@@ -23,6 +23,8 @@ mod drawers;
 mod manager;
 #[path = "workspace_tab_drag.rs"]
 mod tab_drag;
+#[path = "workspace_update.rs"]
+mod workspace_update;
 #[path = "workspace_zen.rs"]
 mod zen;
 use tab_drag::NativeTabSlide;
@@ -282,6 +284,7 @@ mod allocation {
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
+                owner.allocate_workspace_motion();
                 owner.measure_drawer_tiles();
                 let placement = owner.drawer.geometry(&owner);
                 for (slot, child) in self.children.borrow().iter() {
@@ -394,6 +397,7 @@ mod allocation {
                     self.obj()
                         .frame_clock()
                         .map_or(0, |clock| clock.frame_time()),
+                    self.obj().scale_factor() as f32,
                 );
             }
         }
@@ -765,6 +769,7 @@ pub struct Workspace {
     dragging: Cell<bool>,
     drag_targets: RefCell<Vec<(glib::WeakRef<gtk::Widget>, DragTarget)>>,
     workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
+    publication: workspace_update::Publication,
     measuring_panels: Cell<bool>,
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
@@ -924,6 +929,7 @@ impl Workspace {
             dragging: Cell::new(false),
             drag_targets: RefCell::new(Vec::new()),
             workspace_drag: RefCell::new(None),
+            publication: workspace_update::Publication::default(),
             drop_hint: RefCell::new(None),
             measuring_panels: Cell::new(false),
             toolbar: toolbar.clone(),
@@ -1609,6 +1615,21 @@ impl Workspace {
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
             Ok(change) => {
+                let publication = self
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .map(|g| g.session.workspace_update());
+                if let Some(update) = &publication
+                    && self.publication.model_revision.get() == Some(update.model_revision)
+                    && change.regions == (regions::LAYOUT | regions::CUSTOMIZATION)
+                {
+                    self.publish_workspace(update.clone());
+                    if change.canvas_wake {
+                        self.wake();
+                    }
+                    return;
+                }
                 self.refresh_cursor();
                 if self.status.is_visible()
                     && self
@@ -1620,8 +1641,13 @@ impl Workspace {
                     self.status.set_visible(false);
                 }
                 if change.regions != 0 {
-                    self.refresh(change.regions);
+                    self.reset_workspace_publication();
+                    let moving = publication.as_ref().is_some_and(|u| u.drag.is_some());
+                    self.refresh(change.regions | if moving { regions::LAYOUT } else { 0 });
                     self.workspaces.observe(self, change.regions);
+                }
+                if let Some(update) = publication.filter(|_| change.regions != 0) {
+                    self.publish_workspace(update);
                 }
                 if change.canvas_wake {
                     self.wake();
@@ -1802,6 +1828,16 @@ impl Workspace {
         self.status.set_visible(true);
     }
     fn refresh(self: &Rc<Self>, regions: u32) {
+        self.publication.model_revision.set(
+            self.gpu
+                .borrow()
+                .as_ref()
+                .map(|g| g.session.workspace_model_revision()),
+        );
+        #[cfg(test)]
+        self.publication
+            .refreshes
+            .set(self.publication.refreshes.get() + 1);
         let Some(state) = self
             .gpu
             .borrow()
@@ -2272,6 +2308,7 @@ impl Workspace {
             .collect()
     }
     fn measure_drawer_tiles(&self) {
+        self.publication.hits.borrow_mut().take();
         let mut measurements = Vec::new();
         let mut columns = Vec::new();
         for drawer in self.columns.drawers.borrow().iter() {
@@ -2485,13 +2522,16 @@ impl Workspace {
         None
     }
 
-    // DEPRECATED workspace presentation path. Migrate to UiSession::workspace_update
-    // (crates/layer-ui/src/workspace_update.rs): refresh models on model_revision
-    // changes, otherwise apply geometry in GTK placement/drawing. Keep dispatching
-    // every DragWorkspace phase; only the publication/refresh path is superseded.
+    // Every input reaches Rust. workspace_update retains models by revision and
+    // replaces only pending presentation on GTK's frame clock (see module).
     fn dispatch_drag(self: &Rc<Self>, target: DragTarget, phase: ContactPhase, position: [f32; 2]) {
-        let tabs = if matches!(target, DragTarget::Dock(_)) && phase == ContactPhase::Up {
-            self.tab_hits()
+        #[cfg(test)]
+        let start = std::time::Instant::now();
+        let tabs = if matches!(target, DragTarget::Dock(_)) {
+            if phase != ContactPhase::Move || self.publication.hits.borrow().is_none() {
+                *self.publication.hits.borrow_mut() = Some(self.tab_hits());
+            }
+            self.publication.hits.borrow().clone().unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -2501,6 +2541,13 @@ impl Workspace {
             [self.surface.width() as f32, self.surface.height() as f32],
             tabs,
         ));
+        #[cfg(test)]
+        if phase == ContactPhase::Move {
+            self.publication
+                .inputs
+                .borrow_mut()
+                .push(start.elapsed().as_secs_f64() * 1000.);
+        }
     }
 
     fn set_drag_cursor(&self, drag: &NativeWorkspaceDrag, name: &str) {
@@ -2681,12 +2728,12 @@ impl Workspace {
         if !matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
             self.dispatch_drag(drag.target, ContactPhase::Move, point);
         }
-        self.update_tab_slide(&mut drag);
-        *self.workspace_drag.borrow_mut() = Some(drag.clone());
         if let DragTarget::Dock(item) = drag.target {
-            *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);
+            if matches!(item, DockItem::Tile { .. }) {
+                *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);
+                self.surface.queue_draw();
+            }
             self.set_drag_cursor(&drag, "grabbing");
-            self.surface.queue_draw();
         }
         true
     }

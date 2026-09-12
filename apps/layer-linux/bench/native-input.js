@@ -17,8 +17,9 @@ const workspaceWindow = ARGV.includes('--workspace-window');
 const workspaceColumns = ARGV.includes('--workspace-columns');
 const workspaceTabs = ARGV.includes('--workspace-tabs');
 const workspaceHold = ARGV.includes('--workspace-hold');
+const workspaceMotion = ARGV.includes('--workspace-motion');
 const process = Gio.Subprocess.new([
-    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
     '--', '--ignored', '--test-threads=1', '--nocapture',
 ], Gio.SubprocessFlags.NONE);
 let passed = false;
@@ -37,7 +38,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     const session = call('/org/gnome/Mutter/RemoteDesktop', dest, 'CreateSession', '()', [])[0];
     const send = (method, signature, values) => call(session, iface, method, signature, values);
     let touchStream;
-    if (workspaceHold) {
+    if (workspaceHold || workspaceMotion) {
         const id = call(session, 'org.freedesktop.DBus.Properties', 'Get', '(ss)', [iface, 'SessionId'])[0].deep_unpack();
         const cast = 'org.gnome.Mutter.ScreenCast';
         const castCall = (path, name, method, signature, values) => Gio.DBus.session.call_sync(
@@ -50,15 +51,15 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     }
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
-    if (workspaceHold) {
+    if (workspaceHold || workspaceMotion) {
         // Creating Mutter's virtual touchscreen announces a new seat capability.
         // Let GTK bind wl_touch before the first test contact is delivered.
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (workspaceClicks || workspaceCursor || workspaceDrawer || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold) {
+    if (workspaceClicks || workspaceCursor || workspaceDrawer || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion) {
         let step = 0, events = null, index = 0, previous = [0, 0];
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => {
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceMotion ? 4 : 60, () => {
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
                 send('Stop', '()', []);
                 return GLib.SOURCE_REMOVE;

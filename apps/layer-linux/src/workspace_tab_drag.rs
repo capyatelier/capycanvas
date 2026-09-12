@@ -31,7 +31,7 @@ impl NativeTabSlide {
         1. - (1. - t).powi(3)
     }
 
-    pub fn snapshot(&self, snapshot: &gtk::Snapshot, now: i64) {
+    pub fn snapshot(&self, snapshot: &gtk::Snapshot, now: i64, scale: f32) {
         snapshot.push_clip(&gtk::graphene::Rect::new(
             self.clip.x,
             self.clip.y,
@@ -51,7 +51,10 @@ impl NativeTabSlide {
                 tab.from + (tab.to - tab.from) * progress
             };
             snapshot.save();
-            snapshot.translate(&gtk::graphene::Point::new(offset, 0.));
+            snapshot.translate(&gtk::graphene::Point::new(
+                (offset * scale).round() / scale,
+                0.,
+            ));
             snapshot.append_node(&tab.node);
             snapshot.restore();
         }
@@ -138,17 +141,17 @@ impl Workspace {
         }
     }
 
-    pub(super) fn update_tab_slide(self: &Rc<Self>, drag: &mut NativeWorkspaceDrag) {
+    pub(super) fn update_tab_slide(
+        self: &Rc<Self>,
+        drag: &mut NativeWorkspaceDrag,
+        presentation: Option<&WorkspaceTabPresentation>,
+    ) {
         let Some(tab) = drag.tab.as_mut() else { return };
-        let preview = self
-            .gpu
-            .borrow()
-            .as_ref()
-            .and_then(|g| g.session.tab_drag_preview(drag.point));
-        let Some(preview) = preview else {
+        let Some(presentation) = presentation else {
             self.clear_tab_slide(drag);
             return;
         };
+        let preview = &presentation.preview;
         tab.bounds = preview.bounds;
         if preview
             .offsets
@@ -160,7 +163,7 @@ impl Workspace {
                 .frame_clock()
                 .map_or(0, |clock| clock.frame_time());
             let progress = tab.progress(now);
-            for offset in preview.offsets {
+            for offset in &preview.offsets {
                 let neighbor = &mut tab.tabs[offset.index];
                 neighbor.from += (neighbor.to - neighbor.from) * progress;
                 neighbor.to = offset.x;
