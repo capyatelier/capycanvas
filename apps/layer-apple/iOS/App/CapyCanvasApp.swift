@@ -2,7 +2,10 @@ import SwiftUI
 
 @main struct CapyCanvasApp: App {
     @UIApplicationDelegateAdaptor(WorkspaceSceneLifecycle.self) private var lifecycle
-    var body: some Scene { WindowGroup(id: "editor") { EditorSessionScene { IPadEditorScene(scene: $0) } } }
+    var body: some Scene {
+        WindowGroup(id: "editor") { EditorSessionScene { IPadEditorScene(scene: $0) } }
+            .defaultSize(width: 1200, height: 900)
+    }
 }
 
 @MainActor private final class WorkspaceSceneLifecycle: NSObject, UIApplicationDelegate {

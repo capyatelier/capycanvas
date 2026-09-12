@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 struct NativeReorderInput: NSViewRepresentable {
-    let model: WorkspaceRowInteraction
+    let model: any NativeReorderModel
     func makeNSView(context: Context) -> ReorderInputView { ReorderInputView() }
     func updateNSView(_ view: ReorderInputView, context: Context) { view.model = model; view.validate() }
     static func dismantleNSView(_ view: ReorderInputView, coordinator: ()) {
@@ -11,10 +11,11 @@ struct NativeReorderInput: NSViewRepresentable {
 }
 
 final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
-    weak var model: WorkspaceRowInteraction?
+    weak var model: (any NativeReorderModel)?
     private weak var attached: NSView?
     private var stream = -1
     private var cancelling = false
+    private var lastPoint: CGPoint?
     private var pan: NSPanGestureRecognizer!
     private var press: NSPressGestureRecognizer!
     private var secondary: NSClickGestureRecognizer!
@@ -40,26 +41,42 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+    }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window?.contentView !== attached else { return }
-        detach(); attached = window?.contentView
+        attach()
+    }
+    private func attach() {
+        let next = window?.contentView
+        guard next !== attached else { return }
+        detach(); attached = next
         for gesture in [pan!, press!, secondary!] { attached?.addGestureRecognizer(gesture) }
         updateViewport()
     }
-    override func layout() { super.layout(); updateViewport() }
+    override func layout() { super.layout(); attach(); updateViewport() }
     func detach() {
         cancel(); for gesture in [pan!, press!, secondary!] { attached?.removeGestureRecognizer(gesture) }; attached = nil
     }
     func validate() {
-        updateViewport()
+        attach(); updateViewport()
     }
     private func cancel() {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
         model?.cancel(); timer?.invalidate(); timer = nil; stream = -1
         pan.isEnabled = false; press.isEnabled = false; pan.isEnabled = true; press.isEnabled = true
+    }
+    private func scrollAt(_ point: CGPoint) -> NSScrollView? {
+        guard let attached else { return nil }
+        return attached.hitTest(convert(point, to: attached.superview))?.enclosingScrollView
+    }
+    @discardableResult private func move(_ point: CGPoint, force: Bool = false) -> Bool {
+        guard let model else { return false }
+        if !force && model.contact.dragging && point == lastPoint { return true }
+        lastPoint = point
+        return model.contact.move(to: point)
     }
     private func updateViewport() {
         model?.viewport = enclosingScrollView.map { convert($0.contentView.bounds, from: $0.contentView) } ?? bounds
@@ -69,8 +86,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         updateViewport()
         let point = convert(event.locationInWindow, from: nil)
         if recognizer === secondary {
-            return event.type == .rightMouseDown && model.enabled && model.viewport.contains(point)
-                && model.frames.values.contains(where: { $0.row.contains(point) })
+            return event.type == .rightMouseDown && model.acceptsContext(at: point)
         }
         guard event.type == .leftMouseDown else { return false }
         if stream != event.eventNumber {
@@ -79,6 +95,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             }
             let device: ReorderDevice = event.type == .tabletPoint || event.subtype == .tabletPoint ? .pen : .mouse
             model.contact.prepare(target, device: device, origin: point); stream = event.eventNumber
+            lastPoint = nil
         }
         return recognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
     }
@@ -99,7 +116,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     }
     @objc private func pressed(_ recognizer: NSPressGestureRecognizer) {
         switch recognizer.state {
-        case .began: model?.contact.recognizeHold()
+        case .began: model?.recognizeHold()
         case .ended: finish()
         case .cancelled: cancel()
         default: break
@@ -108,7 +125,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     @objc private func panned(_ recognizer: NSPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
-            if model?.contact.move(to: recognizer.location(in: self)) == true && timer == nil {
+            if move(recognizer.location(in: self)) && timer == nil {
                 let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.track() } }
                 RunLoop.main.add(timer, forMode: .common); self.timer = timer
             }
@@ -125,15 +142,20 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         guard let model, model.contact.dragging else { timer?.invalidate(); timer = nil; return }
         updateViewport()
         let point = pan.location(in: self)
-        if let scroll = enclosingScrollView, model.viewport.contains(point) {
-            let delta: CGFloat = point.y < model.viewport.minY + 28 ? -8 : point.y > model.viewport.maxY - 28 ? 8 : 0
+        var scrolled = false
+        if let scroll = enclosingScrollView ?? scrollAt(point) {
+            let viewport = convert(scroll.contentView.bounds, from: scroll.contentView)
+            guard viewport.contains(point) else { _ = move(point); return }
+            let delta: CGFloat = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
             if delta != 0 {
                 let clip = scroll.contentView
                 let limit = max(0, (scroll.documentView?.bounds.height ?? 0) - clip.bounds.height)
+                let previous = clip.bounds.origin
                 clip.scroll(to: CGPoint(x: clip.bounds.minX, y: max(0, min(limit, clip.bounds.minY + delta))))
+                scrolled = previous != clip.bounds.origin
                 scroll.reflectScrolledClipView(clip); updateViewport()
             }
         }
-        _ = model.contact.move(to: pan.location(in: self))
+        _ = move(pan.location(in: self), force: scrolled)
     }
 }

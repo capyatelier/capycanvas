@@ -269,9 +269,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         layout.validate()?;
         let insets = self.state.workspace.layout.titlebar_insets;
+        let bottom_inset = self.state.workspace.layout.bottom_inset;
         self.state.workspace.layout = durable_layout(layout);
         self.state.workspace.zen_mode = false;
         self.state.workspace.layout.titlebar_insets = insets;
+        self.state.workspace.layout.bottom_inset = bottom_inset;
         self.state.customization = CustomizationState::default();
         self.sync_work_area();
         self.refresh_commands();
@@ -283,8 +285,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn cancel_workspace_layout_preview(&mut self) -> UiChange {
         if let Some(original) = self.workspace_preview.take() {
             let insets = self.state.workspace.layout.titlebar_insets;
+            let bottom_inset = self.state.workspace.layout.bottom_inset;
             self.state.workspace = original;
             self.state.workspace.layout.titlebar_insets = insets;
+            self.state.workspace.layout.bottom_inset = bottom_inset;
             self.state.customization = CustomizationState::default();
             self.sync_work_area();
             self.refresh_commands();
@@ -310,12 +314,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.set_brush(brush.clone()).map_err(error)?;
         let working = capture.working;
         let titlebar_insets = self.state.workspace.layout.titlebar_insets;
+        let bottom_inset = self.state.workspace.layout.bottom_inset;
         self.state.workspace = WorkspaceState {
             version: 1,
             layout: capture.history.layout().clone(),
             zen_mode: working.zen_mode,
         };
         self.state.workspace.layout.titlebar_insets = titlebar_insets;
+        self.state.workspace.layout.bottom_inset = bottom_inset;
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
         let before = self.state.workspace.clone();
         if self.state.workspace.layout.collapse_empty_toolbar_groups() {
@@ -376,6 +382,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let before = self.state.workspace.clone();
         self.state.workspace.layout = durable_layout(&layout);
         self.state.workspace.layout.titlebar_insets = before.layout.titlebar_insets;
+        self.state.workspace.layout.bottom_inset = before.layout.bottom_inset;
         self.workspace_history
             .record_named(before, &self.state.workspace, description);
         self.state.customization = CustomizationState::default();

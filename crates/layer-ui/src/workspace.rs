@@ -49,6 +49,7 @@ pub fn durable_layout(layout: &DockLayout) -> DockLayout {
     layout.measurements.clear();
     layout.column_scroll.clear();
     layout.titlebar_insets = [0.0; 3];
+    layout.bottom_inset = 0.0;
     layout
 }
 
@@ -134,6 +135,7 @@ impl LayoutHistory {
                 || !revision.layout.measurements.is_empty()
                 || !revision.layout.column_scroll.is_empty()
                 || revision.layout.titlebar_insets != [0.0; 3]
+                || revision.layout.bottom_inset != 0.0
             {
                 return Err("Invalid layout history revision".into());
             }
@@ -212,6 +214,7 @@ impl WorkspaceHistory {
         layout.measurements.clone_from(&state.layout.measurements);
         layout.column_scroll.clone_from(&state.layout.column_scroll);
         layout.titlebar_insets = state.layout.titlebar_insets;
+        layout.bottom_inset = state.layout.bottom_inset;
         state.layout = layout;
     }
     pub fn capture(&mut self, state: &WorkspaceState) -> LayoutHistory {

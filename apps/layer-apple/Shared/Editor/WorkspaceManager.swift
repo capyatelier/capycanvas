@@ -181,6 +181,29 @@ import SwiftUI
         case "switch_to_window":
             let item = try await library.read(["type": "load", "id": value.raw])
             try focusWindow(value.string, item: item); presented = false
+        case "reset":
+            guard value.string == library.status["active_id"].string else {
+                throw HostFailure(message: "Switch to this workspace before restoring its layout")
+            }
+            let wasPresented = presented
+            try await library.finishLayoutPreview()
+            let item = try await library.read(["type": "load", "id": value.raw])
+            let baseline = item["entity"]["content"]["baseline"]
+            let spec = try await library.read(["type": "prompt", "action": action.raw])["prompt"]
+            do {
+                let succeeded = try await form(spec, beforePrompt: {
+                    try await library.beginLayoutPreview()
+                    try await library.previewLayout(baseline)
+                }) { [self] fields in
+                    try await library.finishLayoutPreview()
+                    try await execute(action, fields: fields)
+                }
+                try await library.finishLayoutPreview()
+                if succeeded || !wasPresented { presented = false }
+            } catch {
+                try? await library.finishLayoutPreview()
+                throw error
+            }
         case "history", "versions", "metadata":
             historyID = value.string; historyMode = type == "history" ? "layout" : type
             showingStorage = false; presented = true
@@ -282,13 +305,15 @@ import SwiftUI
             let focus = target.focusWindow else { throw HostFailure(message: "This workspace is open in another application window. Use that window or duplicate the workspace.") }
         focus()
     }
-    private func form(_ spec: JSON, operation: (JSON) async throws -> Void) async throws -> Bool {
+    private func form(_ spec: JSON, beforePrompt: (() async throws -> Void)? = nil,
+        operation: (JSON) async throws -> Void) async throws -> Bool {
         var previous = JSON(), failure: String?
-        while let values = await ask(spec, previous: previous, error: failure) {
+        while true {
+            try await beforePrompt?()
+            guard let values = await ask(spec, previous: previous, error: failure) else { return false }
             do { try await operation(values); return true }
             catch { previous = values; failure = error.localizedDescription }
         }
-        return false
     }
     private func ask(_ spec: JSON, previous: JSON, error: String?) async -> JSON? {
         presented = true; formError = error

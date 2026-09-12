@@ -3,59 +3,12 @@
 import AppKit
 import SwiftUI
 
-@main struct WorkspaceSwitcherInputChecks {
-    @MainActor static var previousPoint: CGPoint?
-    static func note(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
-    @MainActor static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
-    @MainActor static func drain(_ seconds: Double = 0.08) async throws {
-        try await Task.sleep(for: .seconds(seconds))
-    }
-    @MainActor static func find(_ view: NSView) -> ReorderInputView? {
-        if let marker = view as? ReorderInputView { return marker }
-        return view.subviews.lazy.compactMap(find).first
-    }
-    @MainActor static func key(_ characters: String, code: UInt16, window: NSWindow) throws {
-        for type: NSEvent.EventType in [.keyDown, .keyUp] {
-            guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, characters: characters, charactersIgnoringModifiers: characters,
-                isARepeat: false, keyCode: code) else { throw HostFailure(message: "No native fixture key") }
-            NSApp.postEvent(event, atStart: false)
-        }
-    }
-    @MainActor static func event(_ type: NSEvent.EventType, at point: CGPoint, marker: ReorderInputView, number: Int, tablet: Bool = false) throws {
-        guard let window = marker.window, let event = NSEvent.mouseEvent(with: type,
-            location: marker.convert(point, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1, pressure: 0.5) else {
-            throw HostFailure(message: "No native fixture event")
-        }
-        // mouseEvent(with:) leaves buttonNumber at zero even for right-down/up.
-        // Rewrap the CGEvent to deliver an actual secondary-button contact.
-        guard let cg = event.cgEvent else { throw HostFailure(message: "Missing fixture CGEvent") }
-        let button: Int64 = type == .rightMouseDown || type == .rightMouseUp ? 1 : 0
-        cg.setIntegerValueField(.mouseEventButtonNumber, value: button)
-        cg.setIntegerValueField(.mouseEventNumber, value: Int64(number))
-        if tablet { cg.setIntegerValueField(.mouseEventSubtype, value: Int64(CGEventMouseSubtype.tabletPoint.rawValue)) }
-        if type == .leftMouseDragged, let previousPoint {
-            cg.setDoubleValueField(.mouseEventDeltaX, value: point.x - previousPoint.x)
-            cg.setDoubleValueField(.mouseEventDeltaY, value: point.y - previousPoint.y)
-        }
-        previousPoint = point
-        guard let delivered = NSEvent(cgEvent: cg) else { throw HostFailure(message: "Invalid fixture CGEvent") }
-        try require(delivered.type == type && delivered.buttonNumber == button
-            && delivered.eventNumber == number && delivered.windowNumber == window.windowNumber
-            && delivered.locationInWindow == event.locationInWindow,
-            "Fixture event must retain the native button, window and measured location: type=\(delivered.type.rawValue)/\(type.rawValue), button=\(delivered.buttonNumber)/\(button), number=\(delivered.eventNumber)/\(number), window=\(delivered.windowNumber)/\(window.windowNumber), location=\(delivered.locationInWindow)/\(event.locationInWindow)")
-        try require((delivered.subtype == .tabletPoint) == tablet, "The fixture must retain the actual tablet subtype")
-        NSApp.postEvent(delivered, atStart: false)
-    }
+@main final class WorkspaceSwitcherInputChecks: NativeWorkspaceInputFixture {
     @MainActor static func penChecks(marker: ReorderInputView, library: WorkspaceLibrary, manager: WorkspaceManager) async throws {
-        let model = marker.model!, window = marker.window!
+        let model = marker.model as! WorkspaceRowInteraction, window = marker.window!
         let order = library.status["order"].array.map { $0.string }, first = order[0], last = order.last!
         let selected = manager.selection
-        let hold = (window.contentView!.gestureRecognizers.first { $0 is NSPressGestureRecognizer } as! NSPressGestureRecognizer).minimumPressDuration + 0.15
+        let hold = try holdDuration(marker)
         var start = CGPoint(x: model.frames[first]!.row.midX, y: model.frames[first]!.row.midY)
         let end = CGPoint(x: start.x, y: model.frames[last]!.row.maxY - 2)
         try event(.leftMouseDown, at: start, marker: marker, number: 201, tablet: true); try await drain(0.02)
@@ -97,7 +50,7 @@ import SwiftUI
         try await library.finishLayoutPreview()
         for index in 0..<18 { _ = try await library.operation(["type": "new", "name": String(format: "Scrolling Task %02d", index)]) }
         try await manager.show("workspaces"); try await drain(0.2)
-        let model = marker.model!, scroll = marker.enclosingScrollView!
+        let model = marker.model as! WorkspaceRowInteraction, scroll = marker.enclosingScrollView!
         marker.window!.setContentSize(CGSize(width: 560, height: 240)); try await drain()
         scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView); try await drain()
         let order = library.status["order"].array.map { $0.string }, first = order[0]
@@ -106,7 +59,7 @@ import SwiftUI
         let frame = model.frames[first]!, start = CGPoint(x: frame.grip.midX, y: frame.grip.midY)
         try event(.rightMouseDown, at: start, marker: marker, number: 291); try await drain(0.02)
         try event(.rightMouseUp, at: start, marker: marker, number: 292); try await drain()
-        try require(model.menu == first, "The long-list scroll check must begin with an open native menu")
+        try require(model.menu == first, "The long-list scroll check must begin with an open native menu: enabled=\(model.enabled), accepted=\(model.acceptsContext(at: start)), viewport=\(model.viewport), start=\(start), row=\(frame.row), clip=\(scroll.contentView.bounds), key=\(marker.window?.isKeyWindow == true), dragging=\(model.contact.dragging), menu=\(String(describing: model.menu))")
         for (phase, cgPhase): (NSEvent.Phase, CGScrollPhase) in [(.began, .began), (.changed, .changed), (.ended, .ended)] {
             guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                 wheel1: phase == .ended ? 0 : -80, wheel2: 0, wheel3: 0) else {
@@ -163,7 +116,7 @@ import SwiftUI
         note("Window mounted")
         try await drain(0.3); host.layoutSubtreeIfNeeded()
         note("Window event pump returned")
-        guard let marker = find(host), let model = marker.model else { throw HostFailure(message: "Native list marker was not mounted") }
+        guard let marker = find(host), let model = marker.model as? WorkspaceRowInteraction else { throw HostFailure(message: "Native list marker was not mounted") }
         try require(marker.enclosingScrollView != nil && model.frames.count == 3 && model.viewport.height > 0,
             "Native capture must use the real scroll content and measured row rectangles")
         let first = manager.view["rows"][0]["id"].string
@@ -224,6 +177,11 @@ import SwiftUI
             "Dismantling a captured list must retire it without publishing into SwiftUI's destroying graph")
         window.contentView = host; window.makeKeyAndOrderFront(nil); try await drain()
         guard let remounted = find(host) else { throw HostFailure(message: "Native list marker was not remounted") }
+        // The physical contact still ends after its source is removed. Deliver
+        // its late up before starting another contact in the remounted list.
+        try event(.leftMouseUp, at: target, marker: remounted, number: 113); try await drain()
+        try require(library.status["order"].stableKey == beforeCancel,
+            "A late release after remount must not commit the removed source")
         try await scrolling(marker: remounted, library: library, manager: manager)
         manager.presented = false; manager.dismissed()
         try await drain(0.1); try await library.close()

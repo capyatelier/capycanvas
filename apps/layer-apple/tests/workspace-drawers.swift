@@ -97,7 +97,7 @@ import SwiftUI
         store.customize(["type": "toggle_column_drawer", "group": 6, "panel": "toolbar"])
         try await wait("Closing drawer stops intercepting input") {
             store.contentDrawers.items["4"]?.interactive != true
-                && store.workspace.sources[item.stableKey] == nil
+                && !store.workspace.sourceInstances.values.contains { $0.item == item.stableKey && $0.layer >= 200 }
         }
         print("PASS: SwiftUI drawer geometry, tab/header drag sources, reorder, restored drop targets and closing hit-test retirement")
     }

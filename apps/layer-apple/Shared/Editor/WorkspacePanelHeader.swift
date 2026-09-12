@@ -19,7 +19,8 @@ struct WorkspacePanelHeader: View {
             }
             WorkspaceGroupGrip(store: store, group: group["id"], drawer: drawer).frame(width: 20, height: 36)
         }.frame(height: 36).background(palette[drawer || group["active"].string == "navigator" ? "panel" : "tabbar"])
-            .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw])))
+            .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw]),
+                context: JSON(["kind": "group", "group": group["id"].raw])))
     }
     private var tabs: some View {
         WorkspacePanelTabs(store: store, slide: store.workspace.tabSlide, group: group, drawer: drawer)
@@ -36,13 +37,15 @@ private struct WorkspacePanelTabs: View {
         ForEach(group["panels"].array.indices, id: \.self) { index in
             let tab = store.panel(group["panels"][index].string)
             let selected = tab["id"].string == group["active"].string
-            Button { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) } label: {
+            Button {
+                if !store.workspace.input.contact.consumeClick() { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) }
+            } label: {
                 WorkspaceTabLabel(tab: tab, selected: selected, palette: palette).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(tab["title"].string)
                 .accessibilityIdentifier((drawer ? "drawer-tab-" : "panel-tab-") + tab["id"].string)
                 .accessibilityAddTraits(selected ? .isSelected : [])
-                .modifier(WorkspaceContext(store: store, target: JSON(["kind": "panel", "panel": tab["id"].raw])))
-                .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": tab["id"].raw])))
+                .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": tab["id"].raw]),
+                    context: JSON(["kind": "panel", "panel": tab["id"].raw])))
                 .modifier(WorkspaceTabMeasurement(group: group["id"].uint, index: index))
                 .zIndex(selected ? 1 : 0)
                 .opacity(slide.isVisible(in: group["id"].uint) ? 0 : 1)
@@ -94,7 +97,8 @@ struct WorkspaceGroupGrip: View {
             .contentShape(Rectangle()).accessibilityElement().accessibilityLabel("Panel group options")
             .accessibilityIdentifier((drawer ? "drawer-group-options-" : "group-options-") + String(group.uint))
             .accessibilityHidden(false)
-            .modifier(WorkspaceContext(store: store, target: JSON(["kind": "group", "group": group.raw]), openOnTap: true,
+            .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group.raw]),
+                context: JSON(["kind": "group", "group": group.raw]), openOnTap: true,
                 doubleClick: { store.doubleClickHandle(JSON(["kind": "group", "group": group.raw])) }))
     }
 }

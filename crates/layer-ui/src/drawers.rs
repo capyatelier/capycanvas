@@ -462,7 +462,7 @@ impl ContentDrawer {
             x: WORKSPACE_SPACING,
             y: top,
             width: viewport[0] - WORKSPACE_SPACING * 2.0,
-            height: viewport[1] - top - WORKSPACE_SPACING,
+            height: (layout.workspace_height(viewport[1]) - top - WORKSPACE_SPACING).max(1.0),
         };
         let direction = match edge {
             Some(Edge::Top) => Edge::Bottom,
@@ -727,6 +727,32 @@ mod tests {
             "{p:?}"
         );
     }
+    #[test]
+    fn workspace_bottom_clearance_contains_drawers_without_changing_canvas_size() {
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            let mut layout = DockLayout::default();
+            layout
+                .move_panel(
+                    VIEWPORT,
+                    Panel::Toolbar,
+                    DockTarget::Edge { edge, outer: false },
+                )
+                .unwrap();
+            layout.bottom_inset = TILE_SIZE;
+            let d = drawer(&layout);
+            for partial in [false, true] {
+                if let Some(p) = d.placement(&layout, VIEWPORT, &[3000., 3000.], partial) {
+                    assert!(
+                        p.bounds.y + p.bounds.height
+                            <= VIEWPORT[1] - TILE_SIZE - WORKSPACE_SPACING + 0.001
+                    );
+                } else {
+                    assert!(partial, "The visible toolbar must open its drawer");
+                }
+            }
+        }
+    }
+
     #[test]
     fn tile_drawers_fit_all_edges_and_content_changes() {
         for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {

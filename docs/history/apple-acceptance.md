@@ -85,6 +85,63 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
+## Native workspace pickup — implementation in progress, 2026-09-12
+
+Toolbar tiles and collapsed-column icons now share retained contact ownership
+with the workspace manager's AppKit/UIKit adapters. Native timing and device
+classification gate pickup; tabs/grips remain immediate. Menus stay open on a
+held pen/touch release and close when that same contact starts dragging. Rust
+still validates drops and owns the layout/history transaction. Separate measured
+source instances preserve both a column icon and its open drawer tab.
+
+The native AppKit fixture passes mouse/tablet tile gating, menus, reorder and
+one-step Undo/Redo on both Apple presets. It also passes immediate pen grip
+pickup with focus-loss rollback, plus collapsed-icon gating, retained menus,
+same-contact tear-off and Undo. The full row regression passes mouse/pen and
+keyboard actions, removal during capture, late release, remounting, native
+scrolling and offscreen capture. A failing remount fixture had omitted the
+cancelled contact's final mouse-up before starting another mouse-down; the
+corrected sequence verifies that late release cannot commit a removed source.
+AppKit's native recognizers handle these events without a local event monitor.
+
+The UIKit simulator workflow passes touch tile rejection, hold/release, menu
+dismissal, same-contact reorder and Undo/Redo. Immediate toolbar-grip pickup now
+also passes, with explicit assertions that the app window stays fixed and Undo
+restores the original grip position. iPadOS 26 and later reserve 36 logical
+pixels below editor controls to avoid the system's bottom-corner resize gesture.
+This is a narrow platform control accommodation: Metal and the shared canvas
+viewport retain the complete window, while Rust applies the runtime clearance
+to docks, floating movement/resizing, expanded panels, drawers and partial Zen.
+The clearance survives workspace changes, previews and Undo/Redo, but is excluded
+from portable layouts, history and persistence. UIKit reported zero safe-area
+insets at the failing corner; edge-gesture deferral did not prevent OS resizing
+and was removed. Fresh iPad windows request the Mac's 1200×900 default size;
+restored and OS-sized windows remain resizable.
+
+Collapsed columns draw shared separator bounds, use the editor's 30% text color
+for separators, point compact chevrons toward the canvas, and highlight only an
+open drawer's origin. All 290 shared UI tests pass, including serialized divider
+geometry, scrolling, native clearance and its storage lifetime. The 41 Apple and
+24 host bridge tests pass with native Metal access; one existing host hardware
+benchmark stays ignored. Both Debug apps compile. The invisible drawer geometry
+regression also passes. Local evidence is under `artifacts/apple-workspace-input*`,
+`apple-workspace-native-input*` and `apple-workspace-bottom*`; raw captures,
+results and machine identifiers remain ignored.
+
+Shared changes through `5c68977` are integrated, including starting-layout
+preview before restoration. Both Apple hosts now show that preview before the
+shared confirmation; Cancel or dismissal restores the previous layout, while
+confirmation is one Undo/Redo step preserving tool settings and document state.
+The real Swift coordinator checks pass for both Apple presets, along with all
+59 native workspace tests. Integrated macOS and physical-iPad-target builds pass;
+the latter is a compile check, without a new device install or physical-input
+claim. Only the owned simulator fixture and runner were removed after testing.
+
+These checks do not establish physical Pencil row/column behavior, the complete
+disabled/divider/drawer input matrix, whole-layer-row pickup, small-window/header
+parity, full pixel parity or sustained hardware performance. Those gates remain
+open; no physical Pencil result is inferred from simulator or injected events.
+
 ## Configurable workspace switcher — 2026-09-12
 
 Both Apple hosts now project the shared saved pins and complete workspace order.

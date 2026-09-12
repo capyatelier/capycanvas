@@ -767,6 +767,9 @@ pub struct DockLayout {
     /// Transient native caption bounds: left width, right width, height.
     #[serde(skip)]
     pub titlebar_insets: [f32; 3],
+    /// Runtime native window-control clearance; the canvas viewport stays full size.
+    #[serde(skip)]
+    pub bottom_inset: f32,
     #[serde(default = "initial_tile_id")]
     next_tile_id: u32,
     next_id: u32,
@@ -1315,7 +1318,7 @@ impl DockLayout {
             x: gap,
             y: crate::HEADER_HEIGHT,
             width: (viewport[0] - gap * 2.0).max(1.0),
-            height: (viewport[1] - crate::HEADER_HEIGHT - gap).max(1.0),
+            height: (self.workspace_height(viewport[1]) - crate::HEADER_HEIGHT - gap).max(1.0),
         };
         let side = edge.is_none() || matches!(edge, Some(Edge::Left | Edge::Right));
         let preview_width = if side {
@@ -1412,6 +1415,7 @@ impl Default for DockLayout {
             fit_tab_groups: Vec::new(),
             measurements: Vec::new(),
             titlebar_insets: [0.0; 3],
+            bottom_inset: 0.0,
             next_tile_id: initial_tile_id(),
             bands: vec![
                 DockBand {
@@ -2074,7 +2078,7 @@ impl DockLayout {
             ],
             [
                 viewport[0] - WORKSPACE_SPACING * 2.0,
-                viewport[1] - crate::HEADER_HEIGHT - WORKSPACE_SPACING,
+                self.workspace_height(viewport[1]) - crate::HEADER_HEIGHT - WORKSPACE_SPACING,
             ],
         )
     }
@@ -2174,7 +2178,10 @@ impl DockLayout {
         if let DockItem::Column { column } = item {
             return self.move_column(viewport, column, target);
         }
-        if matches!(target, DockTarget::Tile { .. } | DockTarget::TileGroup { .. }) {
+        if matches!(
+            target,
+            DockTarget::Tile { .. } | DockTarget::TileGroup { .. }
+        ) {
             return Err("Only tools can be dropped inside a toolbar".into());
         }
         if let DockTarget::Split { group, .. } = target
@@ -2856,16 +2863,22 @@ impl DockLayout {
         result
     }
 
+    pub(crate) fn workspace_height(&self, height: f32) -> f32 {
+        (height - self.bottom_inset).max(1.0)
+    }
+
     /// Hosts supply measured native chrome in logical units. All panel and
     /// divider coordinates remain relative to the full-window canvas.
     pub fn workspace(&self, width: f32, height: f32, top: f32, bottom: f32) -> ResolvedLayout {
+        let viewport = [width, height];
+        let height = self.workspace_height(height);
         // The header already includes bottom padding. Keep the outer inset on
         // the sides/bottom only, rather than doubling the gap above the docks.
         let mut result = self.resolve(
             (width - WORKSPACE_SPACING * 2.0).max(1.0),
             (height - top - WORKSPACE_SPACING).max(1.0),
         );
-        result.viewport = [width, height];
+        result.viewport = viewport;
         let offset = |b: &mut Bounds| {
             b.x += WORKSPACE_SPACING;
             b.y += top;
@@ -3003,7 +3016,8 @@ impl DockLayout {
             ),
             position[1].clamp(
                 crate::HEADER_HEIGHT,
-                (viewport[1] - WORKSPACE_SPACING - b.height).max(crate::HEADER_HEIGHT),
+                (self.workspace_height(viewport[1]) - WORKSPACE_SPACING - b.height)
+                    .max(crate::HEADER_HEIGHT),
             ),
         ];
         Ok(())
@@ -3029,6 +3043,7 @@ impl DockLayout {
         }
         self.fit_tab_groups.retain(|id| *id != group);
         let minimum_width = self.group_min_width(group).max(TILE_SIZE);
+        let available_height = self.workspace_height(viewport[1]);
         let floating = self
             .floating
             .iter_mut()
@@ -3071,7 +3086,7 @@ impl DockLayout {
         ) {
             bottom = (bottom + delta[1]).clamp(
                 top + TAB_BAR_HEIGHT,
-                (viewport[1] - WORKSPACE_SPACING).max(top + TAB_BAR_HEIGHT),
+                (available_height - WORKSPACE_SPACING).max(top + TAB_BAR_HEIGHT),
             );
         }
         floating.position = [left, top];
@@ -6863,6 +6878,89 @@ mod tests {
             }
         );
     }
+    #[test]
+    fn workspace_bottom_clearance_keeps_controls_inside_the_full_canvas() {
+        for viewport in [[375., 486.], [1200., 900.]] {
+            let mut layout = DockLayout::default();
+            layout.bottom_inset = TILE_SIZE;
+            let bottom = viewport[1] - TILE_SIZE - WORKSPACE_SPACING;
+            let resolved = layout.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            );
+            assert_eq!(resolved.viewport, viewport);
+            for divider in &resolved.dividers {
+                let mut inset = layout.clone();
+                let mut plain = layout.clone();
+                plain.bottom_inset = 0.;
+                let position = [viewport[0] * 0.4, viewport[1] * 0.8];
+                inset
+                    .resize_workspace(divider.id, position, viewport)
+                    .unwrap();
+                plain
+                    .resize_workspace(divider.id, position, [viewport[0], viewport[1] - TILE_SIZE])
+                    .unwrap();
+                assert_eq!(
+                    crate::workspace::durable_layout(&inset),
+                    plain,
+                    "Divider resizing must use the same available height as placement"
+                );
+            }
+            for bounds in resolved
+                .groups
+                .iter()
+                .map(|g| g.bounds)
+                .chain(resolved.dividers.iter().map(|d| d.bounds))
+                .chain([resolved.status])
+            {
+                assert!(bounds.y + bounds.height <= bottom + 0.001, "{bounds:?}");
+            }
+            for section in layout.zen_toolbars(viewport).sections {
+                assert!(
+                    section.bounds.y + section.bounds.height <= bottom + 0.001,
+                    "{:?}",
+                    section.bounds
+                );
+            }
+            layout
+                .move_panel(
+                    viewport,
+                    Panel::Layers,
+                    DockTarget::Float {
+                        position: [100., 5000.],
+                    },
+                )
+                .unwrap();
+            let group = layout.panel_group(Panel::Layers).unwrap();
+            layout
+                .move_floating(group, [100., 5000.], viewport)
+                .unwrap();
+            let placed = layout.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            );
+            let bounds = placed.groups.iter().find(|g| g.id == group).unwrap().bounds;
+            assert!(bounds.y + bounds.height <= bottom + 0.001);
+            layout
+                .resize_floating(group, ResizeEdge::Bottom, bounds, [0., 5000.], viewport)
+                .unwrap();
+            let floating = layout
+                .floating
+                .iter()
+                .find(|f| f.root.id() == group)
+                .unwrap();
+            assert!(floating.position[1] + floating.height.unwrap() <= bottom + 0.001);
+            let expanded = layout
+                .expanded_panel(viewport, Panel::Layers, [5000., 5000.], 1.)
+                .unwrap();
+            assert!(expanded.bounds.y + expanded.bounds.height <= bottom + 0.001);
+        }
+    }
+
     #[test]
     fn workspace_insets_and_zen_proximity_share_panel_geometry() {
         let layout = DockLayout::default();
