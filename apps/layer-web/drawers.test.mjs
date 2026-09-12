@@ -60,9 +60,16 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         const start=source==="grip"?center(g):source==="empty"?{x:g.x-12,y:g.y+g.height/2}:center(await rect(`${drawer} .drawer-tabs .dock-tab[data-panel="${source==="active"?"brushes":"sizes"}"]`));
         const before=await snap(),away=await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
         await press(start);await move({x:start.x+10,y:start.y});assert.deepEqual(await snap(),before,`${pointer} ${source}: Moving inside drawer keeps source docked`);
+        assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview').length"),["active","inactive"].includes(source)?1:0);
+        if(["active","inactive"].includes(source)) {
+          const preview=await rect('.dragged-tab-preview');
+          assert.ok(Math.abs(preview.x+preview.width/2-start.x-10)<1);
+          assert.ok(Math.abs(preview.y+preview.height/2-start.y)<1);
+        }
         const measured=await evaluate("window.__drawerActions.findLast(a=>a.type==='measure_column_drawers').measurements.find(m=>m.group===41).bounds");
         assert.deepEqual(measured,b,"Rust receives displayed drawer bounds");
         await move(away);assert.equal((await snap()).layout.floating.length,1,`${pointer} ${source} live tear-off: ${JSON.stringify(await evaluate("({status:document.querySelector('#status').textContent,drawer:layerApp.state().customization.column_drawers})"))}`);
+        assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview, .dragged-tab-source').length"),0);
         await release();
         assert.deepEqual((await snap()).layout.panels,before.layout.panels,"Tear-off preserves tab preferences");
         const moved=await group(source==="inactive"?"sizes":"brushes");

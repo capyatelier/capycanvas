@@ -773,6 +773,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             STATUS_HEIGHT,
         )
     }
+    /// Hosts can slide the pressed tab while the shared gesture still owns its
+    /// source group. Once detached, the floating panel supplies the feedback.
+    pub fn dragging_attached_tab(&self) -> bool {
+        self.workspace_drag.is_some_and(|drag| {
+            matches!(drag.original, DockItem::Panel { .. }) && drag.floating.is_none()
+        })
+    }
+
     fn drag_workspace(
         &mut self,
         item: DockItem,
@@ -7852,19 +7860,23 @@ mod tests {
             };
             let press = [source.x + 30.0, source.y + 12.0];
             drag(&mut app, ContactPhase::Down, press);
+            assert!(app.dragging_attached_tab());
             drag(
                 &mut app,
                 ContactPhase::Move,
                 [source.x + source.width + 80.0, press[1]],
             );
             assert!(app.state.workspace.layout.floating.is_empty());
+            assert!(app.dragging_attached_tab());
             drag(
                 &mut app,
                 ContactPhase::Move,
                 [source.x + source.width + 81.0, press[1]],
             );
             assert_eq!(app.state.workspace.layout.floating[0].root.id(), group);
+            assert!(!app.dragging_attached_tab());
             drag(&mut app, ContactPhase::Up, [700.0, 450.0]);
+            assert!(!app.dragging_attached_tab());
             let floated = app.state.workspace.clone();
             assert_eq!(floated.layout.floating.len(), 1);
             invoke(&mut app, CommandId::UndoWorkspace);
@@ -7881,6 +7893,7 @@ mod tests {
                 .unwrap()
                 .bounds;
             drag(&mut app, ContactPhase::Down, [b.x + 20.0, b.y + 10.0]);
+            assert!(!app.dragging_attached_tab());
             drag(&mut app, ContactPhase::Move, [b.x + 30.0, b.y + 25.0]);
             assert_eq!(app.state.workspace.layout.floating[0].root.id(), group);
             assert_eq!(
@@ -7904,12 +7917,14 @@ mod tests {
                 .unwrap()
                 .bounds;
             drag(&mut app, ContactPhase::Down, [b.x + 20.0, b.y + 10.0]);
+            assert!(app.dragging_attached_tab());
             drag(
                 &mut app,
                 ContactPhase::Move,
                 [b.x + b.width + 101.0, b.y + 10.0],
             );
             assert_eq!(app.state.workspace.layout.floating.len(), 2);
+            assert!(!app.dragging_attached_tab());
             assert_eq!(
                 app.state.workspace.layout.panel_group(Panel::Brushes),
                 Some(group)
@@ -7919,6 +7934,7 @@ mod tests {
                 Some(group)
             );
             drag(&mut app, ContactPhase::Cancel, [0.0; 2]);
+            assert!(!app.dragging_attached_tab());
             assert_eq!(app.state.workspace, multi);
         }
     }

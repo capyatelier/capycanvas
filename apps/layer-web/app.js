@@ -691,6 +691,35 @@ function update(regions) {
 // records; CSS animates the returned visibility without resizing the canvas.
 let revealPointer = null;
 let workspaceGesture = null;
+function startTabSlide(drag) {
+  if (!drag.node.matches(".dock-tab")) return;
+  const source = drag.node, bounds = source.getBoundingClientRect();
+  // Keep the real tab's insertion geometry and draw above the clipped header.
+  const preview = source.cloneNode(true);
+  for (const name of [...preview.attributes].map(a => a.name)) {
+    if (name.startsWith("data-") || name === "id") preview.removeAttribute(name);
+  }
+  preview.classList.add("dragged-tab-preview");
+  preview.setAttribute("aria-hidden", "true");
+  preview.inert = true;
+  Object.assign(preview.style, { left: `${bounds.x}px`, top: `${bounds.y}px`,
+    width: `${bounds.width}px`, height: `${bounds.height}px`, font: getComputedStyle(source).font });
+  source.classList.add("dragged-tab-source");
+  workspace.append(preview);
+  drag.tabSlide = { source, preview };
+}
+function clearTabSlide(drag) {
+  if (!drag.tabSlide) return;
+  drag.tabSlide.source.classList.remove("dragged-tab-source");
+  drag.tabSlide.preview.remove();
+  drag.tabSlide = null;
+}
+function updateTabSlide(drag, e) {
+  if (!app.dragging_attached_tab()) { clearTabSlide(drag); return; }
+  if (drag.tabSlide) {
+    drag.tabSlide.preview.style.transform = `translateX(${e.clientX - drag.start.clientX}px)`;
+  }
+}
 function workspaceCursor(cursor) {
   if (cursor) {
     workspace.dataset.workspaceCursor = cursor;
@@ -714,6 +743,7 @@ function endWorkspaceGesture(e, cancel = false) {
   if (!drag || (e && drag.id !== e.pointerId)) return;
   if (drag.started) workspaceGestureEvent(cancel ? "cancel" : "up", e || drag.last);
   workspaceGesture = null;
+  clearTabSlide(drag);
   workspaceCursor(null);
   if (workspace.hasPointerCapture(drag.id)) workspace.releasePointerCapture(drag.id);
   dropIndicator.hidden = true;
@@ -725,7 +755,7 @@ workspace.addEventListener("pointerdown", e => {
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
   workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
-    start: e, last: e, started: false, cursor: getComputedStyle(node).cursor };
+    start: e, last: e, started: false, node, cursor: getComputedStyle(node).cursor };
   // External resize strips are outside the unselectable panel. Prevent a
   // native text-selection drag from stealing their pointer sequence.
   if (workspaceGesture.action.type !== "drag_workspace") e.preventDefault();
@@ -741,13 +771,15 @@ workspace.addEventListener("pointermove", e => {
     // Capture on the stable workspace before Rust tears off/rebuilds a tab.
     workspace.setPointerCapture(e.pointerId);
     groups.forEach(node => node.getAnimations().forEach(a => a.cancel()));
+    startTabSlide(drag);
     workspaceGestureEvent("down", drag.start);
   }
   workspaceGestureEvent("move", e);
+  updateTabSlide(drag, e);
   if (drag.action.type === "drag_workspace") {
     const hint = dropHint(e, drag.action.item);
     showDropHint(hint);
-    workspaceCursor(drag.action.item.kind === "column" && !hint ? "no-drop" : "grabbing");
+    workspaceCursor("grabbing");
   } else {
     workspaceCursor(drag.cursor);
   }

@@ -11059,6 +11059,135 @@ fn native_window_drag_input() {
 
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_tab_slide_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.TabSlideInput");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let original = state(&w).workspace;
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native pointer timed out"
+        );
+        step += 1;
+        pump(150);
+    };
+    for (panel, end) in [
+        (Panel::Layers, "cancel"),
+        (Panel::Adjustments, "release"),
+        (Panel::Layers, "blur"),
+        (Panel::Adjustments, "detach"),
+    ] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original.clone(),
+        });
+        pump(300);
+        let group = original.layout.panel_group(panel).unwrap();
+        let tab = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == group)
+            .unwrap()
+            .tabs
+            .iter()
+            .find(|(p, _)| *p == panel)
+            .unwrap()
+            .1
+            .clone();
+        let bounds = tab.compute_bounds(&w.surface).unwrap();
+        let start = [
+            bounds.x() + bounds.width() * 0.5,
+            bounds.y() + bounds.height() * 0.5,
+        ];
+        let before_hits = w.tab_hits();
+        perform(serde_json::json!([{ "point": start }, { "down": true },
+            { "point": [start[0] + 2., start[1]] }]));
+        assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
+        assert_eq!(tab.opacity(), 1.);
+        for dx in [24., -16.] {
+            perform(serde_json::json!([{ "point": [start[0] + dx, start[1] + 8.] }]));
+            assert_eq!(tab.opacity(), 0.);
+            assert_eq!(tab.compute_bounds(&w.surface).unwrap(), bounds);
+            assert_eq!(
+                w.tab_hits(),
+                before_hits,
+                "Visual sliding must not move insertion targets"
+            );
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+            let drag = w.workspace_drag.borrow();
+            let drag = drag.as_ref().unwrap();
+            assert!(drag.tab.is_some());
+            assert!((drag.point[0] - drag.origin[0] - dx).abs() < 1.);
+        }
+        crate::snapshot(&w)
+            .save_to_png(dir.join(format!("tab-slide-{end}.png")))
+            .unwrap();
+        let mut point = [start[0] - 16., start[1] + 8.];
+        if end == "detach" {
+            point = [
+                w.surface.width() as f32 * 0.5,
+                w.surface.height() as f32 * 0.55,
+            ];
+            perform(serde_json::json!([{ "point": point }]));
+            assert_eq!(state(&w).workspace.layout.floating.len(), 1);
+            assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
+            assert_eq!(tab.opacity(), 1.);
+            w.workspace_drag_input(ContactPhase::Cancel, point, None);
+        } else if end == "release" {
+            let first = before_hits
+                .iter()
+                .find(|hit| hit.group == group && hit.index == 0)
+                .unwrap()
+                .bounds;
+            point = [first.x + 2., first.y + first.height * 0.5];
+            perform(serde_json::json!([{ "point": point }]));
+        } else if end == "blur" {
+            w.interact(UiInput::Blur);
+        } else {
+            w.workspace_drag_input(ContactPhase::Cancel, point, None);
+        }
+        perform(serde_json::json!([{ "down": false }]));
+        assert!(w.workspace_drag.borrow().is_none());
+        assert_eq!(tab.opacity(), 1.);
+        if end == "release" {
+            assert_eq!(
+                state(&w).workspace.layout.group_panels(group).unwrap()[0],
+                panel
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+        }
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+    }
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_column_drawer_drag_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.ColumnDrawerDragInput");
@@ -11181,7 +11310,18 @@ fn native_column_drawer_drag_input() {
                 before,
                 "inside the drawer retains the source dock"
             );
+            assert_eq!(
+                w.workspace_drag.borrow().as_ref().unwrap().tab.is_some(),
+                !whole
+            );
+            if !whole {
+                let drag = w.workspace_drag.borrow();
+                let drag = drag.as_ref().unwrap();
+                assert_eq!(drag.tab.as_ref().unwrap().widget.opacity(), 0.);
+                assert!((drag.point[0] - drag.origin[0] + 12.).abs() < 1.);
+            }
             perform(serde_json::json!([{ "point": away }]));
+            assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
             assert_eq!(
                 state(&w).workspace.layout.floating.len(),
                 1,
@@ -11904,12 +12044,11 @@ fn native_collapsed_column_input() {
                 let hint = w.drop_hint.borrow().clone();
                 if distance == 90. {
                     assert!(hint.is_none());
-                    assert_eq!(cursor().as_deref(), Some("no-drop"));
                 } else {
                     let hint = hint.unwrap_or_else(|| panic!("missing native column hint: right={right}, collapsed={collapsed}, distance={distance}"));
                     assert_eq!(hint.bounds.height, divider.bounds.height);
-                    assert_eq!(cursor().as_deref(), Some("grabbing"));
                 }
+                assert_eq!(cursor().as_deref(), Some("grabbing"));
                 assert_eq!(
                     state(&w).workspace,
                     before,
@@ -11966,7 +12105,7 @@ fn native_collapsed_column_input() {
         let start = [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5];
         let away = [viewport[0] * 0.5, viewport[1] * 0.5];
         perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
-        assert_eq!(cursor().as_deref(), Some("no-drop"));
+        assert_eq!(cursor().as_deref(), Some("grabbing"));
         if blur {
             w.interact(UiInput::Blur);
         } else {

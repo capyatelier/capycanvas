@@ -691,6 +691,9 @@ impl WebApp {
     pub fn layout(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         serialize(&self.session.layout([width, height]))
     }
+    pub fn dragging_attached_tab(&self) -> bool {
+        self.session.dragging_attached_tab()
+    }
     pub fn drop_hint(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: DropQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
         match self

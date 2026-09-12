@@ -174,6 +174,9 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .dock-tab.icon-only-tab { width: 36px; justify-content: center; }
 .drag-source { opacity: .5; }
 .dock-tab[aria-selected="true"], .dock-tab[aria-selected="true"]:hover { background: var(--panel); z-index: 1; }
+.dragged-tab-source { visibility: hidden; }
+.dock-tab.dragged-tab-preview { position: fixed; z-index: 2000; pointer-events: none; margin: 0; background: var(--tabbar); }
+.dock-tab.dragged-tab-preview[aria-selected="true"] { background: var(--panel); }
 /* Concave lower shoulders join the selected tab to the panel, without borders. */
 .dock-tab[aria-selected="true"]::before, .dock-tab[aria-selected="true"]::after { content: ""; position: absolute; bottom: 0; width: 6px; height: 6px; pointer-events: none; }
 .dock-tab[aria-selected="true"]::before { left: -6px; background: radial-gradient(circle at top left, transparent 6px, var(--panel) 6px); }
