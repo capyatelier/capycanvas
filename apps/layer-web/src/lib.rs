@@ -2,6 +2,7 @@
 
 mod documents;
 mod editor;
+mod workspaces;
 
 use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -13,6 +14,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
     session: UiSession<WebRenderer>,
     canvas: web_sys::HtmlCanvasElement,
     sequence: u64,
@@ -369,6 +371,7 @@ impl WebApp {
             .map_err(js)?;
         Ok(Self {
             session,
+            workspaces: None,
             canvas,
             sequence: 0,
             startup: StartupProgress::default(),

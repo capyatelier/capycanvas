@@ -1,6 +1,7 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
     pub host: layer_host::NativeHost,
+    pub workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
     pub blank_presented: bool,
     pub profiling: bool,
     pub frame_cost: [i64; 5],
@@ -21,6 +22,7 @@ impl App {
         })?;
         Ok(Self {
             host,
+            workspaces: None,
             blank_presented: false,
             profiling: false,
             frame_cost: [0; 5],

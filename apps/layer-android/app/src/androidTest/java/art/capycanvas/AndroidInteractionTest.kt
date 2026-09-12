@@ -138,6 +138,7 @@ class AndroidInteractionTest {
         return result
     }
     @Before fun ready() {
+        CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "interaction-workspace-tests/${java.util.UUID.randomUUID()}").absolutePath
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity {
             host = it.host; owner = findView<ViewRootForTest>(it.window.decorView)!!
@@ -145,6 +146,7 @@ class AndroidInteractionTest {
             density = it.resources.displayMetrics.density
         }
         waitFor("brush ready", 60_000) { snapshot().optBoolean("brush_ready") }
+        waitFor("workspace ready", 60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
         scenario.onActivity {
             saved = if (recovery.exists()) JSONObject(recovery.readText())
                 else JSONObject(workspace()).also { recovery.writeText(it.toString()) }
@@ -172,7 +174,7 @@ class AndroidInteractionTest {
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 recovery.delete()
             } }
-            finally { if (::scenario.isInitialized) scenario.close() }
+            finally { if (::scenario.isInitialized) scenario.close(); CanvasHost.workspaceDirectoryForTest = null }
         }
     }
 

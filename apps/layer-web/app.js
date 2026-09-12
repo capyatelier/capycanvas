@@ -1,4 +1,6 @@
 import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
+import { createWorkspaceClient } from "./workspace-store.js";
+import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
@@ -46,7 +48,8 @@ let startupNotice;
 let firstCanvasRendered = false;
 let servicingRequests = false;
 const settingsKey = "layer.preferences.v1", workspaceKey = "layer.workspace.v1";
-let savedWorkspace = "", workspaceSaveTimer;
+let savedWorkspace = "";
+let workspaceManager;
 const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 applyTheme(systemTheme.matches ? "dark" : "light");
@@ -253,6 +256,7 @@ function dispatch(action) {
   }
 }
 function applyChange(change) {
+  if (change.regions & (1 | 2 | 4 | 128)) workspaceManager?.observe();
   if (change.regions) {
     const presentation = app.workspace_update();
     if (workspaceModelRevision !== presentation.model_revision) {
@@ -743,6 +747,7 @@ function update(regions) {
               continue;
             }
             else if (request.kind.type === "open_link") { window.open(app.application_link(request.kind.link), "_blank", "noopener"); }
+            else if (request.kind.type === "workspace") { workspaceManager?.handle(request); }
             else if (request.kind.type !== "save_settings") { documents.handle(request); continue; }
             else
             localStorage.setItem(settingsKey, JSON.stringify(request.kind.settings));
@@ -1064,15 +1069,8 @@ function refreshWorkspaceMenu() {
   }
 }
 function persistWorkspace() {
-  clearTimeout(workspaceSaveTimer);
-  workspaceSaveTimer = setTimeout(saveWorkspace, 250);
+  workspaceManager?.observe();
 }
-function saveWorkspace() {
-  if(!app) return;
-  try { const value=JSON.stringify(app.workspace_persistence()); if(value!==savedWorkspace){localStorage.setItem(workspaceKey,value);savedWorkspace=value;} }
-  catch(error){message(`Cannot save workspace: ${error}`);}
-}
-window.addEventListener("pagehide",saveWorkspace);
 function pointerStyle(e) {
   // Touch leaves :hover stuck until the next tap; track actual pointer input
   // instead of disabling hover for a whole device that may also have a pen/mouse.
@@ -1083,6 +1081,7 @@ window.addEventListener(
   "pointermove",
   (e) => {
     pointerStyle(e);
+    if (e.target.closest("dialog[open]")) return;
     if (!e.buttons) chromeHeld = false;
     chromeInput({ kind: "motion", position: [e.clientX, e.clientY] });
     cursorInput(e);
@@ -1098,6 +1097,10 @@ window.addEventListener(
   (e) => {
     pointerStyle(e);
     revealPointer = null;
+    // Native DOM modals own their contacts. Workspace transitions deliberately
+    // consume editor input, so forwarding a dialog contact would swallow its
+    // buttons before the DOM click handler can run.
+    if (e.target.closest("dialog[open]")) return;
     if (e.target.closest("#header")) chromeHeld = true;
     const reply = chromeInput({
       kind: "contact",
@@ -1259,6 +1262,7 @@ canvas.addEventListener(
   { passive: false },
 );
 function keyInput(e, pressed, divider = null) {
+  if (e.target instanceof Element && e.target.closest("dialog[open]")) return;
   updateZen();
   const reply = input({
     type: "key",
@@ -1359,7 +1363,7 @@ try {
   canvas.width = 800;
   canvas.height = 600;
   app = WebApp.create(canvas);
-  let restoreError;
+  let restoreError, workspaceRestoreError;
   try {
     const saved = localStorage.getItem(settingsKey);
     if (saved) app.dispatch({ type: "restore_settings", settings: JSON.parse(saved) });
@@ -1367,7 +1371,7 @@ try {
   try {
     const saved = localStorage.getItem(workspaceKey);
     if(saved) { app.dispatch({type:"restore_workspace", workspace:JSON.parse(saved)}); savedWorkspace=saved; }
-  } catch(error) { restoreError = `Cannot restore workspace: ${error}`; }
+  } catch(error) { restoreError = workspaceRestoreError = `Cannot restore workspace: ${error}`; }
   const themeAction = () => ({
     type: "system_theme_changed",
     theme: systemTheme.matches ? "dark" : "light",
@@ -1394,6 +1398,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
+  workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   update(255);
   systemStatus.sync();
   $("status").textContent = "";

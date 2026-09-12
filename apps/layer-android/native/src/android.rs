@@ -543,6 +543,17 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
     string(&mut env, result)
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_workspace(
+    mut env: JNIEnv, _: JClass, handle: jlong, request: JString,
+) -> jstring {
+    let result = read(&mut env, &request)
+        .and_then(|s| serde_json::from_str(&s).map_err(error))
+        .and_then(|request| unsafe { app(handle) }.workspace(request))
+        .map(|v| v.to_string());
+    string(&mut env, result)
+}
+
 /// Native layout only. Navigator samples the live composition in the canvas
 /// presentation pass, including while pen input or camera gestures are active.
 #[unsafe(no_mangle)]
