@@ -597,17 +597,33 @@ impl CustomizationState {
                     .iter()
                     .find(|m| m.group == group)?
                     .bounds;
+                let active = layout.active_panel(origin)?;
+                let config = layout.panel(active).ok()?;
+                let tiles = (active.kind() == PanelKind::Tiles).then(|| {
+                    crate::toolbar_tile_layout(
+                        bounds.width,
+                        crate::toolbar_content_height(
+                            bounds.width,
+                            config.tiles(),
+                            config.tile_style,
+                        ),
+                        Axis::Vertical,
+                        config.tiles(),
+                        false,
+                        config.tile_style,
+                    )
+                });
                 Some(GroupPlacement {
                     id: group,
                     bounds,
                     panels: panels.to_vec(),
-                    active: layout.active_panel(origin)?,
+                    active,
                     axis: Axis::Vertical,
                     tabs_visible: true,
                     footer_grip: None,
                     floating: false,
                     resize_handles: Vec::new(),
-                    tiles: None,
+                    tiles,
                 })
             })
             .collect()

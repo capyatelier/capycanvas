@@ -34,6 +34,17 @@ and handles/title/tab bars drag without waiting. A test that succeeds after a
 hold does not establish that the hold is required. Current gaps and relevant
 suites are listed in the [drag inventory](../ui/drag-inventory.md).
 
+Run the pickup regression matrices on an isolated compositor:
+
+```bash
+bash tools/performance/workspace-motion.sh gtk --drag-pickup
+bash tools/performance/workspace-motion.sh web --drag-pickup
+```
+
+GTK uses Mutter mouse/touch delivery; Web uses Chrome mouse/touch/pen injection.
+Neither replaces physical stylus testing. The `--workspace-motion` mode measures
+steady dragging separately from the intentional hold delay.
+
 Build the [Linux client](linux.md) before running its ignored interactive tests.
 Run GTK tests individually, with one test thread per process:
 

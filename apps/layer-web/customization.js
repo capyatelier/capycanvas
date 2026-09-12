@@ -89,7 +89,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (!node) return;
     e.preventDefault(); showContext(node, [e.clientX, e.clientY]);
   });
-  // Touch long press supplies the browser's missing context-menu gesture. A
+  // A hold opens the existing menu and arms reordering for every device. A
   // scroll, drag or cancelled contact cancels it; never claim input editing.
   let hold, heldPointer = null;
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
@@ -100,18 +100,23 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   workspace.addEventListener("pointerdown", (e) => {
     cancelHold(); heldPointer = null;
     const node = contextTarget(e.target);
-    if (!node || e.button !== 0 || (e.pointerType !== "touch" && !node.closest(".layer-row"))) return;
-    hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
-      heldPointer = e.pointerId; cancelHold();
+    if (!node || e.button !== 0 || (e.pointerType === "mouse" && !node.closest(".layer-row,[data-drag-pickup=hold]"))) return;
+    const parent = node.parentNode;
+    hold = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: setTimeout(() => {
+      cancelHold();
+      if (!node.isConnected || node.parentNode !== parent) return;
+      heldPointer = e.pointerId;
       showContext(node, [e.clientX, e.clientY]);
     }, 500) };
   });
   workspace.addEventListener("pointermove", (e) => {
-    if (hold && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) cancelHold();
+    if (hold?.id === e.pointerId && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) cancelHold();
   }, { capture: true });
   for (const event of ["pointerup", "pointercancel", "dragstart", "scroll"])
-    workspace.addEventListener(event, cancelHold, { capture: true });
-  window.addEventListener("blur", cancelHold);
+    window.addEventListener(event, cancelHold, { capture: true });
+  window.addEventListener("blur", dismissContext);
+  window.addEventListener("keydown", e => { if (e.key === "Escape") cancelHold(); });
+  workspace.addEventListener("pointercancel", dismissContext, { capture: true });
   workspace.addEventListener("click", (e) => {
     if (heldPointer === e.pointerId) { heldPointer = null; e.preventDefault(); e.stopImmediatePropagation(); }
   }, { capture: true });

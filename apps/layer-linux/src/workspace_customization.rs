@@ -1378,7 +1378,7 @@ impl Workspace {
         widget.add_controller(click);
         let hold = gtk::GestureLongPress::new();
         hold.set_name(Some("workspace-context-hold"));
-        hold.set_touch_only(true);
+        hold.set_touch_only(false);
         hold.set_propagation_phase(gtk::PropagationPhase::Capture);
         hold.connect_pressed(glib::clone!(
             #[weak(rename_to = w)]
@@ -1399,7 +1399,7 @@ impl Workspace {
     fn show_context(self: &Rc<Self>, widget: &gtk::Widget, target: ContextTarget, x: f64, y: f64) {
         let held_drag = {
             let mut pending = self.workspace_drag.borrow_mut();
-            if let Some(drag) = pending.as_mut().filter(|d| d.sequence.is_some()) {
+            if let Some(drag) = pending.as_mut() {
                 if drag.started {
                     return;
                 }
@@ -1425,8 +1425,8 @@ impl Workspace {
         };
         self.customization.anchor.set([point.x(), point.y()]);
         let popover = &self.customization.context;
-        // A native popup grab diverts the rest of the original touch sequence.
-        // Retain that contact until it becomes a drag or is released.
+        // A native popup grab diverts the original contact. Keep mouse, touch,
+        // and pen with the source until it becomes a drag or is released.
         if held_drag {
             popover.set_autohide(false);
         }

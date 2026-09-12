@@ -162,7 +162,7 @@ fn row_drag(
     item: &gtk::ListItem,
     root: &gtk::Box,
     name: &gtk::Stack,
-    touch: bool,
+    handle: bool,
     held: &Rc<Cell<bool>>,
     owner: &Rc<RefCell<Weak<Workspace>>>,
     context: &gtk::PopoverMenu,
@@ -187,11 +187,17 @@ fn row_drag(
         None,
         move |source, x, y| {
             if name.visible_child_name().as_deref() == Some("edit")
-                || (!touch
+                || (!handle
                     && !held.get()
-                    && source
-                        .current_event_device()
-                        .is_some_and(|d| d.source() == gdk::InputSource::Touchscreen))
+                    && (source
+                        .current_event()
+                        .is_some_and(|e| e.device_tool().is_some())
+                        || source.current_event_device().is_some_and(|d| {
+                            matches!(
+                                d.source(),
+                                gdk::InputSource::Touchscreen | gdk::InputSource::Pen
+                            )
+                        })))
             {
                 return None;
             }

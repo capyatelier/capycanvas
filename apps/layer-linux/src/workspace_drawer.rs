@@ -98,7 +98,25 @@ impl ToolbarBody {
                 .iter()
                 .map(|t| {
                     let b = customization::tile_button(w, config, t);
-                    self.strip.append(&b);
+                    let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    b.set_hexpand(true);
+                    b.set_vexpand(true);
+                    root.append(&b);
+                    w.install_panel_drag(
+                        &root,
+                        DockItem::Tile {
+                            panel: self.panel,
+                            tile: t.id,
+                        },
+                    );
+                    w.install_context(
+                        &root,
+                        ContextTarget::Tile {
+                            panel: self.panel,
+                            tile: t.id,
+                        },
+                    );
+                    self.strip.append(&root);
                     b
                 })
                 .collect();

@@ -115,6 +115,9 @@ impl Columns {
                         ));
                         image.set_pixel_size(20);
                         button.set_child(Some(&image));
+                        // An icon tile remains a held source even though it moves a panel.
+                        button.add_css_class("drag-hold");
+                        w.install_panel_drag(&button, DockItem::Panel { panel: icon.panel });
                         w.install_context(&button, ContextTarget::Panel { panel: icon.panel });
                         mini.append(&button);
                         buttons.push((icon.panel, button));

@@ -167,54 +167,12 @@ function iconButton(id) {
   node.append(glyph);
   return node;
 }
-function draggable(node, item) {
-  if (item.kind !== "tile") {
-    node.draggable = false;
-    node.dataset.workspaceDrag = JSON.stringify({ type: "drag_workspace", item });
-    return node;
-  }
-  node.draggable = true;
-  let pointer;
-  node.addEventListener("workspace-context-claimed", e => {
-    if (pointer?.dragging) e.preventDefault();
-    else if (pointer) pointer.context = true;
-  });
-  node.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" || e.button !== 0) return;
-    pointer = { id: e.pointerId, x: e.clientX, y: e.clientY, dragging: false };
-    node.setPointerCapture(e.pointerId);
-  });
-  node.addEventListener("pointermove", (e) => {
-    if (pointer?.id !== e.pointerId) return;
-    if (!pointer.dragging && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 8) {
-      customization.dismissContext();
-      pointer.dragging = true; dragItem = item; node.classList.add("drag-source"); updateZen();
-    }
-    if (pointer.dragging) { e.preventDefault(); showDropHint(dropHint(e, item)); }
-  });
-  const endPointer = (e) => {
-    if (pointer?.id !== e.pointerId) return;
-    const moved = pointer.dragging, context = pointer.context; pointer = null;
-    if (context) revealPointer = e.pointerId;
-    if (!moved) return;
-    revealPointer = e.pointerId;
-    if (e.type === "pointerup") dropItem(item, dropHint(e, item));
-    dragItem = null; dropIndicator.hidden = true; node.classList.remove("drag-source"); updateZen();
-  };
-  for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) node.addEventListener(event, endPointer);
-  node.addEventListener("dragstart", (e) => {
-    if (pointer?.dragging) { e.preventDefault(); return; }
-    customization.dismissContext();
-    e.dataTransfer.setData("text/layer-dock", JSON.stringify(item));
-    e.dataTransfer.effectAllowed = "move";
-    dragItem = item;
-    updateZen();
-  });
-  node.addEventListener("dragend", () => {
-    dragItem = null;
-    dropIndicator.hidden = true;
-    updateZen();
-  });
+function draggable(node, item, pickup = item.kind === "tile" ? "hold" : "immediate") {
+  // All workspace contacts share stable capture, including mouse tile reorders.
+  // Classify the visible source separately from its Rust docking payload.
+  node.draggable = false;
+  node.dataset.workspaceDrag = JSON.stringify({ type: "drag_workspace", item });
+  node.dataset.dragPickup = pickup;
   return node;
 }
 function grip(item) {
@@ -904,7 +862,13 @@ function workspaceGestureEvent(phase, e) {
 function endWorkspaceGesture(e, cancel = false) {
   const drag = workspaceGesture;
   if (!drag || (e && drag.id !== e.pointerId)) return;
-  if (drag.started) workspaceGestureEvent(cancel ? "cancel" : "up", e || drag.last);
+  if (drag.started) {
+    if (drag.tile) {
+      if (!cancel) dropItem(drag.action.item, dropHint(e || drag.last, drag.action.item));
+      dragItem = null; drag.node.classList.remove("drag-source");
+    } else workspaceGestureEvent(cancel ? "cancel" : "up", e || drag.last);
+  }
+  if (cancel && drag.context) customization.dismissContext();
   workspaceGesture = null;
   clearTabSlide(drag);
   workspaceCursor(null);
@@ -914,11 +878,13 @@ function endWorkspaceGesture(e, cancel = false) {
   updateZen();
 }
 workspace.addEventListener("pointerdown", e => {
-  if (e.button !== 0 || workspaceGesture) return;
+  if (e.button !== 0 || !e.isPrimary || workspaceGesture) return;
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
   workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
-    start: e, last: e, started: false, node, cursor: getComputedStyle(node).cursor };
+    start: e, last: e, started: false, node, parent: node.parentNode,
+    waitForHold: node.dataset.dragPickup === "hold", cursor: getComputedStyle(node).cursor };
+  workspaceGesture.tile = workspaceGesture.action.item?.kind === "tile";
   grabTabSlide(workspaceGesture);
   // External resize strips are outside the unselectable panel. Prevent a
   // native text-selection drag from stealing their pointer sequence.
@@ -929,18 +895,27 @@ workspace.addEventListener("pointermove", e => {
   if (!drag || drag.id !== e.pointerId) return;
   drag.last = e;
   if (!drag.started) {
+    if (!drag.node.isConnected || drag.node.parentNode !== drag.parent) {
+      endWorkspaceGesture(e, true); return;
+    }
     const distance = Math.hypot(e.clientX - drag.start.clientX, e.clientY - drag.start.clientY);
     if (distance <= (drag.action.type === "drag_workspace" ? 8 : 0)) return;
+    if (drag.waitForHold && !drag.context) { endWorkspaceGesture(e, true); return; }
     customization.dismissContext();
     drag.started = true;
     // Capture on the stable workspace before Rust tears off/rebuilds a tab.
     workspace.setPointerCapture(e.pointerId);
     groups.forEach(node => node.getAnimations().forEach(a => a.cancel()));
-    startTabSlide(drag);
-    workspaceGestureEvent("down", drag.start);
-    if (drag.tabSlide) app.begin_tab_drag(drag.tabSlide.tabs.map(t => t.hit), drag.tabSlide.clip);
+    if (drag.tile) {
+      dragItem = drag.action.item; drag.node.classList.add("drag-source"); updateZen();
+    } else {
+      startTabSlide(drag);
+      workspaceGestureEvent("down", drag.start);
+      if (drag.tabSlide) app.begin_tab_drag(drag.tabSlide.tabs.map(t => t.hit), drag.tabSlide.clip);
+    }
   }
-  workspaceGestureEvent("move", e);
+  if (drag.tile) showDropHint(dropHint(e, drag.action.item));
+  else workspaceGestureEvent("move", e);
   if (drag.action.type === "drag_workspace") {
     workspaceCursor("grabbing");
   } else {
@@ -948,12 +923,16 @@ workspace.addEventListener("pointermove", e => {
   }
   e.preventDefault(); e.stopPropagation();
 }, { capture: true });
-workspace.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });
-workspace.addEventListener("pointercancel", e => endWorkspaceGesture(e, true), { capture: true });
+workspace.addEventListener("touchmove", e => {
+  if (workspaceGesture?.context && e.touches.length === 1) e.preventDefault();
+}, { passive: false });
+window.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });
+window.addEventListener("pointercancel", e => endWorkspaceGesture(e, true), { capture: true });
 workspace.addEventListener("lostpointercapture", e => {
   // Touch starts with implicit capture on the tab. Transferring capture to the
   // stable workspace releases that child; only losing our own capture cancels.
-  if (e.target === workspace) endWorkspaceGesture(e, true);
+  if (e.target === workspace || (!workspace.hasPointerCapture(e.pointerId)
+    && workspaceGesture?.node.contains(e.target))) endWorkspaceGesture(e, true);
 });
 workspace.addEventListener("workspace-context-claimed", e => {
   const drag = workspaceGesture;
@@ -1326,7 +1305,10 @@ function keyInput(e, pressed, divider = null) {
     e.stopPropagation();
   }
 }
-window.addEventListener("keydown", (e) => keyInput(e, true));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); return; }
+  keyInput(e, true);
+});
 window.addEventListener("keyup", (e) => keyInput(e, false));
 window.addEventListener("blur", () => {
   endWorkspaceGesture(null, true);

@@ -61,6 +61,64 @@ fn native_layer_hold_input() {
         pump(120);
     };
     std::fs::write(dir.join("ready"), "ready").unwrap();
+    pump(400);
+    for touch in [false, true] {
+        for handle in [false, true] {
+            let source = row(before[0]);
+            let node = if handle {
+                source.last_child().unwrap()
+            } else {
+                find_css(&source, "layer-name").unwrap()
+            };
+            let b = bounds(&node);
+            let start = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
+            let b = bounds(&row(before[1]));
+            let target = [b.x() + b.width() / 2., b.y() + b.height() - 3.];
+            let slop = gtk::Settings::default().unwrap().gtk_dnd_drag_threshold() as f32;
+            let pickup = [start[0] - slop * 3., start[1]];
+            let jitter = [start[0] - 2., start[1]];
+            perform(if touch {
+                serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":jitter},{"touch":"move","point":pickup}])
+            } else {
+                serde_json::json!([{"point":start},{"down":true},{"point":jitter},{"point":pickup}])
+            });
+            let controllers = if handle {
+                node.observe_controllers()
+            } else {
+                source.observe_controllers()
+            };
+            let drag = (0..controllers.n_items())
+                .find_map(|i| controllers.item(i).and_downcast::<gtk::DragSource>())
+                .unwrap();
+            assert_eq!(
+                drag.drag().is_some(),
+                handle || !touch,
+                "pickup crosses slop without waiting for a hold"
+            );
+            perform(if touch {
+                serde_json::json!([{"touch":"move","point":[target[0]+1.,target[1]]},{"touch":"up"}])
+            } else {
+                serde_json::json!([{"point":[target[0]+1.,target[1]]},{"down":false}])
+            });
+            if handle || !touch {
+                assert_ne!(
+                    order(),
+                    before,
+                    "touch={touch} handle={handle}: immediate row pickup"
+                );
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::Undo,
+                });
+                pump(150);
+            }
+            assert_eq!(
+                order(),
+                before,
+                "unheld touch body must not reorder; direct drag is one undo"
+            );
+            dismiss();
+        }
+    }
     for region in [
         "padding", "name", "content", "mask", "eye", "check", "link", "grip",
     ] {

@@ -1113,17 +1113,48 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.customization = CustomizationState::default();
                 return Ok(());
             }
-            let source = match item {
-                DockItem::Group { group } => layout.groups.iter().find(|g| g.id == group),
-                DockItem::Panel { panel } => {
-                    layout.groups.iter().find(|g| g.panels.contains(&panel))
-                }
-                DockItem::Tile { .. } => return Err("Tools use tile reordering".into()),
-                DockItem::Column { .. } => unreachable!(),
-            }
-            .ok_or("Unknown drag source")?;
-            let normalized = if source.panels.len() == 1 {
-                DockItem::Group { group: source.id }
+            // Collapsed icon tiles are panel sources too. Keep their small
+            // pickup bounds so tear-off starts from the icon, without opening
+            // a drawer or expanding the column as a separate history action.
+            let icon_source = if let DockItem::Panel { panel } = item {
+                layout
+                    .collapsed
+                    .iter()
+                    .flat_map(|c| &c.groups)
+                    .find_map(|g| {
+                        g.icons
+                            .iter()
+                            .find(|i| {
+                                i.panel == panel && i.bounds.contains(position[0], position[1])
+                            })
+                            .map(|i| (g.group, g.icons.len(), g.active, i.bounds, false))
+                    })
+            } else {
+                None
+            };
+            let (source_id, source_count, source_active, source_bounds, source_floating) =
+                icon_source
+                    .or_else(|| {
+                        let source = match item {
+                            DockItem::Group { group } => {
+                                layout.groups.iter().find(|g| g.id == group)
+                            }
+                            DockItem::Panel { panel } => {
+                                layout.groups.iter().find(|g| g.panels.contains(&panel))
+                            }
+                            _ => None,
+                        }?;
+                        Some((
+                            source.id,
+                            source.panels.len(),
+                            source.active,
+                            source.bounds,
+                            source.floating,
+                        ))
+                    })
+                    .ok_or("Unknown drag source")?;
+            let normalized = if source_count == 1 {
+                DockItem::Group { group: source_id }
             } else {
                 item
             };
@@ -1142,13 +1173,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 item: normalized,
                 panel: match item {
                     DockItem::Panel { panel } => panel,
-                    _ => source.active,
+                    _ => source_active,
                 },
-                source: source.bounds,
-                floating: (whole && source.floating).then_some(source.id),
-                offset: [position[0] - source.bounds.x, position[1] - source.bounds.y],
+                source: source_bounds,
+                floating: (whole && source_floating).then_some(source_id),
+                offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
-                chrome_revealed: !source.floating || !self.interaction.hidden,
+                chrome_revealed: !source_floating || !self.interaction.hidden,
                 moved: false,
                 drawer: self
                     .state
@@ -1156,15 +1187,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .column_drawers
                     .iter()
                     .find_map(|d| {
-                        matches!(d.anchor, DrawerAnchor::Column { group, .. } if group == source.id)
+                        matches!(d.anchor, DrawerAnchor::Column { group, .. } if group == source_id)
                             .then_some(d.anchor)
                     }),
             });
-            if whole && source.floating {
+            if whole && source_floating {
                 let floats = &mut self.state.workspace.layout.floating;
                 let index = floats
                     .iter()
-                    .position(|f| f.root.id() == source.id)
+                    .position(|f| f.root.id() == source_id)
                     .unwrap();
                 let floating = floats.remove(index);
                 floats.push(floating);
@@ -9229,6 +9260,88 @@ mod tests {
                         assert_eq!(app.state.workspace, after);
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_icon_drag_uses_shared_history_and_cancellation() {
+        let viewport = [1600., 1200.];
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for cancel in [false, true] {
+                let mut app = session();
+                app.set_platform(platform);
+                let group = app
+                    .state
+                    .workspace
+                    .layout
+                    .panel_group(Panel::Layers)
+                    .unwrap();
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetColumnCollapsed {
+                        group,
+                        collapsed: true,
+                    },
+                })
+                .unwrap();
+                let source = app
+                    .layout(viewport)
+                    .collapsed
+                    .into_iter()
+                    .flat_map(|c| c.groups)
+                    .flat_map(|g| g.icons)
+                    .find(|i| i.panel == Panel::Layers)
+                    .unwrap()
+                    .bounds;
+                let before = serde_json::to_value(&app.state.workspace).unwrap();
+                let point = [750., 500.];
+                for (phase, position) in [
+                    (
+                        ContactPhase::Down,
+                        [source.x + source.width / 2., source.y + source.height / 2.],
+                    ),
+                    (ContactPhase::Move, point),
+                    (
+                        if cancel {
+                            ContactPhase::Cancel
+                        } else {
+                            ContactPhase::Up
+                        },
+                        point,
+                    ),
+                ] {
+                    app.dispatch(UiAction::DragWorkspace {
+                        item: DockItem::Panel {
+                            panel: Panel::Layers,
+                        },
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                }
+                if !cancel {
+                    let after = serde_json::to_value(&app.state.workspace).unwrap();
+                    assert_ne!(after, before);
+                    assert_eq!(app.state.workspace.layout.floating.len(), 1);
+                    app.dispatch(UiAction::Invoke {
+                        command: CommandId::UndoWorkspace,
+                    })
+                    .unwrap();
+                    assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), before);
+                    app.dispatch(UiAction::Invoke {
+                        command: CommandId::RedoWorkspace,
+                    })
+                    .unwrap();
+                    assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), after);
+                    app.dispatch(UiAction::Invoke {
+                        command: CommandId::UndoWorkspace,
+                    })
+                    .unwrap();
+                }
+                assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), before);
+                assert!(app.workspace_drag.is_none());
             }
         }
     }

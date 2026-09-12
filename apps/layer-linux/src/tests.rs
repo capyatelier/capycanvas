@@ -1,6 +1,8 @@
 //! Native control/lifecycle integration on a hardware desktop. Control signals
 //! exercise GTK bindings; pen records exercise scheduling and GPU presentation.
 //! Physical tablet/touch delivery remains a human test (not faked here).
+#[path = "drag_pickup_tests.rs"]
+mod drag_pickup;
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
 #[path = "workspace_drawer_style_tests.rs"]
@@ -7938,20 +7940,14 @@ fn native_panel_customization() {
         ];
         let item = DockItem::Tile { panel, tile: moved };
         let hint = w.drop_at(point[0], point[1], item).unwrap();
-        *w.drop_hint.borrow_mut() = Some(hint);
+        *w.drop_hint.borrow_mut() = Some(hint.clone());
         capture_reference(&w, &format!("{dir}/tile-drop-{theme:?}.png"), 1.0);
-        let controllers = w.surface.observe_controllers();
-        let drop = (0..controllers.n_items())
-            .find_map(|i| controllers.item(i).and_downcast::<gtk::DropTarget>())
-            .unwrap();
-        assert!(drop.emit_by_name::<bool>(
-            "drop",
-            &[
-                &glib::BoxedValue(NativeDockItem(item).to_value()),
-                &(point[0] as f64),
-                &(point[1] as f64)
-            ]
+        // Captured workspace gestures commit the shared validated move.
+        w.dispatch(item.move_action(
+            hint.target,
+            [w.surface.width() as f32, w.surface.height() as f32],
         ));
+        w.clear_drop();
         assert_eq!(
             state(&w)
                 .workspace

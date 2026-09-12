@@ -55,12 +55,11 @@ export async function checkLongPressDragging({call, evaluate, settle}) {
         await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"layers"}});
       }
       const scope = drawer ? '.content-drawer[data-drawer="43"]' : '.dock-group[data-group="43"]';
-      const selector = tile ? '.toolbar-controls [draggable="true"]' : mode === "toolbar-grip" ? '.toolbar-controls > .panel-grip' : ["grip","floating-group"].includes(mode) ? `${scope} .dock-tabs > .panel-grip` : `${scope} .dock-tab[data-panel="properties"]`;
+      const selector = tile ? '.toolbar-controls [data-drag-pickup="hold"]' : mode === "toolbar-grip" ? '.toolbar-controls > .panel-grip' : ["grip","floating-group"].includes(mode) ? `${scope} .dock-tabs > .panel-grip` : `${scope} .dock-tab[data-panel="properties"]`;
       const start = center(await rect(selector)), before = await snapshot();
       pen = mode === "pen" || mode === "tool-pen";
       await press(start);
-      if (pen) await contextEvent(selector);
-      else await evaluate("new Promise(r=>setTimeout(r,650))");
+      await evaluate("new Promise(r=>setTimeout(r,650))");
       assert.equal(await menu(),true,`${mode}: hold opens the menu`);
       assert.deepEqual(await snapshot(),before,`${mode}: hold does not move or select the tab`);
       await move({x:start.x+2,y:start.y});
@@ -76,7 +75,7 @@ export async function checkLongPressDragging({call, evaluate, settle}) {
         continue;
       }
       const away = await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
-      const point = tile ? await evaluate("(()=>{const r=document.querySelectorAll('.toolbar-controls [draggable=true]')[2].getBoundingClientRect();return{x:r.x+r.width*.8,y:r.y+r.height*.8}})()") : ["reorder","drawer","pen"].includes(mode) ? {x:start.x-20,y:start.y} : away;
+      const point = tile ? await evaluate("(()=>{const r=document.querySelectorAll('.toolbar-controls [data-drag-pickup=hold]')[2].getBoundingClientRect();return{x:r.x+r.width*.8,y:r.y+r.height*.8}})()") : ["reorder","drawer","pen"].includes(mode) ? {x:start.x-20,y:start.y} : away;
       await move(point);
       assert.equal(await menu(),false,`${mode}: moving after the hold dismisses the menu`);
       if (!tile) assert.equal(await evaluate("document.querySelector('#workspace').dataset.workspaceCursor"),"grabbing");

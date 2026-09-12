@@ -99,7 +99,12 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if (suppressClick) { row.removeEventListener("click", suppressClick, true); suppressClick = null; }
       if (e.button || !e.isPrimary || e.target.closest("input") || !get().can_drop_below) return;
       drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId,
-        waitForHold: e.pointerType === "touch" && !grip.contains(e.target), held: false };
+        waitForHold: e.pointerType !== "mouse" && !grip.contains(e.target), held: false };
+      // Follow fast mouse exits before pickup without retargeting ordinary
+      // button clicks. Capture the row only once movement becomes a drag.
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", finish, true);
+      window.addEventListener("pointercancel", finish, true);
     });
     row.addEventListener("workspace-context-claimed", e => {
       if (drag?.ghost) e.preventDefault();
@@ -110,10 +115,10 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     row.addEventListener("touchmove", e => {
       if (drag?.held && e.touches.length === 1) e.preventDefault();
     }, { passive: false });
-    row.addEventListener("pointermove", e => {
+    const move = e => {
       if (!drag || drag.pointer !== e.pointerId) return;
       if (drag.waitForHold && !drag.held) {
-        if (Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 8) drag = null;
+        if (Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 8) finish({type:"pointercancel",pointerId:e.pointerId});
         return;
       }
       if (!drag.ghost && Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 6) {
@@ -133,10 +138,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         drag.target = { op: "drop", id: get().id, target: to.id, fraction };
         target.classList.add(to.group && fraction > .25 && fraction < .75 ? "layer-drop-into" : fraction < .5 ? "layer-drop-before" : "layer-drop-after");
       }
-    });
+    };
     const finish = e => {
       if (!drag || (e.pointerId != null && drag.pointer !== e.pointerId)) return;
       const previous = drag; drag = null;
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", finish, true);
+      window.removeEventListener("pointercancel", finish, true);
       if (row.hasPointerCapture(previous.pointer)) row.releasePointerCapture(previous.pointer);
       if ((previous.held || previous.ghost) && e.type === "pointerup") {
         const suppress = e => { e.preventDefault(); e.stopImmediatePropagation(); };
@@ -152,11 +160,17 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     };
     record.cancelDrag = () => finish({type:"pointercancel"});
     row.addEventListener("pointerup", finish); row.addEventListener("pointercancel", finish);
-    row.addEventListener("lostpointercapture", finish);
+    row.addEventListener("lostpointercapture", e => {
+      // Transferring implicit touch/pen capture from a grip or child control
+      // to its row releases that child without cancelling the reorder.
+      if (e.target === row || !row.hasPointerCapture(e.pointerId)) finish(e);
+    });
     return record;
   }
   const cancelDrags = () => { for (const r of records.values()) r.cancelDrag(); };
   window.addEventListener("blur", cancelDrags);
+  const cancelOnEscape = e => { if (e.key === "Escape") cancelDrags(); };
+  window.addEventListener("keydown", cancelOnEscape);
   function refresh() {
     const epoch=String(state().document_file.epoch);
     if(epoch!==documentEpoch){cancelDrags();documentEpoch=epoch;revisions.clear();for(const id of owned)pending.delete(id);owned.clear();
@@ -231,5 +245,5 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh, dispose(){cancelDrags();window.removeEventListener("blur",cancelDrags);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
+  return { refresh, dispose(){cancelDrags();window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
 }

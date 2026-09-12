@@ -110,6 +110,21 @@ are well below the 8.33 ms frame interval. GTK received 264–268 mouse events
 and all 550 touch events per case; Chrome received 267–270 native events per
 case after toolkit coalescing.
 
+## Drag pickup convention follow-up, 2026-09-12
+
+Mandatory tile holds and touch/pen row holds preserve steady workspace motion.
+The release-build mouse/touch regression matrix measured GTK presentation at
+117.30–120.02 Hz (changing placements: 117.90–120.20 Hz) and Web placement at
+119.81–120.04 Hz. All 16 scenarios passed the 115 Hz floor, with zero full model
+refreshes; Web also needed zero canvas GPU frames. These are regression results,
+not a speedup claim. Hold recognition is intentionally excluded from steady motion.
+
+Native GTK pickup/menu/scroll tests and browser mouse/touch/pen pickup tests cover
+tiles, toolbar drawers, collapsed icons, immediate tabs/grips, cancellation and
+undo/redo. Browser pen injection does not validate physical stylus delivery;
+GTK pen hardware testing remains outstanding. The hardware and isolation limits
+below apply to these measurements as well.
+
 ## Measurement scope
 
 GTK drawer parity validation on 2026-09-12 retained 116.42–120.02 Hz dragging

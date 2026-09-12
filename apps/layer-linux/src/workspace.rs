@@ -660,6 +660,9 @@ struct NativeWorkspaceDrag {
     point: [f32; 2],
     started: bool,
     context: bool,
+    source: gtk::Widget,
+    parent: Option<gtk::Widget>,
+    wait_for_hold: bool,
     sequence: Option<gdk::EventSequence>,
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
@@ -1436,8 +1439,15 @@ impl Workspace {
                 ..Default::default()
             };
         }
+        if matches!(&input, UiInput::Key { key, pressed: true, .. } if key == "Escape") {
+            let drag = self.workspace_drag.borrow().clone();
+            if let Some(drag) = drag {
+                self.workspace_drag_input(ContactPhase::Cancel, drag.point, drag.sequence);
+            }
+        }
         if matches!(input, UiInput::Blur) {
             if let Some(mut drag) = self.workspace_drag.borrow_mut().take() {
+                self.reset_drag_recognizers(&drag);
                 if drag.context {
                     self.dismiss_context();
                 }
@@ -2416,33 +2426,9 @@ impl Workspace {
     }
     fn install_panel_drag(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, item: DockItem) {
         self.register_drag(widget, DragTarget::Dock(item));
-        if !matches!(item, DockItem::Tile { .. }) {
-            return;
+        if matches!(item, DockItem::Tile { .. }) {
+            widget.add_css_class("drag-hold");
         }
-        let source = gtk::DragSource::builder()
-            .actions(gdk::DragAction::MOVE)
-            .build();
-        source.set_content(Some(&gdk::ContentProvider::for_value(
-            &NativeDockItem(item).to_value(),
-        )));
-        source.connect_drag_begin(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |_, _| {
-                this.dragging.set(true);
-                this.update_zen();
-            }
-        ));
-        source.connect_drag_end(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |_, _, _| {
-                this.dragging.set(false);
-                this.clear_drop();
-                this.update_zen();
-            }
-        ));
-        widget.add_controller(source);
     }
     fn clear_drop(&self) {
         self.drop_hint.borrow_mut().take();
@@ -2588,6 +2574,10 @@ impl Workspace {
     }
 
     fn drag_target_at(&self, point: [f32; 2]) -> Option<DragTarget> {
+        self.drag_source_at(point).map(|(_, target)| target)
+    }
+
+    fn drag_source_at(&self, point: [f32; 2]) -> Option<(gtk::Widget, DragTarget)> {
         let mut picked =
             self.surface
                 .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
@@ -2599,7 +2589,7 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
-                return Some(target);
+                return Some((widget, target));
             }
             picked = widget.parent();
         }
@@ -2676,6 +2666,31 @@ impl Workspace {
         }
     }
 
+    fn reset_drag_recognizers(&self, drag: &NativeWorkspaceDrag) {
+        // The stable controller consumes release. Reset native click/hold
+        // recognizers so cancellation cannot leave a timer or a stale click.
+        let mut picked = self
+            .surface
+            .pick(
+                drag.origin[0] as f64,
+                drag.origin[1] as f64,
+                gtk::PickFlags::DEFAULT,
+            )
+            .or_else(|| Some(drag.source.clone()));
+        while let Some(widget) = picked {
+            let controllers = widget.observe_controllers();
+            for i in 0..controllers.n_items() {
+                if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>() {
+                    gesture.reset();
+                }
+            }
+            if &widget == self.surface.upcast_ref::<gtk::Widget>() {
+                break;
+            }
+            picked = widget.parent();
+        }
+    }
+
     fn workspace_drag_input(
         self: &Rc<Self>,
         phase: ContactPhase,
@@ -2684,17 +2699,17 @@ impl Workspace {
     ) -> bool {
         if phase == ContactPhase::Down {
             if self.workspace_drag.borrow().is_none()
-                && let Some(target) = self.drag_target_at(point)
+                && let Some((source, target)) = self.drag_source_at(point)
             {
-                if sequence.is_none() && matches!(target, DragTarget::Dock(DockItem::Tile { .. })) {
-                    return false;
-                }
                 let mut drag = NativeWorkspaceDrag {
                     target,
                     origin: point,
                     point,
                     started: false,
                     context: false,
+                    wait_for_hold: source.has_css_class("drag-hold"),
+                    parent: source.parent(),
+                    source,
                     sequence,
                     cursor: None,
                     tab: None,
@@ -2715,6 +2730,9 @@ impl Workspace {
         };
         if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
             self.workspace_drag.borrow_mut().take();
+            if phase == ContactPhase::Cancel {
+                self.reset_drag_recognizers(&drag);
+            }
             self.clear_tab_slide(&mut drag);
             if drag.started {
                 if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
@@ -2744,6 +2762,11 @@ impl Workspace {
             return drag.started || drag.context;
         }
         if !drag.started {
+            if !drag.source.is_ancestor(&self.surface) || drag.source.parent() != drag.parent {
+                self.workspace_drag.borrow_mut().take();
+                self.dismiss_context();
+                return false;
+            }
             let recognized = if matches!(drag.target, DragTarget::Dock(_)) {
                 self.surface.drag_check_threshold(
                     drag.origin[0] as i32,
@@ -2757,27 +2780,13 @@ impl Workspace {
             if !recognized {
                 return false;
             }
-            self.dismiss_context();
-            // Reset click/hold recognizers once this is a drag. Merely denying
-            // them leaves stale sequence state: this stable controller consumes
-            // the release, so their next click would only clear that old drag.
-            let mut picked = self.surface.pick(
-                drag.origin[0] as f64,
-                drag.origin[1] as f64,
-                gtk::PickFlags::DEFAULT,
-            );
-            while let Some(widget) = picked {
-                let controllers = widget.observe_controllers();
-                for i in 0..controllers.n_items() {
-                    if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>() {
-                        gesture.reset();
-                    }
-                }
-                if &widget == self.surface.upcast_ref::<gtk::Widget>() {
-                    break;
-                }
-                picked = widget.parent();
+            if drag.wait_for_hold && !drag.context {
+                // Moving before the native hold wins belongs to scrolling.
+                self.workspace_drag.borrow_mut().take();
+                return false;
             }
+            self.dismiss_context();
+            self.reset_drag_recognizers(&drag);
             drag.started = true;
             if matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
                 self.dragging.set(true);
@@ -2919,7 +2928,7 @@ impl Workspace {
         self.surface.add_controller(click);
         // A window-surface event stream survives unparenting the pressed tab.
         // GtkGestureDrag cancels that sequence when tear-off rebuilds its group.
-        // Native widgets still receive clicks until GTK's drag threshold passes.
+        // Native widgets keep clicks until pickup is eligible and crosses slop.
         let pointer = gtk::EventControllerLegacy::new();
         pointer.set_name(Some("workspace-drag"));
         pointer.set_propagation_phase(gtk::PropagationPhase::Capture);

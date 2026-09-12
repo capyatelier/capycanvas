@@ -11,7 +11,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
   const input=async(type,p=point)=>{
     point=p;
     if(device==="touch")await call("Input.dispatchTouchEvent",{type:{down:"touchStart",move:"touchMove",up:"touchEnd",cancel:"touchCancel"}[type],touchPoints:["up","cancel"].includes(type)?[]:[{id:1,...p}]});
-    else await call("Input.dispatchMouseEvent",{type:{down:"mousePressed",move:"mouseMoved",up:"mouseReleased"}[type],...p,button:"left",buttons:type==="up"?0:1,clickCount:1});
+    else await call("Input.dispatchMouseEvent",{type:{down:"mousePressed",move:"mouseMoved",up:"mouseReleased"}[type],...p,button:"left",buttons:type==="up"?0:1,clickCount:1,pointerType:device});
     down=!["up","cancel"].includes(type);await wait();
   };
   try {
@@ -46,8 +46,8 @@ export async function checkLayerHolding({call, evaluate, settle}) {
         }
       }
     }
-    for(const mode of ["cancel-hold","cancel-drag","blur","mouse"]) {
-      device=mode==="mouse"?"mouse":"touch";
+    for(const mode of ["cancel-hold","cancel-drag","blur","mouse","pen"]) {
+      device=["mouse","pen"].includes(mode)?mode:"touch";
       await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
       const r=await rect(`${source} .layer-name`);
       await input("down",{x:r.x+r.width/2,y:r.y+r.height/2});await wait(600);
@@ -57,7 +57,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
         await input("move",{x:target.x+target.width/2,y:target.y+target.height-3});
         assert.equal(await menu(),false);
       }
-      if(mode==="mouse") {await input("up");assert.notDeepEqual(await order(),before);await send({type:"invoke",command:"undo"});}
+      if(["mouse","pen"].includes(mode)) {await input("up");assert.notDeepEqual(await order(),before);await send({type:"invoke",command:"undo"});}
       else if(mode==="blur") {await evaluate("window.dispatchEvent(new Event('blur'))");await input("up");}
       else await input("cancel");
       assert.deepEqual(await order(),before);

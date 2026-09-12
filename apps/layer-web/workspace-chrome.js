@@ -79,7 +79,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));
           b.setAttribute("aria-selected",String(state().customization.column_drawers.some(d=>d.anchor.column===column.id&&d.anchor.origin===item.panel)));
           place(b,local(item.bounds,column.content));customization.target(b,{kind:"panel",panel:item.panel});
-          content.append(draggable(b,{kind:"panel",panel:item.panel}));
+          content.append(draggable(b,{kind:"panel",panel:item.panel},"hold"));
         }
       }
       const handle=grip({kind:"column",column:column.id});place(handle,local(column.grip,column.bounds));root.append(handle);
