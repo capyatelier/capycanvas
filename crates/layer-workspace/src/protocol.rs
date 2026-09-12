@@ -190,7 +190,10 @@ fn intern(value: Value, components: &mut BTreeMap<String, Vec<u8>>) -> Result<Va
     components.entry(id.clone()).or_insert(bytes);
     Ok(serde_json::json!({ "$workspace_component": id }))
 }
-fn pack(value: Value, components: &mut BTreeMap<String, Vec<u8>>) -> Result<Value, StoreError> {
+pub(crate) fn pack(
+    value: Value,
+    components: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<Value, StoreError> {
     match value {
         Value::Object(mut object) => {
             if object.contains_key("bands")
@@ -321,6 +324,16 @@ pub enum StoreRequest {
     Raw {
         id: String,
     },
+    Maintenance {
+        owner: Option<Owner>,
+        clear_older: bool,
+        apply: bool,
+    },
+    DeletePermanently {
+        id: String,
+        owner: Owner,
+        fence: String,
+    },
     Reopen,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -334,5 +347,6 @@ pub enum StoreResponse {
     Binding(Option<String>),
     Pending(Vec<CommitBatch>),
     Raw(String),
+    Storage(StorageReport),
     Done,
 }

@@ -196,6 +196,9 @@ pub(crate) struct WorkspaceHistory {
     gesture: Option<WorkspaceState>,
 }
 impl WorkspaceHistory {
+    pub fn generation(&self) -> Option<u64> {
+        self.durable.as_ref().map(|h| h.generation)
+    }
     fn adopt_layout(state: &mut WorkspaceState, mut layout: DockLayout) {
         layout.measurements.clone_from(&state.layout.measurements);
         layout.column_scroll.clone_from(&state.layout.column_scroll);

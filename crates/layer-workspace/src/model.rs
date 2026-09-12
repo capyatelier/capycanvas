@@ -166,6 +166,11 @@ impl Metadata {
     }
     pub fn rename(&mut self, name: &str, description: &str, now: u64) -> Result<(), StoreError> {
         validate_name(name.trim())?;
+        if description.len() > 16_384 || self.previous.len() >= 100_000 {
+            return Err(StoreError::invalid(
+                "Item metadata exceeds supported limits.",
+            ));
+        }
         if self.builtin {
             return Err(StoreError::invalid(
                 "Duplicate to customize this built-in template.",
@@ -334,11 +339,19 @@ pub struct Entity {
 impl Entity {
     pub fn workspace(
         name: &str,
-        capture: WorkspaceCapture,
+        mut capture: WorkspaceCapture,
         baseline: DockLayout,
         origin: Option<TemplateOrigin>,
         now: u64,
     ) -> Self {
+        for revision in capture
+            .history
+            .revisions
+            .values_mut()
+            .filter(|r| r.timestamp_ms == 0)
+        {
+            revision.timestamp_ms = now;
+        }
         Self {
             id: new_id(),
             metadata: Metadata::new(ItemKind::Workspace, name, now),

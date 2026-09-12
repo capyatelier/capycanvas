@@ -49,7 +49,26 @@ impl SqliteStore {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder
+                .create(parent)
+                .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(path)
                 .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
         }
         let mut connection = Connection::open(path)?;
@@ -97,6 +116,17 @@ impl SqliteStore {
     pub fn handle(&mut self, request: StoreRequest) -> Result<StoreResponse> {
         match request {
             StoreRequest::List => self.list().map(StoreResponse::List),
+            StoreRequest::Maintenance {
+                owner,
+                clear_older,
+                apply,
+            } => self
+                .maintenance(owner.as_ref(), clear_older, apply)
+                .map(StoreResponse::Storage),
+            StoreRequest::DeletePermanently { id, owner, fence } => {
+                self.delete_permanently(&id, &owner, parse_counter(&fence)?)?;
+                Ok(StoreResponse::Done)
+            }
             StoreRequest::Load { id } => self.load(&id).map(StoreResponse::Entity),
             StoreRequest::Claim { id, owner } => self.claim(&id, owner).map(StoreResponse::Entity),
             StoreRequest::Renew { id, owner, fence } => self
@@ -116,6 +146,7 @@ impl SqliteStore {
                     [&operation_id],
                 )?;
                 tx.execute("DELETE FROM pending WHERE id=?1 AND EXISTS (SELECT 1 FROM receipts WHERE id=?1)", [&operation_id])?;
+                tx.execute("DELETE FROM receipts WHERE id IN (SELECT id FROM receipts WHERE acknowledged=1 AND NOT EXISTS(SELECT 1 FROM pending WHERE pending.id=receipts.id) ORDER BY rowid DESC LIMIT -1 OFFSET 256)",[])?;
                 tx.commit()?;
                 Ok(StoreResponse::Done)
             }
@@ -605,3 +636,6 @@ fn resolve_name(
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
+
+#[path = "sqlite_maintenance.rs"]
+mod maintenance;

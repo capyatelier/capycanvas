@@ -1327,7 +1327,7 @@ impl Workspace {
             }
         })
     }
-    fn customize(self: &Rc<Self>, action: CustomizationAction) {
+    pub(crate) fn customize(self: &Rc<Self>, action: CustomizationAction) {
         if !self.customization.updating.get() {
             self.dispatch(UiAction::Customize { action });
         }

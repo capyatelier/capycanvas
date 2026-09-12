@@ -68,6 +68,141 @@ fn workspace(name: &str) -> Entity {
         1_000_000,
     )
 }
+
+#[test]
+fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
+    let mut f = Fixture::new();
+    let current = f.create("Retained");
+    let mut content = current.entity.content.clone();
+    let ItemContent::Workspace {
+        history, baseline, ..
+    } = &mut content
+    else {
+        panic!()
+    };
+    let original = baseline.clone();
+    let mut first = original.clone();
+    first.bands[0].extent += 20.;
+    history.append(&first, "First");
+    let abandoned = history.current.clone();
+    history.undo();
+    let mut second = original.clone();
+    second.bands[0].extent += 40.;
+    history.append(&second, "Second");
+    let navigation = (
+        history.current.clone(),
+        history.undo.clone(),
+        history.redo.clone(),
+    );
+    let mut metadata = current.entity.metadata.clone();
+    metadata.rename("Renamed", "", 2_000_000).unwrap();
+    f.store
+        .commit(
+            CommitBatch::prepare(
+                f.owner.clone(),
+                vec![change(&current, Some(metadata), Some(content), None)],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let snapshot = f.store.load(&current.entity.id).unwrap();
+    let other = Owner::fresh();
+    let StoreResponse::Storage(deferred) = f
+        .store
+        .handle(StoreRequest::Maintenance {
+            owner: Some(other),
+            clear_older: true,
+            apply: true,
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(deferred.versions_to_remove, 0);
+    let request = StoreRequest::Maintenance {
+        owner: Some(f.owner.clone()),
+        clear_older: true,
+        apply: false,
+    };
+    let StoreResponse::Storage(preview) = f.store.handle(request).unwrap() else {
+        panic!()
+    };
+    assert_eq!(preview.versions_to_remove, 2);
+    f.store
+        .handle(StoreRequest::Maintenance {
+            owner: Some(f.owner.clone()),
+            clear_older: true,
+            apply: true,
+        })
+        .unwrap();
+    let cleaned = f.store.load(&current.entity.id).unwrap();
+    let ItemContent::Workspace {
+        history, baseline, ..
+    } = &cleaned.entity.content
+    else {
+        panic!()
+    };
+    assert_eq!(baseline, &original);
+    assert_eq!(history.layout(), &second);
+    assert_eq!(
+        (&history.current, &history.undo, &history.redo),
+        (&navigation.0, &navigation.1, &navigation.2)
+    );
+    assert!(!history.revisions.contains_key(&abandoned));
+    assert_eq!(cleaned.entity.working, current.entity.working);
+    assert!(cleaned.entity.metadata.previous.is_empty());
+    assert!(cleaned.generations.layout > snapshot.generations.layout);
+    let copy = f.create("Shares original");
+    let mut metadata = cleaned.entity.metadata.clone();
+    metadata.deleted_at_ms = Some(1_000_000);
+    f.store
+        .commit(
+            CommitBatch::prepare(
+                f.owner.clone(),
+                vec![change(&cleaned, Some(metadata), None, None)],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    f.clock
+        .0
+        .store(1_000_000 + TRASH_LIFETIME_MS + 1, Ordering::Relaxed);
+    f.store
+        .handle(StoreRequest::Maintenance {
+            owner: None,
+            clear_older: false,
+            apply: true,
+        })
+        .unwrap();
+    assert!(f.store.load(&cleaned.entity.id).is_err());
+    assert_eq!(
+        f.store
+            .load(&copy.entity.id)
+            .unwrap()
+            .entity
+            .capture()
+            .unwrap()
+            .history
+            .layout(),
+        &original
+    );
+    assert!(
+        f.store
+            .commit(
+                CommitBatch::prepare(
+                    f.owner.clone(),
+                    vec![change(
+                        &snapshot,
+                        None,
+                        Some(snapshot.entity.content.clone()),
+                        None
+                    )]
+                )
+                .unwrap()
+            )
+            .is_err()
+    );
+}
 fn change(
     stored: &StoredEntity,
     metadata: Option<Metadata>,

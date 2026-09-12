@@ -82,6 +82,79 @@ impl PreparedWorkspace {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn install_workspace_toolbar(
+        &mut self,
+        mut config: PanelConfig,
+        replace: Option<Panel>,
+        group: Option<u32>,
+    ) -> Result<(Panel, UiChange), String> {
+        self.require_workspace_idle()?;
+        config.id = Panel::Toolbar;
+        config.validate()?;
+        let PanelContent::Toolbar { name, tiles } = &config.content else {
+            return Err("Choose a toolbar".into());
+        };
+        let controls: Vec<_> = tiles.iter().map(|t| t.control).collect();
+        let before = self.state.workspace.clone();
+        let mut layout = before.layout.clone();
+        let panel = if let Some(panel) = replace {
+            layout.panel(panel)?;
+            if panel.kind() != PanelKind::Tiles {
+                return Err("Choose a toolbar to replace".into());
+            }
+            let name = if layout.check_toolbar_name(name, Some(panel)).is_ok() {
+                name.clone()
+            } else {
+                layout.unused_toolbar_name(name)
+            };
+            layout
+                .panels
+                .iter_mut()
+                .find(|p| p.id == panel)
+                .unwrap()
+                .tiles_mut()?
+                .clear();
+            layout.rename_toolbar(panel, &name)?;
+            layout.insert_tools(panel, None, &controls)?;
+            panel
+        } else {
+            let name = layout.unused_toolbar_name(name);
+            layout.add_toolbar(group, &name, &controls)?
+        };
+        let added = layout.panels.iter_mut().find(|p| p.id == panel).unwrap();
+        added.tile_style = config.tile_style;
+        added.hide_tab = config.hide_tab;
+        layout.validate()?;
+        self.state.workspace.layout = layout;
+        self.workspace_history.record_named(
+            before,
+            &self.state.workspace,
+            if replace.is_some() {
+                "Replace toolbar from library"
+            } else {
+                "Add toolbar from library"
+            },
+        );
+        self.state.customization = CustomizationState::default();
+        self.sync_work_area();
+        self.refresh_commands();
+        Ok((
+            panel,
+            self.changed(
+                regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,
+                false,
+            ),
+        ))
+    }
+    pub fn configure_workspace_manager(
+        &mut self,
+        workspace: ManagedWorkspace,
+    ) -> Result<UiChange, String> {
+        workspace.baseline.validate()?;
+        self.managed_workspace = Some(workspace);
+        self.refresh_commands();
+        Ok(self.changed(regions::COMMANDS, false))
+    }
     pub fn begin_workspace_transition(&mut self) -> Result<(), String> {
         self.require_workspace_idle()?;
         if self.workspace_transition {
@@ -138,6 +211,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             history: self.workspace_history.capture(&self.state.workspace),
             working: self.workspace_working_state(),
         })
+    }
+    pub fn workspace_layout_generation(&self) -> Option<u64> {
+        self.workspace_history.generation()
     }
 
     pub fn adopt_workspace(&mut self, prepared: PreparedWorkspace) -> Result<UiChange, String> {

@@ -147,6 +147,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .iter()
                                 .copied()
                                 .filter(|id| id.available_on(self.state.platform))
+                                .filter(|id| {
+                                    !(menu == M::View
+                                        && *id == CommandId::ResetLayout
+                                        && self.managed_workspace.is_some())
+                                })
                                 .map(command)
                                 .collect()
                         })

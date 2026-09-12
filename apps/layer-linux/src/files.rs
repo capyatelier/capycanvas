@@ -131,6 +131,9 @@ impl Workspace {
                                 HostRequestKind::SaveSettings { settings } => {
                                     crate::preferences::persist(&w, settings).await
                                 }
+                                HostRequestKind::Workspace { command } => {
+                                    w.workspaces.command(&w, command).await
+                                }
                                 HostRequestKind::OpenLink { link } => {
                                     gtk::UriLauncher::new(link.url())
                                         .launch_future(Some(&w.window))
@@ -365,7 +368,7 @@ fn write_png(output: &mut dyn Write, image: layer_render::ReadbackImage) -> Resu
 
 /// Local atomic streaming write: the original survives validation, encoding or
 /// disk errors. Only a fully flushed sibling temporary file replaces it.
-fn atomic_write(
+pub(crate) fn atomic_write(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> Result<(), String>,
 ) -> Result<(), String> {

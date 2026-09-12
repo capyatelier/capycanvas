@@ -51,8 +51,37 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn current(&self) -> Option<Entity> {
         self.state.borrow().latest.clone()
     }
+    pub fn current_record(&self) -> Option<StoredEntity> {
+        let state = self.state.borrow();
+        let mut saved = state.saved.clone()?;
+        saved.entity = state.latest.clone()?;
+        Some(saved)
+    }
     pub fn items(&self) -> Vec<ItemSummary> {
         self.state.borrow().items.clone()
+    }
+    pub fn binding(&self) -> Option<layer_ui::ManagedWorkspace> {
+        let current = self.current()?;
+        let ItemContent::Workspace { baseline, .. } = current.content else {
+            return None;
+        };
+        let mut items = self.items();
+        items.retain(|i| {
+            i.metadata.kind == ItemKind::Workspace && i.metadata.deleted_at_ms.is_none()
+        });
+        items.sort_by_key(|i| std::cmp::Reverse(i.metadata.last_used_ms));
+        Some(layer_ui::ManagedWorkspace {
+            id: current.id,
+            name: current.metadata.name,
+            baseline,
+            choices: items
+                .into_iter()
+                .map(|i| layer_ui::WorkspaceChoice {
+                    id: i.id,
+                    name: i.metadata.name,
+                })
+                .collect(),
+        })
     }
     pub fn error(&self) -> Option<StoreError> {
         self.state.borrow().error.clone()
@@ -152,7 +181,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             _ => Err(StoreError::invalid("Unexpected workspace load reply.")),
         }
     }
-    async fn claim(&self, id: &str) -> Result<StoredEntity> {
+    pub(crate) async fn claim(&self, id: &str) -> Result<StoredEntity> {
         match self
             .store
             .execute(StoreRequest::Claim {
@@ -178,6 +207,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
     pub async fn initialize(&self, now: u64) -> Result<StoredEntity> {
+        self.store
+            .execute(StoreRequest::Maintenance {
+                owner: None,
+                clear_older: false,
+                apply: true,
+            })
+            .await?;
         self.refresh().await?;
         if !self.items().iter().any(|i| i.id == DEFAULT_TEMPLATE_ID) {
             let mut default = Entity::reusable(
@@ -276,7 +312,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             now,
         ))
     }
-    async fn create_and_bind(
+    pub(crate) async fn create_and_bind(
         &self,
         entity: Entity,
         name_policy: NamePolicy,
@@ -297,6 +333,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .bindings
             .push((format!("window:{}", self.owner.id), Some(id.clone())));
         self.publish(batch).await?;
+        self.refresh().await?;
         self.load(&id).await
     }
     pub async fn prepare_switch(&self, id: &str, now: u64) -> Result<StoredEntity> {
@@ -598,3 +635,6 @@ fn update(
 #[cfg(all(test, feature = "native"))]
 #[path = "manager_tests.rs"]
 mod tests;
+
+#[path = "manager_operations.rs"]
+mod operations;

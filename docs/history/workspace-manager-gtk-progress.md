@@ -103,3 +103,60 @@ After integrating the next Android and GTK/Web changes, 258 shared UI tests and
 17 store/coordinator tests passed. The native test passed again in 4.38 seconds.
 Its layout assertions compare durable fields, excluding transient GTK widget
 measurements, which can arrive at different times after each realization.
+
+## Milestone 4: GTK manager, reuse, and portable recovery
+
+Connected the shared Workspace menu to a searchable GTK manager with workspace,
+template, local-toolbar, library, and Recently Deleted views. Implemented named
+creation, duplication, rename, template publication and updates, original-baseline
+reset, layout history, metadata recovery, reusable versions, toolbar copies and
+replacement, deletion with a selected replacement, restoration, and permanent
+deletion. Copies from another window in the same process settle that window's
+accepted edits before capture. Other processes remain fenced and require their
+source window to close before a current snapshot can be duplicated.
+
+Added separate hash-verified template, toolbar, and full workspace backup packages.
+Backup import retains working values, baseline and history/navigation under fresh
+local IDs; reusable imports contain layout/configuration only. Imports use unique
+names and publish atomically. GTK supplies native file pickers and background
+atomic file writes. Storage details offer backup export/import, in-memory recovery
+as a new workspace, retry, and a preview before clearing eligible older history.
+
+Shared retention protects current state, baselines, active navigation, and data
+referenced by other items. Native maintenance runs at startup and periodically
+while idle, defers other live owners, expires 30-day trash, collects unreachable
+components, and bounds acknowledged delivery receipts. History usage is currently
+reported conservatively from serialized revision sizes; shared component usage is
+reported separately. Current supported toolbar controls reference built-in tools
+and commands; portable packages carry their exact layout/toolbar definitions.
+
+Native testing caught and fixed closing an unopened manager dialog, delayed list
+replies overwriting Storage details, wrong sidebar selection for history, and
+startup racing asynchronous filter preparation. Routine GTK measurements no longer
+clone complete retained layout history on every presentation change.
+
+Validation:
+
+- 260 shared UI and 20 native store/coordinator tests pass, plus doc tests.
+  New cases cover library copy/reset/undo, pinned resets after template update and
+  deletion, backup navigation and fresh IDs, corrupt/missing/newer packages,
+  failed publication, retention, shared resources, and deletion fences.
+- `native_named_workspace_manager_templates_library_and_history` passed in 4.50s
+  on real GTK/Wayland/Vulkan with fatal criticals enabled. It exercises naming and
+  confirmation dialogs, independent working values, template creation/use, reset
+  undo, toolbar-library copies/deletion/recovery, and the history/storage screens.
+  The document remains unchanged. Reviewed manager and history captures in `/tmp`.
+- `native_workspace_database_resume_and_independent_windows` passed again in 6.99s,
+  including startup from the repository root with installed filter preparation.
+- `cargo check --locked -p layer-linux` passed. Integrated incoming Apple, Windows,
+  and Web changes through `56a897e` while retaining the GTK work.
+
+### Remaining GTK acceptance audit
+
+This milestone is not final GTK approval. Finish and validate interruption recovery
+for non-autosave operations, storage-full cleanup/retry, recovery of unsupported or
+corrupt database bytes, suspend/resume ownership revalidation, session-only close
+recovery, and resource-publication failure boundaries. Check native file-picker
+backup round trips and concurrent-owner failure presentation. Audit the proposal's
+remaining details and action availability, including newer-template information,
+before supplying the trial command and requesting approval for other hosts.

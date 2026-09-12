@@ -82,6 +82,7 @@ pub struct UiSession<R: CanvasRenderer> {
     workspace_tab_drag: Option<crate::tab_drag::TabDrag>,
     workspace_history: workspace::WorkspaceHistory,
     workspace_transition: bool,
+    managed_workspace: Option<ManagedWorkspace>,
     interaction: Interaction,
     cursor: cursor::Cursor,
     next_request: u32,
@@ -132,6 +133,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             workspace_tab_drag: None,
             workspace_history: workspace::WorkspaceHistory::default(),
             workspace_transition: false,
+            managed_workspace: None,
             interaction: Interaction::default(),
             cursor: cursor::Cursor::default(),
             next_request: 1,
@@ -233,15 +235,57 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
-        Ok(match target {
+        let mut menu = match target {
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
             _ => self
                 .state
                 .workspace
                 .layout
                 .context_menu_on(target, self.state.platform),
-        }?
-        .with_shortcuts(&self.state.settings, self.state.platform))
+        }?;
+        if self.managed_workspace.is_some() {
+            fn route(items: &mut [Vec<ContextMenuItem>]) {
+                for item in items.iter_mut().flatten() {
+                    let command = match &item.action {
+                        Some(UiAction::Customize {
+                            action: CustomizationAction::NewToolbar { group },
+                        }) => Some(WorkspaceCommand::NewToolbar { group: *group }),
+                        Some(UiAction::Customize {
+                            action: CustomizationAction::ManageToolbars,
+                        }) => Some(WorkspaceCommand::ManageToolbars),
+                        _ => None,
+                    };
+                    if let Some(command) = command {
+                        item.action = Some(UiAction::WorkspaceManager { command });
+                    }
+                    route(&mut item.sections);
+                }
+            }
+            route(&mut menu.sections);
+            let panel = match target {
+                ContextTarget::Panel { panel }
+                | ContextTarget::Ribbon { panel }
+                | ContextTarget::Tile { panel, .. } => Some(panel),
+                ContextTarget::Group { group } => self
+                    .state
+                    .workspace
+                    .layout
+                    .group_panels(group)
+                    .ok()
+                    .filter(|p| p.len() == 1)
+                    .map(|p| p[0]),
+                _ => None,
+            };
+            if let Some(panel) = panel.filter(|p| p.kind() == PanelKind::Tiles) {
+                menu.sections.push(vec![ContextMenuItem::command(
+                    "Save to Toolbar Library…",
+                    UiAction::WorkspaceManager {
+                        command: WorkspaceCommand::SaveToolbar { panel },
+                    },
+                )]);
+            }
+        }
+        Ok(menu.with_shortcuts(&self.state.settings, self.state.platform))
     }
     pub fn workspace_menu(&self) -> ContextMenu {
         let command = |id: CommandId| {
@@ -251,7 +295,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.hint = state.shortcut;
             item
         };
-        ContextMenu {
+        let mut menu = ContextMenu {
             title: WORKSPACE_MENU_LABEL.into(),
             sections: vec![
                 vec![
@@ -273,15 +317,33 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command(CommandId::ManageToolbars),
                 ],
             ],
+        };
+        if let Some(workspace) = &self.managed_workspace {
+            menu.sections.insert(
+                0,
+                vec![workspace.menu(
+                    self.require_workspace_idle().is_ok(),
+                    durable_layout(&self.state.workspace.layout) != workspace.baseline,
+                )],
+            );
         }
-        .with_shortcuts(&self.state.settings, self.state.platform)
+        menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
     pub fn toolbar_prompt(&self) -> Option<crate::customization::ToolbarPromptView> {
         self.state.customization.toolbar_prompt.as_ref().map(|p| {
-            p.view(
+            let mut view = p.view(
                 &self.state.workspace.layout,
                 &self.command(CommandId::UndoWorkspace).shortcut,
-            )
+            );
+            if view.destructive
+                && let Some(workspace) = &self.managed_workspace
+            {
+                view.message.push_str(&format!(
+                    " This removes the toolbar from {}.",
+                    workspace.name
+                ));
+            }
+            view
         })
     }
     pub fn toolbar_manager(&self) -> Option<crate::customization::ToolbarManagerView> {
@@ -1183,7 +1245,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             checkable: id.is_toggle(),
             icon: self.command_icon(id),
             id,
-            label: id.label(),
+            label: if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
+                "Reset Layout…"
+            } else {
+                id.label()
+            },
             tooltip: self.state.settings.action_tooltip(
                 id.label(),
                 &UiAction::Invoke { command: id },
@@ -1228,6 +1294,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::ResetLayout if self.managed_workspace.is_some() => {
+                self.require_workspace_idle().is_ok()
+                    && self
+                        .managed_workspace
+                        .as_ref()
+                        .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
+            }
             CommandId::NewDocument
             | CommandId::OpenDocument
             | CommandId::SaveDocument
@@ -1372,6 +1445,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::WorkspaceManager { command } => {
+                if self.managed_workspace.is_none() {
+                    return Err("Workspace management is not connected".into());
+                }
+                if let WorkspaceCommand::Switch { id } = &command
+                    && self.managed_workspace.as_ref().is_some_and(|w| &w.id == id)
+                {
+                    return Ok(UiChange::default());
+                }
+                self.request(HostRequestKind::Workspace { command })?;
+                (HOST, false)
+            }
             UiAction::MeasureColumnDrawers { measurements } => {
                 self.state
                     .customization
@@ -2862,6 +2947,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((SETTINGS, true))
             }
             CommandId::ResetLayout => {
+                if self.managed_workspace.is_some() {
+                    self.require_workspace_idle()?;
+                    self.request(HostRequestKind::Workspace {
+                        command: WorkspaceCommand::ResetLayout,
+                    })?;
+                    return Ok((HOST, false));
+                }
                 self.state
                     .workspace
                     .layout
@@ -2883,6 +2975,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
             CommandId::NewToolbar | CommandId::ManageToolbars => {
+                if self.managed_workspace.is_some() {
+                    self.request(HostRequestKind::Workspace {
+                        command: if command == CommandId::NewToolbar {
+                            WorkspaceCommand::NewToolbar { group: None }
+                        } else {
+                            WorkspaceCommand::ManageToolbars
+                        },
+                    })?;
+                    return Ok((HOST, false));
+                }
                 let partial_zen = self.state.partial_zen();
                 let changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
@@ -3127,14 +3229,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
             let icon = self.command_icon(id);
+            let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
+                "Reset Layout…"
+            } else {
+                id.label()
+            };
             if let Some(previous) = self.state.commands.get_mut(index) {
                 if previous.enabled != enabled
                     || previous.selected != selected
                     || previous.icon != icon
+                    || previous.label != label
                 {
                     previous.enabled = enabled;
                     previous.selected = selected;
                     previous.icon = icon;
+                    previous.label = label;
                     changed = true;
                 }
             } else {
@@ -3426,6 +3535,60 @@ mod tests {
         s.dispatch(UiAction::SetBrushSize { value: 50. }).unwrap();
         assert_eq!(s.state.brush.diameter, 50.);
         assert_eq!(s.engine.document(), &before);
+    }
+
+    #[test]
+    fn library_copies_remap_tiles_and_full_reset_recovers_toolbar_customization() {
+        let mut s = session();
+        let initial = s.capture_workspace().unwrap();
+        let baseline = initial.history.layout().clone();
+        let source = baseline
+            .panels
+            .iter()
+            .find(|p| p.id.kind() == PanelKind::Tiles && !p.tiles().is_empty())
+            .unwrap()
+            .clone();
+        let mut library = source.clone();
+        if let PanelContent::Toolbar { name, tiles } = &mut library.content {
+            *name = "Library Tools".into();
+            tiles[0].control = ToolbarControl::Size { pixels: 20 };
+        }
+        s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
+        invoke(&mut s, CommandId::ZenMode);
+        let working = s.workspace_working_state();
+        let (copy, _) = s
+            .install_workspace_toolbar(library.clone(), None, None)
+            .unwrap();
+        assert_ne!(copy, source.id);
+        assert_eq!(s.state.workspace.layout.panel(source.id).unwrap(), &source);
+        let installed = s.state.workspace.layout.panel(copy).unwrap();
+        assert_eq!(
+            installed.tiles()[0].control,
+            ToolbarControl::Size { pixels: 20 }
+        );
+        assert!(
+            installed
+                .tiles()
+                .iter()
+                .all(|tile| source.tiles().iter().all(|old| old.id != tile.id))
+        );
+        if let PanelContent::Toolbar { tiles, .. } = &mut library.content {
+            tiles[0].control = ToolbarControl::Size { pixels: 30 };
+        }
+        let placement = s.state.workspace.layout.panel_group(copy);
+        s.install_workspace_toolbar(library, Some(copy), None)
+            .unwrap();
+        assert_eq!(s.state.workspace.layout.panel_group(copy), placement);
+        let customized = durable_layout(&s.state.workspace.layout);
+        assert_eq!(s.workspace_working_state(), working);
+        s.restore_workspace_layout(baseline.clone(), "Reset to original layout")
+            .unwrap();
+        assert_eq!(durable_layout(&s.state.workspace.layout), baseline);
+        assert_eq!(s.workspace_working_state(), working);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(durable_layout(&s.state.workspace.layout), customized);
+        assert_eq!(s.workspace_working_state(), working);
+        assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 4);
     }
 
     #[test]

@@ -41,7 +41,9 @@ mod settings;
 mod shortcuts;
 mod theme;
 mod workspace;
+mod workspace_manager_ui;
 pub use session::{LayerAction, LayerCanvasTool, LayersView, RegionSource};
+pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, CloseDecision,
@@ -817,6 +819,9 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    WorkspaceManager {
+        command: WorkspaceCommand,
+    },
     WindowFullscreen {
         fullscreen: bool,
     },

@@ -11234,10 +11234,13 @@ fn native_tab_slide_input() {
             ];
             perform(serde_json::json!([{ "point": point }]));
             assert_eq!(state(&w).workspace.layout.floating.len(), 1);
-            let layout = w.gpu.borrow().as_ref().unwrap().session.layout([
-                w.surface.width() as f32,
-                w.surface.height() as f32,
-            ]);
+            let layout = w
+                .gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .layout([w.surface.width() as f32, w.surface.height() as f32]);
             let floated = layout
                 .groups
                 .iter()
@@ -11314,7 +11317,11 @@ fn native_column_drawer_drag_input() {
         let native = w.window.surface().unwrap();
         let pointer = native.display().default_seat().unwrap().pointer().unwrap();
         let cursor = native.device_cursor(&pointer).and_then(|c| c.name());
-        if w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started) {
+        if w.workspace_drag
+            .borrow()
+            .as_ref()
+            .is_some_and(|d| d.started)
+        {
             assert_eq!(cursor.as_deref(), Some("grabbing"));
         } else {
             assert_ne!(cursor.as_deref(), Some("grabbing"));
@@ -11411,7 +11418,14 @@ fn native_column_drawer_drag_input() {
             if !whole {
                 let drag = w.workspace_drag.borrow();
                 let drag = drag.as_ref().unwrap();
-                assert!(drag.tab.as_ref().unwrap().tabs.iter().all(|tab| tab.widget.opacity() == 0.));
+                assert!(
+                    drag.tab
+                        .as_ref()
+                        .unwrap()
+                        .tabs
+                        .iter()
+                        .all(|tab| tab.widget.opacity() == 0.)
+                );
                 assert!((drag.point[0] - drag.origin[0] + 12.).abs() < 1.);
             }
             perform(serde_json::json!([{ "point": away }]));
@@ -13174,13 +13188,20 @@ fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
 #[test]
 #[ignore = "private Wayland display, Vulkan and CAPY_WORKSPACE_DIR: native SQLite workspace resume"]
 fn native_workspace_database_resume_and_independent_windows() {
-    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some(), "Use an isolated CAPY_WORKSPACE_DIR for this test");
+    assert!(
+        std::env::var_os("CAPY_WORKSPACE_DIR").is_some(),
+        "Use an isolated CAPY_WORKSPACE_DIR for this test"
+    );
     let app = native_test_app("art.capycanvas.WorkspacePersistence");
     let wait_ready = |w: &Workspace| {
         let deadline = Instant::now() + Duration::from_secs(20);
         while !w.workspaces.ready.get() || w.workspaces.busy.get() {
             pump(20);
-            assert!(Instant::now() < deadline, "workspace startup: {:?}", w.workspaces.manager.as_ref().unwrap().error());
+            assert!(
+                Instant::now() < deadline,
+                "workspace startup: {:?}",
+                w.workspaces.manager.as_ref().unwrap().error()
+            );
         }
     };
     let wait_saved = |w: &Workspace| {
@@ -13188,51 +13209,263 @@ fn native_workspace_database_resume_and_independent_windows() {
         let manager = w.workspaces.manager.as_ref().unwrap();
         while manager.dirty() || manager.saving() {
             pump(20);
-            assert!(manager.error().is_none(), "workspace save: {:?}", manager.error());
+            assert!(
+                manager.error().is_none(),
+                "workspace save: {:?}",
+                manager.error()
+            );
             assert!(Instant::now() < deadline, "workspace save deadline");
         }
         assert!(manager.error().is_none());
     };
-    let w = Workspace::new(&app); w.window.present(); wait_ready(&w);
+    let w = Workspace::new(&app);
+    w.window.present();
+    wait_ready(&w);
     let id = w.workspaces.manager.as_ref().unwrap().active_id().unwrap();
     let baseline = durable_layout(&state(&w).workspace.layout);
-    let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
-    w.dispatch(UiAction::MovePanel { panel: Panel::Layers, target: DockTarget::Float { position: [420., 180.] }, viewport: [1200., 900.] });
+    let document = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .clone();
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Layers,
+        target: DockTarget::Float {
+            position: [420., 180.],
+        },
+        viewport: [1200., 900.],
+    });
     w.dispatch(UiAction::SetBrushSize { value: 73. });
-    w.dispatch(UiAction::SetColor { rgba: [0.2, 0.4, 0.6, 1.] });
-    w.dispatch(UiAction::Invoke { command: CommandId::ZenMode });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.2, 0.4, 0.6, 1.],
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
     let moved = durable_layout(&state(&w).workspace.layout);
     assert_ne!(moved, baseline);
     wait_saved(&w);
-    assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document(), &document);
+    assert_eq!(
+        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        &document
+    );
     w.window.close();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.is_visible() { pump(20); assert!(Instant::now() < deadline, "acknowledged close"); }
-    drop(w); pump(30);
-    let reopened = Workspace::new(&app); reopened.window.present(); wait_ready(&reopened);
-    assert_eq!(reopened.workspaces.manager.as_ref().unwrap().active_id().unwrap(), id);
+    while w.window.is_visible() {
+        pump(20);
+        assert!(Instant::now() < deadline, "acknowledged close");
+    }
+    drop(w);
+    pump(30);
+    let reopened = Workspace::new(&app);
+    reopened.window.present();
+    wait_ready(&reopened);
+    assert_eq!(
+        reopened
+            .workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_id()
+            .unwrap(),
+        id
+    );
     assert_eq!(durable_layout(&state(&reopened).workspace.layout), moved);
     assert_eq!(state(&reopened).brush.diameter, 73.);
     assert_eq!(state(&reopened).colors.foreground, [0.2, 0.4, 0.6, 1.]);
     assert!(state(&reopened).workspace.zen_mode);
-    reopened.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+    reopened.dispatch(UiAction::Invoke {
+        command: CommandId::UndoWorkspace,
+    });
     assert_eq!(durable_layout(&state(&reopened).workspace.layout), baseline);
     assert_eq!(state(&reopened).brush.diameter, 73.);
     assert!(state(&reopened).workspace.zen_mode);
     wait_saved(&reopened);
     reopened.window.close();
-    while reopened.window.is_visible() { pump(20); assert!(Instant::now() < deadline + Duration::from_secs(20)); }
-    drop(reopened); pump(30);
-    let again = Workspace::new(&app); again.window.present(); wait_ready(&again);
-    again.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+    while reopened.window.is_visible() {
+        pump(20);
+        assert!(Instant::now() < deadline + Duration::from_secs(20));
+    }
+    drop(reopened);
+    pump(30);
+    let again = Workspace::new(&app);
+    again.window.present();
+    wait_ready(&again);
+    again.dispatch(UiAction::Invoke {
+        command: CommandId::RedoWorkspace,
+    });
     assert_eq!(durable_layout(&state(&again).workspace.layout), moved);
     assert_eq!(state(&again).brush.diameter, 73.);
     wait_saved(&again);
-    let second = Workspace::new(&app); second.window.present(); wait_ready(&second);
-    assert_ne!(again.workspaces.manager.as_ref().unwrap().active_id(), second.workspaces.manager.as_ref().unwrap().active_id());
-    second.dispatch(UiAction::SetBrushSize { value: 121. }); wait_saved(&second);
+    let second = Workspace::new(&app);
+    second.window.present();
+    wait_ready(&second);
+    assert_ne!(
+        again.workspaces.manager.as_ref().unwrap().active_id(),
+        second.workspaces.manager.as_ref().unwrap().active_id()
+    );
+    second.dispatch(UiAction::SetBrushSize { value: 121. });
+    wait_saved(&second);
     assert_eq!(state(&again).brush.diameter, 73.);
     assert_eq!(state(&second).brush.diameter, 121.);
     crate::capture(&second, "/tmp/capy-workspace-persistence.png");
-    second.window.close(); again.window.close(); pump(500);
+    second.window.close();
+    again.window.close();
+    pump(500);
+}
+
+#[test]
+#[ignore = "requires an isolated CAPY_WORKSPACE_DIR and native GTK/Vulkan display"]
+fn native_named_workspace_manager_templates_library_and_history() {
+    use layer_workspace::{ItemKind, ManagerAction as A, ManagerPage};
+    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    let app = native_test_app("art.capycanvas.NamedWorkspaceManager");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(
+            Instant::now() < deadline,
+            "startup: {:?}",
+            w.workspaces.manager.as_ref().unwrap().error()
+        );
+    }
+    let manager = w.workspaces.manager.as_ref().unwrap();
+    let run = |action: A, name: Option<&str>, confirm: Option<&str>| {
+        if name.is_some() || confirm.is_some() {
+            let w = w.clone();
+            let name = name.map(str::to_owned);
+            let confirm = confirm.map(str::to_owned);
+            let timeout = Instant::now() + Duration::from_secs(10);
+            glib::timeout_add_local(Duration::from_millis(20), move || {
+                assert!(Instant::now() < timeout, "manager prompt did not appear");
+                if let Some(name) = &name {
+                    let Some(entry) = find_named(w.window.upcast_ref(), "workspace-item-name")
+                    else {
+                        return glib::ControlFlow::Continue;
+                    };
+                    entry.downcast::<gtk::Entry>().unwrap().set_text(name);
+                }
+                if let Some(confirm) = &confirm {
+                    let Some(button) = find_button(w.window.upcast_ref(), confirm) else {
+                        return glib::ControlFlow::Continue;
+                    };
+                    button.emit_clicked();
+                }
+                glib::ControlFlow::Break
+            });
+        }
+        glib::MainContext::default()
+            .block_on(w.workspaces.perform(&w, action))
+            .unwrap();
+        pump(100);
+        assert!(!w.workspaces.busy.get());
+    };
+    let drawing = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .clone();
+    run(A::New, Some("Painting"), Some("Create and Switch"));
+    assert_eq!(manager.active_name().as_deref(), Some("Painting"));
+    let painting = manager.active_id().unwrap();
+    let baseline = durable_layout(&state(&w).workspace.layout);
+    w.dispatch(UiAction::SetBrushSize { value: 73. });
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Layers,
+        target: DockTarget::Float {
+            position: [430., 170.],
+        },
+        viewport: [1200., 900.],
+    });
+    let customized = durable_layout(&state(&w).workspace.layout);
+    run(
+        A::SaveAsTemplate(painting.clone()),
+        Some("Illustration"),
+        Some("Save as Template"),
+    );
+    let template = manager
+        .items()
+        .into_iter()
+        .find(|i| i.metadata.name == "Illustration")
+        .unwrap()
+        .id;
+    run(
+        A::NewFromTemplate(template.clone()),
+        Some("Inking"),
+        Some("Create and Switch"),
+    );
+    assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
+    assert_ne!(state(&w).brush.diameter, 73.);
+    run(A::Switch(painting.clone()), None, None);
+    assert_eq!(state(&w).brush.diameter, 73.);
+    run(A::Reset(painting.clone()), None, Some("Reset Layout"));
+    assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
+    assert_eq!(state(&w).brush.diameter, 73.);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::UndoWorkspace,
+    });
+    assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
+    let toolbar = state(&w)
+        .workspace
+        .layout
+        .panels
+        .iter()
+        .find(|p| p.id.kind() == PanelKind::Tiles)
+        .unwrap()
+        .id;
+    run(
+        A::SaveToolbar(toolbar),
+        Some("Ink Tools"),
+        Some("Save to Library"),
+    );
+    let library = manager
+        .items()
+        .into_iter()
+        .find(|i| i.metadata.kind == ItemKind::Toolbar && i.metadata.name == "Ink Tools")
+        .unwrap()
+        .id;
+    let count = state(&w).workspace.layout.panels.len();
+    run(A::AddToolbar(library.clone()), None, None);
+    assert_eq!(state(&w).workspace.layout.panels.len(), count + 1);
+    assert_eq!(state(&w).brush.diameter, 73.);
+    run(
+        A::Delete(library.clone()),
+        None,
+        Some("Move to Recently Deleted"),
+    );
+    assert_eq!(state(&w).workspace.layout.panels.len(), count + 1);
+    run(A::RestoreDeleted(library), None, None);
+    run(A::History(painting.clone()), None, None);
+    assert!(find_named(w.window.upcast_ref(), "workspace-history-restore").is_some());
+    crate::capture(&w, "/tmp/capy-workspace-layout-history.png");
+    w.workspaces.ui.show(&w, ManagerPage::Templates);
+    pump(200);
+    assert!(find_named(w.window.upcast_ref(), "workspace-manager-search").is_some());
+    assert!(find_named(w.window.upcast_ref(), "workspace-layout-preview").is_some());
+    crate::capture(&w, "/tmp/capy-workspace-manager.png");
+    run(A::Storage, None, None);
+    assert!(find_button(w.window.upcast_ref(), "Import Workspace Backup…").is_some());
+    assert!(find_button(w.window.upcast_ref(), "Export Workspace Backup…").is_some());
+    assert_eq!(
+        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        &drawing
+    );
+    w.workspaces.ui.dialog.close();
+    pump(50);
+    w.window.close();
+    pump(500);
+    assert!(!w.window.is_visible());
 }

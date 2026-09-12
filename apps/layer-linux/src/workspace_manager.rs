@@ -4,6 +4,15 @@ use layer_workspace::{StoreError, StoreWorker, StoredEntity, WorkspaceManager};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Manager = WorkspaceManager<StoreWorker>;
+thread_local! {
+    static WINDOWS: RefCell<std::collections::BTreeMap<String, std::rc::Weak<Workspace>>> = RefCell::new(std::collections::BTreeMap::new());
+}
+#[path = "workspace_manager_actions.rs"]
+mod actions;
+#[path = "workspace_manager_dialog.rs"]
+mod dialog;
+#[path = "workspace_manager_storage.rs"]
+mod storage;
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -12,18 +21,23 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 pub(crate) struct NativeWorkspaces {
+    pub ui: dialog::ManagerUi,
     pub manager: Option<Rc<Manager>>,
     pub root: gtk::Box,
     pub label: gtk::Label,
     retry: gtk::Button,
+    recovery: gtk::Button,
     pub ready: Cell<bool>,
     pub busy: Cell<bool>,
+    operation_generation: Cell<u64>,
     close_ready: Cell<bool>,
     close_requested: Cell<bool>,
     layout_pending: Cell<bool>,
+    captured_generation: Cell<Option<u64>>,
     last_edit: Cell<Instant>,
     last_save: Cell<Instant>,
     last_renew: Cell<Instant>,
+    last_maintenance: Cell<Instant>,
     failed_snapshot: RefCell<Option<WorkspaceCapture>>,
 }
 impl NativeWorkspaces {
@@ -54,25 +68,50 @@ impl NativeWorkspaces {
         retry.set_visible(false);
         root.append(&label);
         root.append(&retry);
+        let recovery = gtk::Button::with_label("Storage and Backups…");
+        recovery.set_visible(false);
+        root.append(&recovery);
         root.set_visible(manager.is_some());
         let now = Instant::now();
         Self {
+            ui: dialog::ManagerUi::new(),
             ready: Cell::new(manager.is_none()),
             manager,
             root,
             label,
             retry,
+            recovery,
             busy: Cell::new(false),
+            operation_generation: Cell::new(0),
             close_ready: Cell::new(false),
             close_requested: Cell::new(false),
             layout_pending: Cell::new(false),
+            captured_generation: Cell::new(None),
             last_edit: Cell::new(now),
             last_save: Cell::new(now),
             last_renew: Cell::new(now),
+            last_maintenance: Cell::new(now),
             failed_snapshot: RefCell::new(None),
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        if let Some(manager) = &self.manager {
+            WINDOWS.with(|windows| {
+                windows
+                    .borrow_mut()
+                    .insert(manager.owner.id.clone(), Rc::downgrade(w));
+            });
+        }
+        self.ui.bind(w);
+        self.recovery.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                w.workspaces
+                    .ui
+                    .run(&w, layer_workspace::ManagerAction::Storage);
+            }
+        ));
         self.retry.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -119,23 +158,40 @@ impl NativeWorkspaces {
                     .as_ref()
                     .is_some_and(|old| old != capture)
             });
-        if let Err(error) = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .ok_or("Canvas unavailable".to_string())
-            .and_then(|g| g.session.begin_workspace_transition())
-        {
-            self.busy.set(false);
-            self.show_error(StoreError::invalid(error));
-            return;
-        }
         w.surface.set_sensitive(false);
         self.label.set_text("Opening workspace…");
         glib::spawn_future_local(glib::clone!(
             #[weak]
             w,
             async move {
+                // Startup can still be compiling installed filter resources.
+                // Let rendering finish that preparation before the idle-only
+                // workspace adoption, while the editor remains insensitive.
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let result = w
+                        .gpu
+                        .borrow_mut()
+                        .as_mut()
+                        .ok_or("Canvas unavailable".to_string())
+                        .and_then(|g| g.session.begin_workspace_transition());
+                    match result {
+                        Ok(()) => break,
+                        Err(error)
+                            if w.workspaces.failed_snapshot.borrow().is_some()
+                                || Instant::now() >= deadline =>
+                        {
+                            w.workspaces
+                                .adopt(&w, Err(StoreError::invalid(error)))
+                                .await;
+                            return;
+                        }
+                        Err(_) => {
+                            w.wake();
+                            glib::timeout_future(Duration::from_millis(16)).await;
+                        }
+                    }
+                }
                 let _ = manager
                     .store
                     .request(layer_workspace::StoreRequest::Reopen)
@@ -173,8 +229,10 @@ impl NativeWorkspaces {
                 match result {
                     Ok(change) => {
                         let outgoing = manager.activate(incoming);
+                        self.sync_binding(w);
                         self.ready.set(true);
                         self.layout_pending.set(false);
+                        self.captured_generation.set(None);
                         w.changed(Ok(change));
                         if let Some(outgoing) = outgoing
                             && manager.active_id().as_deref() != Some(&outgoing.entity.id)
@@ -236,12 +294,22 @@ impl NativeWorkspaces {
         if !self.layout_pending.get() {
             return;
         }
+        let generation = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .and_then(|g| g.session.workspace_layout_generation());
+        if generation.is_some() && generation == self.captured_generation.get() {
+            self.layout_pending.set(false);
+            return;
+        }
         if let Some(manager) = &self.manager
             && let Some(gpu) = w.gpu.borrow_mut().as_mut()
             && let Ok(capture) = gpu.session.capture_workspace()
         {
             manager.observe(capture, now_ms());
             self.layout_pending.set(false);
+            self.captured_generation.set(generation);
         }
     }
     fn tick(&self, w: &Rc<Workspace>) {
@@ -252,6 +320,32 @@ impl NativeWorkspaces {
             return;
         };
         self.capture(w);
+        if self.last_maintenance.get().elapsed() >= Duration::from_secs(60)
+            && !manager.saving()
+            && manager.error().is_none()
+            && w.gpu
+                .borrow()
+                .as_ref()
+                .is_some_and(|g| g.session.require_workspace_idle().is_ok())
+        {
+            self.last_maintenance.set(Instant::now());
+            glib::spawn_future_local(glib::clone!(
+                #[weak]
+                w,
+                async move {
+                    let Ok(_operation) = w.workspaces.begin_operation(&w).await else {
+                        return;
+                    };
+                    let manager = w.workspaces.manager.as_ref().unwrap();
+                    match manager.maintain_storage(false).await {
+                        Ok(Some(incoming)) => w.workspaces.adopt(&w, Ok(incoming)).await,
+                        Ok(None) => (),
+                        Err(error) => w.workspaces.show_error(error),
+                    }
+                }
+            ));
+            return;
+        }
         if self.last_renew.get().elapsed() >= Duration::from_millis(layer_workspace::OWNER_RENEW_MS)
         {
             self.last_renew.set(Instant::now());
@@ -305,6 +399,7 @@ impl NativeWorkspaces {
         self.label.set_text(&error.message);
         self.label.add_css_class("error");
         self.retry.set_visible(true);
+        self.recovery.set_visible(true);
     }
     pub fn update_status(&self) {
         let Some(manager) = &self.manager else {
@@ -321,10 +416,12 @@ impl NativeWorkspaces {
             ));
             self.label.add_css_class("error");
             self.retry.set_visible(true);
+            self.recovery.set_visible(true);
         } else {
             self.root.set_visible(self.busy.get() || !self.ready.get());
             self.label.remove_css_class("error");
             self.retry.set_visible(false);
+            self.recovery.set_visible(false);
             self.label.set_text(&format!(
                 "{} · {}",
                 manager
