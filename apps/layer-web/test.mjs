@@ -22,6 +22,7 @@ import { checkMediumTiles } from "./tiles.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
 import { checkWorkspaceMotion } from "./workspace-motion.test.mjs";
 import { checkWorkspaceResize } from "./workspace-resize.test.mjs";
+import { checkResizeRendering } from "./workspace-resize-rendering.test.mjs";
 import { checkWorkspaceRendering } from "./workspace-rendering.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
@@ -248,6 +249,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--settings-audit")) {
     await checkSettingsParity({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--resize-rendering")) {
+    await checkResizeRendering({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace-resize")) {
     await checkWorkspaceResize({call,evaluate,settle});

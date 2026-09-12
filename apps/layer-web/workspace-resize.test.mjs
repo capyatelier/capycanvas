@@ -34,7 +34,7 @@ export async function checkWorkspaceResize({call,evaluate,settle}) {
   ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(46,fixture.layout.next_id)});
   fixture.zen_mode=false;
   if(native)await writeFile(`${dir}/ready`,"ready");
-  const stop=()=>evaluate(`(()=>{const p=window.resizeProbe;if(!p)return;p.running=false;p.observer.disconnect();for(const[k,v]of Object.entries(p.original))layerApp.app[k]=v;Node.prototype.cloneNode=p.clone;})()`);
+  const stop=()=>evaluate(`(()=>{const p=window.resizeProbe;if(!p)return;p.running=false;p.observer.disconnect();p.allocationObserver?.disconnect();for(const[k,v]of Object.entries(p.original))layerApp.app[k]=v;Node.prototype.cloneNode=p.clone;})()`);
   try {
     for(const device of ["mouse","touch"])for(const scenario of ["left","right","navigator"]) {
       const workspace=structuredClone(fixture);
@@ -46,15 +46,16 @@ export async function checkWorkspaceResize({call,evaluate,settle}) {
       const origin={x:start.x+(scenario==="left"?20:-20),y:start.y};
       await input("move",origin);await wait();
       await evaluate(`(()=>{
-        const app=layerApp.app,p=window.resizeProbe={original:{},counts:{},cpu:{},frames:[],widths:[],running:true,clones:0,added:0,removed:0};
+        const app=layerApp.app,p=window.resizeProbe={original:{},counts:{},cpu:{},frames:[],widths:[],running:true,clones:0,added:0,removed:0,allocations:0,scaledFrames:0};
         p.node=document.querySelector('.dock-group[data-group="${group}"]');p.content=p.node.querySelector('.panel');p.surface=p.node.querySelector('.navigator-surface');
-        for(const name of ["state","layout","layout_update","workspace_update","dispatch","frame","editor_models","panel_view","workspace_projection","navigator_size","navigator_surface"]){
+        if(p.surface){p.allocationObserver=new MutationObserver(records=>{p.allocations+=records.length;});p.allocationObserver.observe(p.surface,{attributes:true,attributeFilter:["width","height"]});}
+        for(const name of ["state","layout","layout_update","workspace_update","dispatch","frame","reflow_navigators","editor_models","panel_view","workspace_projection","navigator_size","navigator_surface"]){
           if(typeof app[name]!=="function")continue;
           p.original[name]=app[name].bind(app);app[name]=(...args)=>{const t=performance.now(),v=p.original[name](...args);const key=name==="dispatch"?"dispatch:"+args[0].type:name;(p.cpu[key]??=[]).push(performance.now()-t);p.counts[key]=(p.counts[key]||0)+1;return v;};
         }
         p.clone=Node.prototype.cloneNode;Node.prototype.cloneNode=function(...args){p.clones++;return p.clone.apply(this,args);};
         p.observer=new MutationObserver(records=>{for(const r of records){p.added+=r.addedNodes.length;p.removed+=r.removedNodes.length;}});p.observer.observe(document.querySelector('#workspace'),{childList:true,subtree:true});
-        const frame=t=>{if(!p.running)return;const width=p.node.getBoundingClientRect().width;if(width!==p.last){p.frames.push(t);p.widths.push(width);p.last=width;}requestAnimationFrame(frame);};requestAnimationFrame(frame);
+        const frame=t=>{if(!p.running)return;const width=p.node.getBoundingClientRect().width;if(width!==p.last){p.frames.push(t);p.widths.push(width);p.last=width;}if(p.surface){const r=p.surface.getBoundingClientRect();if(Math.abs(p.surface.width-r.width*devicePixelRatio)>1||Math.abs(p.surface.height-r.height*devicePixelRatio)>1)p.scaledFrames++;}requestAnimationFrame(frame);};requestAnimationFrame(frame);
       })()`);
       const pending=[],began=performance.now();
       for(let i=0;native?i<550:performance.now()-began<2200;i++) {
@@ -64,12 +65,18 @@ export async function checkWorkspaceResize({call,evaluate,settle}) {
         if(!native)await new Promise(r=>setTimeout(r,4));
       }
       if(native)await perform(pending);else await Promise.all(pending);await settle();
-      const probe=await evaluate(`(()=>{const p=resizeProbe,b=p.node.getBoundingClientRect(),expected=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.id===${group}).bounds;return{counts:p.counts,cpu:p.cpu,frames:p.frames,widths:p.widths,clones:p.clones,added:p.added,removed:p.removed,retained:p.node.isConnected&&p.content===p.node.querySelector('.panel'),error:Math.abs(b.width-expected.width),nativeSurface:!p.surface||(p.surface===p.node.querySelector('.navigator-surface')&&Math.abs(p.surface.width-p.surface.getBoundingClientRect().width*devicePixelRatio)<=1)};})()`);
+      const probe=await evaluate(`(()=>{const p=resizeProbe,b=p.node.getBoundingClientRect(),expected=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.id===${group}).bounds;return{scale:devicePixelRatio,counts:p.counts,cpu:p.cpu,frames:p.frames,widths:p.widths,allocations:p.allocations,scaledFrames:p.scaledFrames,clones:p.clones,added:p.added,removed:p.removed,retained:p.node.isConnected&&p.content===p.node.querySelector('.panel'),error:Math.abs(b.width-expected.width),nativeSurface:!p.surface||(p.surface===p.node.querySelector('.navigator-surface')&&Math.abs(p.surface.width-p.surface.getBoundingClientRect().width*devicePixelRatio)<=1)};})()`);
       await stop();
       const stats=values=>{values.sort((a,b)=>a-b);return{count:values.length,p50:values[Math.floor(values.length*.5)],p95:values[Math.floor(values.length*.95)],total:values.reduce((a,b)=>a+b,0)};};
-      const n=probe.frames.length,result={device,scenario,input:native?"Wayland":"CDP",geometryHz:n>1?(n-1)*1000/(probe.frames.at(-1)-probe.frames[0]):0,changedFrames:n,widthRange:[Math.min(...probe.widths),Math.max(...probe.widths)],counts:probe.counts,bridgeMs:Object.fromEntries(Object.entries(probe.cpu).map(([k,v])=>[k,stats(v)])),clones:probe.clones,added:probe.added,removed:probe.removed,retained:probe.retained};
+      const n=probe.frames.length,result={device,scenario,scale:probe.scale,input:native?"Wayland":"CDP",geometryHz:n>1?(n-1)*1000/(probe.frames.at(-1)-probe.frames[0]):0,changedFrames:n,widthRange:[Math.min(...probe.widths),Math.max(...probe.widths)],counts:probe.counts,bridgeMs:Object.fromEntries(Object.entries(probe.cpu).map(([k,v])=>[k,stats(v)])),allocations:probe.allocations,scaledFrames:probe.scaledFrames,clones:probe.clones,added:probe.added,removed:probe.removed,retained:probe.retained};
       assert.ok(n>20,"actual changing geometry");assert.ok(probe.error<=1,"native width matches Rust");assert.ok(probe.retained&&probe.nativeSurface,"retain native-resolution content/resources");
-      if(process.env.LAYER_RESIZE_RETAINED)assert.equal(result.counts.state||0,0,"no full content refresh during steady resize");
+      if(process.env.LAYER_RESIZE_RETAINED){
+        assert.equal(result.counts.state||0,0,"no full content refresh during steady resize");
+        assert.equal(result.clones,0,"retain intrinsic measurement controls during steady resize");
+        assert.equal(result.added+result.removed,0,"retain visible DOM during steady resize");
+        assert.equal(result.scaledFrames,0,"every observed Navigator frame keeps native resolution");
+        assert.ok(result.allocations<=2*(Math.ceil((result.widthRange[1]-result.widthRange[0])*probe.scale/64)+2),"retain GPU capacity while resizing");
+      }
       if(process.env.LAYER_RESIZE_MIN_HZ)assert.ok(result.geometryHz>=Number(process.env.LAYER_RESIZE_MIN_HZ),`${device}/${scenario}: ${result.geometryHz} Hz`);
       reports.push(result);console.log(JSON.stringify(result));
       await input("up");held=null;await wait();

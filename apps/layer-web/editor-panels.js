@@ -1,7 +1,7 @@
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake }) {
   const updates = new Map(), navigators = new Set();
-  let positioning = false, nextNavigator = 1;
+  let positioning = 0, nextNavigator = 1;
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
   const control = (kind) => {
@@ -125,10 +125,10 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     };
   }
   function navigatorPanel(root) {
-    const overview=element("div","navigator-overview"),surface=element("canvas","navigator-surface"),hole=element("div","overview-hole");overview.append(surface,hole);root.append(overview);
+    const overview=element("div","navigator-overview"),surface=element("canvas","navigator-surface"),clip=element("div","navigator-clip"),hole=element("div","overview-hole");clip.append(surface);overview.append(clip,hole);root.append(overview);
     const controls=element("div","navigator-buttons");root.append(controls);
     const buttons=["zoom_out","zoom_in","rotate_left","rotate_right","flip_horizontal","flip_vertical"].map(id=>{const node=button("",()=>dispatch({type:"invoke",command:id}));node.dataset.navigatorCommand=id;controls.append(node);return[id,node];});
-    const record={id:nextNavigator++,root,overview,hole,size:""};navigators.add(record);
+    const record={id:nextNavigator++,root,overview,surface,hole,size:""};navigators.add(record);
     app.navigator_surface(record.id,surface);
     const resize=new ResizeObserver(queuePositions);resize.observe(overview);
     root.navigatorDispose=()=>{resize.disconnect();navigators.delete(record);app.remove_navigator_surface(record.id);};
@@ -140,8 +140,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     for(const name of ["pointercancel","lostpointercapture"])overview.addEventListener(name,e=>{if(contact===e.pointerId){send(e,"cancel");contact=null;}});
     return()=>{for(const[id,node]of buttons){const c=state().commands.find(c=>c.id===id);if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;}queuePositions();};
   }
-  function updatePositions() {
-    positioning=false;
+  function measurePositions() {
     let resized=false;
     for(const record of navigators) {
       const {overview,hole}=record;
@@ -149,14 +148,24 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       // supplies scrolling, stacking and clipping without per-motion JS/GPU work.
       const r=overview.getBoundingClientRect(),scale=devicePixelRatio||1;
       const size=JSON.stringify([r.width,r.height,scale]);
-      if(size!==record.size){record.size=size;app.navigator_size(record.id,r.width,r.height,scale);resized=true;}
+      if(size!==record.size){
+        record.size=size;
+        const capacity=app.navigator_size(record.id,r.width,r.height,scale);
+        // Native pixels remain 1:1. The surrounding clip follows live layout,
+        // while spare capacity avoids reallocating a GPU surface every frame.
+        record.surface.style.width=`${capacity[0]/scale}px`;
+        record.surface.style.height=`${capacity[1]/scale}px`;
+        resized=true;
+      }
       const g=app.navigator_geometry(r.width,r.height);
       hole.hidden=!g;
       if(g)Object.assign(hole.style,{left:`${g.image.x}px`,top:`${g.image.y}px`,width:`${g.image.width}px`,height:`${g.image.height}px`});
     }
-    if(resized)wake();
+    return resized;
   }
-  function queuePositions(){if(!positioning){positioning=true;requestAnimationFrame(updatePositions);}}
+  function updatePositions(){positioning=0;if(measurePositions()&&app.reflow_navigators())wake();}
+  function queuePositions(){if(!positioning)positioning=requestAnimationFrame(updatePositions);}
+  function flushPositions(){if(positioning)cancelAnimationFrame(positioning);positioning=0;return measurePositions();}
   window.addEventListener("resize",queuePositions);
-  return {control,queuePositions,refresh(){for(const fn of updates.values())fn();}};
+  return {control,queuePositions,flushPositions,refresh(){for(const fn of updates.values())fn();}};
 }

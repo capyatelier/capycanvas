@@ -256,12 +256,18 @@ function applyChange(change) {
   if (change.regions) {
     const presentation = app.workspace_update();
     if (workspaceModelRevision !== presentation.model_revision) {
-      const moving = presentation.drag || workspacePresentation?.drag;
-      workspaceModelRevision = presentation.model_revision;
-      workspacePresentation = null;
-      state = app.state();
-      // A concurrent model change rebases retained placement too.
-      update(change.regions | (moving ? 1 : 0));
+      if (workspaceContentRevision === presentation.content_revision) {
+        queueWorkspaceLayout(presentation);
+      } else {
+        const moving = presentation.drag || workspacePresentation?.drag;
+        workspaceModelRevision = presentation.model_revision;
+        workspaceContentRevision = presentation.content_revision;
+        workspaceLayoutPending = null;
+        workspacePresentation = null;
+        state = app.state();
+        // A concurrent model change rebases retained placement too.
+        update(change.regions | (moving ? 1 : 0));
+      }
     } else if (change.regions & 32) {
       // Camera-only publications intentionally retain the model revision.
       state.camera = app.camera();
@@ -394,11 +400,11 @@ function tabLabel(tab, view) {
   if (view.tab.show_icon) tab.append(icon(view.icon));
   if (view.tab.show_name) tab.append(element("span", "", view.title));
 }
-function arrange() {
+function arrange(nextLayout, layoutOnly = false) {
   if (!app) return;
   clearWorkspacePlacement();
   if (workspaceGesture) workspaceGesture.hits = null;
-  layout = app.layout(workspace.clientWidth, workspace.clientHeight);
+  layout = layoutOnly ? nextLayout : app.layout(workspace.clientWidth, workspace.clientHeight);
   workspace.style.setProperty("--tab-bar-height", `${layout.tab_bar_height}px`);
   const live = new Set();
   for (const group of layout.groups) {
@@ -513,15 +519,21 @@ function arrange() {
       node.remove();
       dividers.delete(key);
     }
-  customization.arrange(layout);
-  workspaceChrome?.arrange(layout);
-  editor.queuePositions();
+  if (!layoutOnly) {
+    customization.arrange(layout);
+    workspaceChrome?.arrange(layout);
+  }
+  if (layoutOnly) {
+    if (editor.flushPositions() && gpuReady && app.reflow_navigators()) wake();
+  } else editor.queuePositions();
   place($("canvas-status"), layout.status);
   // The help occupies the same unobstructed area used for fitting the document.
   // Panels remain native UI siblings above the full-window drawing surface.
   place($("gpu-notice"), layout.work_area);
-  resizeCanvas();
-  updateZen();
+  if (!layoutOnly) {
+    resizeCanvas();
+    updateZen();
+  }
   queuePanelMeasurements();
 }
 // Measure intrinsic widget content only when its width/copy changes. Rust owns
@@ -530,35 +542,66 @@ const panelMeasurements = new Map();
 let measuringPanels = false;
 const measureBox = element("div", "panel-measure");
 measureBox.setAttribute("aria-hidden", "true"); workspace.append(measureBox);
+// An isolated tree retains measurement controls without exposing duplicate IDs
+// to application lookup. It uses the same CSS and inherits the workspace theme.
+const measurementRoot = measureBox.attachShadow({mode:"closed"});
+const measurementStyle = new CSSStyleSheet();
+measurementStyle.replaceSync([...$("workspace-style").sheet.cssRules].map(rule=>rule.cssText).join("\n"));
+measurementRoot.adoptedStyleSheets = [measurementStyle];
+function invalidatePanelMeasurement(id) {
+  panelMeasurements.get(id)?.root.remove();
+  panelMeasurements.delete(id);
+}
 function queuePanelMeasurements() {
   if (measuringPanels) return;
   measuringPanels = true;
   requestAnimationFrame(() => {
     measuringPanels = false;
-    const measurements = state.workspace.layout.panels.map(config => {
+    const pending = [];
+    // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
+    // copy per content revision, so width changes reflow it without cloning.
+    for (const config of state.workspace.layout.panels) {
       const view = customization.view(config.id);
       const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
-      const key = JSON.stringify([width, view.title, view.tab, view.icon, view.controls, view.tile_style, state.layers.length]);
+      const key = JSON.stringify([String(workspaceContentRevision), view.title, view.tab, view.icon, view.controls, view.tile_style]);
       let cached = panelMeasurements.get(config.id);
       if (cached?.key !== key) {
+        invalidatePanelMeasurement(config.id);
+        const root = element("div");
         const tab = element("button", "dock-tab");
         tab.style.width = "max-content";
         tabLabel(tab, view);
-        measureBox.style.width = `${width}px`; measureBox.replaceChildren(tab);
-        const tabWidth = tab.getBoundingClientRect().width;
-        const content = panels.get(config.id).cloneNode(true);
-        content.style.height = "auto"; content.style.width = `${width}px`;
-        measureBox.replaceChildren(content);
-        cached = { key, value: { panel: config.id, tab_width: tabWidth,
-          content_height: config.content.kind === "toolbar" ? 0 : content.getBoundingClientRect().height } };
-        panelMeasurements.set(config.id, cached); measureBox.replaceChildren();
+        root.append(tab);
+        const content = config.content.kind === "toolbar" ? null : panels.get(config.id).cloneNode(true);
+        if (content) {
+          content.style.height = "auto"; content.style.width = "100%";
+          root.append(content);
+        }
+        cached = { key, root, tab, content };
+        panelMeasurements.set(config.id, cached); measurementRoot.append(root);
       }
-      return cached.value;
-    });
-    for (const id of panelMeasurements.keys()) if (!panels.has(id)) panelMeasurements.delete(id);
-    // The core returns no change for identical measurements, including after
-    // workspace restore. This avoids keeping a second authoritative size cache.
-    dispatch({ type: "measure_panels", measurements });
+      // Toolbar intrinsic height is fixed at zero and its tab width is
+      // independent of the available column width.
+      if (cached.value && !cached.content) continue;
+      if (cached.width !== width) {
+        cached.width = width; cached.root.style.width = `${width}px`;
+        pending.push([config.id, cached]);
+      }
+    }
+    for (const [id, cached] of pending) cached.value = {
+      panel: id,
+      tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
+      content_height: cached.content?.getBoundingClientRect().height || 0,
+    };
+    for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
+    const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
+    // Compare against the shared publication, not a second authoritative cache.
+    // Full restores omit these transient facts and therefore measure again.
+    const current = state.workspace.layout.measurements;
+    if (!current || current.length !== measurements.length || measurements.some((m, i) =>
+      m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height)) {
+      dispatch({ type: "measure_panels", measurements });
+    }
   });
 }
 function resizeCanvas() {
@@ -611,7 +654,7 @@ function buildPanels() {
   panels.get("sizes").append(controls, grid);
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, dismissContext: () => customization.dismissContext() });
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
-    contentChanged:id=>{panelMeasurements.delete(id);queuePanelMeasurements();}});
+    contentChanged:id=>{invalidatePanelMeasurement(id);queuePanelMeasurements();}});
 }
 function contentPanel(id) {
   const panel=element("div",`panel ${id}-panel`);
@@ -779,10 +822,31 @@ function workspaceCursor(cursor) {
     workspace.style.removeProperty("--workspace-cursor");
   }
 }
-// Shared workspace_update publication: retain DOM/content by model_revision.
+// Shared workspace_update publication: retain content at content_revision and
+// apply layout-only reflow once per display frame. Geometry-only dragging still
+// retains models at model_revision, without layout or measurement work.
 // Dispatch every input to Rust; replace only pending absolute presentation and
 // apply it on the display clock. No scaled textures or per-motion DOM rebuilds.
-let workspaceModelRevision, workspacePresentation, workspacePresentationFrame = 0;
+let workspaceModelRevision, workspaceContentRevision, workspacePresentation, workspacePresentationFrame = 0;
+let workspaceLayoutPending, workspaceLayoutFrame = 0;
+function queueWorkspaceLayout(presentation) {
+  workspaceLayoutPending = presentation;
+  if (!workspaceLayoutFrame) workspaceLayoutFrame = requestAnimationFrame(function presentWorkspaceLayout() {
+    workspaceLayoutFrame = 0;
+    if (!workspaceLayoutPending) return;
+    workspaceLayoutPending = null;
+    // Fetch only the latest absolute layout, after all queued input reached Rust.
+    const packet = app.layout_update(workspace.clientWidth, workspace.clientHeight);
+    const update = packet.workspace_update;
+    if (update.content_revision !== workspaceContentRevision) return;
+    workspaceModelRevision = update.model_revision;
+    state.revision = update.revision;
+    state.camera = packet.camera;
+    Object.assign(state.workspace.layout, packet.workspace_layout);
+    state.workspace.layout.measurements = packet.panel_measurements;
+    arrange(packet.layout, true);
+  });
+}
 workspace.addEventListener("scroll", () => { if (workspaceGesture) workspaceGesture.hits = null; }, true);
 const workspacePlacements = new Set();
 const deviceAligned = value => Math.round(value * devicePixelRatio) / devicePixelRatio;
@@ -1334,7 +1398,7 @@ try {
   systemStatus.sync();
   $("status").textContent = "";
   if (restoreError) message(restoreError);
-  new ResizeObserver(arrange).observe(workspace);
+  new ResizeObserver(() => arrange()).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
   window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes };
   await startGpu();

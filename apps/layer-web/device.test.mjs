@@ -53,7 +53,10 @@ try {
   await reload();
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--workspace-resize")) {
+  if (process.argv.includes("--editor")) {
+    await checkEditor({call,evaluate,settle,canvasPixels});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--workspace-resize")) {
     await checkWorkspaceResize({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--long-press-drag")) {
