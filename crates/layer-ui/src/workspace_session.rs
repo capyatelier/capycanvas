@@ -317,6 +317,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.state.workspace.layout.titlebar_insets = titlebar_insets;
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
+        let before = self.state.workspace.clone();
+        if self.state.workspace.layout.collapse_empty_toolbar_groups() {
+            // Existing history revisions remain immutable. Record this upgrade
+            // as one recoverable edit instead of rewriting saved snapshots.
+            self.workspace_history.record_named(
+                before,
+                &self.state.workspace,
+                "Remove empty toolbar groups",
+            );
+        }
         self.tools = working.tools;
         self.state.colors = working.colors;
         self.state.brush = BrushState {

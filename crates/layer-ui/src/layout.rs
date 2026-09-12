@@ -39,6 +39,12 @@ fn toolbar_extent(tile: &ToolbarTile, along: f32) -> f32 {
         along
     }
 }
+fn collapse_toolbar_dividers(tiles: &mut Vec<ToolbarTile>) {
+    // Keep the first separator's identity; only empty groups disappear.
+    tiles.dedup_by(|a, b| {
+        a.control == ToolbarControl::Divider && b.control == ToolbarControl::Divider
+    });
+}
 fn toolbar_span(tiles: &[ToolbarTile], along: f32) -> f32 {
     tiles.iter().map(|t| toolbar_extent(t, along) + 2.0).sum()
 }
@@ -1855,14 +1861,21 @@ impl DockLayout {
             .zip(self.next_tile_id..end)
             .map(|(&control, id)| ToolbarTile { id, control })
             .collect::<Vec<_>>();
-        self.panel_mut(panel)?
-            .tiles_mut()?
-            .splice(index..index, added);
+        let tiles = self.panel_mut(panel)?.tiles_mut()?;
+        tiles.splice(index..index, added);
+        collapse_toolbar_dividers(tiles);
         self.next_tile_id = end;
         Ok(())
     }
 
     pub fn remove_tool(&mut self, panel: Panel, tile: u32) -> Result<(), String> {
+        self.remove_tool_raw(panel, tile)?;
+        collapse_toolbar_dividers(self.panel_mut(panel)?.tiles_mut()?);
+        Ok(())
+    }
+
+    // Moves must preserve the destination separator until insertion completes.
+    fn remove_tool_raw(&mut self, panel: Panel, tile: u32) -> Result<(), String> {
         let tiles = self.panel_mut(panel)?.tiles_mut()?;
         let index = tiles
             .iter()
@@ -1870,6 +1883,19 @@ impl DockLayout {
             .ok_or("The tool no longer exists")?;
         tiles.remove(index);
         Ok(())
+    }
+
+    /// Upgrade existing empty toolbar groups without changing nonempty groups.
+    pub(crate) fn collapse_empty_toolbar_groups(&mut self) -> bool {
+        let mut changed = false;
+        for config in &mut self.panels {
+            if let PanelContent::Toolbar { tiles, .. } = &mut config.content {
+                let before = tiles.len();
+                collapse_toolbar_dividers(tiles);
+                changed |= before != tiles.len();
+            }
+        }
+        changed
     }
 
     fn move_tile(&mut self, panel: Panel, tile: u32, target: DockTarget) -> Result<(), String> {
@@ -1906,12 +1932,16 @@ impl DockLayout {
             return Ok(());
         }
         // All fallible lookups are checked before either toolbar changes.
-        self.remove_tool(panel, tile)?;
+        self.remove_tool_raw(panel, tile)?;
         let tiles = self.panel_mut(destination)?.tiles_mut()?;
         let index = before
             .and_then(|id| tiles.iter().position(|t| t.id == id))
             .unwrap_or(tiles.len());
         tiles.insert(index, source);
+        collapse_toolbar_dividers(tiles);
+        if panel != destination {
+            collapse_toolbar_dividers(self.panel_mut(panel)?.tiles_mut()?);
+        }
         Ok(())
     }
 
@@ -1955,7 +1985,7 @@ impl DockLayout {
             .next_tile_id
             .checked_add(u32::from(needs_separator))
             .ok_or("Toolbar tile ID space exhausted")?;
-        self.remove_tool(panel, source.id)?;
+        self.remove_tool_raw(panel, source.id)?;
         let tiles = self.panel_mut(destination)?.tiles_mut()?;
         let index = tiles.iter().position(|t| t.id == divider).unwrap() + 1;
         tiles.insert(index, source);
@@ -1967,6 +1997,10 @@ impl DockLayout {
                     control: ToolbarControl::Divider,
                 },
             );
+        }
+        collapse_toolbar_dividers(tiles);
+        if panel != destination {
+            collapse_toolbar_dividers(self.panel_mut(panel)?.tiles_mut()?);
         }
         self.next_tile_id = next_id;
         Ok(())

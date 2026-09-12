@@ -84,6 +84,10 @@ axis, scaling with its tile size. Dropping a tool there makes it a separate grou
 reusing the existing divider and adding another only when needed. Keep the blue
 line centered on the divider, normal insertion outside the target, stable tool
 IDs, and one undo/redo step. Moving a divider itself keeps ordinary insertion.
+Adjacent toolbar dividers collapse to the first divider when inserting, removing,
+or moving tools. Perform this cleanup after the complete move, in its undo step;
+never remove a destination divider during temporary source removal. Existing
+empty groups are also cleaned up when a workspace is opened.
 
 This convention governs pickup for reordering and moving UI containers. It does
 not add holds to drawing, selection/transform handles, canvas/navigation drags,

@@ -98,9 +98,20 @@ export async function checkColumnDrops({call,evaluate,settle}) {
         assert.equal(tiles.filter(t=>t.control.kind==='divider').length,mode===8?1:2);
         await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await snapshot(),before);
         await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await snapshot(),after);
+        if(mode!==8) {
+          const last=await rect(tile(ids[4]));
+          const point=edge==='top'?{x:last.x+last.width-3,y:last.y+last.height/2}:{x:last.x+last.width/2,y:last.y+last.height-3};
+          await input('down',center(await rect(tile(ids[0]))));await wait(650);
+          await input('move',point);await input('up');await wait(250);
+          const collapsed=await snapshot(),remaining=collapsed.layout.panels.find(p=>p.id==='toolbar').content.tiles;
+          assert.deepEqual(remaining.map(t=>t.id),[ids[1],ids[2],ids[3],ids[4],ids[0]],'An emptied group keeps only its first divider');
+          assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(tile(fixture.layout.next_tile_id))}).length`),0,'Redundant divider DOM is removed');
+          await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await snapshot(),after,'One undo restores the nonempty group and its divider IDs');
+          await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await snapshot(),collapsed);
+        }
       }
     }
-    console.log('PASS: browser mouse/touch/pen 12px column and toolbar divider targets, centered previews, separate tool groups, adjacent insertion, cancellation and undo/redo');
+    console.log('PASS: browser mouse/touch/pen column and toolbar targets, separate tool groups, empty-group cleanup, cancellation and undo/redo');
   } finally {
     if(down)await input('up');
     await send({type:'restore_workspace',workspace:saved});

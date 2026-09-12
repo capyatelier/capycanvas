@@ -333,11 +333,66 @@ fn native_collapsed_divider_drop_input() {
                 });
                 pump(150);
                 assert_eq!(saved(), after);
+                if offset <= 6. {
+                    // Move the sole tool out of the new group. Its two former
+                    // boundaries must become one as part of this same edit.
+                    let b = bounds(ids[0]);
+                    let start = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
+                    let b = bounds(ids[4]);
+                    let point = if edge == Edge::Top {
+                        [b.x() + b.width() - 3., b.y() + b.height() / 2.]
+                    } else {
+                        [b.x() + b.width() / 2., b.y() + b.height() - 3.]
+                    };
+                    perform(if touch {
+                        serde_json::json!([{"touch":"down","point":start}])
+                    } else {
+                        serde_json::json!([{"point":start},{"down":true}])
+                    });
+                    pump(800);
+                    perform(if touch {
+                        serde_json::json!([{"touch":"move","point":point},{"touch":"up"}])
+                    } else {
+                        serde_json::json!([{"point":point},{"down":false}])
+                    });
+                    let collapsed = saved();
+                    assert_eq!(
+                        state(&w)
+                            .workspace
+                            .layout
+                            .panel(Panel::Toolbar)
+                            .unwrap()
+                            .tiles()
+                            .iter()
+                            .map(|t| t.id)
+                            .collect::<Vec<_>>(),
+                        [ids[1], ids[2], ids[3], ids[4], ids[0]]
+                    );
+                    assert!(
+                        find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[4] + 1))
+                            .is_none(),
+                        "redundant divider widget is removed"
+                    );
+                    w.dispatch(UiAction::Invoke {
+                        command: CommandId::UndoWorkspace,
+                    });
+                    pump(150);
+                    assert_eq!(
+                        saved(),
+                        after,
+                        "one undo restores the nonempty group and its divider IDs"
+                    );
+                    w.dispatch(UiAction::Invoke {
+                        command: CommandId::RedoWorkspace,
+                    });
+                    pump(150);
+                    assert_eq!(saved(), collapsed);
+                }
             }
         }
     }
     println!(
-        "PASS: native mouse/touch toolbar group drops, centered previews on both axes, adjacent insertion, cancellation and one-step undo/redo"
+        "PASS: native mouse/touch toolbar group drops and empty-group cleanup, centered previews on both axes, cancellation and one-step undo/redo"
     );
     println!(
         "PASS: native mouse/touch separator drops at +/-5px, adjacent tiles at +/-8px, aligned previews, cancellation, undo/redo on both sides"

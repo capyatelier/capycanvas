@@ -5,6 +5,184 @@ const TOOL: ToolbarControl = ToolbarControl::Color;
 const DIVIDER: ToolbarControl = ToolbarControl::Divider;
 
 #[test]
+fn empty_toolbar_groups_collapse_after_edits_without_losing_drop_anchors() {
+    let mut layout = DockLayout::default();
+    let panel = layout
+        .add_toolbar(None, "Target", &[TOOL, DIVIDER, TOOL, DIVIDER, TOOL])
+        .unwrap();
+    let ids = layout
+        .panel(panel)
+        .unwrap()
+        .tiles()
+        .iter()
+        .map(|t| t.id)
+        .collect::<Vec<_>>();
+    let initial = layout.clone();
+    // Removing the source temporarily brings these dividers together. Its
+    // destination must survive until reinsertion makes the original group.
+    layout
+        .move_item(
+            VIEW,
+            DockItem::Tile {
+                panel,
+                tile: ids[2],
+            },
+            DockTarget::Tile {
+                panel,
+                before: Some(ids[3]),
+            },
+        )
+        .unwrap();
+    assert_eq!(layout, initial);
+    layout
+        .move_item(
+            VIEW,
+            DockItem::Tile {
+                panel,
+                tile: ids[2],
+            },
+            DockTarget::Tile {
+                panel,
+                before: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        layout
+            .panel(panel)
+            .unwrap()
+            .tiles()
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        [ids[0], ids[1], ids[4], ids[2]]
+    );
+    let moved = layout.clone();
+    assert!(
+        layout
+            .move_item(
+                VIEW,
+                DockItem::Tile {
+                    panel,
+                    tile: ids[2]
+                },
+                DockTarget::Tile {
+                    panel,
+                    before: Some(ids[3])
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(
+        layout, moved,
+        "a discarded divider is rejected as a stale target"
+    );
+    layout = initial.clone();
+    layout.remove_tool(panel, ids[2]).unwrap();
+    assert_eq!(
+        layout
+            .panel(panel)
+            .unwrap()
+            .tiles()
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        [ids[0], ids[1], ids[4]]
+    );
+    layout
+        .insert_tools(panel, Some(ids[4]), &[DIVIDER, DIVIDER])
+        .unwrap();
+    assert_eq!(
+        layout
+            .panel(panel)
+            .unwrap()
+            .tiles()
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        [ids[0], ids[1], ids[4]]
+    );
+    layout.validate().unwrap();
+    for grouped in [false, true] {
+        layout = initial.clone();
+        let other = layout
+            .add_toolbar(None, "Other", &[TOOL, DIVIDER, TOOL])
+            .unwrap();
+        let divider = layout.panel(other).unwrap().tiles()[1].id;
+        let target = if grouped {
+            DockTarget::TileGroup {
+                panel: other,
+                divider,
+            }
+        } else {
+            DockTarget::Tile {
+                panel: other,
+                before: None,
+            }
+        };
+        layout
+            .move_item(
+                VIEW,
+                DockItem::Tile {
+                    panel,
+                    tile: ids[2],
+                },
+                target,
+            )
+            .unwrap();
+        assert_eq!(
+            layout
+                .panel(panel)
+                .unwrap()
+                .tiles()
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
+            [ids[0], ids[1], ids[4]]
+        );
+        assert!(
+            layout
+                .panel(other)
+                .unwrap()
+                .tiles()
+                .iter()
+                .any(|t| t.id == ids[2])
+        );
+        layout.validate().unwrap();
+    }
+}
+
+#[test]
+fn consecutive_inserted_dividers_keep_the_first_id_and_nonempty_groups() {
+    let mut layout = DockLayout::default();
+    let first_id = layout.next_tile_id;
+    let panel = layout
+        .add_toolbar(
+            None,
+            "Target",
+            &[DIVIDER, DIVIDER, TOOL, DIVIDER, TOOL, DIVIDER, DIVIDER],
+        )
+        .unwrap();
+    assert_eq!(
+        layout
+            .panel(panel)
+            .unwrap()
+            .tiles()
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        [
+            first_id,
+            first_id + 2,
+            first_id + 3,
+            first_id + 4,
+            first_id + 5
+        ]
+    );
+    layout.validate().unwrap();
+}
+
+#[test]
 fn toolbar_group_moves_preserve_ids_and_only_add_needed_separators() {
     for cross_toolbar in [false, true] {
         for destination_controls in [
@@ -24,7 +202,12 @@ fn toolbar_group_moves_preserve_ids_and_only_add_needed_separators() {
             let tile = layout.panel(source).unwrap().tiles()[0].clone();
             let divider = layout.panel(destination).unwrap().tiles()[2].id;
             let next_id = layout.next_tile_id;
-            let need_separator = destination_controls.get(3) == Some(&TOOL);
+            let need_separator = layout
+                .panel(destination)
+                .unwrap()
+                .tiles()
+                .get(3)
+                .is_some_and(|t| t.control == TOOL);
             layout
                 .move_item(
                     VIEW,

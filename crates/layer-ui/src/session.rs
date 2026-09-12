@@ -2089,6 +2089,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::RestoreWorkspace { mut workspace } => {
                 workspace.validate()?;
+                workspace.layout.collapse_empty_toolbar_groups();
                 workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                 self.state.workspace = workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
@@ -12916,6 +12917,75 @@ mod tests {
         assert!(press(&mut s, "tab").chrome_hidden);
         assert!(s.state.customization.drawer.is_none());
         assert!(chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden);
+    }
+
+    #[test]
+    fn opening_workspaces_collapses_empty_toolbar_groups_without_rewriting_history() {
+        let mut workspace = WorkspaceState::default();
+        workspace
+            .layout
+            .insert_tools(
+                Panel::Toolbar,
+                None,
+                &[
+                    ToolbarControl::Divider,
+                    ToolbarControl::Color,
+                    ToolbarControl::Divider,
+                ],
+            )
+            .unwrap();
+        let tiles = workspace
+            .layout
+            .panel_mut(Panel::Toolbar)
+            .unwrap()
+            .tiles_mut()
+            .unwrap();
+        // Model a saved workspace made before automatic divider cleanup.
+        tiles.remove(tiles.len() - 2);
+        workspace.validate().unwrap();
+        let capture = WorkspaceCapture::from_legacy(workspace.clone()).unwrap();
+        let mut app = session();
+        app.dispatch(UiAction::RestoreWorkspace {
+            workspace: workspace.clone(),
+        })
+        .unwrap();
+        let cleaned = app.state.workspace.clone();
+        assert_eq!(
+            cleaned.layout.panel(Panel::Toolbar).unwrap().tiles().len(),
+            workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .len()
+                - 1
+        );
+        app.adopt_workspace(PreparedWorkspace::new(capture.clone()).unwrap())
+            .unwrap();
+        assert_eq!(app.state.workspace.layout, cleaned.layout);
+        let saved = app.capture_workspace().unwrap();
+        assert_eq!(
+            saved.history.revisions[&capture.history.current],
+            capture.history.revisions[&capture.history.current]
+        );
+        assert_eq!(saved.history.undo.len(), 1, "one recoverable cleanup edit");
+        app.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        })
+        .unwrap();
+        assert_eq!(app.state.workspace.layout, workspace.layout);
+        app.dispatch(UiAction::Invoke {
+            command: CommandId::RedoWorkspace,
+        })
+        .unwrap();
+        assert_eq!(app.state.workspace.layout, cleaned.layout);
+        app.adopt_workspace(PreparedWorkspace::new(saved.clone()).unwrap())
+            .unwrap();
+        assert_eq!(
+            app.capture_workspace().unwrap().history,
+            saved.history,
+            "reopening is idempotent"
+        );
     }
 
     #[test]
