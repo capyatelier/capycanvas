@@ -38,7 +38,7 @@ body { --popover: var(--panel); }
 .workspace-form label { display:flex; flex-direction:column; gap:7px; margin:16px 0; }
 .workspace-form footer { margin:18px 0 0; flex-wrap:wrap; }
 .workspace-form .destructive-action { background:#b33; }
-.workspace-switcher { display:flex; align-items:center; gap:2px; padding:3px; border:1px solid color-mix(in srgb,var(--text) 10%,transparent); border-radius:18px; background:color-mix(in srgb,var(--text) 6%,var(--bg)); flex:0 1 auto; min-width:0; max-width:min(420px,40vw); overflow-x:auto; scrollbar-width:none; }
+.workspace-switcher { display:flex; align-items:center; gap:2px; padding:4px; border:0; border-radius:18px; background:color-mix(in srgb,var(--bg) 80%,black); flex:0 1 auto; min-width:0; max-width:min(420px,40vw); overflow-x:auto; scrollbar-width:none; }
 /* Override the general 36px header button height inside the shared 34px pill. */
 #header .workspace-switcher button { flex:none; max-width:130px; height:26px; min-height:26px; padding:0 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-radius:15px; font-weight:500; background:transparent; }
 #header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }

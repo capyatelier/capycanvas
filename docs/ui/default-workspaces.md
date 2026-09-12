@@ -78,6 +78,8 @@ tooltip **Shown in top bar**. The current workspace retains its checkmark.
 
 Each row's **⋮** menu includes **Show in top bar**. Checking it shows that
 workspace in its list position; unchecking hides it without moving the row.
+The switcher has no border and a darker, recessed background like a slider track
+(80% theme background, 20% black), with a subtle blue active choice.
 New workspaces start unchecked. The top bar follows the list order, skipping
 unchecked entries. An empty selection hides the pill. The pill scrolls horizontally
 when its choices exceed the available width.
