@@ -76,6 +76,37 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared tool-action button presentation — 2026-09-12
+
+All six Tool Settings actions now use one shared Apple button component.
+Checkable actions retain the shared selected state, ordinary actions remain
+unselected, and disabled controls apply one opacity step to the whole button.
+Labels use shared bold typography, full column width, centered 24-point line
+boxes and greedy word wrapping. This replaces native checkboxes/switches and
+bordered buttons while preserving the existing `store.invoke` command route.
+The same component compiles into both Apple targets.
+
+Production AppKit and browser component captures cover light/dark themes,
+120/226-point columns and all four enabled/selected combinations. All 96
+measured control bounds match exactly. Full-image mean absolute channel errors
+fall from 13.581/7.679/13.599/7.571 to 0.947/0.365/0.994/0.409 respectively.
+Zero-tolerance comparisons still fail, with 8.202–13.028% differing pixels and
+maximum channel errors of 106–173; no pixels are excluded. Reproduction and
+the complete table are in the [visual guide](../../tools/visual/README.md#tool-action-buttons).
+These invisible AppKit captures establish component geometry and appearance
+evidence, not UIKit rendering or native activation/accessibility acceptance.
+
+The integrated shared revision `9d747b0` includes the Windows startup-close fix
+and material-pipeline specialization. All 276 UI and 39 Apple ABI tests pass
+after integration, including ruler settings and transform Apply/Cancel with
+exact pixel Undo/Redo. The incoming specialized-versus-uniform material check
+also passes on Metal across pages and prediction. Those checks exercise editor
+effects; they do not simulate SwiftUI clicks. Both signed Release targets build
+and pass signature verification. No new physical install, input or performance
+result is inferred. Save/Load Layout remains excluded, and full parity and
+hardware-performance gates remain open. Raw captures, logs and private build
+metadata stay in ignored local artifacts.
+
 ## Complete shipped property schemas and opacity lock policy — 2026-09-12
 
 The schema 4 inventory enumerates paint, paper, groups and all forty shipped

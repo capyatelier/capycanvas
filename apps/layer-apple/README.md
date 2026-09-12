@@ -264,6 +264,15 @@ widgets. Passing the audit establishes catalog coverage; complete native
 workflows, dynamic controls, visual states and hardware performance still
 require their own evidence. Save/Load Layout remains excluded.
 
+Tool Settings renders checkable and ordinary actions with the same shared
+button component on both Apple targets. Labels use the shared bold text size,
+24-point line boxes and greedy wrapping; selected and disabled states use the
+editor accent and one opacity step. The command route remains `store.invoke`.
+The [tool-action capture workflow](../../tools/visual/README.md#tool-action-buttons)
+compares all six actions against the real browser factory at two widths in both
+themes, without visible editor windows. Exact geometry passes; full pixel,
+native activation and UIKit appearance acceptance remain open.
+
 Mac customized controls can now invoke the shared Full Screen command. AppKit
 notifications update its selected state and icon after the window actually
 changes mode. View keeps AppKit's native Full Screen menu item, and native

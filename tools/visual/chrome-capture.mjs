@@ -10,12 +10,13 @@ import {captureToolbarFixture} from './toolbar-fixture.mjs';
 import {captureWorkspaceTabs} from './workspace-tabs.mjs';
 import {captureHeaderControls} from './header-controls.mjs';
 import {captureControlColors} from './control-colors.mjs';
+import {captureToolActions} from './tool-actions.mjs';
 const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light', scenario='initial', fixturePath] = process.argv.slice(2);
 const width = Number(widthArg), height = Number(heightArg), scale = Number(scaleArg);
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -68,10 +69,10 @@ try {
   await call('Runtime.enable'); await call('Page.enable');
   await call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor:scale, mobile:false});
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion', value:'reduce'}]});
-  const component = ['toolbar-tiles', 'control-colors'].includes(scenario);
+  const component = ['toolbar-tiles', 'control-colors', 'tool-actions'].includes(scenario);
   await call('Page.navigate', {url:`http://127.0.0.1:${server.address().port}${component?'/workspace-chrome.js':''}`});
   if (component) {
-    const capture = scenario === 'toolbar-tiles' ? captureToolbarFixture : captureControlColors;
+    const capture = {'toolbar-tiles':captureToolbarFixture,'control-colors':captureControlColors,'tool-actions':captureToolActions}[scenario];
     await capture({fixture:JSON.parse(await readFile(fixturePath,'utf8')),width,height,scale,output,theme,evaluate,call});
     assert.deepEqual(errors,[]);
   } else {

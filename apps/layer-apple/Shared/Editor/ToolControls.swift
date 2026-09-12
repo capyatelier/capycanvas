@@ -108,14 +108,9 @@ struct ToolSettingsControls: View {
             ForEach(store.state["tool_actions"].array.indices, id: \.self) { index in
                 let action = store.state["tool_actions"][index]
                 let command = store.command(action["command"].string)
-                if action["checkable"].bool {
-                    Toggle(command["label"].string, isOn: Binding(get: { command["selected"].bool }, set: { _ in store.invoke(command["id"].string) }))
-                        .disabled(!command["enabled"].bool).help(command["tooltip"].string)
-                        .accessibilityIdentifier("tool-action-" + command["id"].string)
-                } else {
-                    Button(command["label"].string) { store.invoke(command["id"].string) }
-                        .disabled(!command["enabled"].bool).help(command["tooltip"].string)
-                        .accessibilityIdentifier("tool-action-" + command["id"].string)
+                ToolActionControl(command: command, checkable: action["checkable"].bool,
+                    textSize: store.catalog["text_size_pt"].number * 4 / 3) {
+                    store.invoke(command["id"].string)
                 }
             }
         }

@@ -297,3 +297,63 @@ channel errors of 0.354 and 0.236 levels respectively. The large light fraction
 includes the one-level fill difference. Glyph/edge rasterization differences
 remain. These AppKit component captures do not establish UIKit rendering,
 pointer/keyboard interaction, full-editor parity or hardware performance.
+
+## Tool-action buttons
+
+The tool-action fixture compares the production SwiftUI `ToolActionControl` and
+browser `toolSettings` factory. It contains all six shipped actions in four
+enabled/selected combinations, at 120- and 226-point column widths. Generate
+the action list from a complete `apple-inventory --gpu` result; the generator
+requires matching action labels and checkability on both Apple presets. Theme
+colors and font size come from the shared `toolbar-fixture` example.
+
+```sh
+mkdir -p artifacts/ui/tool-actions
+cargo run -p layer-host --example apple-inventory -- --gpu \
+  > artifacts/ui/tool-actions/inventory.json
+cargo run -p layer-host --example toolbar-fixture -- mac light \
+  > artifacts/ui/tool-actions/theme-light.json
+python3 tools/visual/tool_action_fixture.py \
+  artifacts/ui/tool-actions/inventory.json artifacts/ui/tool-actions/theme-light.json \
+  --column-width 120 > artifacts/ui/tool-actions/light-120.json
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  CAPY_COMPONENT_CAPTURE_SOURCE=apps/layer-apple/tests/tool-action-capture.swift \
+  bash apps/layer-apple/scripts/capture-toolbar.sh \
+  artifacts/ui/tool-actions/light-120.json \
+  artifacts/ui/tool-actions/native-light-120.png PATH_TO_BUILT_MAC_APP
+node tools/visual/chrome-capture.mjs 516 420 2 artifacts/ui/tool-actions \
+  light tool-actions artifacts/ui/tool-actions/light-120.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/ui/tool-actions/web-light-120.png \
+  artifacts/ui/tool-actions/native-light-120.png \
+  --output artifacts/ui/tool-actions/light-120-comparison
+```
+
+Repeat for `dark`, and for column width 226 with total capture width 940.
+Height is 420 and scale is 2 in every case. Native and browser sidecar JSON
+files expose each control's measured `frames` keyed by column/action index;
+compare their `x`, `y`, `width` and `height` without rounding. The browser also
+asserts labels, selected/disabled states, full column width and disabled opacity.
+The native host never displays a window and closes its surface after capture.
+It uses an explicitly active control environment without changing OS settings.
+
+All 96 measured native bounds match Chrome exactly. Greedy wrapping retains
+the browser's line breaks, including “Show rulers” on one line and “Snap to /
+rulers” on two lines in the narrow case. Full raw sRGB comparisons still fail
+at zero tolerance; no pixels are cropped, masked or excluded:
+
+| Theme / column width | Mean absolute channel error | Exact differing pixels | Maximum channel error |
+| --- | ---: | ---: | ---: |
+| Light / 120 | 0.947 | 12.810% | 152 |
+| Light / 226 | 0.365 | 8.202% | 106 |
+| Dark / 120 | 0.994 | 13.028% | 173 |
+| Dark / 226 | 0.409 | 8.349% | 128 |
+
+Before the control change, the corresponding mean errors were 13.581, 7.679,
+13.599 and 7.571. Residual glyph, edge and fill differences remain visible in
+the full comparison reports; this is not a full pixel acceptance pass. These
+AppKit component captures do not establish native UIKit appearance, activation,
+accessibility interaction, complete editor parity or hardware performance.
+The existing Apple ABI tool-panel and transform tests separately exercise
+ruler settings, transform Apply/Cancel and exact pixel Undo/Redo through the
+shared editor. They do not simulate a SwiftUI button click.
