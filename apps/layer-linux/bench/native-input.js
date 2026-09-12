@@ -18,8 +18,9 @@ const workspaceColumns = ARGV.includes('--workspace-columns');
 const workspaceTabs = ARGV.includes('--workspace-tabs');
 const workspaceHold = ARGV.includes('--workspace-hold');
 const workspaceMotion = ARGV.includes('--workspace-motion');
+const workspaceMenus = ARGV.includes('--workspace-menus');
 const process = Gio.Subprocess.new([
-    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
     '--', '--ignored', '--test-threads=1', '--nocapture',
 ], Gio.SubprocessFlags.NONE);
 let passed = false;
@@ -57,7 +58,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (workspaceClicks || workspaceCursor || workspaceDrawer || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion) {
+    if (workspaceClicks || workspaceCursor || workspaceDrawer || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
         let step = 0, events = null, index = 0, previous = [0, 0];
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceMotion ? 4 : 60, () => {
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
@@ -87,7 +88,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                         [event.point[0] - previous[0], event.point[1] - previous[1]]);
                     previous = event.point;
                 }
-                if ('down' in event) send('NotifyPointerButton', '(ib)', [272, event.down]);
+                if ('down' in event) send('NotifyPointerButton', '(ib)', [event.button ?? 272, event.down]);
             }
             return GLib.SOURCE_CONTINUE;
         });

@@ -13471,6 +13471,156 @@ fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
 }
 
 #[test]
+#[ignore = "isolated Mutter pointer driver and SQLite; see bench/workspace-menus.sh"]
+fn native_workspace_menu_input() {
+    fn menu_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+        if root.is_mapped()
+            && root
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == text)
+        {
+            return Some(root.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            if let Some(label) = menu_label(&widget, text) {
+                return Some(label);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+    fn popup_point(popup: &gtk::Popover, label: &gtk::Widget) -> [f32; 2] {
+        let bounds = label.compute_bounds(popup).unwrap();
+        let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
+        let (x, y) = popup.surface_transform();
+        [
+            surface.position_x() as f32 - x as f32 + bounds.x() + bounds.width() * 0.5,
+            surface.position_y() as f32 - y as f32 + bounds.y() + bounds.height() * 0.5,
+        ]
+    }
+    fn menu(root: &gtk::Widget, label: &str) -> Option<gtk::MenuButton> {
+        if let Some(button) = root.downcast_ref::<gtk::MenuButton>()
+            && button.label().as_deref() == Some(label)
+        {
+            return Some(button.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = menu(&widget, label) {
+                return Some(button);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    let app = native_test_app("art.capycanvas.WorkspaceMenuInput");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(
+            Instant::now() < deadline,
+            "workspace startup did not finish"
+        );
+    }
+    pump(500);
+    assert!(w.window.is_maximized());
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut click = |point: [f32; 2], button: u32| {
+        let events = serde_json::json!([{ "point": point }, { "button": button, "down": true }, { "button": button, "down": false }]);
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+            assert!(Instant::now() < deadline, "native click timed out");
+        }
+        step += 1;
+        pump(250);
+    };
+    for label in ["Window", "File"] {
+        let button = menu(w.header.upcast_ref(), label).unwrap();
+        let bounds = button.compute_bounds(&w.window).unwrap();
+        let popup = button.popover().unwrap();
+        click(
+            [
+                bounds.x() + bounds.width() * 0.5,
+                bounds.y() + bounds.height() * 0.5,
+            ],
+            272,
+        );
+        assert!(
+            popup.is_visible(),
+            "{label} menu did not remain open after a native click; sensitive={}, ready={}, busy={}, storage={:?}",
+            w.surface.is_sensitive(),
+            w.workspaces.ready.get(),
+            w.workspaces.busy.get(),
+            w.workspaces.manager.as_ref().unwrap().error()
+        );
+        assert!(popup.is_mapped());
+        capture_popover(&popup, dir.join(format!("{label}.png")).to_str().unwrap());
+        if label == "Window" {
+            let workspace = menu_label(popup.upcast_ref(), "Workspace").unwrap();
+            click(popup_point(&popup, &workspace), 272);
+            let manage = menu_label(popup.upcast_ref(), "Manage Workspaces…")
+                .expect("Workspace submenu should open");
+            capture_popover(&popup, dir.join("Workspace.png").to_str().unwrap());
+            click(popup_point(&popup, &manage), 272);
+            assert!(
+                w.workspaces.ui.dialog.is_visible(),
+                "Manage Workspaces should open through the native menu"
+            );
+            w.workspaces.ui.close();
+            pump(250);
+        }
+        popup.popdown();
+        pump(200);
+    }
+    let tab = w
+        .tab_hits()
+        .into_iter()
+        .find(|t| {
+            state(&w)
+                .workspace
+                .layout
+                .group_panels(t.group)
+                .is_ok_and(|panels| panels.get(t.index) == Some(&Panel::Layers))
+        })
+        .unwrap();
+    click(
+        [
+            tab.bounds.x + tab.bounds.width * 0.5,
+            tab.bounds.y + tab.bounds.height * 0.5,
+        ],
+        273,
+    );
+    let context = w
+        .popovers
+        .borrow()
+        .iter()
+        .filter_map(|p| p.upgrade())
+        .find(|p| p.has_css_class("panel-context-menu") && p.is_visible())
+        .expect("The panel context menu should remain open after a native right click");
+    capture_popover(&context, dir.join("context.png").to_str().unwrap());
+    w.dismiss_context();
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    w.window.close();
+    pump(300);
+}
+
+#[test]
 #[ignore = "private Wayland display, Vulkan and CAPY_WORKSPACE_DIR: native SQLite workspace resume"]
 fn native_workspace_database_resume_and_independent_windows() {
     assert!(

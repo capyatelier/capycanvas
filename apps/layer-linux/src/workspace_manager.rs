@@ -118,7 +118,17 @@ impl NativeWorkspaces {
             w,
             move |window| {
                 if window.is_active() {
-                    w.workspaces.revalidate(&w);
+                    // A live lease already fences other writers. Disabling the
+                    // editor on ordinary activation cancels the native click
+                    // that focused it, including menu and context-menu grabs.
+                    if w.workspaces.owner_lost.get()
+                        || w.workspaces
+                            .manager
+                            .as_ref()
+                            .is_some_and(|m| !m.lease_valid(now_ms()))
+                    {
+                        w.workspaces.revalidate(&w);
+                    }
                 } else if w.workspaces.ready.get() {
                     w.workspaces.save(&w, false);
                 }

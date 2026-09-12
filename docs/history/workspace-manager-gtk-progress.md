@@ -226,3 +226,31 @@ cargo run --locked --release -p layer-linux
 Open Window → Workspace → Manage Workspaces. Review switching away and back,
 template creation, reset/undo, toolbar reuse, and Storage and Backups. User approval
 is the remaining GTK gate before adapting other hosts.
+
+## User review: menu activation regression
+
+User review found that Window and context menus would not open. The earlier
+acceptance tests invoked manager actions directly and missed native pointer
+activation. A new test reproduced the failure through Mutter → Wayland → GTK:
+window activation began ownership revalidation and temporarily disabled the
+editor, cancelling the same click that should open the menu. Popup focus changes
+could repeat this interruption.
+
+Ordinary activation now retains input when the ownership lease remains valid.
+Expired or lost ownership still requires revalidation before editing. The pointer
+test now opens Window → Workspace → Manage Workspaces, File, and the Layers tab's
+right-click context menu. It passes in 5.12s; inspected the actual popup captures.
+Native stale-owner takeover/Save as New still passes in 3.15s. The production
+release build and script syntax checks pass. Concurrent Android main changes
+through `bcfc885` were integrated before validation.
+The concurrent GTK motion milestone through `5619a3a` was then integrated;
+the complete pointer menu test passed again in 5.13s on that combined tree.
+
+Reproduce the pointer regression check with:
+
+```sh
+bash apps/layer-linux/bench/workspace-menus.sh
+```
+
+GTK remains subject to user approval. Close the older running instance before
+using the normal `cargo run --locked --release -p layer-linux` trial command.
