@@ -86,6 +86,7 @@ pub struct UiSession<R: CanvasRenderer> {
     workspace_model_revision: u64,
     workspace_history: workspace::WorkspaceHistory,
     workspace_transition: bool,
+    workspace_read_only: bool,
     managed_workspace: Option<ManagedWorkspace>,
     interaction: Interaction,
     cursor: cursor::Cursor,
@@ -139,6 +140,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             workspace_model_revision: 0,
             workspace_history: workspace::WorkspaceHistory::default(),
             workspace_transition: false,
+            workspace_read_only: false,
             managed_workspace: None,
             interaction: Interaction::default(),
             cursor: cursor::Cursor::default(),
@@ -1454,6 +1456,39 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.workspace_read_only
+            && !matches!(
+                &action,
+                UiAction::WorkspaceManager { .. }
+                    | UiAction::MeasureColumnDrawers { .. }
+                    | UiAction::MeasureDrawerTiles { .. }
+                    | UiAction::MeasureColumnScroll { .. }
+                    | UiAction::MeasurePanels { .. }
+                    | UiAction::MeasureTitlebar { .. }
+                    | UiAction::SystemThemeChanged { .. }
+                    | UiAction::WindowFullscreen { .. }
+                    | UiAction::Invoke {
+                        command: CommandId::ApplyTransform | CommandId::CancelTransform
+                    }
+                    | UiAction::DragWorkspace {
+                        phase: ContactPhase::Up | ContactPhase::Cancel,
+                        ..
+                    }
+                    | UiAction::DragDivider {
+                        phase: ContactPhase::Up | ContactPhase::Cancel,
+                        ..
+                    }
+                    | UiAction::ResizeFloating {
+                        phase: ContactPhase::Up | ContactPhase::Cancel,
+                        ..
+                    }
+            )
+        {
+            return Err(
+                "Workspace ownership needs recovery. Use Save as New Workspace or export a backup."
+                    .into(),
+            );
+        }
         if self.workspace_transition
             && !matches!(
                 &action,

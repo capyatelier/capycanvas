@@ -27,10 +27,12 @@ pub enum ManagerAction {
     ImportToolbar,
     Storage,
     ExportCurrent,
+    ExportDatabase,
     ImportBackup,
     ClearOlderHistory,
     SaveAsNew,
     RetryStorage,
+    RecoverInterrupted,
     Switch(String),
     SwitchToWindow(String),
     NewFromTemplate(String),
@@ -64,10 +66,12 @@ impl ManagerAction {
             Self::ImportToolbar => "Import Toolbar…",
             Self::Storage => "Storage and Backups…",
             Self::ExportCurrent => "Export Workspace Backup…",
+            Self::ExportDatabase => "Export Original Database…",
             Self::ImportBackup => "Import Workspace Backup…",
             Self::ClearOlderHistory => "Clear Older History…",
             Self::SaveAsNew => "Save as New Workspace…",
             Self::RetryStorage => "Retry Storage",
+            Self::RecoverInterrupted => "Recover Interrupted Changes…",
             Self::Switch(_) => "Switch Workspace",
             Self::SwitchToWindow(_) => "Switch to Window",
             Self::NewFromTemplate(_) => "New Workspace from Template…",
@@ -132,6 +136,33 @@ pub struct ManagerDetails {
     pub actions: Vec<ManagerButton>,
 }
 impl<S: WorkspaceStore> WorkspaceManager<S> {
+    pub async fn inspect_details(
+        &self,
+        stored: &StoredEntity,
+        idle: bool,
+        now: u64,
+    ) -> ManagerDetails {
+        let mut details = self.details(stored, idle, now);
+        if let ItemContent::Workspace {
+            origin: Some(origin),
+            ..
+        } = &stored.entity.content
+            && let Ok(template) = self.load(&origin.id).await
+            && template.entity.metadata.deleted_at_ms.is_none()
+            && let ItemContent::Reusable { current, .. } = &template.entity.content
+            && current.id != origin.version
+        {
+            details.description.push_str("\nA newer template version is available. Reset still restores the original starting configuration.");
+            let mut button = ManagerButton::new(
+                ManagerAction::NewFromTemplate(origin.id.clone()),
+                idle,
+                false,
+            );
+            button.label = "New Workspace from Latest Template…".into();
+            details.actions.push(button);
+        }
+        details
+    }
     pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<ManagerRow> {
         if page == ManagerPage::ThisWorkspace {
             let Some(entity) = self.current() else {

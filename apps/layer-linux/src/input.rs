@@ -485,6 +485,11 @@ impl Input {
         self.send(workspace, event);
     }
     pub(crate) fn send(&self, workspace: &Rc<Workspace>, mut event: PenEvent) {
+        if !workspace.workspaces.accepts_input(workspace)
+            && !matches!(event.phase, PenPhase::Up | PenPhase::Cancel)
+        {
+            return;
+        }
         // A contact begun during compilation must not start midway when its
         // shader becomes ready. Navigation and native controls remain active.
         let ready = workspace.gpu.borrow().as_ref().is_some_and(|g| {

@@ -11342,7 +11342,6 @@ fn native_long_press_drag_input() {
     pump(100);
 }
 
-
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_tab_slide_input() {
@@ -13751,6 +13750,226 @@ fn native_named_workspace_manager_templates_library_and_history() {
     );
     w.workspaces.ui.dialog.close();
     pump(50);
+    w.window.close();
+    pump(500);
+    assert!(!w.window.is_visible());
+}
+
+#[test]
+#[ignore = "CAPY_WORKSPACE_DIR must name an isolated regular file to simulate unavailable storage"]
+fn native_workspace_unavailable_close_recovery() {
+    let blocked = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap());
+    assert!(blocked.is_file());
+    let original = std::fs::read(&blocked).unwrap();
+    let app = native_test_app("art.capycanvas.WorkspaceUnavailable");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while w.workspaces.busy.get() || w.workspaces.manager.as_ref().unwrap().error().is_none() {
+        pump(20);
+        assert!(Instant::now() < deadline, "startup error was not presented");
+    }
+    assert!(!w.workspaces.ready.get());
+    w.dispatch(UiAction::SetBrushSize { value: 83. });
+    assert_eq!(state(&w).brush.diameter, 83.);
+    w.window.close();
+    pump(100);
+    let dialog = find_named(w.window.upcast_ref(), "workspace-close-recovery").unwrap();
+    assert!(find_button(&dialog, "Export Backup and Close…").is_some());
+    find_button(&dialog, "Keep Open").unwrap().emit_clicked();
+    pump(100);
+    assert!(w.window.is_visible());
+    assert_eq!(state(&w).brush.diameter, 83.);
+    assert!(!state(&w).document_file.close_ready);
+    w.window.close();
+    pump(100);
+    let dialog = find_named(w.window.upcast_ref(), "workspace-close-recovery").unwrap();
+    find_button(&dialog, "Discard Unsaved Changes")
+        .unwrap()
+        .emit_clicked();
+    pump(200);
+    assert!(!w.window.is_visible());
+    assert_eq!(std::fs::read(blocked).unwrap(), original);
+}
+
+#[test]
+#[ignore = "requires an isolated CAPY_WORKSPACE_DIR and native GTK/Vulkan display"]
+fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
+    use layer_workspace::ManagerAction as A;
+    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    let app = native_test_app("art.capycanvas.WorkspaceOwnership");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let ready = |w: &Workspace| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+            pump(20);
+            assert!(Instant::now() < deadline);
+        }
+    };
+    let first = Workspace::new(&app);
+    first.window.present();
+    ready(&first);
+    first.dispatch(UiAction::SetBrushSize { value: 73. });
+    let manager = first.workspaces.manager.as_ref().unwrap();
+    let id = manager.active_id().unwrap();
+    // Release the lease while retaining the old window, modelling takeover after
+    // suspension. Fake-clock expiry itself is covered by the shared store tests.
+    glib::MainContext::default()
+        .block_on(manager.close())
+        .unwrap();
+    let second = Workspace::new(&app);
+    second.window.present();
+    ready(&second);
+    assert_eq!(
+        second.workspaces.manager.as_ref().unwrap().active_id(),
+        Some(id.clone())
+    );
+    first.workspaces.revalidate(&first);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while manager.error().is_none() {
+        pump(10);
+        assert!(Instant::now() < deadline);
+    }
+    assert!(!first.workspaces.accepts_input(&first));
+    first.dispatch(UiAction::SetBrushSize { value: 119. });
+    assert_eq!(state(&first).brush.diameter, 73.);
+    assert_eq!(state(&second).brush.diameter, 73.);
+    let window = first.clone();
+    glib::timeout_add_local_once(Duration::from_millis(100), move || {
+        find_named(window.window.upcast_ref(), "workspace-item-name")
+            .unwrap()
+            .downcast::<gtk::Entry>()
+            .unwrap()
+            .set_text("Recovered Painting");
+        find_button(window.window.upcast_ref(), "Save and Switch")
+            .unwrap()
+            .emit_clicked();
+    });
+    glib::MainContext::default()
+        .block_on(first.workspaces.perform(&first, A::SaveAsNew))
+        .unwrap();
+    pump(100);
+    assert_ne!(manager.active_id(), Some(id));
+    assert_eq!(manager.active_name().as_deref(), Some("Recovered Painting"));
+    first.dispatch(UiAction::SetBrushSize { value: 119. });
+    assert_eq!(state(&first).brush.diameter, 119.);
+    assert_eq!(state(&second).brush.diameter, 73.);
+    first.window.close();
+    second.window.close();
+    pump(500);
+    assert!(!first.window.is_visible() && !second.window.is_visible());
+}
+
+#[test]
+#[ignore = "requires isolated CAPY_WORKSPACE_DIR, GDK_DEBUG=no-portals and native GTK/Vulkan display"]
+#[allow(deprecated)]
+fn native_workspace_backup_file_picker_round_trip() {
+    use gtk::prelude::FileChooserExt;
+    use layer_workspace::ManagerAction as A;
+    let directory = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap());
+    let destination = directory.join("round-trip.capyworkspace");
+    let app = native_test_app("art.capycanvas.WorkspaceFilePickers");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    w.dispatch(UiAction::SetBrushSize { value: 77. });
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Layers,
+        target: DockTarget::Float {
+            position: [415., 190.],
+        },
+        viewport: [1200., 900.],
+    });
+    let layout = durable_layout(&state(&w).workspace.layout);
+    let source = w.workspaces.manager.as_ref().unwrap().active_id().unwrap();
+    let choose = |path: std::path::PathBuf, saving: bool| {
+        let timeout = Instant::now() + Duration::from_secs(10);
+        glib::timeout_add_local(Duration::from_millis(20), move || {
+            if let Some(picker) = gtk::Window::list_toplevels()
+                .into_iter()
+                .find_map(|w| w.downcast::<gtk::FileChooserDialog>().ok())
+                .filter(|p| p.is_visible())
+            {
+                let path = path.clone();
+                glib::spawn_future_local(async move {
+                    // Let GTK finish its initial folder load before changing the
+                    // selection, just as a user would after the dialog appears.
+                    glib::timeout_future(Duration::from_millis(500)).await;
+                    if saving {
+                        picker
+                            .set_current_folder(Some(&gtk::gio::File::for_path(
+                                path.parent().unwrap(),
+                            )))
+                            .unwrap();
+                        picker.set_current_name(path.file_name().unwrap().to_str().unwrap());
+                    } else {
+                        picker.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+                    }
+                    while picker.file().and_then(|f| f.path()).as_ref() != Some(&path) {
+                        assert!(
+                            Instant::now() < timeout,
+                            "The GTK chooser did not select the requested file."
+                        );
+                        glib::timeout_future(Duration::from_millis(20)).await;
+                    }
+                    glib::timeout_future(Duration::from_millis(250)).await;
+                    if saving {
+                        let snapshot = gtk::Snapshot::new();
+                        gtk::WidgetPaintable::new(Some(&picker)).snapshot(
+                            &snapshot,
+                            picker.width() as f64,
+                            picker.height() as f64,
+                        );
+                        picker
+                            .renderer()
+                            .unwrap()
+                            .render_texture(&snapshot.to_node().unwrap(), None)
+                            .save_to_png("/tmp/capy-workspace-file-picker.png")
+                            .unwrap();
+                    }
+                    picker.response(gtk::ResponseType::Accept);
+                });
+                return glib::ControlFlow::Break;
+            }
+            assert!(
+                Instant::now() < timeout,
+                "The GTK file chooser was not presented; disable portals for this test."
+            );
+            glib::ControlFlow::Continue
+        });
+    };
+    choose(destination.clone(), true);
+    glib::MainContext::default()
+        .block_on(w.workspaces.perform(&w, A::ExportCurrent))
+        .unwrap();
+    assert!(destination.is_file());
+    w.dispatch(UiAction::SetBrushSize { value: 31. });
+    pump(100);
+    choose(destination.clone(), false);
+    glib::MainContext::default()
+        .block_on(w.workspaces.perform(&w, A::ImportBackup))
+        .unwrap();
+    pump(100);
+    let manager = w.workspaces.manager.as_ref().unwrap();
+    assert_ne!(manager.active_id(), Some(source.clone()));
+    assert_eq!(state(&w).brush.diameter, 77.);
+    assert_eq!(durable_layout(&state(&w).workspace.layout), layout);
+    let previous = glib::MainContext::default()
+        .block_on(manager.load(&source))
+        .unwrap();
+    assert_ne!(previous.entity.working, manager.current().unwrap().working);
     w.window.close();
     pump(500);
     assert!(!w.window.is_visible());

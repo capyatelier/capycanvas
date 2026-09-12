@@ -4,6 +4,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
@@ -80,7 +83,10 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).shadow(6.dp, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp)).background(LocalPalette.current.panel)) {
+                    .chromeRegion(dock).shadow(6.dp, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp)).background(LocalPalette.current.panel)
+                    .combinedClickable(onClick = {}, onDoubleClick = {
+                        host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
+                    })) {
                     Box(Modifier.placed(column.getJSONObject("expand").relativeTo(bounds), dock.density)
                         .testTag("expand-column-$id").clickable { host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false)) }, contentAlignment = Alignment.Center) {
                         SharedIcon("column-expand", "Expand column")
@@ -103,8 +109,9 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                         }
                     }
                     val item = obj("kind" to "column", "column" to id)
+                    val context = obj("kind" to "group", "group" to column.array("groups").getJSONObject(0).getInt("group"))
                     Box(Modifier.placed(column.getJSONObject("grip").relativeTo(bounds), dock.density)
-                        .testTag("column-grip-$id").dragSource(dock, item), contentAlignment = Alignment.Center) { PanelGrip("Move column", false) }
+                        .testTag("column-grip-$id").dragSource(dock, item, context), contentAlignment = Alignment.Center) { PanelGrip("Move column", false) }
                 }
             }
         }
@@ -192,9 +199,12 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                                             val panel = bodies[panelId.toString()] ?: return@forEachIndexed
                                             key(panelId.toString()) {
                                                 val presentation = panel.getJSONObject("tab")
+                                                val interaction = remember { MutableInteractionSource() }
                                                 TextButton({ host.dispatch(obj("type" to "select_panel_tab", "group" to group, "panel" to panelId)) },
                                                     enabled = current != null,
+                                                    interactionSource = interaction,
                                                     modifier = Modifier.height(tabHeight.dp).testTag("drawer-tab-$panelId")
+                                                        .indication(interaction, LocalIndication.current)
                                                         .then(if (current != null) Modifier.dragSource(dock, obj("kind" to "panel", "panel" to panelId)) else Modifier)
                                                         .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null)
                                                         .zIndex(if (dock.isDraggedTab(panelId.toString())) 2f else 0f)

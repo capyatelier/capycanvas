@@ -92,7 +92,7 @@ impl NativeWorkspaces {
         self.operation_generation
             .set(self.operation_generation.get().wrapping_add(1));
         w.surface.set_sensitive(false);
-        while manager.saving() {
+        while manager.saving() || self.validating_owner.get() {
             glib::timeout_future(Duration::from_millis(10)).await;
         }
         Ok(OperationGuard {
@@ -109,7 +109,7 @@ impl NativeWorkspaces {
             manager.finish_transition();
         }
         self.busy.set(false);
-        w.surface.set_sensitive(true);
+        w.surface.set_sensitive(!self.validating_owner.get());
         self.update_status();
     }
     pub(super) async fn selected(&self, id: &str) -> Result<StoredEntity> {
@@ -362,10 +362,12 @@ impl NativeWorkspaces {
             }
             A::Export(_)
             | A::ExportCurrent
+            | A::ExportDatabase
             | A::ImportBackup
             | A::ClearOlderHistory
             | A::SaveAsNew
             | A::RetryStorage
+            | A::RecoverInterrupted
             | A::ImportTemplate
             | A::ImportToolbar
             | A::Storage

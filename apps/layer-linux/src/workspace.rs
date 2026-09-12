@@ -835,6 +835,7 @@ impl Workspace {
             .build();
         window.set_icon_name(Some("art.capycanvas.CapyCanvas"));
         static NEXT_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        window.add_css_class("capy-workspace");
         window.set_widget_name(&format!(
             "capy-{}",
             NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1401,6 +1402,20 @@ impl Workspace {
     }
 
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
+        let finishing = matches!(
+            &input,
+            UiInput::Blur
+                | UiInput::Pointer {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+        ) || matches!(&input,UiInput::Key {key,..} if key == "Escape" || key == "Enter");
+        if !finishing && !self.workspaces.accepts_input(self) {
+            return InputReply {
+                handled: true,
+                ..Default::default()
+            };
+        }
         if matches!(input, UiInput::Blur) {
             if let Some(mut drag) = self.workspace_drag.borrow_mut().take() {
                 if drag.context {
@@ -1561,6 +1576,35 @@ impl Workspace {
     }
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
         if self.refreshing.get() {
+            return;
+        }
+        if !matches!(
+            &action,
+            UiAction::WorkspaceManager { .. }
+                | UiAction::MeasureColumnDrawers { .. }
+                | UiAction::MeasureDrawerTiles { .. }
+                | UiAction::Invoke {
+                    command: CommandId::ApplyTransform | CommandId::CancelTransform
+                }
+                | UiAction::DragWorkspace {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+                | UiAction::DragDivider {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+                | UiAction::ResizeFloating {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+                | UiAction::MeasureColumnScroll { .. }
+                | UiAction::MeasurePanels { .. }
+                | UiAction::MeasureTitlebar { .. }
+                | UiAction::SystemThemeChanged { .. }
+                | UiAction::WindowFullscreen { .. }
+        ) && !self.workspaces.accepts_input(self)
+        {
             return;
         }
         if !self.workspaces.ready.get()

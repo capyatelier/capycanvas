@@ -30,8 +30,13 @@ pub(crate) struct NativeWorkspaces {
     pub ready: Cell<bool>,
     pub busy: Cell<bool>,
     operation_generation: Cell<u64>,
+    validating_owner: Cell<bool>,
+    owner_lost: Cell<bool>,
+    interrupted_count: Cell<usize>,
+    interruption_error: RefCell<Option<String>>,
     close_ready: Cell<bool>,
     close_requested: Cell<bool>,
+    close_prompt: Cell<bool>,
     layout_pending: Cell<bool>,
     captured_generation: Cell<Option<u64>>,
     last_edit: Cell<Instant>,
@@ -83,8 +88,13 @@ impl NativeWorkspaces {
             recovery,
             busy: Cell::new(false),
             operation_generation: Cell::new(0),
+            validating_owner: Cell::new(false),
+            owner_lost: Cell::new(false),
+            interrupted_count: Cell::new(0),
+            interruption_error: RefCell::new(None),
             close_ready: Cell::new(false),
             close_requested: Cell::new(false),
+            close_prompt: Cell::new(false),
             layout_pending: Cell::new(false),
             captured_generation: Cell::new(None),
             last_edit: Cell::new(now),
@@ -103,6 +113,17 @@ impl NativeWorkspaces {
             });
         }
         self.ui.bind(w);
+        w.window.connect_is_active_notify(glib::clone!(
+            #[weak]
+            w,
+            move |window| {
+                if window.is_active() {
+                    w.workspaces.revalidate(&w);
+                } else if w.workspaces.ready.get() {
+                    w.workspaces.save(&w, false);
+                }
+            }
+        ));
         self.recovery.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -117,7 +138,9 @@ impl NativeWorkspaces {
             w,
             move |_| {
                 if w.workspaces.ready.get() {
-                    w.workspaces.save(&w, true);
+                    w.workspaces
+                        .ui
+                        .run(&w, layer_workspace::ManagerAction::RetryStorage);
                 } else {
                     w.workspaces.start(&w);
                 }
@@ -228,6 +251,10 @@ impl NativeWorkspaces {
                     });
                 match result {
                     Ok(change) => {
+                        self.owner_lost.set(false);
+                        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                            gpu.session.set_workspace_read_only(false);
+                        }
                         let outgoing = manager.activate(incoming);
                         self.sync_binding(w);
                         self.ready.set(true);
@@ -242,6 +269,7 @@ impl NativeWorkspaces {
                         if let Err(error) = manager.refresh().await {
                             self.show_error(error);
                         }
+                        self.refresh_interrupted().await;
                     }
                     Err(error) => {
                         manager.release(&incoming).await;
@@ -265,7 +293,7 @@ impl NativeWorkspaces {
         }
         manager.finish_transition();
         self.busy.set(false);
-        w.surface.set_sensitive(true);
+        w.surface.set_sensitive(!self.validating_owner.get());
         self.update_status();
         if self.close_requested.get() {
             w.window.close();
@@ -319,6 +347,12 @@ impl NativeWorkspaces {
         let Some(manager) = &self.manager else {
             return;
         };
+        if !manager.lease_valid(now_ms()) {
+            if !self.owner_lost.get() {
+                self.revalidate(w);
+            }
+            return;
+        }
         self.capture(w);
         if self.last_maintenance.get().elapsed() >= Duration::from_secs(60)
             && !manager.saving()
@@ -354,9 +388,21 @@ impl NativeWorkspaces {
                 #[weak]
                 w,
                 async move {
-                    if let Err(error) = manager.renew().await {
-                        w.workspaces.show_error(error);
+                    let id = manager.active_id();
+                    let result = manager.renew().await;
+                    if manager.active_id() != id {
+                        return;
                     }
+                    if let Err(error) = result {
+                        w.workspaces.show_error(error);
+                        if !manager.lease_valid(now_ms()) {
+                            w.workspaces.owner_lost.set(true);
+                            if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                                gpu.session.set_workspace_read_only(true);
+                            }
+                        }
+                    }
+                    w.workspaces.refresh_interrupted().await;
                     w.workspaces.update_status();
                 }
             ));
@@ -369,6 +415,55 @@ impl NativeWorkspaces {
         {
             self.save(w, false);
         }
+    }
+    pub fn accepts_input(&self, w: &Rc<Workspace>) -> bool {
+        if self.manager.is_none() {
+            return true;
+        }
+        if self.busy.get() || self.validating_owner.get() {
+            return false;
+        }
+        if !self.ready.get() {
+            return true;
+        }
+        if self.owner_lost.get() {
+            return false;
+        }
+        if self.manager.as_ref().unwrap().lease_valid(now_ms()) {
+            return true;
+        }
+        self.revalidate(w);
+        false
+    }
+    pub fn revalidate(&self, w: &Rc<Workspace>) {
+        if !self.ready.get() || self.busy.get() || self.validating_owner.replace(true) {
+            return;
+        }
+        let manager = self.manager.as_ref().unwrap().clone();
+        let id = manager.active_id();
+        w.surface.set_sensitive(false);
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                while manager.saving() {
+                    glib::timeout_future(Duration::from_millis(10)).await;
+                }
+                let result = manager.revalidate_owner(now_ms()).await;
+                if manager.active_id() == id {
+                    w.workspaces.owner_lost.set(result.is_err());
+                    if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                        gpu.session.set_workspace_read_only(result.is_err());
+                    }
+                    if let Err(error) = result {
+                        w.workspaces.show_error(error);
+                    }
+                }
+                w.workspaces.validating_owner.set(false);
+                w.surface.set_sensitive(!w.workspaces.busy.get());
+                w.workspaces.update_status();
+            }
+        ));
     }
     fn save(&self, w: &Rc<Workspace>, retry: bool) {
         let Some(manager) = self.manager.clone() else {
@@ -417,6 +512,19 @@ impl NativeWorkspaces {
             self.label.add_css_class("error");
             self.retry.set_visible(true);
             self.recovery.set_visible(true);
+        } else if self.interrupted_count.get() > 0 && !self.busy.get() {
+            self.root.set_visible(true);
+            self.retry.set_visible(false);
+            self.recovery.set_visible(true);
+            self.label.remove_css_class("error");
+            self.label.set_text(
+                &self.interruption_error.borrow().clone().unwrap_or_else(|| {
+                    format!(
+                        "{} interrupted changes are available in Storage and Backups.",
+                        self.interrupted_count.get()
+                    )
+                }),
+            );
         } else {
             self.root.set_visible(self.busy.get() || !self.ready.get());
             self.label.remove_css_class("error");
@@ -437,6 +545,23 @@ impl NativeWorkspaces {
             ));
         }
     }
+    pub(super) async fn refresh_interrupted(&self) {
+        let Some(manager) = &self.manager else {
+            return;
+        };
+        match manager.interrupted_changes(now_ms()).await {
+            Ok(changes) => {
+                self.interrupted_count.set(changes.len());
+                *self.interruption_error.borrow_mut() = None;
+            }
+            Err(error) => {
+                self.interrupted_count.set(1);
+                *self.interruption_error.borrow_mut() = Some(format!(
+                    "Interrupted changes need recovery: {error}. Export Original Database preserves the stored records."
+                ));
+            }
+        }
+    }
     /// Return true while the close must wait for acknowledged workspace writes.
     pub fn request_close(&self, w: &Rc<Workspace>) -> bool {
         let Some(manager) = self.manager.clone() else {
@@ -444,6 +569,10 @@ impl NativeWorkspaces {
         };
         if self.close_ready.get() {
             return false;
+        }
+        if self.busy.get() {
+            self.close_requested.set(true);
+            return true;
         }
         if !self.ready.get() {
             let capture = w
@@ -454,6 +583,7 @@ impl NativeWorkspaces {
             if capture.as_ref() != self.failed_snapshot.borrow().as_ref() {
                 self.show_error(StoreError::new(layer_workspace::ErrorKind::Unavailable,
                     "Workspace storage is unavailable. Keep this window open to recover your changes with Retry or export."));
+                self.recover_close(w);
                 return true;
             }
         }
@@ -468,6 +598,20 @@ impl NativeWorkspaces {
             .map(|g| g.session.capture_workspace());
         if let Some(Ok(capture)) = captured {
             manager.observe(capture, now_ms());
+        }
+        let transition = w
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .map(|g| g.session.begin_workspace_transition());
+        if let Some(Err(error)) = transition {
+            self.close_requested.set(false);
+            if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                gpu.session.reset_document_close();
+            }
+            self.show_error(StoreError::invalid(error));
+            self.update_status();
+            return true;
         }
         self.busy.set(true);
         w.surface.set_sensitive(false);
@@ -485,8 +629,12 @@ impl NativeWorkspaces {
                     }
                     Err(error) => {
                         w.workspaces.close_requested.set(false);
+                        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                            gpu.session.end_workspace_transition();
+                        }
                         w.workspaces.show_error(error);
                         w.surface.set_sensitive(true);
+                        w.workspaces.recover_close(&w);
                     }
                 }
                 w.workspaces.busy.set(false);
