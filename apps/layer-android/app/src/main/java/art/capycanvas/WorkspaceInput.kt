@@ -1,5 +1,6 @@
 package art.capycanvas
 
+import android.view.PointerIcon as AndroidPointerIcon
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.*
@@ -7,8 +8,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.stylusHoverIcon
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import org.json.JSONArray
@@ -16,10 +20,33 @@ import org.json.JSONObject
 
 internal val LocalWorkspaceZ = staticCompositionLocalOf { 0 }
 
+/** System icons render at the device's cursor size for both mouse and pen. */
+@Composable internal fun Modifier.workspacePointerIcon(type: Int?): Modifier {
+    if (type == null) return this
+    val icon = remember(type) { PointerIcon(type) }
+    return pointerHoverIcon(icon).stylusHoverIcon(icon)
+}
+
+@Composable internal fun Modifier.workspaceDragCursor(type: Int?): Modifier {
+    val icon = remember(type) { PointerIcon(type ?: AndroidPointerIcon.TYPE_ARROW) }
+    // Keep the mouse hover node installed before contact, so it owns the
+    // pointer when a resize/drag changes the icon without a new hover-enter.
+    val mouse = pointerHoverIcon(icon, overrideDescendants = type != null)
+    return if (type == null) mouse else mouse.stylusHoverIcon(icon, overrideDescendants = true)
+}
+
+internal fun resizePointerIcon(edge: String) = when (edge) {
+    "left", "right" -> AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW
+    "top", "bottom" -> AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
+    "top_left", "bottom_right" -> AndroidPointerIcon.TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW
+    "top_right", "bottom_left" -> AndroidPointerIcon.TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW
+    else -> AndroidPointerIcon.TYPE_ARROW
+}
+
 /** Native hit geometry and gesture capture only. Rust owns movement, tear-off,
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
-    data class Region(val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int, val context: JSONObject?)
+    data class Region(val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int, val context: JSONObject?, val cursor: Int)
     val regions = mutableMapOf<Any, Region>()
     val chromeRegions = mutableMapOf<Any, Rect>()
     var drawer: JSONObject? = null
@@ -35,6 +62,8 @@ internal class DockInteraction(val host: CanvasHost) {
     var enabled = true
     var hint by mutableStateOf<JSONObject?>(null)
     var dragging by mutableStateOf(false)
+        private set
+    var dragCursor by mutableStateOf<Int?>(null)
         private set
     var expansion by mutableStateOf<JSONObject?>(null)
     var configurationHeight by mutableFloatStateOf(0f)
@@ -123,8 +152,9 @@ internal class DockInteraction(val host: CanvasHost) {
     }
     private fun query() = obj("type" to "drop", "item" to active?.optJSONObject("item"),
         "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabs.values.toList()), "expansion" to expansion)
-    fun start(action: JSONObject, point: Offset) {
+    fun start(action: JSONObject, point: Offset, cursor: Int) {
         active = action; position = point; dragging = true; generation++
+        dragCursor = if (action.optJSONObject("item") != null) AndroidPointerIcon.TYPE_GRABBING else cursor
         refresh(); send("down")
     }
     fun move(point: Offset) {
@@ -139,7 +169,7 @@ internal class DockInteraction(val host: CanvasHost) {
         if (!dragging) return
         val action = active!!
         val request = ++generation
-        fun end() { active = null; hint = null; dragging = false; refresh() }
+        fun end() { active = null; hint = null; dragging = false; dragCursor = null; refresh() }
         if (action.getString("type") == "tile_drag" && !cancel) {
             host.query(query()) { result ->
                 if (request == generation) {
@@ -156,17 +186,17 @@ internal class DockInteraction(val host: CanvasHost) {
 }
 
 @Composable internal fun Modifier.workspaceSource(dock: DockInteraction, action: JSONObject,
-    priority: Int = 0, anchor: JSONObject? = null): Modifier {
+    priority: Int = 0, anchor: JSONObject? = null, cursor: Int = AndroidPointerIcon.TYPE_GRAB): Modifier {
     val token = remember { Any() }
     val z = LocalWorkspaceZ.current
     val key = anchor?.let(dock::anchorKey)
     DisposableEffect(dock, token, key) {
         onDispose { dock.regions.remove(token); if (key != null) dock.anchors.remove(key) }
     }
-    SideEffect { dock.regions[token]?.let { dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor) } }
-    return onGloballyPositioned {
+    SideEffect { dock.regions[token]?.let { dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor) } }
+    return workspacePointerIcon(if (dock.enabled) cursor else null).onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-dock.origin)
-        dock.regions[token] = DockInteraction.Region(action, bounds, z, priority, anchor)
+        dock.regions[token] = DockInteraction.Region(action, bounds, z, priority, anchor, cursor)
         if (key != null) dock.anchors[key] = bounds
     }
 }
@@ -210,7 +240,7 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
                     if (!change.pressed && change.isConsumed) break
                     if (!started && (dock.popupOpen || dock.contextMenu != null || !dock.enabled)) break
                     if (!started && change.pressed && (change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
-                        dock.start(source.action, down.position / dock.density); started = true
+                        dock.start(source.action, down.position / dock.density, source.cursor); started = true
                     }
                     if (started) {
                         change.consume()

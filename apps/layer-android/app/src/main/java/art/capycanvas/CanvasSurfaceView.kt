@@ -15,7 +15,8 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /** Separate compositor layer, not a texture embedded in Compose's renderer. */
-class CanvasSurfaceView(context: Context, private val host: CanvasHost) : SurfaceView(context), SurfaceHolder.Callback {
+class CanvasSurfaceView(context: Context, private val host: CanvasHost,
+    private val chromeHitTest: (Float, Float) -> Boolean = { _, _ -> false }) : SurfaceView(context), SurfaceHolder.Callback {
     private var attached = false
     private var predictor: MotionPredictor? = null
     private var predictionDevice: Int? = null
@@ -26,6 +27,12 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
         isLongClickable = false
         pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
         contentDescription = "Drawing canvas"
+    }
+    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
+        // Compose controls are virtual siblings above this full-window native
+        // view. Let their owner resolve the icon instead of hiding it underneath.
+        if (chromeHitTest(event.getX(pointerIndex), event.getY(pointerIndex))) return null
+        return super.onResolvePointerIcon(event, pointerIndex)
     }
     override fun surfaceCreated(holder: SurfaceHolder) = Unit
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {

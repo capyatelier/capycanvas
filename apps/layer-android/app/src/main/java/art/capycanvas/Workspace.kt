@@ -1,5 +1,6 @@
 package art.capycanvas
 
+import android.view.PointerIcon as AndroidPointerIcon
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.Animatable
@@ -179,10 +180,18 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("workspace").workspaceGestures(dock)
+        .workspaceDragCursor(dock.dragCursor)
         .drawWithContent { drawContent(); host.recordUiDraw() }
         .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
-        AndroidView(factory = { CanvasSurfaceView(it, host) }, modifier = Modifier.fillMaxSize())
+        AndroidView(factory = { CanvasSurfaceView(it, host) { x, y ->
+            val point = androidx.compose.ui.geometry.Offset(x, y)
+            dock.chromeRegions.values.any { bounds -> bounds.contains(point) } || dock.regions.values.any { region -> region.bounds.contains(point) }
+        } }, modifier = Modifier.fillMaxSize(), update = { view ->
+            // AndroidView resolves its own icon outside Compose's descendant
+            // override. Keep the active workspace cursor over bare canvas too.
+            view.pointerIcon = AndroidPointerIcon.getSystemIcon(view.context, dock.dragCursor ?: AndroidPointerIcon.TYPE_NULL)
+        })
         // SurfaceView punches through the window background. Cover its empty
         // layer with normal Android UI until this surface has a finished buffer.
         // This requires none of the application's Vulkan shaders.
@@ -237,7 +246,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     if (expansion == null) group.array("resize_handles").objects().forEach { handle ->
                         Box(Modifier.placed(handle.getJSONObject("bounds"), density).zIndex(100f + index)
                             .testTag("resize-${group.getInt("id")}-${handle.getString("edge")}").workspaceSource(dock,
-                            obj("type" to "resize_floating", "group" to group.getInt("id"), "edge" to handle.getString("edge")), priority = 4))
+                            obj("type" to "resize_floating", "group" to group.getInt("id"), "edge" to handle.getString("edge")),
+                            priority = 4, cursor = resizePointerIcon(handle.getString("edge"))))
                     }
                   }
                 }
@@ -245,7 +255,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             if (!hidden) layout.array("dividers").objects().forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 Box(Modifier.placed(rect, density).testTag("divider-${divider.getInt("id")}").workspaceSource(dock,
-                    obj("type" to "drag_divider", "id" to divider.getInt("id")), priority = 4))
+                    obj("type" to "drag_divider", "id" to divider.getInt("id")), priority = 4,
+                    cursor = if (divider.getString("axis") == "horizontal") AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW else AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW))
             }
             if (!hidden) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {

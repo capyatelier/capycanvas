@@ -8,12 +8,14 @@ import android.os.ParcelFileDescriptor
 import android.view.KeyEvent
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextLayoutResult
@@ -71,6 +73,120 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun workspaceUsesNativeMouseAndPenCursors() {
+        val fixture = JSONObject(defaultWorkspace)
+        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
+                obj("id" to 42, "edge" to "right", "extent" to 252, "root" to obj("kind" to "split", "id" to 43,
+                    "axis" to "vertical", "fraction" to .5, "first" to tabs(44, "layers", "properties"), "second" to tabs(45, "adjustments"))),
+                obj("id" to 46, "edge" to "top", "extent" to 42, "root" to tabs(47, "toolbar")))))
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("next_id", maxOf(48, getInt("next_id")))
+        }
+        fixture.put("zen_mode", false)
+        action(obj("type" to "restore_workspace", "workspace" to fixture))
+        val root = compose.onNodeWithTag("workspace")
+        val native = (root.fetchSemanticsNode().root as ViewRootForTest).view
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
+        fun saved() = state().getJSONObject("workspace").toString()
+        fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
+        fun event(point: androidx.compose.ui.geometry.Offset, tool: Int): MotionEvent {
+            val local = point + root.fetchSemanticsNode().positionInRoot
+            val coords = MotionEvent.PointerCoords().apply { x = local.x; y = local.y }
+            val props = MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
+            val time = SystemClock.uptimeMillis()
+            return MotionEvent.obtain(time, time, MotionEvent.ACTION_HOVER_MOVE, 1, arrayOf(props), arrayOf(coords), 0, 0, 1f, 1f, 1, 0,
+                if (tool == MotionEvent.TOOL_TYPE_MOUSE) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_STYLUS, 0)
+        }
+        fun icon(point: androidx.compose.ui.geometry.Offset, type: Int?, tool: Int = MotionEvent.TOOL_TYPE_MOUSE) {
+            val event = event(point, tool)
+            try {
+                compose.runOnIdle {
+                    assertEquals("Native cursor at $point for tool $tool", type?.let { PointerIcon.getSystemIcon(native.context, it) }, native.onResolvePointerIcon(event, 0))
+                }
+            } finally { event.recycle() }
+        }
+        fun hover(point: androidx.compose.ui.geometry.Offset, type: Int, penType: Int? = type) {
+            root.performMouseInput { moveTo(point) }; settle(); icon(point, type)
+            root.performMouseInput { exit() }
+            val event = event(point, MotionEvent.TOOL_TYPE_STYLUS)
+            try { instrumentation.runOnMainSync {
+                event.action = MotionEvent.ACTION_HOVER_ENTER
+                native.dispatchGenericMotionEvent(event)
+                event.action = MotionEvent.ACTION_HOVER_MOVE
+                native.dispatchGenericMotionEvent(event)
+            } }
+            finally { event.recycle() }
+            settle(); icon(point, penType, MotionEvent.TOOL_TYPE_STYLUS)
+            val exit = event(point, MotionEvent.TOOL_TYPE_STYLUS).apply { action = MotionEvent.ACTION_HOVER_EXIT }
+            try { instrumentation.runOnMainSync { native.dispatchGenericMotionEvent(exit) } }
+            finally { exit.recycle() }
+        }
+        val away = root.fetchSemanticsNode().boundsInRoot.let { androidx.compose.ui.geometry.Offset(it.width * .6f, it.height * .6f) }
+        for (tag in listOf("tab-brushes", "tab-sizes", "group-grip-41", "ribbon-grip-toolbar")) hover(bounds(tag).center, PointerIcon.TYPE_GRAB)
+        val grip = bounds("group-grip-41")
+        hover(androidx.compose.ui.geometry.Offset(grip.left - 8f, grip.center.y), PointerIcon.TYPE_GRAB)
+        // Bare canvas hides the mouse and leaves the native pen icon unspecified.
+        hover(away, PointerIcon.TYPE_NULL, null)
+        val dividers = host.snapshot!!.getJSONObject("layout").array("dividers").objects()
+        assertEquals(setOf("horizontal", "vertical"), dividers.map { it.getString("axis") }.toSet())
+        for (divider in dividers) {
+            val type = if (divider.getString("axis") == "horizontal") PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW else PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
+            val start = bounds("divider-${divider.getInt("id")}").center
+            hover(start, type)
+            val before = saved()
+            val end = start + androidx.compose.ui.geometry.Offset(35f, 35f)
+            root.performMouseInput { moveTo(start); press(); moveTo(end, 200) }; settle(); icon(end, type)
+            root.performMouseInput { cancel() }; settle(); assertEquals(before, saved())
+        }
+        val before = saved()
+        val start = bounds("tab-sizes").center
+        root.performMouseInput { moveTo(start); press(); moveTo(away, 300) }; settle()
+        compose.waitUntil(10_000) { group("sizes").getBoolean("floating") }
+        icon(away, PointerIcon.TYPE_GRABBING)
+        // The native SurfaceView must also keep the active cursor across canvas.
+        compose.runOnIdle { assertEquals(PointerIcon.getSystemIcon(native.context, PointerIcon.TYPE_GRABBING), findCanvas(compose.activity.window.decorView)!!.pointerIcon) }
+        root.performMouseInput { release() }; settle()
+        icon(away, PointerIcon.TYPE_GRAB)
+        compose.runOnIdle { assertEquals(PointerIcon.getSystemIcon(native.context, PointerIcon.TYPE_NULL), findCanvas(compose.activity.window.decorView)!!.pointerIcon) }
+        val floated = saved()
+        val floatingId = group("sizes").getInt("id")
+        for ((edge, type) in listOf("left" to PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW, "right" to PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW,
+            "top" to PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW, "bottom" to PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW,
+            "top_left" to PointerIcon.TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW, "bottom_right" to PointerIcon.TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW,
+            "top_right" to PointerIcon.TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW, "bottom_left" to PointerIcon.TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW)) {
+            val resize = bounds("resize-$floatingId-$edge").center
+            hover(resize, type)
+            val end = resize + androidx.compose.ui.geometry.Offset(40f, 40f)
+            root.performMouseInput { moveTo(resize); press(); moveTo(end, 200) }; settle(); icon(end, type)
+            root.performMouseInput { cancel() }; settle(); assertEquals(floated, saved())
+        }
+        action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, saved())
+        action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(floated, saved())
+        action(obj("type" to "restore_workspace", "workspace" to fixture))
+        customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+        hover(bounds("column-grip-41").center, PointerIcon.TYPE_GRAB)
+        compose.onNodeWithTag("column-icon-brushes").performTouchInput { click() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-header-41").fetchSemanticsNodes().isNotEmpty() }
+        settle()
+        for (tag in listOf("drawer-tab-brushes", "drawer-tab-sizes", "column-drawer-grip-41")) hover(bounds(tag).center, PointerIcon.TYPE_GRAB)
+        val drawerGrip = bounds("column-drawer-grip-41")
+        hover(androidx.compose.ui.geometry.Offset(drawerGrip.left - 8f, drawerGrip.center.y), PointerIcon.TYPE_GRAB)
+        val collapsed = saved()
+        root.performMouseInput { moveTo(bounds("column-grip-41").center); press(); moveTo(away, 250) }; settle()
+        icon(away, PointerIcon.TYPE_GRABBING)
+        val edge = androidx.compose.ui.geometry.Offset(root.fetchSemanticsNode().boundsInRoot.width - 2f, away.y)
+        root.performMouseInput { moveTo(edge, 250) }; settle(); icon(edge, PointerIcon.TYPE_GRABBING)
+        root.performMouseInput { cancel() }; settle(); assertEquals(collapsed, saved())
+        compose.runOnIdle { assertEquals(PointerIcon.getSystemIcon(native.context, PointerIcon.TYPE_NULL), findCanvas(compose.activity.window.decorView)!!.pointerIcon) }
+        hover(bounds("column-grip-41").center, PointerIcon.TYPE_GRAB)
+        hover(away, PointerIcon.TYPE_NULL, null)
+        assertNull(host.actionError)
+    }
+
     @Test fun panelHeadersDoNotHighlightOnMouseOrStylusHover() {
         val fixture = JSONObject(defaultWorkspace)
         fixture.getJSONObject("layout").apply {
