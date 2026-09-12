@@ -8,6 +8,7 @@ import android.os.ParcelFileDescriptor
 import android.view.KeyEvent
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.Choreographer
 import android.view.PointerIcon
 import android.view.View
 import android.view.ViewGroup
@@ -97,7 +98,9 @@ class AndroidHostTest {
                 // hold its native result. This reproduces the response ordering
                 // deterministically without relying on a slow tablet/GPU.
                 CoroutineScope(Dispatchers.Main.immediate).launch {
-                    host.withNative { ownerReached.countDown(); releaseOwner.await(10, TimeUnit.SECONDS) }
+                    host.withNative { Choreographer.getInstance().postFrameCallback {
+                        ownerReached.countDown(); releaseOwner.await(10, TimeUnit.SECONDS)
+                    } }
                 }
                 assertTrue(ownerReached.await(5, TimeUnit.SECONDS))
                 dock.move(androidx.compose.ui.geometry.Offset(size.getDouble(0).toFloat() / 2, size.getDouble(1).toFloat() / 2))

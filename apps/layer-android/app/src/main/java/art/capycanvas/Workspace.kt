@@ -84,7 +84,17 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val colors = remember(state.getString("theme"), state.getJSONObject("palette").toString()) {
         Palette(state.getString("theme") != "light", state.getJSONObject("palette"))
     }
-    val scheme = if (colors.dark) darkColorScheme() else lightColorScheme()
+    val scheme = remember(colors) {
+        (if (colors.dark) darkColorScheme() else lightColorScheme()).copy(surface = colors.panel, background = colors.surround,
+            onSurface = colors.text, onBackground = colors.text, primary = colors.accent,
+            onPrimary = Color.White,
+            surfaceContainer = colors.panel, surfaceContainerHigh = colors.panel,
+            surfaceContainerHighest = colors.tabs, surfaceContainerLow = colors.input,
+            surfaceContainerLowest = colors.surround, surfaceTint = Color.Transparent,
+            secondaryContainer = colors.active, onSecondaryContainer = colors.text,
+            surfaceVariant = colors.tabs, onSurfaceVariant = colors.settingsSecondary, outline = colors.secondary,
+            primaryContainer = colors.active, onPrimaryContainer = colors.text)
+    }
     val activity = LocalActivity.current
     SideEffect {
         activity?.window?.let { window ->
@@ -95,20 +105,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
     }
     val textSize = (host.catalog.optDouble("text_size_pt", 11.0) * 4 / 3).sp
-    val textStyle = TextStyle(fontSize = textSize, lineHeight = 18.sp, letterSpacing = 0.sp)
-    val typography = Typography().let { it.copy(bodyLarge = textStyle, bodyMedium = textStyle,
+    val textStyle = remember(textSize) { TextStyle(fontSize = textSize, lineHeight = 18.sp, letterSpacing = 0.sp) }
+    val typography = remember(textStyle) { Typography().copy(bodyLarge = textStyle, bodyMedium = textStyle,
         bodySmall = textStyle, labelLarge = textStyle.copy(fontWeight = FontWeight.Bold),
         labelMedium = textStyle, labelSmall = textStyle,
         titleMedium = textStyle.copy(fontWeight = FontWeight.Bold)) }
-    MaterialTheme(typography = typography, colorScheme = scheme.copy(surface = colors.panel, background = colors.surround,
-        onSurface = colors.text, onBackground = colors.text, primary = colors.accent,
-        onPrimary = Color.White,
-        surfaceContainer = colors.panel, surfaceContainerHigh = colors.panel,
-        surfaceContainerHighest = colors.tabs, surfaceContainerLow = colors.input,
-        surfaceContainerLowest = colors.surround, surfaceTint = Color.Transparent,
-        secondaryContainer = colors.active, onSecondaryContainer = colors.text,
-        surfaceVariant = colors.tabs, onSurfaceVariant = colors.settingsSecondary, outline = colors.secondary,
-        primaryContainer = colors.active, onPrimaryContainer = colors.text)) {
+    MaterialTheme(typography = typography, colorScheme = scheme) {
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
                 DocumentRequests(host)
@@ -157,7 +159,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val dock = remember(host) { DockInteraction(host) }
     dock.density = density
     dock.enabled = snapshot?.optBoolean("partial_zen") != true && snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
-    val panels = snapshot?.array("panels")?.objects()?.associateBy { it.getString("id") } ?: emptyMap()
+    val panels = host.panelContent?.array("panels")?.objects()?.associateBy { it.getString("id") } ?: emptyMap()
     val state = snapshot?.getJSONObject("state")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
     var shownPanel by remember { mutableStateOf<String?>(null) }
@@ -236,7 +238,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
                         val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(group.toString()).put("tiles", it) } ?: group
-                        PanelGroup(host, state, projected, panels, dock, mod)
+                        PanelGroup(host, host.panelContent?.getJSONObject("state") ?: state, projected, panels, dock, mod)
                         expansion?.getJSONObject("configuration")?.let { rect ->
                             Box(Modifier.placed(rect, density).background(colors.panel)) {
                                 panels[group.getString("active")]?.let { ConfigurePanel(host, it) { height -> dock.configurationHeight = height } }
@@ -264,8 +266,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
         }
-        dock.hint?.getJSONObject("bounds")?.let { Box(Modifier.placed(it, density).zIndex(Float.MAX_VALUE)
-            .background(colors.accent).testTag("workspace-drop-hint")) }
+        WorkspaceDropHint(dock)
         dock.contextMenu?.let { menu ->
             val anchor = dock.contextAnchor
             Box(Modifier.offset { IntOffset(anchor.left.roundToInt(), anchor.top.roundToInt()) }
@@ -274,6 +275,13 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             }
         }
     }
+}
+
+/** Transient feedback must not invalidate the workspace and every panel. */
+@Composable private fun WorkspaceDropHint(dock: DockInteraction) {
+    val bounds = dock.hint?.getJSONObject("bounds") ?: return
+    Box(Modifier.placed(bounds, LocalDensity.current.density).zIndex(Float.MAX_VALUE)
+        .background(LocalPalette.current.accent).testTag("workspace-drop-hint"))
 }
 
 /** Read camera state here so navigation never invalidates the workspace tree. */

@@ -34,7 +34,7 @@ import org.json.JSONObject
     var geometry by remember { mutableStateOf<JSONObject?>(null) }
     val key = remember { Any() }
     val order = LocalWorkspaceZ.current
-    val document = host.snapshot?.getJSONObject("state")?.array("tabs")?.optJSONObject(0)
+    val document = host.panelContent?.getJSONObject("state")?.array("tabs")?.optJSONObject(0)
     val documentSize = document?.let { it.optInt("width") to it.optInt("height") }
     DisposableEffect(host) { onDispose { host.navigatorPlacement(key, null) } }
     LaunchedEffect(viewport, documentSize) {
@@ -77,7 +77,7 @@ import org.json.JSONObject
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            val commands = host.snapshot?.getJSONObject("state")?.array("commands")?.objects() ?: emptyList()
+            val commands = host.panelContent?.getJSONObject("state")?.array("commands")?.objects() ?: emptyList()
             for (id in listOf("zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical")) {
                 commands.find { it.getString("id") == id }?.let { command ->
                     IconButton({ host.invoke(id) }, modifier = Modifier.size(32.dp).testTag("navigator-$id"), enabled = command.getBoolean("enabled")) {

@@ -152,7 +152,7 @@ internal class DockInteraction(val host: CanvasHost) {
                 if (action.getString("type") == "drag_workspace") put("tabs", JSONArray(tabs.values.toList()))
             })
         val request = generation
-        host.workspaceGesture(actions, if (preview && action.optJSONObject("item") != null) query() else null) {
+        host.workspaceGesture(actions, if (preview && action.optJSONObject("item") != null) query() else null, moving = phase == "move") {
             // A newer pointer position must not starve completed feedback.
             // Only ending/replacing the gesture invalidates its replies.
             if (request == generation) hint = it as? JSONObject

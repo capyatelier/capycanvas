@@ -19,7 +19,6 @@ import org.json.JSONObject
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
 internal data class CameraReadout(val zoomPercent: Int, val rotationDegrees: Int)
@@ -42,6 +41,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     var snapshot by mutableStateOf<JSONObject?>(null)
         private set
+    // Panel controls do not depend on workspace positions or the global
+    // revision. Retain their model identity when only placement changes.
+    internal var panelContent by mutableStateOf<JSONObject?>(null)
+        private set
+    private var panelContentKey: String? = null // Native owner only.
     var surfaceReady by mutableStateOf(false)
         private set
     internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
@@ -158,23 +162,32 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         publish(true)
         wake()
     }
-    private val latestWorkspaceUpdate = AtomicReference<Any?>()
-    internal fun workspaceGesture(actions: List<JSONObject>, preview: JSONObject? = null, reply: (Any?) -> Unit = {}) {
-        val update = Any()
-        latestWorkspaceUpdate.set(update)
-        post {
-            // Measurements, movement and its preview share one owner task. Keep
-            // every movement (crossing the tear-off threshold is significant),
-            // but skip obsolete previews/snapshots when input has queued ahead.
-            actions.forEach { Native.dispatch(handle, it.toString()) }
-            if (preview != null && latestWorkspaceUpdate.get() !== update) return@post
-            refreshChrome()
-            if (preview != null) {
-                val value = org.json.JSONTokener(Native.query(handle, preview.toString())).nextValue()
-                main.post { reply(if (value == JSONObject.NULL) null else value) }
-            }
-            publish(true)
-            wake()
+    private data class WorkspacePresentation(val preview: JSONObject?, val reply: (Any?) -> Unit)
+    private var workspacePresentation: WorkspacePresentation? = null // Native owner only.
+    private val workspaceFrame = Choreographer.FrameCallback {
+        val presentation = workspacePresentation
+        workspacePresentation = null
+        if (presentation != null && !disposed) attempt(canvas = false) { presentWorkspace(presentation) }
+    }
+    private fun presentWorkspace(presentation: WorkspacePresentation) {
+        refreshChrome()
+        val value = presentation.preview?.let { org.json.JSONTokener(Native.query(handle, it.toString())).nextValue() }
+        publish(true)
+        if (presentation.preview != null) main.post { presentation.reply(if (value == JSONObject.NULL) null else value) }
+        wake()
+    }
+    internal fun workspaceGesture(actions: List<JSONObject>, preview: JSONObject? = null, moving: Boolean = false, reply: (Any?) -> Unit = {}) = post {
+        // Preserve every movement for tear-off/cancellation/history. Present the
+        // latest result once per display frame; incoming moves do not postpone it.
+        actions.forEach { Native.dispatch(handle, it.toString()) }
+        val presentation = WorkspacePresentation(preview, reply)
+        if (moving) {
+            if (workspacePresentation == null) choreographer?.postFrameCallback(workspaceFrame)
+            workspacePresentation = presentation
+        } else {
+            choreographer?.removeFrameCallback(workspaceFrame)
+            workspacePresentation = null
+            presentWorkspace(presentation)
         }
     }
     fun invoke(command: String) = dispatch(obj("type" to "invoke", "command" to command))
@@ -400,6 +413,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     put("camera", camera)
                     put("revision", next.getLong("revision"))
                 }
+                panelContent?.getJSONObject("state")?.put("camera", camera)
                 updateCameraReadout(camera)
             }
             return
@@ -433,7 +447,15 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val contentState = JSONObject().apply {
+            state.keys().forEach { key -> if (key != "workspace" && key != "revision") put(key, state.get(key)) }
+        }
+        val content = obj("state" to contentState, "panels" to next.array("panels"), "color_panel" to next.objectOrNull("color_panel"))
+        val contentKey = content.toString()
+        val changedContent = contentKey != panelContentKey
+        panelContentKey = contentKey
         main.post {
+            if (changedContent) panelContent = content
             snapshot = next
             updateCameraReadout(state.getJSONObject("camera"))
         }

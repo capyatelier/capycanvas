@@ -36,7 +36,7 @@ private fun JSONArray.point(scale: Float) = Offset(getDouble(0).toFloat() * scal
 
 /** Normalized geometry, color conversion, selection and clamping belong to Rust. */
 @Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity) {
-    val view = host.snapshot?.objectOrNull("color_panel") ?: return
+    val view = host.panelContent?.objectOrNull("color_panel") ?: return
     val colors = LocalPalette.current
     val space = view.getString("space")
     fun color(action: org.json.JSONObject) = host.dispatch(obj("type" to "color", "action" to action))

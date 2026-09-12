@@ -45,7 +45,7 @@ import kotlin.math.roundToInt
                 }
                 val modifier = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
                     obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
-                val fill = if (kind == "color") host.snapshot?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
+                val fill = if (kind == "color") host.panelContent?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
                         Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
                     } else null
                 val colors = LocalPalette.current
@@ -179,7 +179,7 @@ import kotlin.math.roundToInt
                 EditorCheck(control.getBoolean("visible_in_panel"), control.getString("label")) { visible -> host.customize(obj("type" to "set_control_visible", "panel" to panel.getString("id"), "control" to control.getString("control"), "visible" to visible)) }
                 Text(control.getString("label"))
             }
-            host.snapshot?.getJSONObject("state")?.let { state -> ConfigurationControl(host, state, control.getString("control"), control.getString("label")) }
+            host.panelContent?.getJSONObject("state")?.let { state -> ConfigurationControl(host, state, control.getString("control"), control.getString("label")) }
           }
         }
         Column { WorkspaceMenuItems(host, panel.array("toolbar_options")) }

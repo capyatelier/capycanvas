@@ -217,7 +217,7 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                                 columns[index].values().forEach { panelId ->
                                     bodies[panelId.toString()]?.let { panel ->
                                         if (panel.array("tiles").length() > 0) DrawerToolbar(host, panel, dock, bounds.number("width"))
-                                        else PanelControls(host, snapshot.getJSONObject("state"), panel,
+                                        else PanelControls(host, host.panelContent?.getJSONObject("state") ?: snapshot.getJSONObject("state"), panel,
                                             if (panelId in listOf("layers", "adjustments")) Modifier.height(480.dp) else Modifier.fillMaxWidth(), scrollable = false)
                                     }
                                 }
