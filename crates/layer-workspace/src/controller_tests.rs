@@ -105,6 +105,94 @@ impl Fixture {
     }
 }
 #[test]
+fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
+    let defaults = [
+        DEFAULT_WORKSPACES[1].0,
+        DEFAULT_WORKSPACES[0].0,
+        DEFAULT_WORKSPACES[2].0,
+    ];
+    for occupied in 0..=defaults.len() {
+        let mut f = Fixture::new();
+        f.input(serde_json::json!({"type":"switch","id":defaults[0]}));
+        f.action(serde_json::json!({"type":"set_brush_size","value":73.0}));
+        f.save();
+        f.input(serde_json::json!({"type":"form","kind":"new"}));
+        f.input(serde_json::json!({"type":"submit","name":"Delete Me"}));
+        let deleted = f.controller.view.id.clone().unwrap();
+        let capture = f.host.session.capture_workspace().unwrap();
+        let count = f.controller.manager.items().len();
+        let owner = Owner::fresh();
+        for id in &defaults[..occupied] {
+            pollster::block_on(Store(f.backend.clone()).execute(StoreRequest::Claim {
+                id: (*id).into(),
+                owner: owner.clone(),
+            }))
+            .unwrap();
+        }
+        f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+        f.input(serde_json::json!({"type":"form","kind":"delete","id":deleted}));
+        f.input(serde_json::json!({"type":"cancel"}));
+        assert_eq!(f.controller.view.id.as_ref(), Some(&deleted));
+        assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+        assert!(f.controller.manager.switcher_ids().contains(&deleted));
+        f.input(serde_json::json!({"type":"form","kind":"delete","id":deleted}));
+        f.input(serde_json::json!({"type":"submit","name":""}));
+        let record = pollster::block_on(f.controller.manager.load(&deleted)).unwrap();
+        if occupied == defaults.len() {
+            assert!(f.controller.view.error.is_some());
+            assert_eq!(f.controller.view.id.as_ref(), Some(&deleted));
+            assert!(record.entity.metadata.deleted_at_ms.is_none());
+            assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+        } else {
+            let replacement = defaults[occupied];
+            assert!(
+                f.controller.view.error.is_none(),
+                "{:?}",
+                f.controller.view.error
+            );
+            assert_eq!(f.controller.view.id.as_deref(), Some(replacement));
+            assert!(record.entity.metadata.deleted_at_ms.is_some());
+            assert!(
+                !f.controller
+                    .manager
+                    .switcher_display_ids()
+                    .contains(&deleted)
+            );
+            assert_eq!(
+                f.controller.manager.items().len(),
+                count,
+                "Deletion must not create a new workspace"
+            );
+            let saved = pollster::block_on(f.controller.manager.load(replacement))
+                .unwrap()
+                .entity
+                .capture()
+                .unwrap();
+            assert_eq!(f.host.session.capture_workspace().unwrap(), saved);
+            if occupied == 0 {
+                assert_eq!(saved.working, capture.working);
+            }
+            f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+            assert!(!f.controller.view.rows.iter().any(|r| r.id == deleted));
+            f.input(serde_json::json!({"type":"cancel"}));
+            f.input(serde_json::json!({"type":"suspend"}));
+            let reopened = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+            let incoming = pollster::block_on(reopened.initialize(f.backend.now.get())).unwrap();
+            assert_eq!(incoming.entity.id, replacement);
+            assert_eq!(incoming.entity.capture().unwrap(), saved);
+        }
+        for id in &defaults[..occupied] {
+            let saved = pollster::block_on(f.controller.manager.load(id)).unwrap();
+            assert_eq!(
+                saved.claim.unwrap().owner,
+                owner,
+                "Deletion must not take another window’s workspace"
+            );
+        }
+    }
+}
+
+#[test]
 fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();

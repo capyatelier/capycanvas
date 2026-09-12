@@ -114,7 +114,33 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.deepEqual((await capture()).working,expectedReset.working);
     await reload(); await wait('window.layerApp?.startupTimes.complete != null'); await idle();
     assert.equal((await view()).id,created); assert.deepEqual((await capture()).working,expectedReset.working);
-    console.log('PASS: real Web menu/dialog input, New, Rename, preview/filter/cancel, explicit switch, default pill, tools, history, undo, restart, starting layout and brush reset');
+    const deleted=created, beforeDelete=await capture();
+    const illustrator=(await view()).defaults.find(row=>row.id==='builtin:workspace:illustrator').id;
+    await menu('Manage Workspaces…');
+    const rowsBeforeDelete=(await view()).rows.map(row=>row.id);
+    const deleteForm=async()=>{
+      await click(`.workspace-row[data-id="${deleted}"] .workspace-options`);
+      await click('.workspace-row-menu [data-action="delete"]');
+      assert.equal(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),'Delete “Web Inking Acceptance”? This is permanent.');
+      assert.equal(await evaluate('document.querySelectorAll(".workspace-form[open] select").length'),0);
+    };
+    await deleteForm(); await click('.workspace-form footer button'); await idle();
+    assert.equal((await view()).id,deleted);
+    assert.deepEqual(normalized(await capture()),normalized(beforeDelete),'Cancelling deletion preserves the active workspace');
+    await deleteForm(); await shot('delete-workspace');
+    await click('.workspace-form .destructive-action'); await idle();
+    assert.equal((await view()).id,illustrator,'Active deletion switches to the included Illustrator workspace');
+    created=null;
+    assert.equal(await evaluate(`document.querySelectorAll('.workspace-switcher [data-workspace-id="${deleted}"]').length`),0);
+    await menu('Manage Workspaces…');
+    assert.deepEqual((await view()).rows.map(row=>row.id).sort(),rowsBeforeDelete.filter(id=>id!==deleted).sort(),'Deletion removes the row without creating a replacement workspace');
+    await click('.workspace-manager footer button');
+    await reload(); await wait('window.layerApp?.startupTimes.complete != null'); await idle();
+    assert.equal((await view()).id,illustrator,'Reload retains the chosen default');
+    await menu('Manage Workspaces…'); assert.ok(!(await view()).rows.some(row=>row.id===deleted),'Deleted workspace stays absent after reload');
+    await click('.workspace-manager footer button');
+    if(original!==illustrator){await click(`.workspace-switcher button[data-workspace-id="${original}"]`);await idle();}
+    console.log('PASS: real Web menu/dialog input, New, Rename, preview/filter/cancel, explicit switch, default pill, tools, history, undo, restart, starting layout, brush reset and active deletion/cancel/reload');
   } catch (error) { console.error("Workspace acceptance failed", error, await view()); await writeFile(`${directory}/input-events.json`,JSON.stringify(await evaluate('workspaceTestEvents'),null,2)); await shot("failure"); throw error; } finally {
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');
