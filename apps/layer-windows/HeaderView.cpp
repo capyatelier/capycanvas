@@ -2,6 +2,9 @@
 #include "HeaderView.h"
 #include "UiControls.h"
 #include "NativeMenus.h"
+#include "WorkspaceQuery.h"
+#include <chrono>
+#include <set>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.UI.Text.h>
 #include <array>
@@ -18,21 +21,6 @@ J invoke(hstring const& command){return O({{L"type",S(L"invoke")},{L"command",S(
 void menuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,
     A const& sections,std::shared_ptr<WorkspaceData> const& data) {
     NativeMenuItems(target,sections,data,[data](J action){data->dispatch(action);});
-}
-A commandSections(A const& sections,std::shared_ptr<WorkspaceData> const& data) {
-    A result;
-    for(auto section:sections) {
-        A items;
-        for(auto id:section.GetArray()) {
-            auto command=find(array(data->state,L"commands"),L"id",id.GetString());
-            if(!command.Size())continue;
-            items.Append(O({{L"label",S(str(command,L"label"))},{L"enabled",B(flag(command,L"enabled"))},
-                {L"selected",flag(command,L"checkable")?B(flag(command,L"selected")):JsonValue::CreateNullValue()},
-                {L"hint",S(str(command,L"shortcut"))},{L"action",invoke(id.GetString())}}));
-        }
-        result.Append(items);
-    }
-    return result;
 }
 Windows::UI::Color blend(Windows::UI::Color bg,Windows::UI::Color ink,float amount){
     return {255,uint8_t(bg.R+(ink.R-bg.R)*amount),uint8_t(bg.G+(ink.G-bg.G)*amount),uint8_t(bg.B+(ink.B-bg.B)*amount)};
@@ -58,11 +46,59 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     std::vector<std::pair<Button,hstring>> commands;
     hstring theme,palette;
     float leftInset=0,rightInset=0;
-    bool hidden=false,keepZen=true,built=false;
+    bool hidden=false,keepZen=true,built=false,resolvingLink=false;
+    std::set<uint32_t> handledRequests;
+    Microsoft::UI::Dispatching::DispatcherQueueTimer requestTimer{nullptr};
+    ~Impl(){if(requestTimer)requestTimer.Stop();}
+    void complete(uint32_t id,V error=JsonValue::CreateNullValue()){
+        data->dispatch(O({{L"type",S(L"complete_request")},{L"id",N(id)},{L"error",error}}));
+    }
+    static fire_and_forget launchLink(std::weak_ptr<Impl> weak,uint32_t id,hstring url){
+        V error=JsonValue::CreateNullValue();
+        try{
+            if(!co_await Windows::System::Launcher::LaunchUriAsync(Windows::Foundation::Uri(url)))
+                error=S(L"Windows could not open the application link.");
+        }catch(hresult_error const& failure){
+            error=S(L"Windows could not open the application link ("+to_hstring(failure.code().value)+L").");
+        }
+        if(auto self=weak.lock()){self->resolvingLink=false;self->complete(id,error);}
+    }
+    void requests(){
+        auto requests=array(data->state,L"requests");std::set<uint32_t> present;bool retry=false;
+        for(auto value:requests)present.insert(uint32_t(num(value.GetObject(),L"id")));
+        for(auto it=handledRequests.begin();it!=handledRequests.end();)
+            if(!present.contains(*it))it=handledRequests.erase(it);else ++it;
+        for(auto value:requests){
+            auto request=value.GetObject();auto id=uint32_t(num(request,L"id"));
+            if(handledRequests.contains(id))continue;
+            auto kind=object(request,L"kind");auto type=str(kind,L"type");
+            if(type==L"set_fullscreen"){
+                handledRequests.insert(id);
+                try{if(flag(kind,L"fullscreen")!=fullscreenActive)fullscreen();complete(id);}
+                catch(hresult_error const& failure){complete(id,S(L"Windows could not change full screen ("+to_hstring(failure.code().value)+L")."));}
+            }else if(type==L"open_link"&&!resolvingLink){
+                resolvingLink=true;
+                bool queued=QueryWorkspace(data->query,O({{L"type",S(L"application_link")},{L"link",S(str(kind,L"link"))}}),
+                    [weak=weak_from_this(),id](J reply){
+                        if(auto self=weak.lock()){
+                            auto url=str(reply,L"result");
+                            if(url.empty()){self->resolvingLink=false;self->complete(id,S(L"The application link is unavailable."));return;}
+                            launchLink(weak,id,url);
+                        }
+                    });
+                if(queued)handledRequests.insert(id);else{resolvingLink=false;retry=true;}
+            }
+        }
+        if(retry)requestTimer.Start();else requestTimer.Stop();
+    }
     void init() {
         root.Height(48);root.VerticalAlignment(VerticalAlignment::Top);
         AutomationProperties::SetName(root,L"Application header");
         root.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->reflow();});
+        requestTimer=root.DispatcherQueue().CreateTimer();requestTimer.Interval(std::chrono::milliseconds(200));
+        requestTimer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requests();});
+        root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requests();});
+        root.Unloaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requestTimer.Stop();});
     }
     void build(){
         root.Children().Clear();commands.clear();start=StackPanel();end=StackPanel();
@@ -72,15 +108,14 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         Border spacer;spacer.Width(36);spacer.Height(36);start.Children().Append(spacer);
         auto layout=[weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->reflow();};
         start.SizeChanged(layout);end.SizeChanged(layout);
-        A menus;menus.Append(object(data->catalog,L"file_menu"));
-        for(auto value:array(data->catalog,L"menus"))menus.Append(value);
-        for(auto value:menus) {
+        for(auto value:array(data->model,L"application_menus")) {
             auto spec=value.GetObject();auto item=button(data,str(spec,L"label"),[]{});style(item,data);
+            AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));
             MenuFlyout flyout;
-            flyout.Opening([data=data,spec](Windows::Foundation::IInspectable const& sender,auto&&){
+            flyout.Opening([data=data,id=str(spec,L"id")](Windows::Foundation::IInspectable const& sender,auto&&){
                 auto menu=sender.as<MenuFlyout>();menu.Items().Clear();
-                auto sections=array(spec,L"sections");
-                menuItems(menu.Items(),sections.Size()?commandSections(sections,data):array(object(data->model,L"workspace_menu"),L"sections"),data);
+                auto current=find(array(data->model,L"application_menus"),L"id",id);
+                menuItems(menu.Items(),array(object(current,L"model"),L"sections"),data);
             });
             flyout.Opened([state=popups](auto&&,auto&&){++state->count;state->changed(true);});
             flyout.Closed([state=popups](auto&&,auto&&){state->count=std::max(0,state->count-1);state->changed(state->count>0);});
@@ -141,7 +176,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             ToolTipService::SetToolTip(item,box_value(str(state,L"tooltip")));
         }
         hidden=flag(snapshot,L"chrome_hidden");keepZen=flag(snapshot,L"keep_zen_button",true);
-        reflow();
+        reflow();requests();
     }
     std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const {
         std::vector<std::pair<float,float>> controls;
@@ -163,7 +198,8 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     }
 };
 HeaderView::HeaderView(Dispatch send,Json catalog,std::function<void(bool)> popup,
-    std::function<void()> layout,std::function<void()> fullscreen):impl(std::make_shared<Impl>()){
+    std::function<void()> layout,std::function<void()> fullscreen,PreviewTransport queries):impl(std::make_shared<Impl>()){
+    impl->data->query=std::move(queries);
     impl->data->send=std::move(send);impl->data->catalog=catalog;impl->popups->changed=std::move(popup);
     impl->changed=std::move(layout);impl->fullscreen=std::move(fullscreen);impl->init();
 }

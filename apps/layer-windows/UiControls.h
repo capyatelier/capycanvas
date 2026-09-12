@@ -95,7 +95,9 @@ struct WorkspaceData {
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
-    std::function<void(std::string)> send,document;
+    std::function<void(std::string)> send,document,input;
+    J chrome=O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(false)}});
+    bool externalPopup=false;
     bool updating=false;
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
     void refreshPalette(){

@@ -50,6 +50,7 @@ pub struct CapyHost {
     native: NativeHost,
     instance: wgpu::Instance,
     cursor: CanvasCursor,
+    chrome_facts: layer_ui::ChromeFacts,
     navigator: crate::navigator::Navigator,
     scale: f32,
     blank_presented: bool,
@@ -87,6 +88,7 @@ impl CapyHost {
             native,
             instance,
             cursor: CanvasCursor::default(),
+            chrome_facts: layer_ui::ChromeFacts::default(),
             navigator: Default::default(),
             scale,
             blank_presented: false,
@@ -436,8 +438,13 @@ pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        host.native
-            .input(serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?)?;
+        let input = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        if let layer_ui::UiInput::Chrome { facts, .. } = &input {
+            host.chrome_facts = *facts;
+            // This hit belongs only to that UI contact, never later canvas input.
+            host.chrome_facts.contact_tab = None;
+        }
+        host.native.input(input)?;
         host.poll_services()?;
         Ok(0)
     })
@@ -488,7 +495,7 @@ pub unsafe extern "C" fn capy_chrome(
             facts: layer_ui::ChromeFacts {
                 popup_open: popup_open
                     || host.native.session.state().customization.control.is_some(),
-                ..Default::default()
+                ..host.chrome_facts
             },
         })?;
         Ok(i32::from(reply.handled) | (i32::from(reply.dismiss_popups) << 1))
@@ -756,6 +763,25 @@ pub unsafe extern "C" fn capy_layer_thumbnails(
     let mut result = std::ptr::null_mut();
     guard(host, |host| {
         result = Box::into_raw(Box::new(crate::previews::layer_thumbnails(
+            &mut host.native,
+            unsafe { read_json(json) }?,
+        )?));
+        Ok(0)
+    });
+    result
+}
+
+/// # Safety
+/// Exclusive render-owner access; json is a readable NUL-terminated request.
+/// Free the returned CPU-only packet with capy_preview_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_workspace_query(
+    host: *mut CapyHost,
+    json: *const c_char,
+) -> *mut crate::previews::CapyPreview {
+    let mut result = std::ptr::null_mut();
+    guard(host, |host| {
+        result = Box::into_raw(Box::new(crate::workspace::query(
             &mut host.native,
             unsafe { read_json(json) }?,
         )?));

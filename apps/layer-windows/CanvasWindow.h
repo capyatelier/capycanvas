@@ -4,6 +4,7 @@
 #include "HeaderView.h"
 #include "SettingsView.h"
 #include "DocumentView.h"
+#include "WorkspaceDialogs.h"
 #include "CanvasWorkBuffer.h"
 #include "FilterPreviews.h"
 #include "native/include/capy_windows.h"
@@ -46,6 +47,7 @@ private:
     std::unique_ptr<HeaderView> header;
     std::unique_ptr<SettingsView> settings;
     std::unique_ptr<DocumentView> documents;
+    std::unique_ptr<WorkspaceDialogs> workspaceDialogs;
     winrt::Windows::Data::Json::JsonObject lastModel;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
     std::atomic<bool> menuOpen{false},dialogOpen{false};

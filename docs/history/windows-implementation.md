@@ -953,3 +953,147 @@ Clippy, both explicit hardware D3D12 document tests, and the release-mode 4K
 seven-layer replay regression with exact pixel equality. The native build and
 document, effects, Layers and all four lifecycle fixtures pass after the merge.
 The intermittent shader-close sample above remains an acceptance gap.
+
+## 2026-09-11: workspace projection, work in progress
+
+Panel bodies now have independent native widget ownership and share the
+existing per-window preview caches. The header reads the eight shared menus.
+Diagnostics reads the shared StatsView through a bounded read-only query route,
+with weak UI callbacks, one outstanding request per view and no GPU wait or
+pixel transport. Its first request must be allowed before an empty panel has a
+natural height. Native colors use the shared settings_secondary palette role.
+
+A stable workspace capture owner routes panel, group, tile and resize gestures.
+It keeps capture when shared layout reparents source controls, requests measured
+tab drop hints, coalesces hint queries, and cancels on Escape, capture loss,
+deactivation or close. The owner retains native chrome geometry between
+high-rate canvas events. Floating resize strips do not participate in the body
+structure key, avoiding rebuilds merely from moving a floating group.
+
+Help link commands are enabled only after adding asynchronous Windows launcher
+handling and completion acknowledgement. Link URLs remain defined in Rust.
+The optional query route accepts explicit geometry/menu/statistics/link
+operations and rejects package installation, actions and oversized payloads.
+Stale query errors return to the native view without stopping the canvas.
+
+The adapter's 42 unit tests, 236 shared UI tests and 15 host tests pass; three
+explicit GPU tests remain ignored by the ordinary unit command. Strict Windows
+adapter Clippy, bounded queue checks and the native build pass. The workspace
+fixture checks the eight menus, selection and About, actual Diagnostics
+submission values, retained rows, resize, visibility and workspace Undo. The
+Layers, effects, documents and all four lifecycle fixtures also pass after
+adding the gesture owner. Those fixtures use native UI Automation and controlled
+canvas replay, so they do not accept physical docking or tablet input.
+
+A subsequent workspace repeat after enabling Help links completed its functional
+checks but exceeded the five-second process-exit gate. The native window closed
+about 90 ms after authorization; the final retired shader-worker join took
+5.26 seconds. The process exited later. This reproduces the existing intermittent
+shutdown issue; no timeout was increased and that run has no accepted zero-exit
+result.
+
+This is unfinished workspace work, not full editor acceptance. Windows still
+uses its gated legacy preset. Configuration/toolbar management, partial Zen,
+native measurement and physical gesture validation remain, alongside the
+earlier packaging, lifecycle, visual and performance acceptance gaps.
+Presentation benchmarking remains deferred.
+
+Content drawer and collapsed-column projections now follow shared geometry.
+Opening and closing retain native body ownership while the owner computes the
+200 ms placement animation. Native measurements include one initial zero height
+per drawer column, followed by the actual body heights. Reporting an empty
+height array made the shared query return no placement; that startup case is
+now covered by the adapter query test. Early chrome refreshes also wait for
+nonzero native layout before sending a viewport.
+
+Tool drawers report their presented bounds and connection to shared chrome.
+Column drawers report clipped toolbar tile origins, retain body controls across
+tab switches and use native scrolling. The drawer backdrop leaves a GPU
+Navigator opening. Column icons, expansion and keyboard context menus route
+shared actions. Size presets follow Android's two/three/four-column breakpoints.
+All tile sizes use the new shared icon and label metadata.
+
+The native drawer fixture completed Color and Brush Size repeat toggles,
+keyboard collapse, expansion and workspace Undo/Redo. A review closed its
+window about 92 ms after authorization but spent 7.69 seconds in the final
+shader-worker join; the five-second process-exit gate remains failed for that
+run. The later process exit was observed without an accepted exit status.
+A broader fixture adds tab-width/selection and Navigator checks; its first
+attempt requested a context menu while the previous native flyout was closing.
+The fixture now allows that native close animation to settle.
+
+Main through fd1ade7 was fast-forwarded into the Windows worktree, preserving
+uncommitted Windows work. The overlap in column-history tests was resolved by
+keeping the new upstream width-reset coverage and the Windows collapse/history
+test. The merged tree passes 304 unit tests (246 UI, 15 host, 43 Windows) and
+strict Windows adapter Clippy. This remains one unpublished workspace milestone.
+The merged native build and complete drawer fixture now pass, including
+keyboard menus, Color and Size repeat toggles, expansion history, retained
+column width through tab selection, repeated active tabs, Navigator preview and
+zoom, closing cleanup and a zero exit within five seconds. The tab projection
+uses the typed SelectPanelTab action; the shared collapsed-column policy keeps
+repeat selection from opening configuration. A local capture shows the actual
+controlled stroke in the GPU Navigator preview, and the native Border applies
+the shared rounded/connected corners to its child content. This passing repeat
+does not resolve the earlier intermittent shader shutdown delay. The 33 changed
+source files have no high-signal secret matches; captures, profiles and logs
+remain ignored and local.
+
+At that point, column drawer dragging/MeasureColumnDrawers, canvas-facing
+divider reset, origin corner clipping and overlapping GPU preview acceptance
+were still pending, in addition to the unfinished full workspace work above.
+
+The Windows workspace drawers and toolbar management milestone now includes
+native creation/insertion, rename, duplicate, management and delete-confirmation
+dialogs. Lists are virtualized and retain rows through selection updates.
+A synchronous TextChanging handler captures drafts before a delayed snapshot
+can overwrite newer typing; native cancellation waits for Core acknowledgement
+before releasing the modal slot. The event choice follows
+[WinUI's documented event ordering](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.textbox.textchanging?view=windows-app-sdk-1.8).
+Toolbar grips accept keyboard context requests. Dock tabs, drawer headers and
+collapsed icons update their labels after rename or tab-presentation changes.
+
+Column drawers publish presented bounds through MeasureColumnDrawers, route
+individual tab and whole-group drags, and clip drop-hit rectangles through all
+native scrolling ancestors. The fixed group grip remains outside scrolling
+tabs. Canvas-facing column dividers request shared default-width reset on
+double-click. Windows joins the shared tests for drawer tear-off, cancellation,
+docking, tab reordering, stale measurements and one-entry reset history.
+Native physical dragging is still unaccepted.
+
+Main through e1b1fe0 merged cleanly. The merged tree passes 304 unit tests
+(246 UI, 15 host, 43 Windows; three explicit GPU tests ignored), strict Windows
+Clippy, native queue tests and the C++ build. Native toolbar and drawer fixtures
+pass on the final build, including rapid names, rename/duplicate/insert history,
+delete/cancel/manager handoffs, closing with a picker open, keyboard drawer
+menus, tab width, GPU Navigator preview and zero exit. The workspace/Diagnostics,
+Layers and effects fixtures also passed in this milestone. The effects fixture
+now retains the last complete isolated, process-matched trace during a partial
+trace read; new-value waits still keep their existing timeout.
+
+Document regression reached the second launch's final discarded close after
+its document, import, export, Preferences-draft and picker checks. That process
+exceeded the five-second exit gate: its window closed about 72 ms after
+authorization, and the final shader join took about 4.83 seconds before the
+remaining process teardown. The lifecycle fixture passed immediate startup
+close but failed warmup close, where the final shader join took about 5.53
+seconds. Both processes later exited; those runs have no accepted zero-exit
+result. These reproduce the existing shutdown limitation. No timeout was
+increased, and the document/lifecycle suites are not marked passed for this
+milestone.
+
+This is a workspace implementation milestone, not complete Windows acceptance.
+Configuration expansion, full editor defaults, partial Zen, origin corner
+clipping, overlapping GPU previews, runtime filter packages, packaging,
+physical gestures, DPI/device lifecycle, Chrome parity and final presentation
+and input-latency gates remain. Captures, profiles, traces and binaries remain
+ignored/local; only reviewed source, fixture and documentation changes are
+included. Presentation benchmarking remains deferred.
+
+Before publication, main advanced to 16c5886 with Apple drawer work and shared
+toolbar-height, tab-drop ordering and collapsed-layout fixes. That update
+merged cleanly. The resulting 307 unit tests (249 UI, 15 host, 43 Windows),
+strict Windows Clippy and native rebuild pass. Toolbar and drawer fixtures pass
+again on that merged build. The toolbar fixture also closes a modified drawing
+while its picker is open, verifies the unsaved-decision handoff and exits with
+zero status. The earlier document/lifecycle shutdown failures remain open.

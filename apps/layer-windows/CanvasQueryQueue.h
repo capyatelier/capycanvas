@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-enum class CanvasQueryKind { Filters, Thumbnails, LayerMenu };
+enum class CanvasQueryKind { Filters, Thumbnails, LayerMenu, Workspace };
 using PreviewPacket=std::shared_ptr<CapyPreview>;
 using PreviewReply=std::function<void(PreviewPacket)>;
 using PreviewTransport=std::function<bool(CanvasQueryKind,std::string,PreviewReply)>;

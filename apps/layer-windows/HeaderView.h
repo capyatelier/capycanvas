@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "CanvasQueryQueue.h"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -9,7 +10,7 @@ public:
     using Json=winrt::Windows::Data::Json::JsonObject;
     using Dispatch=std::function<void(std::string)>;
     HeaderView(Dispatch send,Json catalog,std::function<void(bool)> popup,
-        std::function<void()> layout,std::function<void()> fullscreen);
+        std::function<void()> layout,std::function<void()> fullscreen,PreviewTransport queries);
     ~HeaderView();
     winrt::Microsoft::UI::Xaml::Controls::Grid Root()const;
     void Apply(Json const& snapshot);

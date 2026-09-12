@@ -1489,6 +1489,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
+                        | Platform::Windows
                 ) && layout.column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
@@ -1554,6 +1555,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
+                        | Platform::Windows
                 ) && control.drawer_columns().is_some()
                     && (!control.selectable()
                         || selected
@@ -2313,6 +2315,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | Platform::Web
                 | Platform::Ios
                 | Platform::Mac
+                | Platform::Windows
         )
     }
 
@@ -7923,9 +7926,12 @@ mod tests {
     #[test]
     fn column_width_reset_is_one_undoable_action() {
         let viewport = [1600., 1000.];
-        for collapsed in [false, true] {
+        for (platform, collapsed) in [Platform::Gtk, Platform::Windows]
+            .into_iter()
+            .flat_map(|platform| [false, true].map(|collapsed| (platform, collapsed)))
+        {
             let mut app = session();
-            app.set_platform(Platform::Gtk);
+            app.set_platform(platform);
             app.state.workspace.layout.bands[0].extent = 400.;
             if collapsed {
                 app.state
@@ -7953,112 +7959,49 @@ mod tests {
     }
 
     #[test]
-    fn ports_awaiting_columns_retain_docked_handle_behavior() {
+    fn windows_column_handles_collapse_with_workspace_history() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Windows] {
-            let mut app = session();
-            app.set_platform(platform);
-            let panel = Panel::Sizes;
-            let group = app.state.workspace.layout.panel_group(panel).unwrap();
-            for style in TabStyle::ALL {
-                app.dispatch(UiAction::Customize {
-                    action: CustomizationAction::SetTabStyle { group, style },
-                })
-                .unwrap();
-                let initial = app.state.workspace.clone();
-                assert_eq!(
-                    initial
-                        .layout
-                        .panel_handle_target(DockItem::Group { group }),
-                    Some(group)
-                );
-                assert_eq!(
-                    initial
-                        .layout
-                        .panel_handle_target(DockItem::Panel { panel }),
-                    None,
-                    "Tab labels retain their own activation behavior"
-                );
-                for hidden in [true, false] {
-                    let before = app.state.workspace.clone();
-                    let change = app
-                        .dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                        .unwrap();
-                    assert!(!change.canvas_wake);
-                    let after = app.state.workspace.clone();
-                    let mut expected = before.clone();
-                    expected.layout.panel_mut(panel).unwrap().hide_tab = hidden;
-                    assert_eq!(
-                        after, expected,
-                        "Only tab visibility changes, not dock dimensions or tab style"
-                    );
-                    let resolved = app
-                        .layout(viewport)
-                        .groups
-                        .into_iter()
-                        .find(|g| g.id == group)
-                        .unwrap();
-                    assert_eq!(resolved.tabs_visible, !hidden);
-                    assert!(!resolved.floating);
-                    invoke(&mut app, CommandId::UndoWorkspace);
-                    assert_eq!(app.state.workspace, before);
-                    invoke(&mut app, CommandId::RedoWorkspace);
-                    assert_eq!(app.state.workspace, after);
-                    let json = serde_json::to_string(&after).unwrap();
-                    assert_eq!(
-                        serde_json::from_str::<WorkspaceState>(&json).unwrap(),
-                        after
-                    );
-                }
-                assert_eq!(app.state.workspace, initial);
-            }
-            // A docked toolbar accepts the handle but never toggles its tab.
-            let toolbar = app
-                .state
-                .workspace
-                .layout
-                .panel_group(Panel::Toolbar)
-                .unwrap();
-            assert_eq!(
-                app.state
-                    .workspace
-                    .layout
-                    .panel_handle_target(DockItem::Group { group: toolbar }),
-                Some(toolbar)
-            );
-            assert_eq!(
-                app.state
-                    .workspace
-                    .layout
-                    .panel_handle_target(DockItem::Panel {
-                        panel: Panel::Toolbar
-                    }),
-                Some(toolbar)
-            );
-            let before = app.state.workspace.clone();
-            app.dispatch(UiAction::DoubleClickPanelHandle {
-                group: toolbar,
-                viewport,
+        let mut app = session();
+        app.set_platform(Platform::Windows);
+        let panel = Panel::Sizes;
+        let group = app.state.workspace.layout.panel_group(panel).unwrap();
+        for style in TabStyle::ALL {
+            app.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTabStyle { group, style },
             })
             .unwrap();
-            assert_eq!(app.state.workspace, before);
-            app.dispatch(UiAction::MovePanel {
-                panel: Panel::Brushes,
-                viewport,
-                target: DockTarget::Tab { group, index: None },
-            })
-            .unwrap();
+            let before = app.state.workspace.clone();
             assert_eq!(
+                before.layout.panel_handle_target(DockItem::Panel { panel }),
+                None,
+                "A tab label keeps its activation behavior"
+            );
+            let change = app
+                .dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap();
+            assert!(!change.canvas_wake);
+            assert!(
                 app.state
                     .workspace
                     .layout
-                    .panel_handle_target(DockItem::Group { group }),
-                Some(group)
+                    .collapsed_column_for_group(group)
+                    .is_some()
             );
-            let before = app.state.workspace.clone();
-            app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                .unwrap();
+            assert_eq!(
+                app.state.workspace.layout.panel(panel).unwrap().hide_tab,
+                before.layout.panel(panel).unwrap().hide_tab
+            );
+            let collapsed = app.state.workspace.clone();
+            let json = serde_json::to_string(&collapsed).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WorkspaceState>(&json).unwrap(),
+                collapsed
+            );
+            invoke(&mut app, CommandId::UndoWorkspace);
             assert_eq!(app.state.workspace, before);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, collapsed);
+            invoke(&mut app, CommandId::UndoWorkspace);
         }
     }
 
@@ -8665,6 +8608,7 @@ mod tests {
             Platform::Android,
             Platform::Mac,
             Platform::Ios,
+            Platform::Windows,
         ] {
             for right in [false, true] {
                 let mut t = CollapsedResizeTest::new(platform, right, None);
@@ -9109,13 +9053,19 @@ mod tests {
     #[test]
     fn column_drawer_drag_tear_off_cancel_dock_and_history() {
         let viewport = [1200., 900.];
-        for (group, panel, whole) in [
-            (5, Panel::Brushes, false),
-            (8, Panel::Properties, false),
-            (8, Panel::Layers, true),
-        ] {
+        for (platform, (group, panel, whole)) in [Platform::Gtk, Platform::Windows]
+            .into_iter()
+            .flat_map(|platform| {
+                [
+                    (5, Panel::Brushes, false),
+                    (8, Panel::Properties, false),
+                    (8, Panel::Layers, true),
+                ]
+                .map(|case| (platform, case))
+            })
+        {
             let mut s = session();
-            s.set_platform(Platform::Gtk);
+            s.set_platform(platform);
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                 .unwrap();
             s.dispatch(UiAction::Customize {
@@ -9212,82 +9162,85 @@ mod tests {
 
     #[test]
     fn column_drawer_tabs_reorder_and_reject_stale_geometry() {
-        let mut s = session();
-        let viewport = [1200., 900.];
-        let group = 8;
-        s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-            .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ToggleColumnDrawer {
-                group,
-                panel: Panel::Layers,
-            },
-        })
-        .unwrap();
-        let bounds = s.state.customization.column_drawers[0]
-            .placement(&s.state.workspace.layout, viewport, &[450.], false)
-            .unwrap()
-            .bounds;
-        s.dispatch(UiAction::MeasureColumnDrawers {
-            measurements: vec![ColumnDrawerMeasurement { group, bounds }],
-        })
-        .unwrap();
-        let before = s.state.workspace.clone();
-        let tabs: Vec<_> = (0..3)
-            .map(|index| TabHit {
-                group,
-                index,
-                bounds: Bounds {
-                    x: bounds.x + index as f32 * 90.,
-                    y: bounds.y,
-                    width: 90.,
-                    height: TAB_BAR_HEIGHT,
+        for platform in [Platform::Generic, Platform::Gtk, Platform::Windows] {
+            let mut s = session();
+            s.set_platform(platform);
+            let viewport = [1200., 900.];
+            let group = 8;
+            s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap();
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group,
+                    panel: Panel::Layers,
                 },
             })
-            .collect();
-        let item = DockItem::Panel {
-            panel: Panel::Properties,
-        };
-        for (phase, position) in [
-            (ContactPhase::Down, [bounds.x + 220., bounds.y + 18.]),
-            (ContactPhase::Move, [bounds.x + 10., bounds.y + 18.]),
-            (ContactPhase::Up, [bounds.x + 10., bounds.y + 18.]),
-        ] {
-            s.dispatch(UiAction::DragWorkspace {
-                item,
-                phase,
-                position,
-                viewport,
-                tabs: tabs.clone(),
+            .unwrap();
+            let bounds = s.state.customization.column_drawers[0]
+                .placement(&s.state.workspace.layout, viewport, &[450.], false)
+                .unwrap()
+                .bounds;
+            s.dispatch(UiAction::MeasureColumnDrawers {
+                measurements: vec![ColumnDrawerMeasurement { group, bounds }],
             })
             .unwrap();
+            let before = s.state.workspace.clone();
+            let tabs: Vec<_> = (0..3)
+                .map(|index| TabHit {
+                    group,
+                    index,
+                    bounds: Bounds {
+                        x: bounds.x + index as f32 * 90.,
+                        y: bounds.y,
+                        width: 90.,
+                        height: TAB_BAR_HEIGHT,
+                    },
+                })
+                .collect();
+            let item = DockItem::Panel {
+                panel: Panel::Properties,
+            };
+            for (phase, position) in [
+                (ContactPhase::Down, [bounds.x + 220., bounds.y + 18.]),
+                (ContactPhase::Move, [bounds.x + 10., bounds.y + 18.]),
+                (ContactPhase::Up, [bounds.x + 10., bounds.y + 18.]),
+            ] {
+                s.dispatch(UiAction::DragWorkspace {
+                    item,
+                    phase,
+                    position,
+                    viewport,
+                    tabs: tabs.clone(),
+                })
+                .unwrap();
+            }
+            assert_eq!(
+                s.state.workspace.layout.group_panels(group).unwrap(),
+                &[Panel::Properties, Panel::Layers, Panel::Adjustments]
+            );
+            assert!(s.state.workspace.layout.is_collapsed(group));
+            assert!(s.state.workspace.layout.floating.is_empty());
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            invoke(&mut s, CommandId::UndoWorkspace);
+            assert_eq!(s.state.workspace, before);
+            s.state.customization.column_drawers.clear();
+            assert!(
+                s.dispatch(UiAction::DragWorkspace {
+                    item,
+                    phase: ContactPhase::Down,
+                    position: [bounds.x + 10., bounds.y + 18.],
+                    viewport,
+                    tabs,
+                })
+                .is_err()
+            );
+            assert!(
+                serde_json::to_value(&s.state.customization)
+                    .unwrap()
+                    .get("column_drawer_bounds")
+                    .is_none()
+            );
         }
-        assert_eq!(
-            s.state.workspace.layout.group_panels(group).unwrap(),
-            &[Panel::Properties, Panel::Layers, Panel::Adjustments]
-        );
-        assert!(s.state.workspace.layout.is_collapsed(group));
-        assert!(s.state.workspace.layout.floating.is_empty());
-        assert_eq!(s.state.customization.column_drawers.len(), 1);
-        invoke(&mut s, CommandId::UndoWorkspace);
-        assert_eq!(s.state.workspace, before);
-        s.state.customization.column_drawers.clear();
-        assert!(
-            s.dispatch(UiAction::DragWorkspace {
-                item,
-                phase: ContactPhase::Down,
-                position: [bounds.x + 10., bounds.y + 18.],
-                viewport,
-                tabs,
-            })
-            .is_err()
-        );
-        assert!(
-            serde_json::to_value(&s.state.customization)
-                .unwrap()
-                .get("column_drawer_bounds")
-                .is_none()
-        );
     }
 
     #[test]
@@ -11035,58 +10988,53 @@ mod tests {
     }
 
     #[test]
-    fn popup_tiles_toggle_while_explicit_open_remains_idempotent() {
-        for platform in [Platform::Windows] {
-            let mut app = session();
-            app.set_platform(platform);
-            let tile = |app: &UiSession<Recorder>, control| {
-                app.state
-                    .workspace
-                    .layout
-                    .panel(Panel::Toolbar)
-                    .unwrap()
-                    .tiles()
-                    .iter()
-                    .find(|t| t.control == control)
-                    .unwrap()
-                    .id
-            };
-            let color = tile(&app, ToolbarControl::Color);
-            let opacity = tile(&app, ToolbarControl::Opacity);
-            let activate = |app: &mut UiSession<Recorder>, tile| {
+    fn windows_tiles_toggle_drawers_and_explicit_control_open_is_idempotent() {
+        let mut app = session();
+        app.set_platform(Platform::Windows);
+        let tile = |app: &UiSession<Recorder>, control| {
+            app.state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| t.control == control)
+                .unwrap()
+                .id
+        };
+        let color = tile(&app, ToolbarControl::Color);
+        let opacity = tile(&app, ToolbarControl::Opacity);
+        for id in [color, opacity] {
+            for open in [true, false] {
                 app.dispatch(UiAction::ActivateTile {
                     panel: Panel::Toolbar,
-                    tile,
+                    tile: id,
                 })
-                .unwrap()
-            };
-            activate(&mut app, color);
+                .unwrap();
+                assert_eq!(app.state.customization.drawer.is_some(), open);
+                assert!(app.state.customization.control.is_none());
+            }
+        }
+        for _ in 0..2 {
+            app.dispatch(UiAction::Customize {
+                action: CustomizationAction::OpenControl {
+                    control: PanelControl::BrushColor,
+                },
+            })
+            .unwrap();
             assert_eq!(
                 app.state.customization.control,
                 Some(PanelControl::BrushColor)
             );
-            activate(&mut app, color);
-            assert_eq!(app.state.customization.control, None);
-            for _ in 0..2 {
-                app.dispatch(UiAction::Customize {
-                    action: CustomizationAction::OpenControl {
-                        control: PanelControl::BrushColor,
-                    },
-                })
-                .unwrap();
-                assert_eq!(
-                    app.state.customization.control,
-                    Some(PanelControl::BrushColor)
-                );
-            }
-            activate(&mut app, opacity);
-            assert_eq!(
-                app.state.customization.control,
-                Some(PanelControl::BrushOpacity)
-            );
-            activate(&mut app, opacity);
-            assert_eq!(app.state.customization.control, None);
         }
+        app.dispatch(UiAction::ActivateTile {
+            panel: Panel::Toolbar,
+            tile: opacity,
+        })
+        .unwrap();
+        assert!(app.state.customization.control.is_none());
+        assert!(app.state.customization.drawer.is_some());
     }
 
     #[test]

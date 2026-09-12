@@ -118,7 +118,7 @@ pub unsafe extern "C" fn capy_preview_free(packet: *mut CapyPreview) {
 }
 
 impl CapyPreview {
-    fn packet(metadata: serde_json::Value, bytes: Vec<u8>) -> Result<Self, String> {
+    pub(crate) fn packet(metadata: serde_json::Value, bytes: Vec<u8>) -> Result<Self, String> {
         Ok(Self {
             metadata: CString::new(metadata.to_string()).map_err(|e| e.to_string())?,
             bytes,

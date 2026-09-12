@@ -13,6 +13,9 @@ typedef struct CapyPreview CapyPreview;
 __declspec(dllimport) CapyPreview* capy_filter_previews(CapyHost*, const char* json);
 __declspec(dllimport) CapyPreview* capy_layer_thumbnails(CapyHost*, const char* json);
 __declspec(dllimport) CapyPreview* capy_layer_menu(CapyHost*, const char* json);
+/* Read-only workspace geometry/menu queries, on the render owner. Metadata
+   contains result (any JSON type) and error (null or string); no pixel payload. */
+__declspec(dllimport) CapyPreview* capy_workspace_query(CapyHost*, const char* json);
 __declspec(dllimport) const char* capy_preview_metadata(const CapyPreview*);
 __declspec(dllimport) const uint8_t* capy_preview_bytes(const CapyPreview*, size_t* length);
 __declspec(dllimport) void capy_preview_free(CapyPreview*);

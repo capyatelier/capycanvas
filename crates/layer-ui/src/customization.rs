@@ -101,6 +101,7 @@ impl TileStyle {
                     | Platform::Gtk
                     | Platform::Mac
                     | Platform::Ios
+                    | Platform::Windows
             )
     }
     pub(crate) fn floating_width(self) -> f32 {
@@ -638,6 +639,7 @@ impl DockLayout {
                     | Platform::Web
                     | Platform::Ios
                     | Platform::Mac
+                    | Platform::Windows
             )
         }) else {
             return Vec::new();
@@ -1607,6 +1609,7 @@ impl CustomizationState {
                         | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
+                        | Platform::Windows
                 ) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
@@ -1642,6 +1645,7 @@ impl CustomizationState {
                         | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
+                        | Platform::Windows
                 ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
@@ -1658,6 +1662,7 @@ impl CustomizationState {
                         | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
+                        | Platform::Windows
                 ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
@@ -1896,6 +1901,7 @@ mod tests {
                     | Platform::Gtk
                     | Platform::Mac
                     | Platform::Ios
+                    | Platform::Windows
             );
             let context = layout
                 .context_menu_on(
