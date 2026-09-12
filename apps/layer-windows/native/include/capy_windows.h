@@ -40,6 +40,11 @@ __declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void
 /* Returns 1 when canvas work is pending; 0 permits an idle service-only tick. */
 __declspec(dllimport) int32_t capy_poll_services(CapyHost*);
 __declspec(dllimport) int32_t capy_workspace_action(CapyHost*, const char* json);
+/* Cold runtime package transport on the render owner. JSON: directory (optional),
+   mode (add/replace/merge), library (default false; true preserves embedded project
+   programs). Directory omitted reloads installed/overridden resources.
+   1=busy/rejected, -1=fatal; progress/error is in windows_filter_load snapshots. */
+__declspec(dllimport) int32_t capy_load_filter_directory(CapyHost*, const char* json);
 /* Logical native overview slots; call only on the canvas owner. */
 __declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
 /* Pure shared image bounds for the native cutout; output has four floats. */

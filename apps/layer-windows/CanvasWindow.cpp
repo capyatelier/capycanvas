@@ -25,6 +25,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
         case CanvasCommandKind::Workspace:return capy_workspace_action(host,json);
         case CanvasCommandKind::Overviews:return capy_overviews(host,json);
         case CanvasCommandKind::Action:return capy_action(host,json);
+        case CanvasCommandKind::Filters:return capy_load_filter_directory(host,json);
     }
     return -1;
 }
@@ -108,6 +109,10 @@ void CanvasWindow::Open() {
             test.Click([weak=weak_from_this(),mode](auto&&,auto&&){if(auto self=weak.lock())self->Replay(mode==1,mode==2);});
             toolbar.Children().Append(test);
         }
+        Button reload;reload.Content(box_value(L"Test filter reload"));
+        reload.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
+            self->Send(R"({"mode":"merge"})",CanvasCommandKind::Filters);});
+        toolbar.Children().Append(reload);
     }
     root.Children().Append(toolbar);
     status.Text(L"Preparing canvas…");
@@ -824,7 +829,9 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     if(!statusFailed){
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");
+        if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
         if(message.empty()&&!flag(model,L"brush_ready"))message=L"Preparing brushes…";
+        if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=L"Loading filters…";
         if(message.empty()&&flag(model,L"windows_importing")&&!flag(object(model,L"windows_image_import"),L"picking"))
             message=L"Importing image…";
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);

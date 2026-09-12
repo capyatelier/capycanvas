@@ -11,12 +11,14 @@ async function checkHeaderSpacing(evaluate) {
       centered:Math.abs(icon.x+icon.width/2-tile.x-tile.width/2)<.1 && Math.abs(icon.y+icon.height/2-tile.y-tile.height/2)<.1,
       textPadding,clockPadding:getComputedStyle(el("#system-clock")).paddingLeft,
       titlePadding:getComputedStyle(el("#document-title")).paddingRight,
-      titleGap:el("#document-title").getClientRects().length ? clock.left-r("#document-title").right : null};
+      workspaceGap:clock.left-r(".workspace-switcher").right,
+      titleGap:el("#document-title").getClientRects().length ? r(".workspace-switcher").left-r("#document-title").right : null};
   })()`);
   assert.deepEqual(spacing.tile, spacing.button);
   assert.deepEqual(spacing.tile, [36,36]);
   for(const gap of spacing.gaps) assert.ok(Math.abs(gap-spacing.gap)<.1,JSON.stringify(spacing));
   if(spacing.titleGap!==null) assert.ok(Math.abs(spacing.titleGap-spacing.gap)<.1,JSON.stringify(spacing));
+  assert.ok(spacing.workspaceGap>=spacing.gap-.1,JSON.stringify(spacing));
   assert.ok(spacing.centered);
   assert.equal(spacing.clockPadding,spacing.textPadding);
   assert.equal(spacing.titlePadding,spacing.textPadding);

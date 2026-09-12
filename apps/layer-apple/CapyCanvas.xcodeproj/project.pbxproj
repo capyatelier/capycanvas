@@ -209,6 +209,18 @@
 			"path" = "Shared/Editor/EditorView.swift";
 			"sourceTree" = "<group>";
 		};
+		"36660DB4B43A10EE0CA16CA4" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/HeaderControlGeometry.swift";
+			"sourceTree" = "<group>";
+		};
+		"BE44FD6E43F2589D621233D2" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/HeaderTextMetrics.swift";
+			"sourceTree" = "<group>";
+		};
 		"7B439BEA225CFC855F4334EC" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -759,6 +771,14 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "17ED6F984198C731A0BA5B98";
 		};
+		"5BDBD81336E9B8BA06E49B05" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "36660DB4B43A10EE0CA16CA4";
+		};
+		"EA36AE60E1CB4DC61BD8947A" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "BE44FD6E43F2589D621233D2";
+		};
 		"57157F686EB7774DE9FAC0C7" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7B439BEA225CFC855F4334EC";
@@ -976,6 +996,8 @@
 				"ACB31AE6965107D4787234E8",
 				"35A4210E05C7501A6A33623B",
 				"C81BC21CD8E2940A2B4F6A0D",
+				"5BDBD81336E9B8BA06E49B05",
+				"EA36AE60E1CB4DC61BD8947A",
 				"57157F686EB7774DE9FAC0C7",
 				"2F8557A72FB077CF171DF9D4",
 				"1F963416770049C7A2DB46A9",
@@ -1455,6 +1477,14 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "17ED6F984198C731A0BA5B98";
 		};
+		"B86D551E7247A03C497467C4" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "36660DB4B43A10EE0CA16CA4";
+		};
+		"16CE8D2EE93BD85AC7763E0D" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "BE44FD6E43F2589D621233D2";
+		};
 		"EE5ACC9AC15279956BC75A8C" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7B439BEA225CFC855F4334EC";
@@ -1676,6 +1706,8 @@
 				"A1386C175D94680AFC6A6DD7",
 				"CE6BA2A1B9CFDEBC98F72918",
 				"FD3BFD5DB3E2F285B1709A59",
+				"B86D551E7247A03C497467C4",
+				"16CE8D2EE93BD85AC7763E0D",
 				"EE5ACC9AC15279956BC75A8C",
 				"4662F0C104A4B022BC604D3E",
 				"8419EAAAD9EA947A35E14686",
@@ -2054,6 +2086,8 @@
 				"3C2F71F8F20B2C2C9C727336",
 				"FA3427803906428C68B02A6E",
 				"17ED6F984198C731A0BA5B98",
+				"36660DB4B43A10EE0CA16CA4",
+				"BE44FD6E43F2589D621233D2",
 				"7B439BEA225CFC855F4334EC",
 				"E8BB3CF07F7A2B1B32731536",
 				"678EC1B43E4347EEA803E53A",

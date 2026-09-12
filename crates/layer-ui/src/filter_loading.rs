@@ -17,6 +17,14 @@ pub(super) struct Pending {
     migrate_instances: bool,
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    /// Hosts acquiring package bytes asynchronously can retain them until this
+    /// boundary. Loading still validates the package and renderer availability.
+    pub fn can_stage_effect_package(&self) -> bool {
+        self.pending_filters.is_none()
+            && !self.state.document_file.busy
+            && self.require_idle().is_ok()
+    }
+
     /// The returned change wakes frame polling, including on an idle canvas.
     /// Existing layers/catalog remain usable until validation and an idle
     /// document boundary. Only one cold package compilation runs at a time.

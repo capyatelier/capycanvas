@@ -726,6 +726,53 @@ baseline restoration, included/custom workspace policies, brush reset, header
 switching and restart. The second checks independent app instances and owner
 window activation. Both enforce the existing five-second close gate; the known
 intermittent final shader-worker join can still fail that gate. Profiles and
-captures stay local. Same-process New Window, full visual/gesture parity,
-runtime filter packages, lifecycle/device/DPI validation, distribution and final
-physical-input/presentation acceptance remain open.
+captures stay local. New Window and runtime filter transport are implemented.
+Full visual/gesture parity, toolbar library round trips, lifecycle/device/DPI
+validation, distribution and final physical-input/presentation acceptance remain open.
+
+## Runtime filter packages
+
+Builds copy the shared manifest and WGSL modules into `Assets/filters` beside the
+executable. Each window reads these files on a background worker and stages them
+through the shared GPU validator. A missing default directory retains the embedded
+fallback; an explicitly selected missing or invalid package reports an error.
+`CAPY_FILTERS_DIR` selects another directory and `CAPY_FILTERS_MODE` selects
+`add`, `replace` or `merge` (default). Startup refreshes the filter library without
+migrating programs embedded in an existing document.
+
+For the already-built app, from the repository root:
+
+~~~powershell
+$env:CAPY_FILTERS_DIR=(Resolve-Path examples/filters/tent-blur).Path
+$env:CAPY_FILTERS_MODE='add'
+& ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+Native integrations can send `CanvasCommandKind::Filters` through the ordered
+canvas command queue. Its render-owner entry is `capy_load_filter_directory`,
+accepting JSON with optional `directory`, `mode` (default `merge`) and `library`
+(default `false`). Omitting the directory reloads the environment override or
+installed assets. Explicit replacement updates compatible live instances;
+`library: true` keeps embedded document programs unchanged. Conflicting WGSL
+names are rejected under the shared contract. `windows_filter_load` snapshots
+report request ID, pending state, phase and error. The call returns zero when
+accepted, one when busy/rejected, and minus one on bridge failure.
+
+File acquisition is bounded and stays off the UI and render threads. Publication
+waits for GPU validation and an idle document boundary. A delayed explicit read
+cannot migrate a replacement document. Invalid metadata, missing modules and
+invalid WGSL preserve the working catalog, document and values. This is the same
+programmatic loading contract as the other hosts; there is no shader-editor UI.
+The reload button exists only with the opt-in `CAPY_SMOKE_TEST` controls.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable <native-exe>
+cargo test --locked -p layer-windows --lib filter_packages::tests::d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values -- --ignored --exact --nocapture
+~~~
+
+The native fixture loads the example, inserts it, edits Radius, reloads changed
+WGSL/metadata without changing the executable, checks failures/retry and verifies
+a changed GPU preview. The separate hardware D3D12 test compares full-image bytes
+for replacement, atomic rejection and library refresh without live migration.
+Profiles, copied test packages, captures and reports stay under ignored artifacts.
+Neither check establishes physical input latency or presentation performance.

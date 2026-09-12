@@ -37,6 +37,44 @@ layer thumbnail pixels and layout. GPU attachment alone can precede the actual
 preview readbacks; a fixed delay is insufficient for a settled reference.
 The native scenario must use the same theme, document, workspace and camera.
 
+## Complete header components
+
+This fast fixture renders the actual shared Apple header in an invisible AppKit
+host, with a temporary workspace library and the three default task workspaces.
+It captures both Apple presets at 744 and 1200 logical points, both themes,
+clock/battery shown and hidden, and paper/surround backgrounds: 96 images.
+The clock and battery use deterministic inputs through the real status view.
+Optional geometry readers are disabled in ordinary editor views.
+
+```sh
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/WorkspaceMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_HEADER_CAPTURES="$PWD/artifacts/apple-headers" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/header-controls.swift
+node tools/visual/chrome-capture.mjs 1200 870 2 artifacts/apple-headers light header-controls \
+  artifacts/apple-headers/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-headers/web-0-painter-1200-light-clock-paper.png \
+  artifacts/apple-headers/native-0-painter-1200-light-clock-paper.png \
+  --output artifacts/apple-headers/diff-0-painter-1200-light-clock-paper
+```
+
+Compare every corresponding pair in the manifest with the same comparator.
+Chrome switches the real workspace identities and captures the full 48-point header
+at the native scale. Geometry reports retain position, size and edge errors
+separately; an edge bound is not a waiver for a larger size error. Captures use
+the actual menu, title, workspace, clock, battery, settings and Zen components.
+The Mac reference explicitly reserves window-control space and removes in-app
+menus. The browser fullscreen button is excluded to reflect Apple's different
+capabilities; the iPad fullscreen action remains an open feature gate.
+
+The deterministic background isolates header compositing, without Metal or
+UIKit rasterization. This is component evidence, not whole-editor or physical
+iPad pixel acceptance. Keep the complete raw differences, including fonts,
+truncation and blending, without masks or resampling. The web's focused
+`test.mjs --headless --header-controls` workflow separately checks narrow menu
+reachability, real Zoom In, focus, resizing and workspace-pill geometry against
+a running local web server.
+
 ## Workspace tabs
 
 The direct Apple check runs the real shared SwiftUI headers and Rust owner in

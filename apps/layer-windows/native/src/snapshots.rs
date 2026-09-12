@@ -6,6 +6,7 @@ use serde_json::Value;
 #[derive(Serialize)]
 pub(crate) struct WindowsMetadata {
     pub windows_importing: bool,
+    pub windows_filter_load: Option<crate::filter_packages::Status>,
     pub windows_image_import: Option<Value>,
     pub windows_isolated_settings: bool,
     pub windows_workspace: Option<crate::workspace_service::WorkspaceStatus>,
@@ -38,6 +39,7 @@ mod tests {
     fn metadata() -> WindowsMetadata {
         WindowsMetadata {
             windows_importing: false,
+            windows_filter_load: None,
             windows_image_import: None,
             windows_isolated_settings: true,
             windows_workspace: None,
@@ -59,6 +61,7 @@ mod tests {
         for field in [
             "workspace_update",
             "windows_importing",
+            "windows_filter_load",
             "windows_image_import",
             "windows_isolated_settings",
             "windows_workspace",

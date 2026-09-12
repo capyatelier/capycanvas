@@ -5,17 +5,24 @@ import SwiftUI
 struct ApplicationMenus: View {
     @ObservedObject var store: EditorStore
     let palette: EditorPalette
+    var compact = false
+    private var textSize: Double {
+        compact ? 12 : store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
+    }
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
+            HStack(spacing: compact ? 0 : 6) {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
                     Menu { CatalogMenuItems(store: store, id: menu["id"].string) } label: {
-                        Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
+                        Text(menu["label"].string).fontWeight(.bold).fixedSize()
+                            .frame(width: HeaderTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
+                            .padding(.horizontal, 6).frame(height: 36)
                             .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
                     }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
+                        .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
-            }.fixedSize()
+            }.font(.system(size: textSize)).fixedSize()
             Menu {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
@@ -25,6 +32,7 @@ struct ApplicationMenus: View {
                 SharedIcon(name: "menu").frame(width: 36, height: 36)
                     .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             }.buttonStyle(.plain).accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
+                .modifier(HeaderControlMeasurement(id: "application-menus"))
         }
     }
 }

@@ -95,7 +95,7 @@ impl<T> Drop for AsyncTask<T> {
     }
 }
 
-// A user-requested package export is rare and bounded. Its owned I/O job never
+// Cold file transport is rare and bounded. Its owned I/O job never
 // borrows the live session and is joined before a window callback can expire.
 pub(crate) struct BlockingTask<T> {
     state: Arc<Mutex<BlockingState<T>>>,
@@ -113,7 +113,7 @@ impl<T: Send + 'static> BlockingTask<T> {
         }));
         let worker = state.clone();
         let thread = std::thread::Builder::new()
-            .name("workspace-export".into())
+            .name("capy-file-io".into())
             .spawn(move || {
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).map_err(|_| ());
@@ -137,7 +137,7 @@ impl<T> Future for BlockingTask<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = self.state.lock().unwrap();
         if let Some(result) = state.result.take() {
-            Poll::Ready(result.map_err(|()| "Workspace export worker stopped.".into()))
+            Poll::Ready(result.map_err(|()| "File I/O worker stopped.".into()))
         } else {
             state.waker = Some(cx.waker().clone());
             Poll::Pending

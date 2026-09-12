@@ -76,6 +76,60 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared Apple and web header alignment — 2026-09-12
+
+Both Apple targets use shared six-point menu/title/clock padding, fractional
+native font advances and natural workspace-label widths. The task switcher is
+a 34-point capsule with capped, truncated labels and the shared accent color.
+Clock and battery backgrounds stay transparent over the canvas. Compact iPad
+headers hide the title and retain all eight menus through the overflow control
+when necessary; Mac retains OS menus and its window-control reservation.
+
+The integrated web workspace header had a general button-height rule overriding
+its compact cells. It now follows the shared capsule dimensions and ellipsizes
+the actual text. A narrow menu overflow uses the existing recursive menu/action
+renderer, closes obsolete popups during resize and transfers keyboard focus to
+the visible menus. It preserves all top-level menus and their actions. Save/Load
+Layout remains excluded under the user's revised scope.
+
+Ninety-six real SwiftUI component captures cover both Apple presets, the three
+task workspaces, 744/1200-point widths, both themes, clock visibility and two
+backgrounds. Matching live Chrome captures use the real workspace switcher and
+status component, with explicit Mac OS-menu/window-space and Apple fullscreen
+adaptations. Measured control-edge error is at most 0.991 points; the separate
+position/size report retains a 1.221-point maximum title-width difference from
+accumulated font advances. Full raw pixel comparisons still fail exact equality;
+font rendering, truncation, blending and remaining geometry differences are
+retained without masks, rescaling or tolerance waivers. These invisible AppKit
+captures establish shared-component evidence, not UIKit or Metal pixel parity.
+
+Both final signed Release targets build, and the iPad build installs and launches.
+All 385 integrated Rust checks pass (one existing hardware-only check ignored).
+The actual web header workflow passes all eight overflow menus, Zoom In, resize
+closure, restored menus, focus and capsule geometry. The web manager workflow
+passes creation, rename, filtering/preview/cancel, switching, tools, history,
+undo, restart and reset actions. Its text helper selects the input directly
+before browser text insertion to avoid a reproduced headless Mac Chrome OS-key
+routing stall. The fast native clock/battery lifecycle check also passes.
+
+The final builds complete isolated three-second ink smoke checks after ten
+seconds of warm-up on the physical Mac and iPad, with no frame errors, rejected
+input or missing presentation callbacks. CPU p99 is 3.00 ms on Mac and 5.15 ms
+on iPad. Mac has zero CPU frames over 11.11 ms and two long active presentation
+intervals; iPad has three CPU frames over 8.33 ms and four long intervals.
+The Mac measurement is 0.10 ms shorter than requested. One Mac and two iPad
+zero-time callbacks occur outside the measured intervals. GPU timing is disabled;
+these are startup/drawing checks, not sustained performance acceptance. Both
+owned validation apps are closed. The later `42fa3c3` integration changes only
+Windows's New Window capability in shared code; physical and component checks
+precede it, with integrated builds and the affected UI suite checked afterward.
+
+Reproduction and limitations are in the
+[header comparison workflow](../../tools/visual/README.md#complete-header-components).
+Raw captures, logs and signing/device metadata stay in ignored local artifacts.
+Full visual, input, lifecycle and sustained performance acceptance remains open
+on both platforms; this milestone does not close those gates.
+
 ## Retained live panel resizing — 2026-09-12
 
 Both Apple apps now consume the shared layout-aware incremental publication.

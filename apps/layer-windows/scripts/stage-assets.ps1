@@ -18,3 +18,10 @@ $previews=Join-Path $Destination 'brush-previews'
 [IO.Directory]::CreateDirectory($previews) | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $web 'brush-previews') -Filter '*.png' -File |
     Copy-Item -Destination $previews -Force
+$filters=Join-Path $Destination 'filters'
+[IO.Directory]::CreateDirectory($filters)|Out-Null
+foreach($file in Get-ChildItem -LiteralPath (Join-Path $repo 'assets/filters') -File){
+    if($file.Name -eq 'manifest.json' -or $file.Extension -eq '.wgsl'){
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $filters $file.Name) -Force
+    }
+}

@@ -23,7 +23,7 @@ The same parser resolves external packages and the embedded startup fallback.
 | `layer-ui/filter_loading.rs` | Transactional publication, compatible values, catalog and preview revisions |
 | `layer-render-wgpu/effect_validation.rs` | Namespace/interface checks and device compilation |
 | `layer-render-wgpu/effects.rs`, `effect_preparation.rs` | Shared storage, compilation reuse, ordered preparation/render work |
-| GTK, web, Android hosts | Obtain bytes and render the shared schema |
+| GTK, web, Android, Windows hosts | Obtain bytes and render the shared schema |
 
 A package has `format: 1`, `categories` and `filters`. Each filter contains a
 `program`, category, icon and optional preview overrides. A shader accepts inline
@@ -68,6 +68,24 @@ versions are pruned at this cold publication boundary.
 Compilation is cold work, not a 120 Hz operation. Authored WGSL is executable
 content: bounded storage and interface validation do not prove termination,
 safety from GPU watchdog resets, or a particular execution time.
+
+## Windows file transport
+
+Windows builds stage editable resources in `Assets/filters` beside the executable.
+`CAPY_FILTERS_DIR` and `CAPY_FILTERS_MODE` select a startup library override. The
+render-owner API `capy_load_filter_directory` accepts an optional directory,
+installation mode and `library` flag; the default explicit load can migrate live
+instances, while startup/library refresh preserves embedded document programs.
+An owned background worker reads only manifest-approved flat module names before
+passing bytes to the shared loader. `windows_filter_load` adds transport progress
+and errors to the native snapshot. There is no filter-import or shader-editor UI.
+
+The native UI fixture validates edited WGSL and metadata without rebuilding, live
+values, picker previews and recovery from missing/invalid files. A separate
+hardware D3D12 full-image test verifies atomic replacement/rejection and compatible
+library refresh without altering the current document. These scoped checks do not
+resolve the strict v4 reference discrepancy recorded below or establish performance.
+See [Windows host commands](../../apps/layer-windows/README.md#runtime-filter-packages).
 
 ## Persistent GPU preparation
 

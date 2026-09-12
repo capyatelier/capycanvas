@@ -57,7 +57,9 @@ The full editor preset and titlebar-aware Zen layout are available. Incremental
 workspace messages retain panel models while native translation transforms move
 floating panels, resize grips and GPU overview allocations. Full content refresh,
 motion and camera updates retain their separate ordering rules. Complete
-workspace gesture acceptance and runtime filter package import remain in progress.
+workspace gesture acceptance remains in progress. Runtime filter JSON/WGSL loads
+from editable packaged assets through background file transport and the shared
+GPU validator; compatible live replacement preserves current parameter values.
 New Window creates independent native windows with shared preferences and storage. Native task workspace management uses the
 shared store, preview and ownership policy, with a three-workspace titlebar pill.
 Project transport handles background work, save checkpoints and replacement of
@@ -71,6 +73,7 @@ cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-window
 ./apps/layer-windows/scripts/exercise-manager.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ```
 
 The persistence fixture owns disposable profiles through the absolute

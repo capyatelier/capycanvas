@@ -55,6 +55,7 @@ pub struct CapyHost {
     scale: f32,
     blank_presented: bool,
     services: Option<crate::settings::SettingsService>,
+    filters: Option<crate::filter_packages::FilterService>,
     documents: Option<crate::documents::DocumentService>,
     workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
     blocked_contacts: std::collections::BTreeSet<u64>,
@@ -96,6 +97,7 @@ impl CapyHost {
             scale,
             blank_presented: false,
             services: None,
+            filters: None,
             documents: None,
             workspaces: None,
             blocked_contacts: Default::default(),
@@ -113,6 +115,9 @@ impl CapyHost {
         }
         if let Some(service) = self.services.as_mut() {
             service.poll(&mut self.native)?;
+        }
+        if let Some(service) = self.filters.as_mut() {
+            service.poll(&mut self.native);
         }
         if let Some(service) = self.workspaces.as_mut() {
             if self.native.session.state().document_file.close_ready
@@ -280,6 +285,16 @@ pub unsafe extern "C" fn capy_start_services(
                 },
             ));
         }
+        if host.filters.is_none() {
+            let context = context as usize;
+            let mut service = crate::filter_packages::FilterService::new(move || {
+                if let Some(wake) = wake {
+                    wake(context as *mut c_void);
+                }
+            });
+            service.startup(&mut host.native);
+            host.filters = Some(service);
+        }
         if host.workspaces.is_none() {
             let context = context as usize;
             let directory = crate::settings::data_directory()?;
@@ -315,6 +330,12 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         fail("Null canvas");
         return -1;
     };
+    let filters = catch_unwind(AssertUnwindSafe(|| {
+        if let Some(mut service) = host.filters.take() {
+            service.stop();
+        }
+    }))
+    .map_err(|_| "Filter transport shutdown failed".to_string());
     let workspaces = catch_unwind(AssertUnwindSafe(|| {
         if let Some(mut service) = host.workspaces.take() {
             service.stop();
@@ -339,7 +360,7 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         } else {
             Ok(())
         };
-        documents.and(settings).and(workspaces)
+        documents.and(settings).and(workspaces).and(filters)
     })) {
         Ok(Ok(())) => 0,
         Ok(Err(error)) => {
@@ -491,6 +512,33 @@ unsafe fn read_json<'a>(json: *const c_char) -> Result<&'a str, String> {
         return Err("Null JSON".into());
     }
     unsafe { CStr::from_ptr(json) }.to_str().map_err(err)
+}
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// `json` must be null or a readable NUL-terminated buffer that remains unchanged
+/// for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_load_filter_directory(
+    host: *mut CapyHost,
+    json: *const c_char,
+) -> i32 {
+    guard(host, |host| {
+        let text = unsafe { read_json(json) }?;
+        if text.len() > 8192 {
+            return Err("Filter directory request is too large.".into());
+        }
+        let request = serde_json::from_str(text).map_err(err)?;
+        let service = host
+            .filters
+            .as_mut()
+            .ok_or("Filter file transport is not started.")?;
+        if let Err(error) = service.load(&mut host.native, request) {
+            fail(error);
+            return Ok(1);
+        }
+        service.poll(&mut host.native);
+        Ok(0)
+    })
 }
 /// # Safety
 /// `host` must be null or a live host exclusively accessed by this caller.
@@ -667,6 +715,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .as_ref()
                 .and_then(|service| service.import_request()),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
+            windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
             windows_workspace_manager: host
                 .workspaces
                 .as_ref()
