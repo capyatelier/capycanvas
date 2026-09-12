@@ -245,6 +245,15 @@ percentage. Mac full-screen notifications and iPad scene geometry observations
 control the fullscreen-only policy. Observing an iPad scene does not add the
 still-unavailable full-screen toggle.
 
+Menu labels, the title and clock use the shared six-point side padding. Compact
+iPad headers hide the title and preserve all menus in an overflow control when
+the workspace pill and status controls need the space. Mac keeps its OS menus,
+document title and window-control reservation. Workspace labels use natural
+widths with truncation, a 34-point capsule and the shared app accent. Clock and
+battery backgrounds stay transparent over the canvas. See the
+[complete header comparison](../../tools/visual/README.md#complete-header-components)
+for fast native/Chrome captures and explicit platform adaptations.
+
 Visible headers share one native battery subscription and one minute-aligned
 clock timer. The last hidden/background header stops monitoring; minute and
 power updates stay outside the Rust owner and drawing display link. UIKit uses

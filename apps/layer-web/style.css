@@ -22,10 +22,12 @@ body { --popover: var(--panel); }
 .workspace-form label { display:flex; flex-direction:column; gap:7px; margin:16px 0; }
 .workspace-form footer { margin:18px 0 0; flex-wrap:wrap; }
 .workspace-form .destructive-action { background:#b33; }
-.workspace-switcher { display:flex; align-items:center; gap:2px; padding:3px; border-radius:9px; background:color-mix(in srgb,var(--text) 8%,transparent); flex:none; }
-.workspace-switcher button { max-width:130px; min-height:28px; padding:3px 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-radius:6px; font-weight:500; background:transparent; }
-.workspace-switcher button[aria-pressed="true"] { color:var(--text); background:color-mix(in srgb,var(--accent) 28%,transparent); }
-@media(max-width:760px) { .workspace-switcher button { max-width:90px; padding:3px 5px; } }
+.workspace-switcher { display:flex; align-items:center; gap:2px; padding:3px; border:1px solid color-mix(in srgb,var(--text) 10%,transparent); border-radius:18px; background:color-mix(in srgb,var(--text) 6%,var(--bg)); flex:none; }
+/* Override the general 36px header button height inside the shared 34px pill. */
+#header .workspace-switcher button { max-width:130px; height:26px; min-height:26px; padding:0 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-radius:15px; font-weight:500; background:transparent; }
+#header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+#header .workspace-switcher button[aria-pressed="true"] { color:var(--text); background:color-mix(in srgb,var(--accent) 28%,var(--bg)); }
+@media(max-width:760px) { #header .workspace-switcher button { max-width:90px; padding:0 5px; } }
 body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed; --tabbar: #dedede; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -97,6 +99,9 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 .zen-hidden #zen-button[aria-pressed="true"] { background: var(--bg); }
 :root:not([data-touch]) #zen-button:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav { display: flex; align-items: center; gap:var(--header-item-gap); z-index: 1; }
+.header-menu-labels { display:flex; flex:none; gap:var(--header-item-gap); width:max-content; }
+.header-menu-labels[inert] { position:absolute; visibility:hidden; pointer-events:none; }
+#header .header-menu-overflow > summary { width:36px; padding:0; }
 #document-title { position: absolute; left: 50%; transform: translateX(-50%); font-weight: 600; white-space: nowrap; padding:0 var(--header-text-padding); height:36px; line-height:36px; }
 .header-menu { position: relative; }
 .header-menu > summary { padding:0 var(--header-text-padding); }

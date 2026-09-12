@@ -1,4 +1,5 @@
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
 import {checkLayerHolding} from "./layer-hold.test.mjs";
@@ -180,7 +181,7 @@ try {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  if (process.argv.includes("--fullscreen")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
+  if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
@@ -190,7 +191,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--layer-hold")) {
+  if (process.argv.includes("--header-controls")) {
+    await checkHeaderControls({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--layer-hold")) {
     await checkLayerHolding({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace-acceptance")) {

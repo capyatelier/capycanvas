@@ -1,21 +1,20 @@
 import SwiftUI
 
 struct SystemStatusView: View {
-    let palette: EditorPalette
     let dark: Bool
-    @ObservedObject private var status = SystemStatus.shared
+    @ObservedObject var status = SystemStatus.shared
+    var spacing: CGFloat = 6
     @Environment(\.scenePhase) private var phase
     @State private var subscription: UUID?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: spacing) {
             Text(status.time).monospacedDigit().lineLimit(1).fixedSize()
-                .padding(.horizontal, 12).frame(height: 36)
-                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 6).frame(height: 36)
                 .accessibilityIdentifier("system-clock")
+                .modifier(HeaderControlMeasurement(id: "system-clock"))
             if let battery = status.battery {
                 BatteryIndicator(battery: battery, dark: dark).frame(width: 36, height: 36)
-                    .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             }
         }
             .onAppear { subscribe() }
@@ -66,5 +65,6 @@ struct BatteryIndicator: View {
         }.frame(width: 26, height: 14)
             .accessibilityElement().accessibilityLabel(battery.description).help(battery.description)
             .accessibilityIdentifier("system-battery")
+            .modifier(HeaderControlMeasurement(id: "system-battery"))
     }
 }

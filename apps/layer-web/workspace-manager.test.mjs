@@ -35,8 +35,11 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await idle();
   };
   const text = async (selector,value) => {
-    await click(selector); await call('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,nativeVirtualKeyCode:65,modifiers:2});
-    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,nativeVirtualKeyCode:65,modifiers:2});
+    await click(selector);
+    // Select the input contents directly, then use the browser's text insertion.
+    // This avoids OS shortcut routing in headless Mac Chrome (Ctrl+A is not the
+    // Mac select-all binding) while retaining real input events and app handling.
+    await evaluate(`document.querySelector(${JSON.stringify(selector)}).select()`);
     await call('Input.insertText',{text:value}); await settle();
   };
   const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await new Promise(r=>setTimeout(r,500)); await idle(); };

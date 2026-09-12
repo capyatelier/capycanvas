@@ -50,8 +50,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if (!view.error) { dismissedError = null; if (recovery?.open) recovery.close(); }
     for (const row of view.defaults) {
       let node = switches.get(row.id);
-      if (!node) { node = button(row.title, () => send({type:"switch",id:row.id})); node.dataset.workspaceId = row.id; switches.set(row.id,node); switcher.append(node); }
-      node.textContent = row.title; node.title = `Switch to ${row.title} workspace`;
+      if (!node) { node = button("", () => send({type:"switch",id:row.id})); node.append(element("span")); node.dataset.workspaceId = row.id; switches.set(row.id,node); switcher.append(node); }
+      node.firstElementChild.textContent = row.title; node.title = `Switch to ${row.title} workspace`;
       node.setAttribute("aria-pressed",String(row.id === view.id)); node.disabled = !view.ready || view.busy || !!view.page || !!view.form;
     }
     if (view.focus_window) { channel?.postMessage({ focus: view.focus_window }); message("The workspace is open in another tab or window. Switch to that window to continue."); }

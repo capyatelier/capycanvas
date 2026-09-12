@@ -1044,6 +1044,8 @@ function buildHeader() {
   zen.dataset.context = JSON.stringify({ kind: "zen_mode" });
   workspace.prepend(zen);
   $("header-start").append(element("span", "zen-spacer"));
+  const labels = element("div", "header-menu-labels");
+  $("header-start").append(labels);
   for (const spec of app.editor_models(workspace.clientWidth, workspace.clientHeight).application_menus) {
     const details = element("details", "header-menu"); details.name = "workspace-menu"; details.dataset.menu = spec.id;
     const summary = element("summary", "", spec.label); summary.setAttribute("aria-label", spec.label);
@@ -1051,22 +1053,61 @@ function buildHeader() {
     if(spec.id === "window") contents.id = "workspace-menu";
     details.append(summary,contents);
     details.addEventListener("toggle",()=>{if(details.open) refreshWorkspaceMenu(); updateZen();});
-    $("header-start").append(details);
+    labels.append(details);
   }
+  const overflow = element("details", "header-menu header-menu-overflow");
+  overflow.name = "workspace-menu"; overflow.dataset.menu = "all"; overflow.hidden = true;
+  const summary = element("summary"); summary.setAttribute("aria-label", "Menus"); summary.append(icon("menu"));
+  const contents = element("div", "popover"); contents.setAttribute("role", "menu");
+  overflow.append(summary, contents); $("header-start").append(overflow);
+  overflow.addEventListener("toggle", () => { if (overflow.open) refreshWorkspaceMenu(); updateZen(); });
   systemStatus = createSystemStatus({element, changed:fullscreen => {
     if(customization && state.fullscreen !== fullscreen) dispatch({type:"window_fullscreen",fullscreen});
   }});
   $("header-end").append(systemStatus.root, iconButton("fullscreen"), iconButton("settings"));
   $("header-end").querySelector('[data-command="fullscreen"]').id = "fullscreen";
+  // Keep one set of menu nodes and their measured natural width. When the
+  // workspace/clock leaves insufficient room, all menus remain reachable from
+  // the same recursive menu renderer. No work runs in the drawing frame loop.
+  let layoutQueued = false;
+  const queueLayout = () => {
+    if (layoutQueued) return; layoutQueued = true;
+    requestAnimationFrame(() => {
+      layoutQueued = false;
+      const header = $("header"), start = $("header-start"), style = getComputedStyle(header);
+      const gap = parseFloat(style.columnGap) || 0;
+      const fixed = [...header.children].filter(node => node !== start && node.id !== "document-title" && getComputedStyle(node).display !== "none");
+      const titleVisible = getComputedStyle($("document-title")).display !== "none";
+      const available = header.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+        - fixed.reduce((width, node) => width + node.getBoundingClientRect().width, 0) - gap * (fixed.length + Number(titleVisible));
+      const natural = start.querySelector(".zen-spacer").getBoundingClientRect().width + gap + labels.getBoundingClientRect().width;
+      const collapsed = natural > available + 0.01;
+      if (labels.inert === collapsed) return;
+      const moveFocus = (collapsed ? labels : overflow).contains(document.activeElement);
+      for (const menu of start.querySelectorAll("details[open]")) menu.open = false;
+      labels.inert = collapsed; overflow.hidden = !collapsed;
+      if (moveFocus) (collapsed ? overflow : labels).querySelector('summary')?.focus({preventScroll:true});
+    });
+  };
+  const observer = new ResizeObserver(queueLayout);
+  observer.observe(labels);
+  const observeChildren = () => { observer.observe($("header")); for (const node of $("header").children) observer.observe(node); queueLayout(); };
+  new MutationObserver(observeChildren).observe($("header"), {childList:true});
+  observeChildren();
 }
 function refreshWorkspaceMenu() {
   if(!customization || !document.querySelector(".header-menu[open]")) return;
-  for(const spec of app.editor_models(workspace.clientWidth,workspace.clientHeight).application_menus) {
+  const menus = app.editor_models(workspace.clientWidth,workspace.clientHeight).application_menus;
+  for(const spec of menus) {
     if (!document.fullscreenEnabled) for (const item of spec.model.sections.flat())
       if (item.action?.type === "invoke" && item.action.command === "fullscreen") item.enabled = false;
     const details = document.querySelector(`[data-menu="${spec.id}"]`);
     if(details?.open) customization.renderMenu(details.querySelector(".popover"),spec.model,()=>{details.open=false;updateZen();});
   }
+  const overflow = document.querySelector('.header-menu-overflow');
+  if (overflow?.open) customization.renderMenu(overflow.querySelector('.popover'), {
+    title: "Menus", sections: [menus.map(spec => ({label:spec.label,enabled:true,sections:spec.model.sections}))],
+  }, () => { overflow.open=false; updateZen(); });
 }
 function persistWorkspace() {
   workspaceManager?.observe();
