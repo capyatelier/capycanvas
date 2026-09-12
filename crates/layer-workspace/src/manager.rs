@@ -280,7 +280,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .execute(StoreRequest::Load { id: id.into() })
             .await?
         {
-            StoreResponse::Entity(entity) => Ok(entity),
+            StoreResponse::Entity(entity) => Ok(*entity),
             _ => Err(StoreError::invalid("Unexpected workspace load reply.")),
         }
     }
@@ -293,7 +293,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             })
             .await?
         {
-            StoreResponse::Entity(entity) => Ok(entity),
+            StoreResponse::Entity(entity) => Ok(*entity),
             _ => Err(StoreError::invalid("Unexpected workspace claim reply.")),
         }
     }
@@ -364,7 +364,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .or(prior_workspace)
             .unwrap_or_else(|| DEFAULT_WORKSPACES[1].0.into());
         match self.prepare_switch(&id, now).await {
-            Ok(entity) => return Ok(entity),
+            Ok(entity) => Ok(entity),
             Err(error) if error.kind == ErrorKind::OwnedElsewhere => {
                 let source = self.load(&id).await?.entity.capture()?;
                 let baseline = source.history.layout().clone();

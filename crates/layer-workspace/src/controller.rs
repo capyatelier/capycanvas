@@ -132,10 +132,15 @@ pub enum WorkspaceInput {
     Resume,
 }
 enum Outcome {
-    Adopt(StoredEntity),
+    Adopt(Box<StoredEntity>),
     Done,
     Closed,
     Focus(String),
+}
+impl Outcome {
+    fn adopt(entity: StoredEntity) -> Self {
+        Self::Adopt(Box::new(entity))
+    }
 }
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     pub manager: Rc<WorkspaceManager<S>>,
@@ -225,17 +230,17 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let legacy_error = self.legacy_error.clone();
         self.task = Some(Task::new(async move {
             m.store.execute(StoreRequest::Reopen).await?;
-            if let Some(error) = legacy_error {
-                if !matches!(
+            if let Some(error) = legacy_error
+                && !matches!(
                     m.store
                         .execute(StoreRequest::LegacyImport {
                             source: source.clone()
                         })
                         .await?,
                     StoreResponse::Binding(Some(_))
-                ) {
-                    return Err(StoreError::invalid(error));
-                }
+                )
+            {
+                return Err(StoreError::invalid(error));
             }
             if let Some(legacy) = legacy {
                 m.migrate_legacy_capture(&source, legacy, now).await?;
@@ -248,7 +253,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     key: format!("window:{}", m.owner.id),
                 })
                 .await?;
-            Ok(Outcome::Adopt(
+            Ok(Outcome::adopt(
                 if let StoreResponse::Binding(Some(id)) = resume {
                     m.prepare_switch(&id, now).await?
                 } else {
@@ -687,7 +692,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         let capture = session.capture_workspace().map_err(StoreError::invalid)?;
                         self.task = Some(Task::new(async move {
                             Ok(match form.kind.as_str() {
-                                "new" => Outcome::Adopt(
+                                "new" => Outcome::adopt(
                                     m.create_workspace(&name, None, false, now).await?,
                                 ),
                                 "rename" => {
@@ -709,10 +714,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                     )
                                     .await?
                                 {
-                                    Some(s) => Outcome::Adopt(s),
+                                    Some(s) => Outcome::adopt(s),
                                     None => Outcome::Done,
                                 },
-                                "reset" => Outcome::Adopt(
+                                "reset" => Outcome::adopt(
                                     m.change_layout(
                                         &m.active_id().ok_or_else(|| {
                                             StoreError::invalid("Open a workspace.")
@@ -722,7 +727,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                     )
                                     .await?,
                                 ),
-                                _ => Outcome::Adopt(m.save_as_new(capture, &name, now).await?),
+                                _ => Outcome::adopt(m.save_as_new(capture, &name, now).await?),
                             })
                         }));
                     }
@@ -767,7 +772,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                         return Ok(Outcome::Focus(id));
                                     }
                                 }
-                                Ok(Outcome::Adopt(match page.as_str() {
+                                Ok(Outcome::adopt(match page.as_str() {
                                     "history" => {
                                         m.change_layout(
                                             &m.active_id().ok_or_else(|| {
@@ -795,7 +800,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                 m.revalidate_owner(now).await?;
                                 m.flush().await?;
                                 Ok(match m.retry_failed_operation().await? {
-                                    Some(s) => Outcome::Adopt(s),
+                                    Some(s) => Outcome::adopt(s),
                                     None => Outcome::Done,
                                 })
                             }));
@@ -864,7 +869,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             self.view.switcher_revision =
                                 self.view.switcher_revision.wrapping_add(1);
                         }
-                        self.incoming = Some(incoming);
+                        self.incoming = Some(*incoming);
                     } else if let Outcome::Focus(id) = outcome {
                         self.view.focus_window = Some(id);
                     } else if matches!(outcome, Outcome::Closed) {
@@ -913,26 +918,25 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(Outcome::Closed)
             }));
         }
-        if let Some(incoming) = &self.incoming {
-            if !self.terminating
-                && self.incoming_renew.is_none()
-                && self.view.error.is_none()
-                && incoming
-                    .claim
-                    .as_ref()
-                    .is_none_or(|c| c.expires_at_ms <= now.saturating_add(OWNER_RENEW_MS))
-            {
-                let m = self.manager.clone();
-                let original = incoming.clone();
-                self.incoming_renew = Some(Task::new(async move {
-                    let claimed = m.claim(&original.entity.id).await?;
-                    if claimed.generations != original.generations {
-                        m.release(&claimed).await;
-                        return Err(StoreError::conflict());
-                    }
-                    Ok(claimed)
-                }));
-            }
+        if let Some(incoming) = &self.incoming
+            && !self.terminating
+            && self.incoming_renew.is_none()
+            && self.view.error.is_none()
+            && incoming
+                .claim
+                .as_ref()
+                .is_none_or(|c| c.expires_at_ms <= now.saturating_add(OWNER_RENEW_MS))
+        {
+            let m = self.manager.clone();
+            let original = incoming.clone();
+            self.incoming_renew = Some(Task::new(async move {
+                let claimed = m.claim(&original.entity.id).await?;
+                if claimed.generations != original.generations {
+                    m.release(&claimed).await;
+                    return Err(StoreError::conflict());
+                }
+                Ok(claimed)
+            }));
         }
         if self.incoming.is_some()
             && !self.terminating
@@ -950,14 +954,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(c) => {
                     change = c;
                     let id = incoming.entity.id.clone();
-                    if let Some(outgoing) = self.manager.activate(incoming) {
-                        if outgoing.entity.id != id {
-                            let m = self.manager.clone();
-                            self.task = Some(Task::new(async move {
-                                m.release(&outgoing).await;
-                                Ok(Outcome::Done)
-                            }));
-                        }
+                    if let Some(outgoing) = self.manager.activate(incoming)
+                        && outgoing.entity.id != id
+                    {
+                        let m = self.manager.clone();
+                        self.task = Some(Task::new(async move {
+                            m.release(&outgoing).await;
+                            Ok(Outcome::Done)
+                        }));
                     }
                     self.view.ready = true;
                     self.view.error = None;
@@ -1046,16 +1050,18 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }));
             }
         }
-        if self.task.is_none() && self.incoming.is_none() && !self.terminating {
-            if let Some(input) = self.queued.take() {
-                match self.input(session, input, now) {
-                    Ok(c) => {
-                        change.regions |= c.regions;
-                        change.canvas_wake |= c.canvas_wake;
-                        change.revision = change.revision.max(c.revision);
-                    }
-                    Err(e) => self.view.error = Some(e.to_string()),
+        if self.task.is_none()
+            && self.incoming.is_none()
+            && !self.terminating
+            && let Some(input) = self.queued.take()
+        {
+            match self.input(session, input, now) {
+                Ok(c) => {
+                    change.regions |= c.regions;
+                    change.canvas_wake |= c.canvas_wake;
+                    change.revision = change.revision.max(c.revision);
                 }
+                Err(e) => self.view.error = Some(e.to_string()),
             }
         }
         if presentation_changed {
@@ -1082,16 +1088,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         // controls. Publish actual catalog changes only at an idle boundary.
         if self.pending_binding.is_some() && session.require_workspace_idle().is_ok() {
             let binding = self.pending_binding.take().unwrap();
-            if let Ok(key) = serde_json::to_string(&binding) {
-                if self.binding_key.as_ref() != Some(&key) {
-                    match session.configure_workspace_manager(binding) {
-                        Ok(c) => {
-                            self.binding_key = Some(key);
-                            change.regions |= c.regions;
-                            change.revision = c.revision;
-                        }
-                        Err(e) => self.view.error = Some(e),
+            if let Ok(key) = serde_json::to_string(&binding)
+                && self.binding_key.as_ref() != Some(&key)
+            {
+                match session.configure_workspace_manager(binding) {
+                    Ok(c) => {
+                        self.binding_key = Some(key);
+                        change.regions |= c.regions;
+                        change.revision = c.revision;
                     }
+                    Err(e) => self.view.error = Some(e),
                 }
             }
         }

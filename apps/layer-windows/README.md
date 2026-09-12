@@ -991,3 +991,21 @@ ports through ebc507a. The shared drag convention, physical input, mixed-DPI and
 device recovery, packaging, strict renderer reference agreement and final 120 Hz
 painting/input acceptance still need completion. See the implementation history
 for the scope and remaining renderer failure.
+
+### Layers and workspace shadows
+
+This visual milestone adds retained compositor shadows to panels, expanded
+configuration and drawers, plus matching Layers spacing, typography, controls
+and disabled states. The header uses the shared recessed switcher styling.
+Four complete editor scenes now require matching Layers control sets and layout,
+with at most 1.000031 physical pixels of error at 1.5 scale. Captures wait for
+visible thumbnail readbacks and retain native render bounds alongside raw UI
+Automation bounds, full client images and complete XAML images.
+
+Native layers, drawers, expansion and manager/restart checks pass, as do the
+production native/Wasm builds. Final integration through main 98294ff passes
+strict Windows Clippy, the Wasm check and 452 unit tests; four explicit hardware
+tests remain ignored. Whole-editor
+raster identity, configurable-switcher interactions, drag pickup, physical input,
+lifecycle/DPI/recovery, packaging and final presentation acceptance remain open.
+See the implementation history for detailed evidence and its scope.

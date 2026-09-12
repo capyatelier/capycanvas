@@ -369,7 +369,9 @@ impl PreviewPipeline {
             record[5] = u32::from(mask.is_some_and(|m| m.inverted));
             record[8..12].copy_from_slice(&background.map(f32::to_bits));
             for (dst, value) in bytes[i * stride..i * stride + 48]
-                .chunks_exact_mut(4)
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
                 .zip(record)
             {
                 dst.copy_from_slice(&value.to_le_bytes());

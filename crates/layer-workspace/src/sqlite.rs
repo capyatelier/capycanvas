@@ -159,8 +159,11 @@ impl SqliteStore {
                 self.delete_permanently(&id, &owner, parse_counter(&fence)?)?;
                 Ok(StoreResponse::Done)
             }
-            StoreRequest::Load { id } => self.load(&id).map(StoreResponse::Entity),
-            StoreRequest::Claim { id, owner } => self.claim(&id, owner).map(StoreResponse::Entity),
+            StoreRequest::Load { id } => self.load(&id).map(Box::new).map(StoreResponse::Entity),
+            StoreRequest::Claim { id, owner } => self
+                .claim(&id, owner)
+                .map(Box::new)
+                .map(StoreResponse::Entity),
             StoreRequest::Renew { id, owner, fence } => self
                 .renew(&id, &owner, parse_counter(&fence)?)
                 .map(StoreResponse::Claim),

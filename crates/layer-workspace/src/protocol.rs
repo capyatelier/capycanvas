@@ -373,7 +373,7 @@ pub enum StoreResponse {
     Switcher(Option<Vec<String>>),
     WorkspaceOrder(Option<Vec<String>>),
     List(Vec<ItemSummary>),
-    Entity(StoredEntity),
+    Entity(Box<StoredEntity>),
     Claim(Claim),
     Committed(CommitReceipt),
     Receipt(Option<CommitReceipt>),

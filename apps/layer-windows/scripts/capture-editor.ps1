@@ -81,6 +81,14 @@ function Set-Theme([string]$Theme) {
     Invoke 'Close' ([System.Windows.Automation.ControlType]::Button) $dialog
     Wait-Until {!(Find 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }
+function Layout-Evidence {
+    $workspace=Find 'Drawing workspace' ([System.Windows.Automation.ControlType]::Pane)
+    if(!$workspace){
+        $workspace=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing workspace'))
+    }
+    if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}
+}
 function Settle {
     $script:previousGeometry=$null;$script:stable=0
     Wait-Until {
@@ -94,7 +102,27 @@ function Settle {
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'canvas-camera'))
         $expected=([Math]::Round($m.state.camera.zoom*100,[MidpointRounding]::AwayFromZero)).ToString()+'% · 0°'
         if(!$readout -or $readout.Current.Name -ne $expected){return $false}
-        $geometry=@($m.layout,$m.panel_measurements,$m.state.camera,$m.titlebar_insets,$m.state.theme)|ConvertTo-Json -Depth 60 -Compress
+        # A stable model does not imply that asynchronous GPU readbacks reached
+        # the visible Image controls. Require each visible raster row's previews.
+        $visibleRows=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
+            Where-Object {!$_.Current.IsOffscreen -and $_.Current.AutomationId -match '^layer-row-[0-9]+$'})
+        if(!$visibleRows.Count){return $false}
+        foreach($row in $visibleRows){
+            $layerId=$row.Current.AutomationId.Substring(10)
+            $layer=$m.state.layers | Where-Object {$_.id.ToString() -eq $layerId}
+            if(!$layer){return $false}
+            $required=@()
+            if(!$layer.group -and !$layer.content_icon){$required+='thumbnail'}
+            if($layer.has_mask){$required+='mask-thumbnail'}
+            foreach($kind in $required){
+                $preview=$row.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,"layer-$layerId-$kind"))
+                if(!$preview -or $preview.Current.ItemStatus -ne 'Ready'){return $false}
+            }
+        }
+        $evidence=Layout-Evidence
+        if(!$evidence.elements){return $false}
+        $geometry=@($m.layout,$m.panel_measurements,$m.state.camera,$m.titlebar_insets,$m.state.theme,$evidence.elements)|ConvertTo-Json -Depth 60 -Compress
         if($geometry -eq $script:previousGeometry){$script:stable++}else{$script:stable=0;$script:previousGeometry=$geometry}
         $script:stable -ge 3
     } 'Native editor geometry or startup did not settle'
@@ -165,9 +193,24 @@ foreach($theme in @('dark','light')){
         foreach($node in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
             $entry=$node.Current;$rect=$entry.BoundingRectangle
             if($entry.IsOffscreen -or $rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0){continue}
-            $elements+=@{id=$entry.AutomationId;name=$entry.Name;type=$entry.ControlType.ProgrammaticName;
+            $elements+=@{id=$entry.AutomationId;name=$entry.Name;type=$entry.ControlType.ProgrammaticName;status=$entry.ItemStatus;
                 bounds=@{x=($rect.X-$origin.x)/$scale;y=($rect.Y-$origin.y)/$scale;width=$rect.Width/$scale;height=$rect.Height/$scale}}
         }
+        $layoutEvidence=Layout-Evidence
+        $layoutEvidence|ConvertTo-Json -Depth 100|Set-Content -LiteralPath (Join-Path $OutputDirectory "layout-$name.json")
+        $layerElements=@($elements|Where-Object{$_.id -match '^layer-(row-[0-9]+|[0-9]+-(content|mask|thumbnail|mask-thumbnail|visibility|selection|label|meta|drag)|controls|options|flags|footer|blend)$'} |
+            ForEach-Object {
+                $entry=$_
+                # ItemsRepeater parks recycled elements far outside the viewport.
+                # Keep the raw trace, but pair visible UIA controls only with
+                # arranged elements intersecting the complete capture surface.
+                $arranged=@($layoutEvidence.elements|Where-Object {
+                    $_.id -eq $entry.id -and $_.bounds.x+$_.bounds.width -gt 0 -and $_.bounds.y+$_.bounds.height -gt 0 -and
+                        $_.bounds.x -lt $Width -and $_.bounds.y -lt $Height
+                })
+                if($arranged.Count -ne 1){throw "Expected one arranged rectangle for $($entry.id)"}
+                @{id=$entry.id;name=$entry.name;type=$entry.type;status=$entry.status;uia_bounds=$entry.bounds;bounds=$arranged[0].bounds}
+            })
         $model|ConvertTo-Json -Depth 100|Set-Content -LiteralPath (Join-Path $OutputDirectory "model-$name.json")
         $elements|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $OutputDirectory "elements-$name.json")
         $fixtures+=@{name=$name;viewport=@($Width,$Height);scale=$scale;theme=$theme;scenario=$scenario;
@@ -175,6 +218,7 @@ foreach($theme in @('dark','light')){
             workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;
             document=$model.state.tabs[0];camera=$model.state.camera;layout=$model.layout;
             tool_set=@($elements|Where-Object{$_.id -match '^tool-(group|subtool)-'});
+            layers=$layerElements;layer_geometry_source='UIElement RenderSize transformed into Drawing workspace; ActualWidth/Height and UIA bounds retained';
             header=@($elements|Where-Object{$_.id -match '^(application-menu[s-]|workspace-switch|document-title$|zen-button$|fullscreen$|settings-button$)'})}
         Write-Output "Captured $name at $Width x $Height logical, scale $scale"
     }

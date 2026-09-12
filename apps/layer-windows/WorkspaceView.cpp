@@ -7,6 +7,7 @@
 #include "WorkspaceGeometry.h"
 #include "WorkspacePublication.h"
 #include "OverviewOcclusion.h"
+#include "WorkspaceShadow.h"
 #include "WorkspaceDrawers.h"
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
@@ -67,6 +68,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     hstring lastOverviews;
     struct Group {
         Border frame,border,configurationFrame;
+        WorkspaceShadow shadow;
+        hstring shadowKey;
         Canvas content;
         Grid layout{nullptr},header{nullptr};
         StackPanel tabLabels{nullptr};
@@ -264,11 +267,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto [it,added]=groups.try_emplace(id);auto& group=it->second;
             if(added){
                 group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({8,8,8,8});
-                group.frame.RenderTransform(group.translation);
+                group.frame.RenderTransform(group.translation);group.shadow.Root().RenderTransform(TranslateTransform());
                 group.background.IsHitTestVisible(false);group.background.Fill(data->brush(L"panel"));
                 group.content.Children().Append(group.background);group.content.Children().Append(group.border);
                 group.configurationFrame.Background(clear());group.content.Children().Append(group.configurationFrame);
-                root.Children().Append(group.frame);
+                root.Children().Append(group.shadow.Root());root.Children().Append(group.frame);
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
             }
             group.geometry=geometry;group.offset={};
@@ -297,6 +300,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto it=groups.begin();it!=groups.end();){
             if(std::find(visible.begin(),visible.end(),it->first)==visible.end()){
                 uint32_t index;if(root.Children().IndexOf(it->second.frame,index))root.Children().RemoveAt(index);
+                if(root.Children().IndexOf(it->second.shadow.Root(),index))root.Children().RemoveAt(index);
                 it=groups.erase(it);
             }else ++it;
         }
@@ -329,6 +333,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         // Native render transforms preserve control resolution and move hit/clip
         // coordinates without invalidating the retained panel's layout.
         group.translation.X(group.offset.X);group.translation.Y(group.offset.Y);
+        auto shadowTransform=group.shadow.Root().RenderTransform().as<TranslateTransform>();
+        shadowTransform.X(group.offset.X);shadowTransform.Y(group.offset.Y);
         // Resize grips are siblings of the frame. Apply the same absolute
         // offset so their hit rectangles stay attached to the native panel.
         for(auto value:array(group.geometry,L"resize_handles")){
@@ -370,6 +376,24 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 {0,0,float(group.frame.ActualWidth()),float(group.frame.ActualHeight())});
             positions.Append(O({{L"id",N(id)},{L"bounds",rectangle(bounds)}}));
         }
+        // Automation bounds can include invisible template focus decorations or
+        // omit a container's padding. Trace the actual arranged rectangles too;
+        // this is opt-in evidence and never changes layout or hit testing.
+        A elements;
+        std::function<void(DependencyObject const&)> visit=[&](DependencyObject const& node){
+            if(auto item=node.try_as<FrameworkElement>()){
+                if(item.Visibility()!=Visibility::Visible)return;
+                auto id=AutomationProperties::GetAutomationId(item);
+                if(std::wstring_view(id).starts_with(L"layer-")&&item.IsLoaded()&&item.ActualWidth()>0&&item.ActualHeight()>0){
+                    auto transform=item.TransformToVisual(root);auto size=item.RenderSize();
+                    auto bounds=transform.TransformBounds({0,0,size.Width,size.Height});
+                    auto contentBounds=transform.TransformBounds({0,0,float(item.ActualWidth()),float(item.ActualHeight())});
+                    elements.Append(O({{L"id",S(id)},{L"bounds",rectangle(bounds)},{L"actual_bounds",rectangle(contentBounds)}}));
+                }
+            }
+            for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);i++)visit(VisualTreeHelper::GetChild(node,i));
+        };
+        visit(root);
         A grips;
         for(auto const& [id,handle]:handles){
             if(!handle.IsLoaded())continue;
@@ -380,7 +404,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto value=O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
-            {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},
+            {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
         if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
     }
@@ -483,6 +507,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             RectangleGeometry clip;clip.Rect({0,0,box.Width,box.Height});group.content.Clip(clip);
             group.frame.Visibility(group.hidden?Visibility::Collapsed:Visibility::Visible);
             Canvas::SetZIndex(group.frame,active?1000:group.order);
+            group.shadow.Layout(box,active?1000:group.order,!group.hidden);
             auto geometry=J::Parse(group.geometry.Stringify());geometry.Insert(L"bounds",preview);
             if(active&&expanded.HasKey(L"tiles"))geometry.Insert(L"tiles",object(expanded,L"tiles"));
             group.body->Layout(geometry);
@@ -537,8 +562,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
             GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
-            shape.Children().Append(group.presented.Size()?expansionShape(group.presented):
-                roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8}));
+            auto outline=group.presented.Size()?expansionShape(group.presented):
+                roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8});
+            auto shadowKey=O({{L"expansion",group.presented},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
+            if(shadowKey!=group.shadowKey){
+                group.shadowKey=shadowKey;bool expanded=group.presented.Size()!=0;
+                // WinUI geometries have one owner; retain a separate mask outline.
+                auto mask=expanded?expansionShape(group.presented):roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8});
+                group.shadow.Shape(mask,float(num(bounds,L"width")),float(num(bounds,L"height")),expanded?36.f:12.f,expanded?8.f:2.f,expanded?.4f:.16f);
+            }
+            shape.Children().Append(outline);
             for(auto value:slots){
                 auto slot=value.GetObject();auto area=array(slot,L"bounds"),clip=array(slot,L"clip");float image[4]{};
                 if(area.Size()!=4||clip.Size()!=4||!capy_navigator_image(float(area.GetNumberAt(2)),float(area.GetNumberAt(3)),

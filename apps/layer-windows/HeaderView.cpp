@@ -24,7 +24,7 @@ void menuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> con
     NativeMenuItems(target,sections,data,[data](J action){data->dispatch(action);});
 }
 Windows::UI::Color blend(Windows::UI::Color bg,Windows::UI::Color ink,float amount){
-    return {255,uint8_t(bg.R+(ink.R-bg.R)*amount),uint8_t(bg.G+(ink.G-bg.G)*amount),uint8_t(bg.B+(ink.B-bg.B)*amount)};
+    return {255,uint8_t(std::lround(bg.R+(ink.R-bg.R)*amount)),uint8_t(std::lround(bg.G+(ink.G-bg.G)*amount)),uint8_t(std::lround(bg.B+(ink.B-bg.B)*amount))};
 }
 void style(Button const& item,std::shared_ptr<WorkspaceData> const& data) {
     auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
@@ -168,10 +168,9 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         auto screenLabel=fullscreenActive?L"Exit full screen":L"Full screen";
         AutomationProperties::SetName(screen,screenLabel);ToolTipService::SetToolTip(screen,box_value(screenLabel));
         switcher=Border();switches=StackPanel();switcher.UseLayoutRounding(false);switches.UseLayoutRounding(false);switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
-        switcher.Child(switches);switcher.Height(34);switcher.Padding({3,3,3,3});switcher.CornerRadius({18,18,18,18});
+        switcher.Child(switches);switcher.Height(34);switcher.Padding({4,4,4,4});switcher.CornerRadius({18,18,18,18});
         auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
-        auto ink=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
-        switcher.Background(fill(blend(bg,ink,.06f)));switcher.BorderBrush(fill(blend(bg,ink,.10f)));switcher.BorderThickness({1});
+        switcher.Background(fill(blend(bg,{255,0,0,0},.20f)));switcher.BorderThickness({0});
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");
         AutomationProperties::SetName(switcher,L"Task workspaces");
         switcher.HorizontalAlignment(HorizontalAlignment::Left);switcher.VerticalAlignment(VerticalAlignment::Top);

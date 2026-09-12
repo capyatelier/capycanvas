@@ -64,3 +64,8 @@ presentation-probe.json
 
 # Opt-in native UI test snapshots can contain user settings.
 ui-state.json
+ui-state-*.json
+camera-state.json
+camera-state-*.json
+canvas-state-*.json
+windows-*.json

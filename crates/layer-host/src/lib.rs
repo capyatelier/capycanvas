@@ -361,17 +361,23 @@ impl NativeHost {
             || !records.len().is_multiple_of(9)
             || !records.iter().all(|n| n.is_finite())
             || records
-                .chunks_exact(9)
+                .as_chunks::<9>()
+                .0
+                .iter()
                 .any(|r| r[7] < 0.0 || r[8] < 0.0 || r[8] > 4.0 || r[8].fract() != 0.0)
         {
             return Err("Invalid native pointer batch".into());
         }
         if (!updates.is_empty() && updates.len() != records.len() / 9 * 2)
             || updates
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0))
             || (correction
-                && (predicted || updates.is_empty() || updates.chunks_exact(2).any(|u| u[0] == 0)))
+                && (predicted
+                    || updates.is_empty()
+                    || updates.as_chunks::<2>().0.iter().any(|u| u[0] == 0)))
             || (predicted && !updates.is_empty())
         {
             return Err("Invalid native input estimates".into());
@@ -379,7 +385,7 @@ impl NativeHost {
         if !self.accepts_pointer_input(view_revision) {
             return Ok(());
         }
-        for (index, sample) in records.chunks_exact(9).enumerate() {
+        for (index, sample) in records.as_chunks::<9>().0.iter().enumerate() {
             let update = updates.get(index * 2..index * 2 + 2).unwrap_or(&[0, 0]);
             let phase = match sample[8] as u8 {
                 0 => PenPhase::Hover,

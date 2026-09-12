@@ -1699,3 +1699,54 @@ mixed-DPI/suspend/device recovery, distribution packaging and final sustained
 120 Hz painting plus physical input-to-present acceptance remain open. No
 presentation benchmark ran. Profiles, documents, captures, logs and binaries
 remain ignored/local. The goal remains active.
+
+## Layers and composition shadows (2026-09-12)
+
+The native Layers panel now follows the shared 24-DIP header control height,
+conditional thumbnail/mask gaps, row label and metadata line heights, rename
+spacing, thumbnail corner radius, grip geometry and disabled icon opacity.
+Panel, expanded-configuration and drawer shadows use retained Composition
+SpriteVisuals with separate XAML alpha masks. Their padded roots preserve blur
+outside the panel while the existing Navigator occlusion path excludes GPU
+image regions. Shadows follow panel transforms and disposal. The header adopts
+the shared recessed, borderless switcher style.
+
+The complete editor capture now measures 18 visible Layers elements in each
+of four 960 x 660-DIP scenes at 1.5 scale: light/dark and fit/under-header camera
+positions. Maximum Layers geometry error is 1.000031 physical pixels; header
+error remains at most 1.664063 and Tool Set error at most 0.5. Camera checks pass.
+A sampled 25-pixel standard-panel shadow edge matches Chrome exactly in dark
+mode and differs by at most one color level in light mode after blur calibration.
+This sample does not establish whole-image equality or mixed-DPI acceptance.
+Complete zero-tolerance initial-scene comparisons still differ in 8.43% of light
+pixels and 7.58% of dark pixels; these raster differences remain available for
+review and are not an accepted whole-editor parity result.
+
+Named row/container/image peers improve accessibility and expose preview
+readiness. Captures wait for each visible raster thumbnail's asynchronous
+readback before taking a frame. Opt-in diagnostics record RenderSize after
+layout settles: UI Automation may include invisible focus decoration or omit
+container padding, while TextBlock ActualWidth can report content width.
+Raw automation bounds, ActualWidth/Height bounds, parked virtualized elements,
+the full client and complete XAML image remain available locally. Browser
+geometry uses its own production layout. No image differences are masked.
+
+Native layer checks cover painting and exact undo, masks, row retention and
+recycling, document replacement, and focused-draft commit on close. Drawer and
+expansion checks pass, including Navigator GPU occlusion/restoration; their
+captures were inspected. Following integration through main 8b37ee2, production
+WinUI and release Wasm builds, strict Windows Clippy, all four Chrome captures,
+the manager/restart fixture and 450 unit tests pass (24 host, 279 UI, 91 Windows,
+56 workspace; four explicitly ignored hardware tests). Shared Rust cleanup
+uses fixed-size record chunks and boxes the large workspace reply/outcome
+payloads while retaining the serialized protocol. Final integration through
+98294ff also includes the other ports' collapsed-column drop improvements and
+Web focus-refresh fix; 452 unit tests, strict Windows Clippy and the Wasm check
+pass after that integration.
+
+Remaining work includes configurable-switcher UI and cross-window refresh,
+the shared drag pickup rules (including no mouse hold menus), further editor
+raster details, the existing strict GPU filter-reference failure, physical
+input, mixed DPI/lifecycle/recovery, distribution and final 120 Hz painting and
+input-latency acceptance. No presentation benchmark ran during this milestone.
+Review artifacts stay ignored and local; the implementation goal remains active.

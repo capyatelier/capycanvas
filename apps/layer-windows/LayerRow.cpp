@@ -31,19 +31,23 @@ void LayerRow::action(J operation){if(!data->updating&&current())data->dispatchD
 void LayerRow::context(bool isMask,UIElement const& anchor){if(current())if(auto view=owner.lock())view->context(id,isMask,anchor);}
 void LayerRow::init(){
     auto weak=weak_from_this();root.Child(body);root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
-    root.BorderBrush(fill({255,53,132,228}));body.ColumnSpacing(2);body.VerticalAlignment(VerticalAlignment::Center);
+    root.BorderBrush(fill({255,53,132,228}));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
-    for(auto width:{24.,24.,0.,3.,30.,12.,30.,-1.,12.,12.}){
+    AutomationProperties::SetName(root,L"Layer row");
+    // Include the two-DIP gaps only beside visible flex items. Empty mask and
+    // indentation columns must not add their own gaps.
+    for(auto width:{26.,26.,0.,5.,32.,14.,32.,-1.,14.,12.}){
         ColumnDefinition column;column.Width({width<0?1:width,width<0?GridUnitType::Star:GridUnitType::Pixel});
         body.ColumnDefinitions().Append(column);
     }
     auto pick=[&](hstring const& title,int column,std::function<void()> action){
         auto control=button(data,title,std::move(action));control.Width(column==4||column==6?30:column==5||column==9?12:24);
-        control.Height(30);Grid::SetColumn(control,column);body.Children().Append(control);return control;
+        control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);body.Children().Append(control);return control;
     };
     eye=pick(L"Layer visibility",0,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"visible"))}}));});
     check=pick(L"Select layer without changing drawing target",1,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"toggle_selection")},{L"id",N(self->id)}}));});
-    Grid::SetColumn(indent,2);body.Children().Append(indent);clip.Width(3);clip.Height(28);clip.CornerRadius({1,1,1,1});clip.Background(fill({255,233,153,165}));
+    for(auto control:{eye,check}){control.ClearValue(FrameworkElement::HeightProperty());control.MinHeight(24);control.VerticalAlignment(VerticalAlignment::Stretch);}
+    Grid::SetColumn(indent,2);body.Children().Append(indent);clip.Width(3);clip.Height(28);clip.CornerRadius({1,1,1,1});clip.Background(fill({255,233,153,165}));clip.HorizontalAlignment(HorizontalAlignment::Left);
     Grid::SetColumn(clip,3);body.Children().Append(clip);
     content=pick(L"Edit layer content",4,[weak]{if(auto self=weak.lock()){
         auto layer=self->model();self->action(flag(layer,L"group")?O({{L"op",S(L"collapse")},{L"id",N(self->id)}}):
@@ -55,16 +59,19 @@ void LayerRow::init(){
     }
     corners(contentCorners);corners(maskCorners);contentTile.Children().Append(contentCorners);maskTile.Children().Append(maskCorners);
     content.Content(contentTile);mask.Content(maskTile);
+    content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
     link=pick(L"Link layer mask",5,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"link_mask")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"mask_linked"))}}));});
     link.Content(icon(L"link",data->theme(),12));
     name=button(data,L"Layer",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
     name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});
+    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});name.Margin({6,0,2,0});
     StackPanel caption;title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);
-    meta=label(data,L"");meta.FontSize(data->textSize()*.78);meta.Opacity(.55);meta.LineHeight(14);
+    title.LineHeight(20);AutomationProperties::SetAutomationId(title,L"layer-"+to_hstring(uint64_t(id))+L"-label");
+    meta=label(data,L"");meta.Opacity(.55);meta.LineHeight(20);
+    AutomationProperties::SetAutomationId(meta,L"layer-"+to_hstring(uint64_t(id))+L"-meta");
     meta.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(meta);name.Content(caption);
     Grid::SetColumn(name,7);body.Children().Append(name);
-    rename.MinWidth(0);rename.MinHeight(28);rename.Height(28);rename.Padding({3,0,3,0});rename.FontSize(data->textSize());
+    rename.MinWidth(0);rename.MinHeight(24);rename.Height(24);rename.Padding({2,0,2,0});rename.Margin({6,0,2,0});rename.FontSize(data->textSize());
     rename.MaxLength(256);rename.Background(data->brush(L"input"));rename.Visibility(Visibility::Collapsed);
     AutomationProperties::SetName(rename,L"Layer name");Grid::SetColumn(rename,7);body.Children().Append(rename);
     rename.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
@@ -81,12 +88,13 @@ void LayerRow::init(){
             self->context(false,self->name);e.Handled(true);
         }
     }});
-    lockImage.Width(12);lockImage.Height(12);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,8);body.Children().Append(lockImage);
-    grip=pick(L"Drag layer",9,[]{});grip.Content(icon(L"grip",data->theme(),12));grip.Opacity(.6);
+    lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,8);body.Children().Append(lockImage);
+    grip=pick(L"Drag layer",9,[]{});grip.Height(12);grip.Content(icon(L"grip",data->theme(),12));grip.Opacity(.6);
     for(auto item:{std::pair{eye,L"visibility"},std::pair{check,L"selection"},std::pair{content,L"content"},
         std::pair{mask,L"mask"},std::pair{link,L"link"},std::pair{name,L"name"},std::pair{grip,L"drag"}})
         AutomationProperties::SetAutomationId(item.first,L"layer-"+to_hstring(uint64_t(id))+L"-"+item.second);
     AutomationProperties::SetAutomationId(rename,L"layer-"+to_hstring(uint64_t(id))+L"-rename");
+    AutomationProperties::SetName(contentImage,L"Layer preview");AutomationProperties::SetName(maskImage,L"Layer mask preview");
     AutomationProperties::SetAutomationId(contentImage,L"layer-"+to_hstring(uint64_t(id))+L"-thumbnail");
     AutomationProperties::SetAutomationId(maskImage,L"layer-"+to_hstring(uint64_t(id))+L"-mask-thumbnail");
     root.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock())self->context(false,self->root);e.Handled(true);});
@@ -141,6 +149,7 @@ void LayerRow::refresh(){
     if(!current())return;auto layer=model();
     root.Background(flag(layer,L"selected")?selected():clear());
     title.Text(str(layer,L"label"));AutomationProperties::SetName(name,str(layer,L"label"));
+    AutomationProperties::SetName(root,str(layer,L"label")+L" layer row");
     auto shown=flag(layer,L"visible")?L"eye":L"eye-hidden";
     auto icons=hstring(shown)+L":"+str(layer,L"selection_icon")+L":"+str(layer,L"content_icon")+L":"+
         to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"));
@@ -157,12 +166,15 @@ void LayerRow::refresh(){
     contentCorners.Visibility(flag(layer,L"editing")&&!flag(layer,L"mask_selected")?Visibility::Visible:Visibility::Collapsed);
     maskCorners.Visibility(flag(layer,L"mask_selected")?Visibility::Visible:Visibility::Collapsed);
     mask.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);link.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);
-    body.ColumnDefinitions().GetAt(5).Width({hasMask?12.:0.,GridUnitType::Pixel});
-    body.ColumnDefinitions().GetAt(6).Width({hasMask?30.:0.,GridUnitType::Pixel});
+    body.ColumnDefinitions().GetAt(5).Width({hasMask?14.:0.,GridUnitType::Pixel});
+    body.ColumnDefinitions().GetAt(6).Width({hasMask?32.:0.,GridUnitType::Pixel});
     link.Opacity(flag(layer,L"mask_linked")?1:.35);link.IsEnabled(!flag(layer,L"locked"));
     maskImage.Opacity(flag(layer,L"mask_enabled")?1:.4);
     body.ColumnDefinitions().GetAt(2).Width({std::min(24.,num(layer,L"depth")*8),GridUnitType::Pixel});
     clip.Opacity(flag(layer,L"clipped")?1:0);lockImage.Opacity(flag(layer,L"locked")||flag(layer,L"alpha_locked")?1:0);
+    body.ColumnDefinitions().GetAt(8).Width({flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
+    body.ColumnDefinitions().GetAt(9).Width({flag(layer,L"can_drop_below")?12.:0.,GridUnitType::Pixel});
+    grip.Visibility(flag(layer,L"can_drop_below")?Visibility::Visible:Visibility::Collapsed);
     grip.Opacity(flag(layer,L"can_drop_below")?.6:0);grip.IsEnabled(flag(layer,L"can_drop_below")&&!flag(layer,L"locked"));
     hstring details=num(layer,L"blend")?str(layer,L"blend_label"):L"";
     if(num(layer,L"opacity",1)<1){if(!details.empty())details=details+L" · ";details=details+to_hstring(int(std::round(num(layer,L"opacity")*100)))+L"%";}

@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "WorkspaceDrawers.h"
 #include "WorkspaceGeometry.h"
+#include "WorkspaceShadow.h"
 #include "WorkspaceQuery.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <chrono>
@@ -20,6 +21,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::shared_ptr<WorkspaceData> data;
     Canvas workspace{nullptr},content;
     Border frame;
+    WorkspaceShadow shadow;
+    hstring shadowKey;
     Shapes::Path background,bridge;
     std::shared_ptr<WorkspaceGestures> gestures;
     std::function<void()> changed,closed;
@@ -42,7 +45,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void dispose(){
         if(disposed)return;disposed=true;++generation;
         if(timer)timer.Stop();
-        remove(workspace,frame);remove(workspace,bridge);
+        remove(workspace,frame);remove(workspace,bridge);remove(workspace,shadow.Root());
     }
     void init(){
         auto weak=weak_from_this();
@@ -52,7 +55,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         Canvas::SetZIndex(frame,order());Canvas::SetZIndex(bridge,order());
         AutomationProperties::SetAutomationId(frame,id==L"tool"?L"tool-drawer":hstring(L"column-drawer-"+id));
         AutomationProperties::SetName(frame,id==L"tool"?L"Tool drawer":L"Column drawer");
-        workspace.Children().Append(bridge);workspace.Children().Append(frame);
+        workspace.Children().Append(shadow.Root());workspace.Children().Append(bridge);workspace.Children().Append(frame);
         timer=frame.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(16));
         timer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock())self->drive();});
         frame.LayoutUpdated([weak](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
@@ -226,6 +229,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void draw(){
         auto placement=object(geometry,L"placement");auto bounds=object(placement,L"bounds");
         frame.Visibility(bounds.Size()?Visibility::Visible:Visibility::Collapsed);
+        shadow.Layout(rectangle(bounds),order(),bounds.Size()!=0);
         if(!bounds.Size()){bridge.Visibility(Visibility::Collapsed);return;}
         place(frame,bounds);
         RectangleGeometry clip;clip.Rect({0,0,float(num(bounds,L"width")),float(num(bounds,L"height"))});content.Clip(clip);
@@ -266,7 +270,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         std::array<float,4> radii{8,8,8,8};
         for(uint32_t i=0;i<std::min(4u,corners.Size());++i)if(corners.GetBooleanAt(i))radii[i]=0;
         frame.CornerRadius({radii[0],radii[1],radii[2],radii[3]});
-        GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);shape.Children().Append(roundedRectangle(width,height,radii));
+        auto outline=roundedRectangle(width,height,radii);
+        auto silhouette=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners}}).Stringify();
+        if(silhouette!=shadowKey){shadowKey=silhouette;shadow.Shape(roundedRectangle(width,height,radii),width,height,21,5,1.f/3);}
+        GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);shape.Children().Append(outline);
         for(auto hole:holes){RectangleGeometry region;region.Rect(rectangle(hole.GetObject()));shape.Children().Append(region);}
         background.Data(shape);
     }

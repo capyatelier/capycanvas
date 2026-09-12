@@ -59,13 +59,30 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
       const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}};
       const layout=layerApp.app.layout(innerWidth,innerHeight);
       const elementId=n=>{
+        const row=n.closest('.layer-row');
+        if(row){
+          const prefix='layer-'+row.dataset.layer+'-';
+          if(n===row)return 'layer-row-'+row.dataset.layer;
+          if(n===row.children[0])return prefix+'visibility';
+          if(n===row.children[1])return prefix+'selection';
+          if(n.matches('.layer-name'))return prefix+'label';
+          if(n.matches('.layer-meta'))return prefix+'meta';
+          if(n.matches('.layer-grip'))return prefix+'drag';
+          const thumbnail=n.closest('.layer-thumbnail');
+          if(thumbnail){
+            const mask=[...row.querySelectorAll('.layer-thumbnail')].indexOf(thumbnail)===1;
+            return prefix+(n.matches('canvas')?(mask?'mask-thumbnail':'thumbnail'):(mask?'mask':'content'));
+          }
+        }
+        for(const [selector,id] of [['.layer-header','controls'],['.layer-options','options'],['.layer-flags','flags'],['.layer-footer','footer'],['.layer-options select','blend']])
+          if(n.matches(selector))return 'layer-'+id;
         if(n.matches('.workspace-switcher'))return 'workspace-switcher';
         if(n.matches('.workspace-switcher button'))return 'workspace-switch-'+n.dataset.workspaceId.split(':').pop();
         if(n.matches('.header-menu > summary'))return n.parentElement.dataset.menu==='all'?'application-menus':'application-menu-'+n.parentElement.dataset.menu;
         if(n.dataset.command==='settings')return 'settings-button';
         return n.id;
       };
-      const elements=[...document.querySelectorAll('button,summary,.panel,.panel-group,.group-tabs,.tool-choice-button,.brush-preview,#header,#document-title,.workspace-switcher')]
+      const elements=[...document.querySelectorAll('button,summary,.panel,.panel-group,.group-tabs,.tool-choice-button,.brush-preview,#header,#document-title,.workspace-switcher,.layer-row,.layer-name,.layer-meta,.layer-grip,.layer-thumbnail canvas,.layer-header,.layer-options,.layer-flags,.layer-footer,.layer-options select')]
         .filter(n=>{const b=n.getBoundingClientRect();return getComputedStyle(n).visibility==='visible'&&b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight})
         .map(n=>({id:n.matches('.tool-choice-button')?'tool-'+(n.parentElement.classList.contains('tool-groups')?'group':'subtool')+'-'+[...n.parentElement.children].indexOf(n):elementId(n),classes:n.className,name:n.getAttribute('aria-label')||n.textContent.trim(),command:n.dataset.command,
           bounds:rect(n),style:Object.fromEntries(['fontFamily','fontSize','fontWeight','lineHeight','padding','gap'].map(k=>[k,getComputedStyle(n)[k]]))}));
@@ -111,16 +128,31 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
     // UI Automation quantizes both origin and size to physical pixels. Bound
     // their accumulated edge error; this does not accept glyph/raster parity.
     assert.ok(headerMaximum<=2.01,`Header geometry differs by ${headerMaximum} physical pixels`);
+    const layerId=id=>/^layer-(row-[0-9]+|[0-9]+-(content|mask|thumbnail|mask-thumbnail|visibility|selection|label|meta|drag)|controls|options|flags|footer|blend)$/.test(id);
+    const layers=(fixture.layers||[]).map(native=>{
+      const web=metrics.elements.find(e=>e.id===native.id);
+      assert.ok(web,`Missing visible reference Layers control: ${native.id}`);
+      const a=native.bounds,b=web.bounds;
+      return {id:native.id,native:a,web:b,maximum_error_pixels:scale*Math.max(...['x','y','width','height'].map(k=>Math.abs(a[k]-b[k])),
+        Math.abs(a.x+a.width-b.x-b.width),Math.abs(a.y+a.height-b.y-b.height))};
+    });
+    const layersMaximum=Math.max(0,...layers.map(e=>e.maximum_error_pixels));
     const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:true});
     const png=Buffer.from(shot.data,'base64');
     assert.equal(png.readUInt32BE(16),Math.round(width*scale));
     assert.equal(png.readUInt32BE(20),Math.round(height*scale));
     await writeFile(`${output}/web-${fixture.name}.png`,png);
-    const report={name:fixture.name,metrics,tool_set:toolSet,tool_set_maximum_error_pixels:toolSetMaximum,header,header_fonts:headerFonts.fonts,header_maximum_error_pixels:headerMaximum,native:{camera:fixture.camera,layout:fixture.layout},
-      adaptations:{native_surface_offset_pixels:fixture.surface_offset_pixels,native_full_client:fixture.full_client,native_caption_button_reservation:fixture.titlebar_insets,system_caption_buttons:'Windows owns these; Chrome leaves the reserved pixels visible'},
+    const report={name:fixture.name,metrics,layers,layers_maximum_error_pixels:layersMaximum,tool_set:toolSet,tool_set_maximum_error_pixels:toolSetMaximum,header,header_fonts:headerFonts.fonts,header_maximum_error_pixels:headerMaximum,native:{camera:fixture.camera,layout:fixture.layout},
+      adaptations:{layer_geometry_source:fixture.layer_geometry_source,native_surface_offset_pixels:fixture.surface_offset_pixels,native_full_client:fixture.full_client,native_caption_button_reservation:fixture.titlebar_insets,system_caption_buttons:'Windows owns these; Chrome leaves the reserved pixels visible'},
       scope:'Full editor; differences remain unaccepted until reviewed. No masks, cropping, resampling or native-measurement substitution.'};
     await writeFile(`${output}/geometry-${fixture.name}.json`,JSON.stringify(report,null,2));
-    reports.push({name:fixture.name,viewport:metrics.viewport,scale,adapter:metrics.adapter,tool_set_maximum_error_pixels:toolSetMaximum,header_maximum_error_pixels:headerMaximum});
+    if(fixture.layers){
+      assert.ok(fixture.layers.some(e=>e.id.startsWith('layer-row-')),'Native Layers row measurements are required');
+      assert.deepEqual(fixture.layers.map(e=>e.id).sort(),metrics.elements.filter(e=>layerId(e.id)).map(e=>e.id).sort(),
+        'Native and reference Layers expose different measured controls');
+      assert.ok(layersMaximum<=2.01,`Layers geometry differs by ${layersMaximum} physical pixels`);
+    }
+    reports.push({name:fixture.name,viewport:metrics.viewport,scale,adapter:metrics.adapter,layers_maximum_error_pixels:layersMaximum,tool_set_maximum_error_pixels:toolSetMaximum,header_maximum_error_pixels:headerMaximum});
   }
   await writeFile(`${output}/windows-editor.json`,JSON.stringify({captures:reports},null,2));
   console.log(JSON.stringify({captures:reports},null,2));

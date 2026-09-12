@@ -26,7 +26,13 @@ void LayersView::init(){
     }
     header.Padding({6,4,6,4});header.Spacing(2);values.ColumnSpacing(6);
     for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});values.ColumnDefinitions().Append(column);}
-    blend.MinWidth(0);blend.MinHeight(26);blend.Height(26);blend.Padding({6,0,0,0});
+    blend.MinWidth(0);blend.MinHeight(24);blend.Height(24);blend.Padding({6,0,6,0});
+    AutomationProperties::SetName(header,L"Layer controls");AutomationProperties::SetName(values,L"Layer blend and opacity");
+    AutomationProperties::SetName(tools,L"Layer flags");AutomationProperties::SetName(footerFrame,L"Layer actions");
+    AutomationProperties::SetAutomationId(header,L"layer-controls");
+    AutomationProperties::SetAutomationId(values,L"layer-options");
+    AutomationProperties::SetAutomationId(tools,L"layer-flags");
+    AutomationProperties::SetAutomationId(footerFrame,L"layer-footer");
     blend.FontSize(data->textSize());blend.FontWeight(Windows::UI::Text::FontWeights::Bold());
     blend.Background(data->brush(L"input"));blend.BorderThickness({0,0,0,0});blend.CornerRadius({6,6,6,6});
     blend.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -54,14 +60,14 @@ void LayersView::init(){
         pick.Width(24);pick.Height(24);pick.Content(icon(spec.icon,data->theme()));
         AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));ToolTipService::SetToolTip(pick,box_value(spec.label));
         tools.Children().Append(pick);controls.emplace_back([data=data,pick,spec](J layer,J capabilities){
-            pick.IsEnabled(flag(capabilities,spec.capability));pick.Background(flag(layer,spec.property)?selected():clear());
+            pick.IsEnabled(flag(capabilities,spec.capability));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected():clear());
         });
     }
     auto reference=button(data,L"Use selected layers as references",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
     reference.Width(24);reference.Height(24);reference.Content(icon(L"reference",data->theme()));
     AutomationProperties::SetAutomationId(reference,L"layer-reference");tools.Children().Append(reference);
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
-        auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));
+        auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);
         reference.Background(flag(view,L"references_selected")?selected():clear());
         auto text=str(view,L"reference_action_label");AutomationProperties::SetName(reference,text);ToolTipService::SetToolTip(reference,box_value(text));
     }});
@@ -82,20 +88,20 @@ void LayersView::init(){
     auto mask=footerButton(L"mask",L"Add layer mask",L"layer-add-mask",[weak]{if(auto self=weak.lock()){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
-    controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));});
+    controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
     auto import=footerButton(L"image",L"Import image as layer",L"layer-import",[weak]{if(auto self=weak.lock()){
         self->data->document(R"({"operation":"request_import"})");
     }});
     controls.emplace_back([data=data,import](J,J){
         auto file=object(data->state,L"document_file");
-        import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(data->model,L"windows_importing")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));
+        import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(data->model,L"windows_importing")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));import.Opacity(import.IsEnabled()?1.:.36);
     });
     auto remove=footerButton(L"delete",L"Delete selected layers",L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
-    controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock())remove.IsEnabled(flag(self->view(),L"can_delete"));});
+    controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});
     auto more=footerButton(L"more",L"Layer actions",L"layer-actions",[weak]{if(auto self=weak.lock()){
         self->context(-1,false,self->footer);
     }});
-    controls.emplace_back([more](J layer,J){more.IsEnabled(layer.Size()!=0);});
+    controls.emplace_back([more](J layer,J){more.IsEnabled(layer.Size()!=0);more.Opacity(more.IsEnabled()?1.:.36);});
     footer.Children().RemoveAtEnd();footer.Padding({0});
     footerFrame.Padding({6,4,6,4});
     ColumnDefinition actionsColumn;actionsColumn.Width({1,GridUnitType::Star});footerFrame.ColumnDefinitions().Append(actionsColumn);

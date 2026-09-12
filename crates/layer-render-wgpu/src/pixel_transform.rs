@@ -348,7 +348,7 @@ impl PixelTransform {
                 source.background,
             ];
             let record = &mut self.records[index * self.stride as usize..][..48];
-            for (value, slot) in values.iter().zip(record.chunks_exact_mut(4)) {
+            for (value, slot) in values.iter().zip(record.as_chunks_mut::<4>().0.iter_mut()) {
                 slot.copy_from_slice(&value.to_le_bytes());
             }
         }

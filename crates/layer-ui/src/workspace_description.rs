@@ -219,10 +219,9 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
             .floating
             .iter()
             .find(|f| f.root.id() == new.root.id())
+            && let Some(description) = tab_change(&old.root, &new.root, after)
         {
-            if let Some(description) = tab_change(&old.root, &new.root, after) {
-                return description;
-            }
+            return description;
         }
     }
     let panels: Vec<_> = after

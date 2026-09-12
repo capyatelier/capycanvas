@@ -94,19 +94,19 @@ impl BrowserDatabase {
         if self.cancelled.contains(&batch.operation_id) {
             return Err(StoreError::conflict());
         }
-        if let Some((original, _)) = self.receipts.get(&batch.operation_id) {
-            if original != &hash {
-                return Err(StoreError::invalid(
-                    "An operation ID cannot be reused for a different change.",
-                ));
-            }
+        if let Some((original, _)) = self.receipts.get(&batch.operation_id)
+            && original != &hash
+        {
+            return Err(StoreError::invalid(
+                "An operation ID cannot be reused for a different change.",
+            ));
         }
-        if let Some(original) = self.pending.get(&batch.operation_id) {
-            if content_id(original.encoded()?.as_bytes()) != hash {
-                return Err(StoreError::invalid(
-                    "An operation ID is already bound to another payload.",
-                ));
-            }
+        if let Some(original) = self.pending.get(&batch.operation_id)
+            && content_id(original.encoded()?.as_bytes()) != hash
+        {
+            return Err(StoreError::invalid(
+                "An operation ID is already bound to another payload.",
+            ));
         }
         for (id, bytes) in &batch.components {
             if content_id(bytes) != *id {
@@ -226,7 +226,7 @@ impl BrowserDatabase {
             Load { id } => {
                 let s = self.item(&id)?;
                 s.entity.validate()?;
-                StoreResponse::Entity(s.clone())
+                StoreResponse::Entity(Box::new(s.clone()))
             }
             Raw { id } => StoreResponse::Raw(serde_json::to_string(self.item(&id)?)?),
             Claim { id, owner } => {
@@ -251,7 +251,7 @@ impl BrowserDatabase {
                     fence,
                     expires_at_ms: now.saturating_add(OWNER_LEASE_MS),
                 });
-                StoreResponse::Entity(s.clone())
+                StoreResponse::Entity(Box::new(s.clone()))
             }
             Renew { id, owner, fence } => {
                 let fence = fence
@@ -267,13 +267,12 @@ impl BrowserDatabase {
                 StoreResponse::Claim(claim)
             }
             Release { id, owner, fence } => {
-                if let Some(s) = self.items.get_mut(&id) {
-                    if s.claim
+                if let Some(s) = self.items.get_mut(&id)
+                    && s.claim
                         .as_ref()
                         .is_some_and(|c| c.owner == owner && c.fence.to_string() == fence)
-                    {
-                        s.claim = None;
-                    }
+                {
+                    s.claim = None;
                 }
                 StoreResponse::Done
             }
@@ -404,19 +403,18 @@ impl BrowserDatabase {
             if self.receipts.contains_key(id) {
                 return Err(StoreError::conflict());
             }
-            if let Some(original) = self.pending.get(id) {
-                if original.owner != batch.owner
-                    && self.items.values().any(|s| {
-                        s.claim
-                            .as_ref()
-                            .is_some_and(|c| c.owner == original.owner && c.expires_at_ms > now)
-                    })
-                {
-                    return Err(StoreError::new(
-                        ErrorKind::OwnedElsewhere,
-                        "The source window is still saving these changes.",
-                    ));
-                }
+            if let Some(original) = self.pending.get(id)
+                && original.owner != batch.owner
+                && self.items.values().any(|s| {
+                    s.claim
+                        .as_ref()
+                        .is_some_and(|c| c.owner == original.owner && c.expires_at_ms > now)
+                })
+            {
+                return Err(StoreError::new(
+                    ErrorKind::OwnedElsewhere,
+                    "The source window is still saving these changes.",
+                ));
             }
             self.cancelled.insert(id.clone());
             self.pending.remove(id);
