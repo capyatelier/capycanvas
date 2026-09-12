@@ -12,9 +12,25 @@ body { --popover: var(--panel); }
 .workspace-row[data-selected="true"] { background:color-mix(in srgb,var(--accent) 25%,transparent); }
 .workspace-row[data-selected="true"] .workspace-choice { background:transparent; }
 .workspace-row-subtitle { font-size:.88em; opacity:.7; }
-.workspace-options { position:relative; align-self:center; }
-.workspace-options summary { padding:8px 14px; cursor:pointer; list-style:none; font-size:20px; }
-.workspace-row-menu { position:absolute; z-index:2; right:5px; top:30px; display:flex; flex-direction:column; min-width:140px; padding:4px; background:var(--panel); box-shadow:0 2px 8px #0006; border-radius:8px; }
+.workspace-options { align-self:center; flex:none; padding:8px 14px; font-size:20px; font-weight:400; }
+.workspace-grip { flex:none; display:flex; align-items:center; justify-content:center; width:16px; padding:0; margin-left:6px; opacity:.55; cursor:grab; touch-action:none; }
+.workspace-grip svg { width:12px; height:12px; }
+.workspace-grip + .workspace-choice { padding-left:6px; min-width:0; }
+.workspace-row { touch-action:pan-y; }
+.workspace-row-mark { display:flex; align-items:center; flex:none; margin-left:6px; }
+.workspace-row-mark svg { width:16px; height:16px; }
+.workspace-pin { opacity:.55; }
+.workspace-row-menu { position:fixed; inset:auto; margin:0; display:none; flex-direction:column; min-width:180px; padding:6px; border:0; color:var(--text); background:var(--popover); box-shadow:0 4px 16px #0005; border-radius:10px; }
+.workspace-row-menu:popover-open { display:flex; }
+.workspace-row-menu button { display:flex; align-items:center; gap:8px; text-align:left; font-weight:400; padding:4px 8px; }
+.workspace-menu-check { display:inline-flex; width:16px; flex:none; }
+.workspace-menu-check svg { width:16px; height:16px; }
+.workspace-row-menu hr { width:100%; border:0; height:1px; background:color-mix(in srgb,var(--text) 15%,transparent); margin:5px 0; }
+.workspace-row-dragging { opacity:.45; }
+.workspace-drop-before { box-shadow:inset 0 2px var(--accent); }
+.workspace-drop-after { box-shadow:inset 0 -2px var(--accent); }
+.workspace-drag-preview { position:fixed; inset:auto; margin:0; border:0; padding:0; border-radius:8px; background:var(--panel); box-shadow:0 4px 12px #0006; pointer-events:none; opacity:.9; }
+.workspace-manager :focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 .workspace-error { color:#e66; margin:10px 20px; white-space:pre-wrap; }
 .workspace-manager footer { margin:18px 20px; }
 .workspace-manager footer button { flex:1; }
@@ -22,9 +38,9 @@ body { --popover: var(--panel); }
 .workspace-form label { display:flex; flex-direction:column; gap:7px; margin:16px 0; }
 .workspace-form footer { margin:18px 0 0; flex-wrap:wrap; }
 .workspace-form .destructive-action { background:#b33; }
-.workspace-switcher { display:flex; align-items:center; gap:2px; padding:3px; border:1px solid color-mix(in srgb,var(--text) 10%,transparent); border-radius:18px; background:color-mix(in srgb,var(--text) 6%,var(--bg)); flex:none; }
+.workspace-switcher { display:flex; align-items:center; gap:2px; padding:3px; border:1px solid color-mix(in srgb,var(--text) 10%,transparent); border-radius:18px; background:color-mix(in srgb,var(--text) 6%,var(--bg)); flex:0 1 auto; min-width:0; max-width:min(420px,40vw); overflow-x:auto; scrollbar-width:none; }
 /* Override the general 36px header button height inside the shared 34px pill. */
-#header .workspace-switcher button { max-width:130px; height:26px; min-height:26px; padding:0 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-radius:15px; font-weight:500; background:transparent; }
+#header .workspace-switcher button { flex:none; max-width:130px; height:26px; min-height:26px; padding:0 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-radius:15px; font-weight:500; background:transparent; }
 #header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 #header .workspace-switcher button[aria-pressed="true"] { color:var(--text); background:color-mix(in srgb,var(--accent) 28%,var(--bg)); }
 @media(max-width:760px) { #header .workspace-switcher button { max-width:90px; padding:0 5px; } }

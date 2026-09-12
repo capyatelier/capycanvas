@@ -88,8 +88,8 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.equal((await view()).id,created);
     assert.deepEqual(normalized(await capture()),normalized(beforeRestart),'Restart retains undo/redo and working settings');
     await menu('Manage Workspaces…');
-    await click(`.workspace-choice[data-id="${created}"] + .workspace-options summary`);
-    await click(`.workspace-choice[data-id="${created}"] + .workspace-options button`);
+    await click(`.workspace-row[data-id="${created}"] .workspace-options`);
+    await click(`.workspace-row-menu [data-action="rename"]`);
     await text('.workspace-form input','Web Inking Acceptance'); await click('.workspace-form .suggested-action'); await idle();
     assert.equal((await view()).name,'Web Inking Acceptance'); await click('.workspace-manager footer button');
     // Header switches address stable identities and preserve their arrangements.

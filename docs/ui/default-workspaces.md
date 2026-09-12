@@ -179,3 +179,28 @@ mouse, touch, and keyboard. Shared, Android, Apple, and Windows bridges compile.
 
 ![Switcher configuration in Manage Workspaces](default-workspaces/switcher-manager.png)
 ![Workspace row options](default-workspaces/switcher-options.png)
+
+
+## Web switcher acceptance
+
+Web now uses the same persisted visibility and row order as GTK. The shared
+`WorkspaceController` exposes `switcher`, `order`, and independent preference
+status; `EditSwitcher` acknowledgements preserve pending and visible previews.
+Web refreshes on focus and uses BroadcastChannel to update other tabs after a
+successful preference edit. The fixed `defaults` field remains for compatibility;
+new host switchers should render `switcher`.
+
+`node apps/layer-web/test.mjs --workspace-switcher` passes in desktop Chrome on an
+isolated Wayland display. It covers native mouse/touch and CDP pen input: every-row
+grips, hold/secondary menus, same-contact dragging, rejection before touch/pen
+holds, unpinned reordering, keyboard moves, scrolling, cancellation/blur, live
+preview preservation, multiple tabs, overflow, and restart. The existing
+`--workspace-manager` regression passes too. Physical stylus testing remains a
+separate hardware check. The headless GPU environment emits an existing external
+Instance warning; desktop Chrome acceptance has no page errors and renders the
+canvas previews correctly. Shared controller tests and 12 packaging tests pass.
+
+Other platforms can use the [minimal implementation handoff](workspace-switcher-platform-handoff.md).
+
+![Web workspace switcher configuration](default-workspaces/web-switcher.png)
+![Web workspace row menu](default-workspaces/web-switcher-menu.png)

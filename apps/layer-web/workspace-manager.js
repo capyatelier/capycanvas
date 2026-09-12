@@ -1,4 +1,5 @@
-export function createWorkspaceManager({ app, store, applyChange, element, button, message, dispatch, hasLegacy, legacyError }) {
+import { createWorkspaceSwitcher } from "./workspace-switcher.js";
+export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message, dispatch, hasLegacy, legacyError }) {
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
   const heading = element("h2"), header = element("header", "dialog-header");
   heading.id = "workspace-manager-title"; dialog.setAttribute("aria-labelledby", heading.id);
@@ -6,7 +7,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const close = button("×", cancel, "dialog-close"); close.setAttribute("aria-label", "Close");
   header.append(heading, add, close);
   const intro = element("p", "workspace-intro"), filter = element("input", "workspace-filter");
-  filter.type = "search"; filter.placeholder = "Search"; filter.setAttribute("aria-label", "Search workspaces and layouts");
+  filter.type = "search"; filter.placeholder = "Search"; filter.setAttribute("aria-label", "Search workspaces");
   filter.addEventListener("input", () => send({ type: "filter", query: filter.value }));
   const list = element("div", "workspace-list"); list.setAttribute("role", "listbox");
   const error = element("p", "workspace-error"), footer = element("footer");
@@ -14,22 +15,23 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const retry = button("Retry", () => send({type:"retry"})); retry.hidden = true;
   footer.append(button("Cancel", cancel), retry, primary); dialog.append(header, intro, filter, list, error, footer);
   document.body.append(dialog, formDialog);
-  const switcher = element("div", "workspace-switcher"); switcher.setAttribute("role", "group"); switcher.setAttribute("aria-label", "Workspaces");
-  document.querySelector("#document-title").after(switcher);
+  const switcher = createWorkspaceSwitcher({dialog, list, element, button, icon, send, getView:() => view,
+    redraw:() => { lastView = null; render(); }});
   const recoveryButton = button("Workspace save failed…", () => { dismissedError = null; showRecovery(view.error); }, "workspace-recovery");
-  recoveryButton.hidden = true; switcher.after(recoveryButton);
-  const switches = new Map();
+  recoveryButton.hidden = true; switcher.root.after(recoveryButton);
+  let switcherRevision;
   let view, lastView, pageKey, rowsKey, formKey, timer, formName, formSource, formError, formSubmit, previousFocus, observePending = false;
   const expectedCloses = new WeakMap();
   const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("capycanvas.workspace.windows") : null;
   channel?.addEventListener("message", e => {
+    if (e.data?.switcher) send({type:"refresh_switcher"});
     if (e.data?.focus === view?.id) { window.focus(); document.title = `CapyCanvas — ${view.name}`; }
   });
   function send(input) {
     try { applyChange(app.workspace_input(JSON.stringify(input))); render(); tick(); }
     catch (e) { message(e); }
   }
-  function cancel() { send({ type: "cancel" }); }
+  function cancel() { switcher.cancel(); send({ type: "cancel" }); }
   for (const node of [dialog, formDialog]) {
     node.addEventListener("cancel", e => { e.preventDefault(); cancel(); });
     node.addEventListener("close", () => {
@@ -48,24 +50,24 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if (!view) return;
     recoveryButton.hidden = !view.error;
     if (!view.error) { dismissedError = null; if (recovery?.open) recovery.close(); }
-    for (const row of view.defaults) {
-      let node = switches.get(row.id);
-      if (!node) { node = button("", () => send({type:"switch",id:row.id})); node.append(element("span")); node.dataset.workspaceId = row.id; switches.set(row.id,node); switcher.append(node); }
-      node.firstElementChild.textContent = row.title; node.title = `Switch to ${row.title} workspace`;
-      node.setAttribute("aria-pressed",String(row.id === view.id)); node.disabled = !view.ready || view.busy || !!view.page || !!view.form;
-    }
+    switcher.render(view);
+    if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel?.postMessage({switcher:true});
+    switcherRevision = view.switcher_revision;
     if (view.focus_window) { channel?.postMessage({ focus: view.focus_window }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
     if (view.page !== pageKey) { pageKey = view.page; filter.value = ""; list.scrollTop = 0; }
+    filter.setAttribute("aria-label", view.page === "history" ? "Search layout history" : "Search workspaces");
     heading.textContent = view.title; intro.textContent = view.intro; intro.hidden = !view.intro;
-    add.hidden = view.page === "history"; add.disabled = view.busy;
+    add.hidden = view.page === "history"; add.disabled = view.busy || view.switcher_busy;
     add.setAttribute("aria-label", "New Workspace");
-    primary.textContent = view.primary; primary.disabled = view.busy || !view.enabled;
+    primary.textContent = view.primary; primary.disabled = view.busy || view.switcher_busy || !view.enabled;
     retry.hidden = !view.retry; retry.disabled = view.busy;
-    error.textContent = view.error || ""; error.hidden = !view.error;
-    if (JSON.stringify(view.rows) !== rowsKey) {
-      const focusedId = list.contains(document.activeElement) ? document.activeElement.dataset.id : null;
+    error.textContent = view.switcher_error || view.error || ""; error.hidden = !error.textContent;
+    const newRowsKey = JSON.stringify([view.page, view.rows, view.switcher.map(row => row.id), view.id]);
+    if (newRowsKey !== rowsKey && !switcher.dragging()) {
+      const focusedId = document.activeElement.closest?.(".workspace-row")?.dataset.id;
+      switcher.closeMenu();
       const scroll = list.scrollTop;
-      rowsKey = JSON.stringify(view.rows); list.replaceChildren();
+      rowsKey = newRowsKey; list.replaceChildren();
       for (const row of view.rows) {
         const container = element("div", "workspace-row"), select = button("", () => send({ type: "select", id: row.id }), "workspace-choice");
         select.dataset.id = row.id; select.setAttribute("role", "option");
@@ -73,15 +75,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
         if (row.subtitle) select.append(element("span", "workspace-row-subtitle", row.subtitle));
         // Enter/double-click invoke only selection, never the confirmation button.
         container.append(select);
-        if (row.options) {
-          const options = element("details", "workspace-options"), summary = element("summary", "", "⋮");
-          summary.setAttribute("aria-label", `Options for ${row.title}`);
-          const menu = element("div", "workspace-row-menu");
-          for (const [kind, label] of [["rename", "Rename…"], ...(row.delete ? [["delete", "Delete…"]] : [])]) menu.append(button(label, () => {
-            options.open = false; send({ type: "form", kind, id: row.id });
-          }));
-          options.append(summary, menu); container.append(options);
-        }
+        if (view.page === "workspaces") switcher.decorate(container, select, row, view);
         list.append(container);
       }
       if (focusedId) [...list.querySelectorAll('.workspace-choice')].find(node=>node.dataset.id===focusedId)?.focus({preventScroll:true});
@@ -107,7 +101,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
         footer.append(button("Cancel", cancel), formSubmit); formDialog.append(formError, footer);
       }
     }
-    if (form) { formError.textContent = view.error || ""; formSubmit.disabled = view.busy; formSubmit.textContent = view.retry && form.kind !== "recover" ? "Retry" : form.confirm; }
+    if (form) { formError.textContent = view.error || ""; formSubmit.disabled = view.busy || view.switcher_busy; formSubmit.textContent = view.retry && form.kind !== "recover" ? "Retry" : form.confirm; }
     show(dialog, !!view.page); show(formDialog, !!form);
     if (!view.page && !form && view.error) showRecovery(view.error);
   }
@@ -137,9 +131,10 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   app.workspace_start(store.execute, JSON.stringify(owner), hasLegacy, legacyError);
   timer = setInterval(tick, 100); tick();
   document.addEventListener("visibilitychange", () => send({ type: document.hidden ? "suspend" : "resume" }));
+  window.addEventListener("focus", () => send({type:"refresh_switcher"}));
   window.addEventListener("pagehide", () => send({ type: "suspend" }));
   window.addEventListener("pageshow", () => send({ type: "resume" }));
-  window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy || view?.switcher_busy) { e.preventDefault(); e.returnValue = ""; } });
   return {
     observe() { observePending = true; },
     send,

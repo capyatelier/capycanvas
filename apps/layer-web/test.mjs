@@ -1,4 +1,5 @@
 import {checkDragPickup} from "./drag-pickup.test.mjs";
+import {checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
@@ -221,6 +222,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace-windows")) {
     await checkWorkspaceWindows({call,evaluate});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--workspace-switcher")) {
+    await checkWorkspaceSwitcher({call,evaluate,settle,reload});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--workspace-manager")) {
     await checkWorkspaceManager({call,evaluate,settle,reload});

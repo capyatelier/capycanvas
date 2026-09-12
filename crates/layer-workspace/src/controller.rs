@@ -79,6 +79,11 @@ pub struct WorkspaceView {
     pub error: Option<String>,
     pub focus_window: Option<String>,
     pub defaults: Vec<WorkspaceRow>,
+    pub switcher: Vec<WorkspaceRow>,
+    pub order: Vec<String>,
+    pub switcher_busy: bool,
+    pub switcher_error: Option<String>,
+    pub switcher_revision: u64,
 }
 #[derive(Clone, Serialize)]
 pub struct WorkspaceForm {
@@ -114,6 +119,10 @@ pub enum WorkspaceInput {
     Switch {
         id: String,
     },
+    EditSwitcher {
+        edit: SwitcherEdit,
+    },
+    RefreshSwitcher,
     Retry,
     Suspend,
     Close,
@@ -129,6 +138,9 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     pub manager: Rc<WorkspaceManager<S>>,
     pub view: WorkspaceView,
     task: Option<Task<Outcome>>,
+    preferences: Option<Task<()>>,
+    preferences_edited: bool,
+    refresh_preferences: bool,
     incoming: Option<StoredEntity>,
     incoming_renew: Option<Task<StoredEntity>>,
     queued: Option<WorkspaceInput>,
@@ -175,6 +187,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             manager: Rc::new(manager),
             view: Default::default(),
             task: None,
+            preferences: None,
+            preferences_edited: false,
+            refresh_preferences: false,
             incoming: None,
             incoming_renew: None,
             queued: None,
@@ -223,6 +238,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 m.migrate_legacy_capture(&source, legacy, now).await?;
             }
             m.initialize_catalog(now).await?;
+            m.refresh_switcher().await?;
             let resume = m
                 .store
                 .execute(StoreRequest::Binding {
@@ -296,6 +312,23 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 subtitle: String::new(),
                 options: false,
                 delete: false,
+            })
+            .collect();
+        self.view.order = self.manager.workspace_ids();
+        let items = self.manager.items();
+        self.view.switcher = self
+            .manager
+            .switcher_ids()
+            .into_iter()
+            .filter_map(|id| {
+                let item = items.iter().find(|item| item.id == id)?;
+                Some(WorkspaceRow {
+                    id,
+                    title: item.metadata.name.clone(),
+                    subtitle: String::new(),
+                    options: false,
+                    delete: false,
+                })
             })
             .collect();
         let page = self.view.page.as_deref();
@@ -449,7 +482,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             return self.input(session, WorkspaceInput::Retry, now);
         }
-        if !matches!(input, WorkspaceInput::Resume) {
+        if !matches!(
+            input,
+            WorkspaceInput::Resume
+                | WorkspaceInput::RefreshSwitcher
+                | WorkspaceInput::EditSwitcher { .. }
+        ) {
             self.view.error = if matches!(input, WorkspaceInput::Cancel) {
                 self.manager.error().map(|error| error.to_string())
             } else {
@@ -459,6 +497,23 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.focus_window = None;
         let mut change = UiChange::default();
         match input {
+            WorkspaceInput::EditSwitcher { edit } => {
+                if !self.view.ready
+                    || self.preferences.is_some()
+                    || self.task.is_some()
+                    || self.incoming.is_some()
+                {
+                    return Err(StoreError::invalid(
+                        "Wait for the current workspace operation to finish.",
+                    ));
+                }
+                self.view.switcher_error = None;
+                self.preferences_edited = true;
+                let manager = self.manager.clone();
+                self.preferences =
+                    Some(Task::new(async move { manager.edit_switcher(edit).await }));
+            }
+            WorkspaceInput::RefreshSwitcher => self.refresh_preferences = true,
             WorkspaceInput::Cancel => {
                 self.queued = None;
                 change = self.stop_preview(session);
@@ -490,6 +545,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 session.set_workspace_read_only(true);
                 self.close_after_task = false;
                 self.last_renew = 0;
+                self.refresh_preferences = true;
             }
             WorkspaceInput::Select { id } => {
                 if self.view.page.is_some() && self.view.form.is_none() {
@@ -555,6 +611,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         let m = self.manager.clone();
                         self.task = Some(Task::new(async move {
                             m.refresh().await?;
+                            m.refresh_switcher().await?;
                             Ok(Outcome::Done)
                         }));
                     }
@@ -745,6 +802,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
         }
         self.rows(now);
+        self.view.switcher_busy = self.preferences.is_some();
         self.view.busy = self.task.is_some() || self.incoming.is_some();
         Ok(change)
     }
@@ -753,6 +811,37 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let mut presentation_changed = false;
         if !self.view.ready {
             session.set_workspace_read_only(true);
+        }
+        // App preferences run independently of layout previews and workspace
+        // publication. Their acknowledgement must not select/reload a row.
+        if let Some(result) = self.preferences.as_mut().and_then(Task::poll) {
+            self.preferences = None;
+            presentation_changed = true;
+            match result {
+                Ok(()) => {
+                    self.view.switcher_error = None;
+                    if self.preferences_edited {
+                        self.view.switcher_revision = self.view.switcher_revision.wrapping_add(1);
+                    }
+                    self.pending_binding = self.manager.binding();
+                }
+                Err(error) => self.view.switcher_error = Some(error.to_string()),
+            }
+            self.preferences_edited = false;
+        }
+        if self.refresh_preferences
+            && self.view.ready
+            && !self.terminating
+            && self.task.is_none()
+            && self.incoming.is_none()
+            && self.preferences.is_none()
+        {
+            self.refresh_preferences = false;
+            let manager = self.manager.clone();
+            self.preferences = Some(Task::new(async move {
+                manager.refresh().await?;
+                manager.refresh_switcher().await
+            }));
         }
         if let Some(result) = self.task.as_mut().and_then(Task::poll) {
             self.task = None;
@@ -957,6 +1046,22 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         if presentation_changed {
             self.rows(now);
+            if self.view.page.as_deref() == Some("workspaces")
+                && self
+                    .view
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| !self.view.rows.iter().any(|row| &row.id == id))
+            {
+                match self.select(session, None) {
+                    Ok(c) => {
+                        change.regions |= c.regions;
+                        change.canvas_wake |= c.canvas_wake;
+                        change.revision = change.revision.max(c.revision);
+                    }
+                    Err(error) => self.view.error = Some(error.to_string()),
+                }
+            }
         }
         // Autosave acknowledgements do not change menus. Reconfiguring them
         // during a resize refreshes command state and invalidates retained tool
@@ -976,6 +1081,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
             }
         }
+        self.view.switcher_busy = self.preferences.is_some();
         self.view.busy = self.task.is_some() || self.incoming.is_some();
         self.view.dirty = self.manager.dirty();
         self.view.retry = self.view.error.is_some()

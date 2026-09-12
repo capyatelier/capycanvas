@@ -424,3 +424,69 @@ fn closing_before_adoption_drains_claims_and_unreadable_legacy_stays_intact() {
         "Unrecognized legacy data must not be replaced with defaults"
     );
 }
+
+#[test]
+fn switcher_edits_preserve_pending_preview_and_workspace_contents() {
+    let mut f = Fixture::new();
+    let original = f.controller.manager.current_record().unwrap();
+    let [painter, illustrator, photographer] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
+    assert_eq!(
+        f.controller
+            .view
+            .switcher
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect::<Vec<_>>(),
+        [&painter, &illustrator, &photographer]
+    );
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    let (release, gate) = async_channel::bounded(1);
+    *f.backend.load_gate.borrow_mut() = Some(gate);
+    f.input(serde_json::json!({"type":"select","id":painter}));
+    assert!(!f.controller.view.enabled);
+    f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":photographer,"visible":false}}));
+    f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"move","id":photographer,"before":painter}}));
+    assert_eq!(f.controller.view.selected.as_ref(), Some(&painter));
+    assert!(
+        !f.controller.view.enabled,
+        "preference acknowledgement must not restart a pending preview"
+    );
+    assert_eq!(f.controller.view.order[0], photographer);
+    assert_eq!(f.controller.view.switcher.len(), 2);
+    assert_eq!(f.controller.view.switcher_revision, 2);
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    release.try_send(()).unwrap();
+    f.pump();
+    let preview = f.host.session.state().workspace.layout.clone();
+    assert!(f.controller.view.enabled);
+    // Another window updates app preferences without claiming this workspace.
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    pollster::block_on(other.edit_switcher(SwitcherEdit::Move {
+        id: illustrator.clone(),
+        before: Some(painter.clone()),
+    }))
+    .unwrap();
+    f.input(serde_json::json!({"type":"refresh_switcher"}));
+    assert_eq!(f.controller.view.switcher[0].id, illustrator);
+    assert_eq!(
+        f.controller.view.switcher_revision, 2,
+        "refresh must not broadcast another edit"
+    );
+    assert_eq!(f.controller.view.selected.as_ref(), Some(&painter));
+    assert_eq!(f.host.session.state().workspace.layout, preview);
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"move","id":"missing","before":null}}));
+    assert!(f.controller.view.switcher_error.is_some());
+    assert!(
+        f.controller.view.error.is_none(),
+        "preference failures are separate from workspace saves"
+    );
+    assert_eq!(f.host.session.state().workspace.layout, preview);
+    f.input(serde_json::json!({"type":"cancel"}));
+    assert_eq!(f.controller.view.switcher[0].id, illustrator);
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    assert_eq!(
+        f.host.session.state().workspace.layout,
+        *original.entity.capture().unwrap().history.layout()
+    );
+}

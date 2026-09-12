@@ -58,7 +58,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["workspace-store.js","workspace-manager.js","system-status.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "pkg/layer_web.js", "app.js"];
+  const modules = ["workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -72,7 +72,8 @@ export function fingerprintAssets(directory) {
   });
   publish("style.css", css);
   publish("workspace-store.js");
-  publish("workspace-manager.js");
+  publish("workspace-switcher.js");
+  publish("workspace-manager.js", replaceRequired(read(join(directory, "workspace-manager.js")), 'from "./workspace-switcher.js"', `from "./${names["workspace-switcher.js"]}"`));
   publish("system-status.js");
   publish("editor-panels.js");
   publish("workspace-chrome.js");
@@ -90,7 +91,7 @@ export function fingerprintAssets(directory) {
     worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);
   publish("workspace-worker.js", worker);
   let app = read(join(directory, "app.js"));
-  for (const path of modules.slice(0, -1))
+  for (const path of modules.slice(0, -1).filter(path => path !== "workspace-switcher.js"))
     app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
   const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews|filters)\//.test(path) || path === "workspace-worker.js"));
   app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
@@ -156,7 +157,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["app.js", "workspace-worker.js", "workspace-store.js", "workspace-manager.js", "system-status.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "style.css"])
+    for (const path of ["app.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));

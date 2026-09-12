@@ -1421,7 +1421,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
-  workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
+  workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   update(255);
   systemStatus.sync();
   $("status").textContent = "";
