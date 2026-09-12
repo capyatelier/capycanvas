@@ -36,6 +36,11 @@ a hardware adapter. Captures wait for staged GPU startup, fonts/images, visible
 layer thumbnail pixels and layout. GPU attachment alone can precede the actual
 preview readbacks; a fixed delay is insufficient for a settled reference.
 The native scenario must use the same theme, document, workspace and camera.
+Full-editor capture also waits for workspace ownership before dispatching setup
+actions, then checks stable layout/camera measurements and rejects application
+error/status messages. An earlier reference dispatched while ownership was still
+loading and displayed a recovery message; it is retained locally as an invalid
+fixture, not a parity result.
 
 For Windows, use the native `capture-editor.ps1` fixture documented in
 [the Windows host notes](../../apps/layer-windows/README.md#matched-editor-captures),
@@ -195,7 +200,11 @@ evidence. Captures can include system corner backgrounds; keep artifacts local.
 
 The focused Apple `EditorLaunchTests/testCompleteEditorCapture` test attaches
 `complete-editor-initial` and `complete-editor-geometry-initial` on either target. It uses
-a fresh light-theme workspace and waits for the canvas and live Navigator.
+a fresh isolated production workspace library, verifies all three workspace
+segments with Illustrator selected, and waits for the canvas and live Navigator.
+The same setup is used by `testEditorControlLayout` and `testNumericToolControls`.
+Older persistence-disabled captures omitted the workspace switcher and do not
+establish complete current-header parity.
 Compare its exported native screenshot with a matching Chrome `initial` capture:
 
 ```sh
@@ -223,6 +232,15 @@ exploratory reports reproducible; broad thresholds do not establish editor parit
 Document any narrowly justified text/shadow/system-control accommodation and
 retain full-image error reports. Keep screenshots and reports in ignored artifacts,
 especially captures or test bundles that may contain personal device metadata.
+
+The current 13-inch iPad simulator pair uses a 1376×1032-point viewport at 2×.
+Full raw differences are 5.818% of pixels initially and 6.367% after four Zoom In
+steps place the canvas behind the header; mean absolute channel errors are
+1.372/1.451 levels, with maxima 255. Exact comparison fails. Color controls,
+icons/text and header/fullscreen differences remain visible, without masks or
+rescaling. The associated UIKit workflows pass numeric expression/correction,
+inactive-tab readback, brush-setting retention, layer blend and Undo checks.
+These simulator results do not establish physical iPad or Mac acceptance.
 
 Raw `simctl io screenshot` images may retain the device's portrait raster while
 the editor is landscape, without an EXIF orientation tag. Inspect the original

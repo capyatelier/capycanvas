@@ -151,7 +151,7 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testCompleteEditorCapture() {
         XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
         captureDefaultEditor(in: app)
@@ -159,7 +159,7 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testEditorControlLayout() {
         XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
         checkEditorControlLayout(in: app)
@@ -167,7 +167,7 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testNumericToolControls() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
         checkNumericToolControls(in: app)

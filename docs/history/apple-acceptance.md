@@ -76,6 +76,36 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Current workspace UIKit workflows and full-editor references — 2026-09-12
+
+Full-editor/control-layout/numeric fixtures on both Apple targets now create an
+isolated production workspace library. They verify all three workspace segments
+with Illustrator selected. The earlier persistence-disabled fixture omitted
+those controls. The numeric workflow now mounts the Brush size tab before using
+its independent readout, preserving the invalid-expression value check instead
+of querying an inactive panel.
+
+Both focused UIKit workflows pass in a disposable 13-inch iPad simulator on
+iOS 26.5: numeric expressions/correction, tab-switch readback, brush-setting
+retention, initial and canvas-under-header capture, layer blend and Undo. The
+Mac and physical iPad test targets also compile; they were not executed. Existing
+Mac/iPad sessions were preserved, and the disposable simulator was removed.
+The drawing runtime remains at the preceding signed numeric-control milestone.
+
+The current web reference initially raced workspace ownership and showed a
+recovery message. That fixture is rejected and retained locally. Chrome now
+waits for ownership before setup actions, stable layout/camera and visible
+previews before capture, and rejects application error/status messages. Both
+corrected full references pass those checks at 1376×1032 logical points and 2×.
+
+Exact full-image comparison still fails: initial/header scenarios differ at
+5.818%/6.367% of pixels, with mean channel errors 1.372/1.451 and maxima 255.
+Color controls, icons/text and header/fullscreen differences remain unmasked.
+Reproduction is in the [visual guide](../../tools/visual/README.md#full-editor-captures).
+This checkpoint establishes current simulator workflows and comparison fixtures,
+not physical UIKit/Mac visual or input acceptance. Full feature/lifecycle and
+sustained Mac 90 Hz / iPad 120 Hz gates remain open. Save/Load Layout is excluded.
+
 ## Shared numeric-control geometry and unit display — 2026-09-12
 
 The shared Apple number control now truncates labels without wrapping or hiding

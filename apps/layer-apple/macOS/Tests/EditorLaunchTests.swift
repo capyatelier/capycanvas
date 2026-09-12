@@ -155,7 +155,7 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testCompleteEditorCapture() {
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
@@ -163,7 +163,7 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testEditorControlLayout() {
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
@@ -171,7 +171,7 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testNumericToolControls() throws {
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-AppleInterfaceStyle", "Light"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()

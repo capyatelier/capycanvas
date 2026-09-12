@@ -79,6 +79,19 @@ try {
     assert.deepEqual(errors,[]);
   } else {
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp&&document.body.dataset.gpu==='ready')resolve(true);else if(performance.now()-start>25000)reject(new Error(document.querySelector('#gpu-notice')?.textContent||'GPU startup timeout'));else setTimeout(check,100);}check();})`);
+  // GPU attachment can precede the asynchronous workspace lease. Dispatching
+  // theme/layout actions while the session is read-only creates a recovery
+  // message and an invalid reference even if storage later finishes normally.
+  await evaluate(`new Promise((resolve,reject)=>{
+    const start=performance.now();
+    function check(){
+      const workspace=JSON.parse(layerApp.app.workspace_view());
+      if(workspace?.error)reject(new Error(workspace.error));
+      else if(workspace?.ready&&!workspace.busy)resolve(true);
+      else if(performance.now()-start>25000)reject(new Error('Workspace ownership did not settle'));
+      else setTimeout(check,50);
+    }check();
+  })`);
   if (scenario === 'windows-editor') {
     await captureWindowsEditor({manifest:JSON.parse(await readFile(fixturePath,'utf8')),output,evaluate,call});
     assert.deepEqual(errors,[]);
@@ -109,16 +122,25 @@ try {
     // fixed delay can capture empty previews and produce a misleading diff.
     await evaluate(`new Promise((resolve,reject)=>{
       const start=performance.now();
+      let previous,stable=0;
       function check(){
         const previews=[...document.querySelectorAll('.layer-thumbnail canvas')].filter(c=>{
           const r=c.getBoundingClientRect(); return r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight;
         });
         const ready=previews.every(c=>c.getContext('2d').getImageData(0,0,c.width,c.height).data.every((v,i)=>i%4!==3||v===255));
-        if(layerApp.startupTimes.complete!==null&&ready) requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)));
+        const state=layerApp.state();
+        const signature=JSON.stringify([layerApp.app.layout(innerWidth,innerHeight),state.workspace.layout.measurements,state.camera],(_,v)=>typeof v==='bigint'?v.toString():v);
+        stable=signature===previous?stable+1:0;previous=signature;
+        const workspace=JSON.parse(layerApp.app.workspace_view());
+        if(workspace?.error)reject(new Error(workspace.error));
+        else if(layerApp.startupTimes.complete!==null&&ready&&stable>=3&&workspace?.ready&&!workspace.busy) requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)));
         else if(performance.now()-start>25000) reject(new Error('Staged GPU startup or visible thumbnails did not settle'));
         else setTimeout(check,100);
       } check();
     })`);
+    const health=await evaluate(`({workspace:JSON.parse(layerApp.app.workspace_view()),status:document.getElementById('status').textContent.trim()})`);
+    assert.equal(health.workspace.ready,true);assert.equal(health.workspace.error,null);
+    assert.equal(health.status,'','A capture with an application error/status message is not a settled reference');
     const shot = await call('Page.captureScreenshot', {format:'png', fromSurface:true});
     const png = Buffer.from(shot.data, 'base64');
     assert.equal(png.readUInt32BE(16), Math.round(width * scale)); assert.equal(png.readUInt32BE(20), Math.round(height * scale));

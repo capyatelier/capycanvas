@@ -473,6 +473,13 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
 Choose a fresh result-bundle path for subsequent runs. The capture checks that
 the default controls exist and waits for the Metal canvas and live Navigator.
 It attaches the full landscape screen on iPad or the editor window on Mac.
+Full-editor, control-layout and numeric workflows use a private UUID namespace
+with the real workspace library, retaining all three task-workspace segments.
+The numeric workflow selects the Brush size tab before inspecting its independent
+readout; the current default layout groups that panel with Tool Settings.
+Both focused UIKit workflows pass on the 13-inch iPad simulator. Matching full
+Chrome captures still fail exact pixel parity; see the
+[full-editor comparison](../../tools/visual/README.md#full-editor-captures).
 It does not measure drawable presentation or prove full visual/functional parity.
 Physical input and hardware performance acceptance are required on each platform.
 Replace the final test method with `testNumericToolControls` for the focused

@@ -14,6 +14,15 @@ extension XCTestCase {
         return app
     }
 
+    /// Full-editor fixtures must include the production workspace service and
+    /// switcher. A fresh private namespace isolates preferences/history per test.
+    @MainActor func editorCaptureApplication() -> XCUIApplication {
+        let app = editorTestApplication()
+        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
+        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
+        return app
+    }
+
     @MainActor func checkSettingsAndWorkspaceRestart(in app: XCUIApplication) {
         app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
         app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString

@@ -6,6 +6,13 @@ extension XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
+        if app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] != nil {
+            for name in ["painter", "illustrator", "photographer"] {
+                let workspace = app.buttons["workspace-switch-builtin:workspace:" + name]
+                XCTAssertTrue(workspace.waitForExistence(timeout: 10), "Full captures require every workspace segment")
+                XCTAssertEqual(workspace.isSelected, name == "illustrator")
+            }
+        }
         for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "navigator", "properties", "layers"] {
             let control = panel == "toolbar" || panel == "commands"
                 ? app.descendants(matching: .any)["toolbar-options-" + panel].firstMatch
@@ -100,8 +107,13 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "value BEGINSWITH %@", "42"), evaluatedWith: value)
         waitForExpectations(timeout: 5)
         let sizePanel = app.buttons["number-value-Brush size"]
+        // Tool and Brush size share one tab group in the current default layout.
+        // Inspect the independent readout only after mounting its actual tab.
+        activate(app.buttons["panel-tab-sizes"])
+        XCTAssertTrue(sizePanel.waitForExistence(timeout: 5))
         XCTAssertTrue((sizePanel.value as? String)?.hasPrefix("42") == true,
             "Tool Settings and Brush size must reflect the same accepted Rust edit")
+        activate(app.buttons["panel-tab-tool_settings"])
         activate(app.buttons["number-increase-tool-size"])
         expectation(for: NSPredicate { _, _ in (value.value as? String)?.hasPrefix("42") == false }, evaluatedWith: value)
         waitForExpectations(timeout: 5)
@@ -110,7 +122,15 @@ extension XCTestCase {
         entry.typeText("1 / 0\n")
         let error = app.staticTexts["number-error-tool-size"]
         XCTAssertTrue(error.waitForExistence(timeout: 5))
+        activate(app.buttons["panel-tab-sizes"])
+        XCTAssertTrue(sizePanel.waitForExistence(timeout: 5))
         XCTAssertEqual(sizePanel.value as? String, accepted, "An invalid expression must preserve brush size")
+        activate(app.buttons["panel-tab-tool_settings"])
+        // Changing tabs retires the draft. Re-enter an invalid expression to
+        // check Escape/correction independently of that view-lifecycle behavior.
+        activate(value)
+        entry.typeText("1 / 0\n")
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
         #if os(macOS)
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         expectation(for: NSPredicate(format: "exists == NO"), evaluatedWith: error)
