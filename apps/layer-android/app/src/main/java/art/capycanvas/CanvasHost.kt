@@ -60,7 +60,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (text != workspaceManagerKey && text != "null") {
             workspaceManagerKey = text
             val view = JSONObject(text)
-            main.post { workspaceManager = view }
+            main.post {
+                val revision = workspaceManager?.optLong("switcher_revision")
+                workspaceManager = view
+                if (revision != null && revision != view.optLong("switcher_revision")) MainActivity.workspaceSwitcherChanged(this)
+            }
         }
     }
     internal fun workspaceInput(request: JSONObject) = post {

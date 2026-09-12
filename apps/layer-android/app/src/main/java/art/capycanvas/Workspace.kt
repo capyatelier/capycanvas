@@ -383,6 +383,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val colors = LocalPalette.current
     BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).chromeRegion(dock).background(colors.surround).padding(6.dp)) {
         val showTitle = maxWidth >= 1100.dp
+        val switcherWidth = (maxWidth * .45f).coerceAtMost(480.dp)
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.size(36.dp))
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -414,7 +415,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Android always uses an immersive fullscreen workspace.
-            WorkspaceSwitcher(host)
+            WorkspaceSwitcher(host, Modifier.widthIn(max = switcherWidth))
             if (state.getJSONObject("settings").optString("show_clock") != "never") SystemStatus()
             IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip"), modifier = Modifier.testTag("header-settings")) { host.invoke("settings") }
         }

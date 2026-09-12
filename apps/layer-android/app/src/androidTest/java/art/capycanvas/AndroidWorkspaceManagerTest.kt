@@ -41,7 +41,7 @@ class AndroidWorkspaceManagerTest {
         assertNull(host.failure)
     }
     private fun idle() {
-        compose.waitUntil(15000) { host.workspaceManager?.let { !it.optBoolean("busy") && !it.optBoolean("dirty") } == true }
+        compose.waitUntil(15000) { host.workspaceManager?.let { !it.optBoolean("busy") && !it.optBoolean("switcher_busy") && !it.optBoolean("dirty") } == true }
         compose.waitForIdle()
         assertTrue(view().isNull("error"))
     }
@@ -55,7 +55,13 @@ class AndroidWorkspaceManagerTest {
         scenario.onActivity { host.workspaceInput(value) }
         Thread.sleep(300); compose.waitForIdle()
     }
-    private fun tap(tag: String) { compose.onNodeWithTag(tag, useUnmergedTree = true).performTouchInput { click() }; Thread.sleep(250); compose.waitForIdle() }
+    private fun tap(tag: String) {
+        val node = compose.onNodeWithTag(tag, useUnmergedTree = true)
+        if (tag.startsWith("workspace-switch-")) {
+            idle(); node.performScrollTo(); compose.waitForIdle(); node.assertIsEnabled().assertIsDisplayed()
+        }
+        node.performTouchInput { click() }; Thread.sleep(250); compose.waitForIdle()
+    }
     private fun menu(label: String) {
         tap("application-menu-window")
         compose.onNodeWithText("Workspaces", useUnmergedTree = true).performTouchInput { click() }
@@ -140,7 +146,12 @@ class AndroidWorkspaceManagerTest {
         assertEquals("Tablet Inking", view().getString("name"))
         for (row in view().array("defaults").objects()) {
             val id = row.getString("id")
+            shot("before-header-switch")
             tap("workspace-switch-$id"); idle()
+            if (id != view().getString("id")) {
+                shot("header-switch-failure")
+                File(instrumentation.targetContext.getExternalFilesDir(null), "validation/workspaces/header-switch-failure.json").writeText(view().toString())
+            }
             assertEquals(id, view().getString("id"))
             compose.onNodeWithTag("workspace-switch-$id").assertIsSelected()
         }

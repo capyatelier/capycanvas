@@ -19,6 +19,12 @@ import androidx.core.view.WindowInsetsControllerCompat
 class MainActivity : ComponentActivity() {
     companion object {
         private val windows = mutableListOf<WeakReference<MainActivity>>()
+        internal fun workspaceSwitcherChanged(source: CanvasHost) {
+            windows.removeAll { it.get() == null }
+            windows.mapNotNull { it.get()?.host }.distinct().filter { it !== source }.forEach {
+                it.workspaceInput(obj("type" to "refresh_switcher"))
+            }
+        }
         internal fun focusWorkspace(id: String): Boolean {
             windows.removeAll { it.get() == null }
             val activity = windows.firstNotNullOfOrNull { it.get()?.takeIf { a -> a.host.workspaceManager?.optString("id") == id } } ?: return false
@@ -77,7 +83,10 @@ class MainActivity : ComponentActivity() {
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) enterFullscreen() else host.input(obj("type" to "blur"))
+        if (hasFocus) {
+            enterFullscreen()
+            host.workspaceInput(obj("type" to "refresh_switcher"))
+        } else host.input(obj("type" to "blur"))
     }
 }
 
