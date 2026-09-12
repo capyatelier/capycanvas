@@ -463,6 +463,201 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun toolbarDrawersSwitchToolsOnFirstTap() {
+        val originalPreset = state().getJSONObject("brush").getInt("preset")
+        val toolCommands = setOf("pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify",
+            "lasso", "move", "hand", "eyedropper", "gradient", "figure", "ruler", "auto_select", "fill")
+        val originalTool = state().array("commands").objects().firstOrNull {
+            it.optBoolean("selected") && it.getString("id") in toolCommands
+        }?.getString("id")
+        val layout = fixture.getJSONObject("layout")
+        val ids = (0..2).map { layout.getInt("next_tile_id") + it }
+        layout.put("next_tile_id", ids.last() + 1)
+        layout.array("panels").objects().first { it.getString("id") == "toolbar" }.getJSONObject("content").put("tiles", JSONArray(ids.mapIndexed { i, id ->
+            obj("id" to id, "control" to if (i == 2) obj("kind" to "color") else obj("kind" to "command", "command" to if (i == 0) "brush" else "eraser"))
+        }))
+        fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
+        fun tag(i: Int) = "tile-toolbar-${ids[i]}"
+        fun click(i: Int, previous: Int? = null) {
+            event(MotionEvent.ACTION_DOWN, bounds(tag(i)).center)
+            SystemClock.sleep(40); instrumentation.waitForIdleSync()
+            try { if (previous != null) assertEquals("Press retains the previous drawer", ids[previous], drawer()?.getJSONObject("anchor")?.getInt("tile")) }
+            finally { event(MotionEvent.ACTION_UP) }
+            settle()
+        }
+        fun check(i: Int) {
+            waitFor("drawer moves to ${ids[i]}") { drawer()?.getJSONObject("anchor")?.optInt("tile") == ids[i] }
+            assertEquals(if (i == 2) 1 else 2, drawer()!!.array("columns").length())
+            if (i != 2) {
+                val command = if (i == 0) "brush" else "eraser"
+                assertEquals(command, state().getJSONObject("brush").getString("tool"))
+                assertTrue("New tool activates on the same tap", state().array("commands").objects().first { it.getString("id") == command }.getBoolean("selected"))
+            }
+            assertTrue(exists("tool-drawer"))
+        }
+        fun move(target: JSONObject) = action(obj("type" to "move_panel", "panel" to "toolbar", "target" to target,
+            "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
+        try {
+            restore()
+            for (edge in listOf("top", "bottom", "left", "right")) {
+                move(obj("kind" to "edge", "edge" to edge, "outer" to true))
+                action(obj("type" to "invoke", "command" to "pen"))
+                click(0); assertNull("Closed drawers still require selecting first", drawer())
+                click(0); check(0)
+                click(1, 0); check(1)
+                click(2, 1); check(2)
+                click(0, 2); check(0)
+                click(0); waitFor("current opener closes") { !exists("tool-drawer") }; assertNull(drawer())
+            }
+            move(obj("kind" to "tab", "group" to 41, "index" to null))
+            customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            tap(bounds("column-icon-toolbar").center); waitFor("nested toolbar") { exists(tag(2)) }; settle()
+            click(2); check(2); click(1, 2); check(1); click(0, 1); check(0)
+        } finally {
+            action(obj("type" to "select_brush", "id" to originalPreset))
+            originalTool?.let { action(obj("type" to "invoke", "command" to it)) }
+        }
+    }
+
+    @Test fun drawerButtonsAndBridgesKeepTheirColors() {
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val toolbar = fixture.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }
+        val tile = toolbar.getJSONObject("content").array("tiles").getJSONObject(0).getInt("id")
+        val alternateTile = fixture.getJSONObject("layout").getInt("next_tile_id")
+        fixture.getJSONObject("layout").put("next_tile_id", alternateTile + 1)
+        toolbar.getJSONObject("content").put("tiles", JSONArray(listOf(
+            obj("id" to tile, "control" to obj("kind" to "panel", "panel" to "color")),
+            obj("id" to alternateTile, "control" to obj("kind" to "panel", "panel" to "sizes")))))
+        val toolTag = "tile-toolbar-$tile"
+        val alternateToolTag = "tile-toolbar-$alternateTile"
+        fun moveToolbar(target: JSONObject) = action(obj("type" to "move_panel", "panel" to "toolbar", "target" to target,
+            "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
+        fun capture(name: String, check: (sample: (Offset) -> Int) -> Unit) {
+            // Wait for the native touch ripple to finish before checking resting colors.
+            SystemClock.sleep(700)
+            settle()
+            val image = instrumentation.uiAutomation.takeScreenshot()
+            val location = IntArray(2)
+            scenario.onActivity { owner.view.getLocationOnScreen(location) }
+            try {
+                val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/drawer-style-$name.png")
+                file.parentFile!!.mkdirs()
+                file.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                check { p -> image.getPixel((p.x + location[0]).toInt(), (p.y + location[1]).toInt()) }
+            } finally { image.recycle() }
+        }
+        fun checkJoin(source: String, drawer: String, name: String, panelColor: Int, selected: Boolean) {
+            val b = bounds(source); val d = bounds(drawer)
+            val horizontal = d.left >= b.right - density || d.right <= b.left + density
+            val positive = if (horizontal) d.left >= b.right - density else d.top >= b.bottom - density
+            val near = if (horizontal) (if (positive) b.right - density else b.left + density)
+                else (if (positive) b.bottom - density else b.top + density)
+            val middle = if (horizontal) Offset(near, b.center.y) else Offset(b.center.x, near)
+            val far = if (horizontal) Offset(if (positive) b.left + density else b.right - density, b.center.y)
+                else Offset(b.center.x, if (positive) b.top + density else b.bottom - density)
+            val corners = if (horizontal) listOf(Offset(near, b.top + density), Offset(near, b.bottom - density))
+                else listOf(Offset(b.left + density, near), Offset(b.right - density, near))
+            val bridge = if (horizontal) Offset(if (positive) (b.right + d.left) / 2 else (b.left + d.right) / 2, b.center.y)
+                else Offset(b.center.x, if (positive) (b.bottom + d.top) / 2 else (b.top + d.bottom) / 2)
+            capture(name) { sample ->
+                assertEquals("$name: connector is not darkened by the drawer shadow", panelColor, sample(bridge))
+                val fill = sample(middle)
+                if (selected) assertTrue("$name: open button is blue", android.graphics.Color.blue(fill) > android.graphics.Color.red(fill))
+                else assertEquals("$name: toolbar source is not darkened", panelColor, fill)
+                (corners + far).forEach { point ->
+                    val color = sample(point)
+                    assertTrue("$name: square source corners match its fill ($fill vs $color)", listOf(0, 8, 16).all {
+                        kotlin.math.abs((fill shr it and 255) - (color shr it and 255)) <= 1
+                    })
+                }
+            }
+        }
+        try { for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); restore()
+            val panelColor = android.graphics.Color.parseColor(if (theme == "light") "#ededed" else "#414141")
+            for ((column, panel) in listOf(41 to "brushes", 43 to "navigator")) {
+                customize(obj("type" to "set_column_collapsed", "group" to column, "collapsed" to true))
+                val tag = "column-icon-$panel"
+                fun checkClosed() {
+                    val b = bounds(tag)
+                    capture("$theme-closed-$column") { sample ->
+                        assertEquals("Closed column button is plain grey", panelColor, sample(Offset(b.center.x, b.top + 2 * density)))
+                    }
+                }
+                checkClosed(); tap(bounds(tag).center); waitFor("open drawer") { exists("column-drawer-$column") }; settle()
+                checkJoin(tag, "column-drawer-$column", "$theme-column-$column", panelColor, true)
+                val alternate = if (column == 41) "sizes" else "layers"
+                tap(bounds("drawer-tab-$alternate").center)
+                waitFor("drawer anchor follows tab") {
+                    state().getJSONObject("customization").array("column_drawers").objects().any {
+                        it.getJSONObject("anchor").getInt("column") == column && it.getJSONObject("anchor").getString("origin") == alternate
+                    }
+                }
+                settle()
+                checkJoin("column-icon-$alternate", "column-drawer-$column", "$theme-switched-column-$column", panelColor, true)
+                checkClosed()
+                tap(bounds("column-icon-$alternate").center); waitFor("close drawer") { !exists("column-drawer-$column") }; checkClosed()
+            }
+            for (edge in listOf("top", "bottom", "left", "right")) {
+                moveToolbar(obj("kind" to "edge", "edge" to edge, "outer" to true))
+                tap(bounds(toolTag).center); waitFor("toolbar drawer") { exists("tool-drawer") }; settle()
+                checkJoin(toolTag, "tool-drawer", "$theme-toolbar-$edge", panelColor, false)
+                tap(bounds(alternateToolTag).center); settle()
+                checkJoin(alternateToolTag, "tool-drawer", "$theme-toolbar-$edge-switched", panelColor, false)
+                tap(bounds(toolTag).center); settle()
+                checkJoin(toolTag, "tool-drawer", "$theme-toolbar-$edge-switched-back", panelColor, false)
+                tap(bounds(toolTag).center); waitFor("close toolbar drawer") { !exists("tool-drawer") }
+            }
+            moveToolbar(obj("kind" to "tab", "group" to 41, "index" to null))
+            tap(bounds("column-icon-toolbar").center); waitFor("toolbar column drawer") { exists(toolTag) }; settle()
+            tap(bounds(alternateToolTag).center); waitFor("nested drawer") { exists("tool-drawer") }; settle()
+            checkJoin(alternateToolTag, "tool-drawer", "$theme-nested-toolbar", panelColor, false)
+            tap(bounds(toolTag).center); settle()
+            checkJoin(toolTag, "tool-drawer", "$theme-nested-toolbar-switched", panelColor, false)
+        }
+            val layout = fixture.getJSONObject("layout")
+            val nextTile = layout.getInt("next_tile_id")
+            layout.put("next_tile_id", nextTile + 2).put("next_id", maxOf(48, layout.getInt("next_id")))
+            toolbar.getJSONObject("content").put("tiles", JSONArray(listOf(
+                obj("id" to tile, "control" to obj("kind" to "panel", "panel" to "color")),
+                obj("id" to nextTile, "control" to obj("kind" to "divider")),
+                obj("id" to nextTile + 1, "control" to obj("kind" to "panel", "panel" to "color")))))
+            fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+                "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon_name")
+            layout.array("bands").getJSONObject(0).put("root", obj("kind" to "split", "id" to 46,
+                "axis" to "vertical", "fraction" to .5, "first" to tabs(41, "brushes", "tool_settings"), "second" to tabs(47, "sizes")))
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme)); restore()
+                customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
+                assertEquals("Leading divider uses toolbar spacing below the expand button", 12 * density,
+                    bounds("column-icon-brushes").top - bounds("expand-column-46").bottom, 1f)
+                assertEquals("Collapsed group spacing matches toolbar divider and gaps", 12 * density,
+                    bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)
+                fun line(tag: String, horizontal: Boolean, name: String) {
+                    waitFor("divider layout $tag") {
+                        find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot?.let {
+                            kotlin.math.abs((if (horizontal) it.height else it.width) - 8 * density) < 1f
+                        } == true
+                    }
+                    val b = bounds(tag)
+                    assertEquals("Divider slot is 8dp", 8 * density, if (horizontal) b.height else b.width, 1f)
+                    capture("$theme-$name") { sample ->
+                        assertNotEquals("Divider line is visible", sample(b.center), sample(b.center +
+                            if (horizontal) Offset(0f, 2 * density) else Offset(2 * density, 0f)))
+                    }
+                }
+                line("column-divider-46-0", true, "column-divider")
+                line("column-divider-46-1", true, "column-group-divider")
+                line("tile-toolbar-$nextTile", false, "toolbar-divider-horizontal")
+                moveToolbar(obj("kind" to "edge", "edge" to "right", "outer" to true))
+                line("tile-toolbar-$nextTile", true, "toolbar-divider-vertical")
+                moveToolbar(obj("kind" to "tab", "group" to 41, "index" to null))
+                tap(bounds("column-icon-toolbar").center); waitFor("nested toolbar divider") { exists("tile-toolbar-$nextTile") }
+                line("tile-toolbar-$nextTile", true, "toolbar-divider-in-drawer")
+            }
+        } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+    }
+
     @Test fun drawerTabsKeepActiveColorsAndPadding() {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         try { for (theme in listOf("light", "dark")) {

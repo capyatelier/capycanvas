@@ -457,7 +457,7 @@ function arrange() {
       }
     }
     node.classList.toggle("floating-panel", group.floating);
-    node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "0";
+    node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "1";
     if (!node.classList.contains("expanded-panel")) node.style.zIndex = node.dataset.zIndex;
     place(node, group.bounds);
     node.style.setProperty("--panel-body-height", `${group.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0)}px`);

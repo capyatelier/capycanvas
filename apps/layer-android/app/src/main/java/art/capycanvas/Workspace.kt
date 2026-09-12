@@ -241,14 +241,16 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             layout.array("groups").objects().filter { !hidden || (it.optBoolean("floating") && !snapshot.optBoolean("hide_floating_panels")) }
                 .sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEachIndexed { index, group ->
                 key(group.getInt("id")) {
-                  val z = (if (group.optBoolean("floating")) 180 else 100) + index
+                  val source = dock.drawerSources.containsKey("tool") && group.getString("active") ==
+                      state.getJSONObject("customization").objectOrNull("drawer")?.getJSONObject("anchor")?.optString("panel")
+                  val z = if (source) 199 else (if (group.optBoolean("floating")) 180 else 100) + index
                   CompositionLocalProvider(LocalWorkspaceZ provides z) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }
                     val base = group.getJSONObject("bounds")
                     val shown = if (group.optBoolean("floating")) floatingBounds(base, dock.dragging, host, group.getInt("id")) else base
                     val bounds = expansion?.getJSONObject("bounds") ?: shown
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
-                        ?.let { expandedShape(it, density) } ?: RoundedCornerShape(8.dp)
+                        ?.let { expandedShape(it, density) } ?: dock.drawerContainerShape(bounds)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
                     Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {

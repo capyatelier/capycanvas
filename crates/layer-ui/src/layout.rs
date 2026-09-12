@@ -16,6 +16,7 @@ pub const PANEL_CONTENT_INSET: f32 = 8.0;
 pub const TOOL_PANEL_MIN_WIDTH: f32 = 3.0 * TILE_SIZE + 2.0 * 2.0 + 2.0 * PANEL_CONTENT_INSET;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
 const PANEL_GRIP_HEIGHT: f32 = 20.0;
+const TOOLBAR_DIVIDER_SIZE: f32 = 8.0;
 /// Shared gesture distances in logical UI pixels, not preferences.
 pub const WORKSPACE_PROXIMITY: f32 = 80.0;
 const PANEL_SNAP_DISTANCE: f32 = WORKSPACE_PROXIMITY * 0.5;
@@ -30,7 +31,7 @@ fn ribbon_lanes(length: f32, count: usize, along: f32) -> usize {
 
 fn toolbar_extent(tile: &ToolbarTile, along: f32) -> f32 {
     if tile.control == ToolbarControl::Divider {
-        8.0
+        TOOLBAR_DIVIDER_SIZE
     } else {
         along
     }

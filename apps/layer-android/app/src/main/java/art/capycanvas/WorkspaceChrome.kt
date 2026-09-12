@@ -48,11 +48,12 @@ import org.json.JSONObject
             tiles[pair.getInt(0)]?.let { projectedTiles.put(it); bounds.put(pair.getJSONObject(1)) }
         }
         val projected = JSONObject(panel.toString()).put("tiles", projectedTiles).put("tile_style", section.getString("style"))
+        val shape = dock.drawerContainerShape(section.getJSONObject("bounds"), radius = 6f)
         key(id, index) {
             ToolRibbon(host, projected, obj("tiles" to bounds), dock,
                 Modifier.placed(section.getJSONObject("bounds"), dock.density).zIndex(150f)
-                    .testTag("zen-section-$index").shadow(6.dp, RoundedCornerShape(6.dp))
-                    .clip(RoundedCornerShape(6.dp)).background(LocalPalette.current.panel),
+                    .testTag("zen-section-$index").shadow(6.dp, shape)
+                    .clip(shape).background(LocalPalette.current.panel),
                 section.getString("edge") in listOf("left", "right"))
         }
     }
@@ -61,11 +62,37 @@ import org.json.JSONObject
 private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
     .put("x", number("x") - parent.number("x")).put("y", number("y") - parent.number("y"))
 
+internal fun drawerButtonShape(direction: String?) = RoundedCornerShape(
+    topStart = if (direction == "top" || direction == "left") 0.dp else 6.dp,
+    topEnd = if (direction == "top" || direction == "right") 0.dp else 6.dp,
+    bottomEnd = if (direction == "bottom" || direction == "right") 0.dp else 6.dp,
+    bottomStart = if (direction == "bottom" || direction == "left") 0.dp else 6.dp)
+
+/** Ancestor clipping must preserve the connected source corners. */
+internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Float = 8f, joined: JSONArray? = null): RoundedCornerShape {
+    val b = bounds.rect()
+    val corners = listOf(b.topLeft, b.topRight, b.bottomRight, b.bottomLeft)
+    val square = corners.mapIndexed { index, point ->
+        joined?.optBoolean(index) == true || drawerSources.values.any { source ->
+            val facing = when (source.direction) {
+                "top" -> listOf(0, 1); "right" -> listOf(1, 2); "bottom" -> listOf(2, 3); else -> listOf(0, 3)
+            }
+            index in facing && point.x >= source.bounds.left - .5f && point.x <= source.bounds.right + .5f &&
+                point.y >= source.bounds.top - .5f && point.y <= source.bounds.bottom + .5f
+        }
+    }
+    return RoundedCornerShape(topStart = if (square[0]) 0.dp else radius.dp,
+        topEnd = if (square[1]) 0.dp else radius.dp, bottomEnd = if (square[2]) 0.dp else radius.dp,
+        bottomStart = if (square[3]) 0.dp else radius.dp)
+}
+
 @Composable internal fun CollapsedColumns(host: CanvasHost, snapshot: JSONObject, panels: Map<String, JSONObject>, dock: DockInteraction) {
+    val drawers = snapshot.getJSONObject("state").getJSONObject("customization").array("column_drawers").objects()
     snapshot.getJSONObject("layout").array("collapsed").objects().forEach { column ->
         val id = column.getInt("id")
         key(id) {
             val bounds = column.getJSONObject("bounds")
+            val shape = dock.drawerContainerShape(bounds)
             val content = column.getJSONObject("content")
             val current by rememberUpdatedState(column)
             val scroll = rememberScrollableState { delta ->
@@ -80,7 +107,7 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).shadow(6.dp, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp)).background(LocalPalette.current.panel)
+                    .chromeRegion(dock).shadow(6.dp, shape).clip(shape).background(LocalPalette.current.panel)
                     .combinedClickable(onClick = {}, onDoubleClick = {
                         host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
                     })) {
@@ -89,14 +116,23 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                         SharedIcon("column-expand", "Expand column")
                     }
                     Box(Modifier.placed(content.relativeTo(bounds), dock.density).clipToBounds().scrollable(scroll, Orientation.Vertical)) {
-                        column.array("groups").objects().forEach { group ->
+                        val groups = column.array("groups").objects()
+                        groups.forEachIndexed { index, group ->
+                            val top = group.getJSONObject("bounds").number("y") - 10f
+                            ToolbarDivider(Modifier.placed(obj("x" to 0f, "y" to (top - content.number("y")),
+                                "width" to content.number("width"), "height" to 8f), dock.density)
+                                .testTag("column-divider-$id-$index"), horizontal = true)
                             group.array("icons").objects().forEach { icon ->
                                 val panel = icon.getString("panel")
                                 val view = panels[panel] ?: return@forEach
                                 val target = obj("kind" to "panel", "panel" to panel)
+                                val selected = drawers.any { it.getJSONObject("anchor").let { anchor ->
+                                    anchor.getInt("column") == id && anchor.getString("origin") == panel
+                                } }
+                                val shape = drawerButtonShape(if (selected) dock.drawerSources[id.toString()]?.direction else null)
                                 Box(Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
                                     .testTag("column-icon-$panel").contextAnchor(dock, target)
-                                    .background(if (group.getString("active") == panel) LocalPalette.current.active else Color.Transparent, RoundedCornerShape(6.dp))
+                                    .clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
                                     .combinedClickable(onLongClick = { dock.context(target) }, onClick = {
                                         host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
                                     }), contentAlignment = Alignment.Center) {
@@ -144,21 +180,34 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
     val columnId = id.toIntOrNull()
     val tileOrigins = if (id == "tool") dock.drawerTileRevision else 0
     var lastModel by remember { mutableStateOf<String?>(null) }
+    var lastAnchor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(current?.toString(), snapshot.getJSONObject("layout").toString(), heights.toList(), tileOrigins) {
         val from = geometry?.getJSONObject("placement")
-        val animate = lastModel != current?.toString()
+        val anchor = current?.getJSONObject("anchor")?.toString()
+        // Changing opener moves the body and connector together, so the new
+        // button never has to join a drawer still positioned at the old one.
+        val switching = anchor != null && lastAnchor != null && lastAnchor != anchor
+        val animate = !switching && lastModel != current?.toString()
         lastModel = current?.toString()
+        // An outside contact can start closing just before another opener is clicked.
+        if (anchor != null) lastAnchor = anchor
         val start = withFrameNanos { it }
         do {
             val progress = if (!animate) 1f else ((withFrameNanos { it } - start) / 200_000_000f).coerceIn(0f, 1f)
             geometry = host.awaitQuery(obj("type" to "drawer", "column" to columnId, "heights" to JSONArray(heights.toList()),
                 "progress" to progress, "from" to from, "closing" to (current == null)))
+            if (current != null && geometry?.objectOrNull("connection") != null)
+                geometry!!.getJSONObject("placement").let { placement ->
+                    dock.drawerSources[id] = DockInteraction.DrawerSource(placement.getString("direction"), placement.getJSONObject("anchor").rect())
+                }
+            else dock.drawerSources.remove(id)
             if (id == "tool") { dock.drawer = geometry; dock.refresh() }
         } while (progress < 1f)
         if (current == null) closed()
     }
     DisposableEffect(dock, id) {
         onDispose {
+            dock.drawerSources.remove(id)
             if (id == "tool") { dock.drawer = null; dock.refresh() }
             if (columnId != null) dock.clearDrawerTiles(columnId)
         }
@@ -166,19 +215,23 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
     val placement = geometry?.objectOrNull("placement") ?: return
     val connection = geometry?.objectOrNull("connection")
     val corners = connection?.array("square_corners")
-    val shape = RoundedCornerShape(
-        topStart = if (corners?.optBoolean(0) == true) 0.dp else 8.dp,
-        topEnd = if (corners?.optBoolean(1) == true) 0.dp else 8.dp,
-        bottomEnd = if (corners?.optBoolean(2) == true) 0.dp else 8.dp,
-        bottomStart = if (corners?.optBoolean(3) == true) 0.dp else 8.dp)
+    val shape = dock.drawerContainerShape(placement.getJSONObject("bounds"), joined = corners)
     val z = if (id == "tool") 220 else 200
     CompositionLocalProvider(LocalWorkspaceZ provides z) {
+        // Shadow below source chrome; a nested toolbar's source lives in a column drawer.
+        val nested = id == "tool" && model.getJSONObject("anchor").optString("panel").let { panel ->
+            snapshot.getJSONObject("state").getJSONObject("customization").array("column_drawers").objects()
+                .any { drawer -> drawer.array("columns").values().any { panel in (it as JSONArray).values() } }
+        }
+        Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(if (nested) 199f else 99f)
+            .shadow(12.dp, shape, clip = false))
         connection?.let { DrawerBridge(it, dock, z.toFloat()) }
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(z.toFloat())
             .testTag(if (id == "tool") "tool-drawer" else "column-drawer-$id").chromeRegion(dock)
             .then(if (columnId != null) Modifier.columnDrawerBounds(dock, columnId, if (current != null) tabs?.getInt("group") else null) else Modifier)
-            .shadow(12.dp, shape).clip(shape).background(LocalPalette.current.panel)) {
-            placement.array("columns").objects().forEachIndexed { index, bounds ->
+            .clip(shape).background(LocalPalette.current.panel)) {
+            // Placement can lag the model by a frame when switching to a drawer with fewer columns.
+            placement.array("columns").objects().take(columns.size).forEachIndexed { index, bounds ->
                 Column(Modifier.placed(bounds, dock.density)) {
                     if (tabs != null && columnId != null) {
                         val group = tabs.getInt("group")

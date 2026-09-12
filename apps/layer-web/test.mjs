@@ -1,7 +1,7 @@
 import {checkLayerHolding} from "./layer-hold.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 // Real Chrome + Wasm + WebGPU smoke/conformance test. No browser framework.
-import {checkDrawerDragging} from "./drawers.test.mjs";
+import {checkDrawerDragging,checkDrawerStyling,checkToolbarDrawerSwitching} from "./drawers.test.mjs";
 import { checkDragCursors } from "./drag-cursors.test.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
@@ -204,6 +204,12 @@ try {
   } else if (process.argv.includes("--drag-cursors")) {
     await checkDragCursors({ call, evaluate, settle });
     assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--drawer-switch")) {
+    await checkToolbarDrawerSwitching({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--drawer-style")) {
+    await checkDrawerStyling({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--drawer-drag")) {
     await checkDrawerDragging({call,evaluate,settle});
     assert.deepEqual(errors,[]);

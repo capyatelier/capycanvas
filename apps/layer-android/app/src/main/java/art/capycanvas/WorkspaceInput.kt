@@ -50,10 +50,12 @@ internal fun resizePointerIcon(edge: String) = when (edge) {
 /** Native hit geometry and gesture capture only. Rust owns movement, tear-off,
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
+    data class DrawerSource(val direction: String, val bounds: Rect)
     data class Region(val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int, val context: JSONObject?, val cursor: Int)
     val regions = mutableMapOf<Any, Region>()
     val chromeRegions = mutableMapOf<Any, Rect>()
     var drawer: JSONObject? = null
+    val drawerSources = mutableStateMapOf<String, DrawerSource>()
     var drawerTileRevision by mutableIntStateOf(0)
         private set
     private val drawerTiles = mutableMapOf<String, JSONObject>()

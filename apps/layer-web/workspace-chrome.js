@@ -28,9 +28,9 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       });
     });
   }
-  function toolbar(panel,tiles) {
+  function toolbar(panel,tiles,axis='vertical') {
     const view=customization.view(panel),root=element("div","toolbar-controls");
-    root.dataset.panel=panel;root.dataset.tileStyle=view.tile_style;
+    root.dataset.panel=panel;root.dataset.tileStyle=view.tile_style;root.dataset.axis=axis;
     root.style.setProperty("--tile-icon-size",`${view.tile_icon_size}px`);
     root.dataset.labeled=String(view.tile_label_lines>0);
     root.style.setProperty("--tile-label-lines",view.tile_label_lines);
@@ -69,19 +69,25 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       expand.setAttribute("aria-label","Expand column");place(expand,local(column.expand,column.bounds));root.append(expand);
       const content=element("div","collapsed-content");place(content,local(column.content,column.bounds));root.append(content);
       content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};
-      for(const group of column.groups)for(const item of group.icons) {
-        const view=customization.view(item.panel),b=button("",()=>send({type:"toggle_column_drawer",group:group.group,panel:item.panel}),"dock-tab column-tab");
-        b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));
-        b.setAttribute("aria-selected",String(state().customization.column_drawers.some(d=>d.tabs?.active===item.panel)));
-        place(b,local(item.bounds,column.content));customization.target(b,{kind:"panel",panel:item.panel});
-        content.append(draggable(b,{kind:"panel",panel:item.panel}));
+      for(const group of column.groups) {
+        const b=group.bounds,divider=element('div','tile-divider column-divider');
+        divider.setAttribute('role','separator');divider.setAttribute('aria-orientation','horizontal');
+        place(divider,{x:0,y:b.y-column.content.y-10,width:column.content.width,height:8});
+        content.append(divider);
+        for(const item of group.icons) {
+          const view=customization.view(item.panel),b=button("",()=>send({type:"toggle_column_drawer",group:group.group,panel:item.panel}),"dock-tab column-tab");
+          b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));
+          b.setAttribute("aria-selected",String(state().customization.column_drawers.some(d=>d.anchor.column===column.id&&d.anchor.origin===item.panel)));
+          place(b,local(item.bounds,column.content));customization.target(b,{kind:"panel",panel:item.panel});
+          content.append(draggable(b,{kind:"panel",panel:item.panel}));
+        }
       }
       const handle=grip({kind:"column",column:column.id});place(handle,local(column.grip,column.bounds));root.append(handle);
     }
     for(const[id,node]of columns)if(!live.has(id)){node.remove();columns.delete(id);}
     refresh();
   }
-  function dispose(record) {customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.root.remove();}
+  function dispose(record) {customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
     if(!resolved)return;
     const [partial_zen,zen_toolbars]=app.workspace_projection(workspace.clientWidth,workspace.clientHeight);
@@ -92,7 +98,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       zenKey=key;zen.replaceChildren();
       for(const section of model.zen_toolbars.sections) {
         const root=element("div","zen-toolbar");root.dataset.edge=section.edge;place(root,section.bounds);
-        root.append(toolbar(section.panel,section.tiles));zen.append(root);
+        root.append(toolbar(section.panel,section.tiles,['left','right'].includes(section.edge)?'vertical':'horizontal'));zen.append(root);
       }
     }
     const live=new Set();
@@ -101,7 +107,11 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       live.add(id);
       let record=drawers.get(id);const key=JSON.stringify([drawer,drawer.columns.flat().map(id=>state().workspace.layout.panels.find(p=>p.id===id))]);
       if(record?.key!==key) {
+        // A new opener must move the body and connector together. Interpolating
+        // from the old body leaves the new anchor disconnected during the move.
+        const switching=record&&JSON.stringify(record.drawer.anchor)!==JSON.stringify(drawer.anchor);
         const from=record?.placement;if(record)dispose(record);
+        const shadow=element("div","drawer-shadow");shadow.setAttribute("aria-hidden","true");workspace.append(shadow);
         const root=element("section","content-drawer");root.dataset.drawer=String(id);root.setAttribute("aria-label","Panel drawer");workspace.append(root);
         const bodies=drawer.columns.map(ids=>{
           const body=element("div","drawer-column");
@@ -114,7 +124,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           }
           root.append(body);return body;
         });
-        record={key,root,bodies,column,drawer,from,started:performance.now(),placement:from};drawers.set(id,record);
+        record={key,root,shadow,bodies,column,drawer,from,started:performance.now()-(switching?160:0),placement:from};drawers.set(id,record);
       }
       record.closing=false;
       record.root.inert=false;
@@ -126,6 +136,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   }
   function animate(now) {
     animating=false;let more=false;const measurements=[];
+    for(const node of workspace.querySelectorAll('[data-drawer-facing]'))delete node.dataset.drawerFacing;
+    for(const node of workspace.querySelectorAll('[data-drawer-source-corners]'))delete node.dataset.drawerSourceCorners;
     for(const[id,r]of drawers) {
       const width=r.placement?.columns?.[0]?.width||232;
       if(!r.closing) for(const body of r.bodies) {
@@ -141,6 +153,21 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       const result=app.drawer({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,heights,progress,from:r.from??null,closing:!!r.closing});
       if(!result || (r.closing&&progress===1)){dispose(r);drawers.delete(id);continue;}
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
+      place(r.shadow,r.placement.bounds);
+      const anchor=r.drawer.anchor;
+      const source=r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
+        [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
+      r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
+      if(source&&r.connection&&!r.closing) {
+        source.dataset.drawerFacing=r.placement.direction;
+        // Flatten only ancestor corners reached by the source, so clipping cannot cut its join.
+        const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[r.placement.direction];
+        for(let node=source.parentElement;node&&node!==workspace;node=node.parentElement) {
+          const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]];
+          const square=facing.filter(i=>{const[x,y]=corners[i];return x>=a.left-.5&&x<=a.right+.5&&y>=a.top-.5&&y<=a.bottom+.5;});
+          if(square.length)node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');
+        }
+      }
       if(r.connection) {
         const c=r.connection;
         if(!r.bridge){r.bridge=document.createElementNS("http://www.w3.org/2000/svg","svg");r.bridge.classList.add("drawer-bridge");workspace.append(r.bridge);}
@@ -150,7 +177,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         path.setAttribute("d",`M 0 0 L ${l} 0 L ${l} ${d-b} C ${l} ${d-b+b*k} ${l+b-b*k} ${d} ${l+b} ${d} L ${-a} ${d} C ${-a+a*k} ${d} 0 ${d-a+a*k} 0 ${d-a} Z`);
         path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);r.bridge.replaceChildren(path);
         r.root.style.borderRadius=c.square_corners.map(square=>square?"0":"8px").join(" ");
-      } else {r.bridge?.remove();r.bridge=null;}
+      } else {r.bridge?.remove();r.bridge=null;r.root.style.borderRadius="8px";}
+      r.shadow.style.borderRadius=r.root.style.borderRadius;
 
       r.root.style.zIndex=r.column==null?"1900":"1800";
       r.placement.columns.forEach((bounds,i)=>place(r.bodies[i],bounds));

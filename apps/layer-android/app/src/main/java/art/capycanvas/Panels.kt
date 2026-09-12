@@ -37,10 +37,7 @@ import kotlin.math.roundToInt
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
                     ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
                 if (kind == "divider") {
-                    Box(Modifier.placed(bounds, density), contentAlignment = Alignment.Center) {
-                        Box((if (vertical) Modifier.fillMaxWidth(.7f).height(1.dp) else Modifier.width(1.dp).fillMaxHeight(.7f))
-                            .background(LocalPalette.current.secondary.copy(alpha = .3f)))
-                    }
+                    ToolbarDivider(Modifier.placed(bounds, density).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}"), horizontal = vertical)
                     return@forEachIndexed
                 }
                 val modifier = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
@@ -49,8 +46,12 @@ import kotlin.math.roundToInt
                         Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
                     } else null
                 val colors = LocalPalette.current
+                val drawerAnchor = host.snapshot?.getJSONObject("state")?.getJSONObject("customization")
+                    ?.objectOrNull("drawer")?.getJSONObject("anchor")
+                val opensDrawer = drawerAnchor?.optString("panel") == panel.getString("id") && drawerAnchor.optInt("tile") == tile.getInt("id")
+                val shape = drawerButtonShape(if (opensDrawer) dock.drawerSources["tool"]?.direction else null)
                 HoverTip(tile.getString("tooltip"), modifier) {
-                Row(Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
+                Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(if (tile.optBoolean("selected")) colors.active else Color.Transparent)
                     .combinedClickable(enabled = tile.getBoolean("enabled"),
                         onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
@@ -75,6 +76,13 @@ import kotlin.math.roundToInt
                 PanelGrip("Move toolbar", vertical)
             }
         }
+    }
+}
+
+@Composable internal fun ToolbarDivider(modifier: Modifier, horizontal: Boolean) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Box((if (horizontal) Modifier.fillMaxWidth(.7f).height(1.dp) else Modifier.width(1.dp).fillMaxHeight(.7f))
+            .background(LocalPalette.current.secondary.copy(alpha = .3f)))
     }
 }
 

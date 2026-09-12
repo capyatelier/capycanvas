@@ -815,7 +815,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         width,
         ..bounds
     };
-    let top = (expand.y + expand.height + WORKSPACE_SPACING).min(grip.y);
+    let top = (expand.y + expand.height + 2.).min(grip.y);
     let content = Bounds {
         y: top,
         height: (grip.y - WORKSPACE_SPACING - top).max(0.),
@@ -851,7 +851,8 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
                     bounds,
                     icons,
                 });
-                *y += bounds.height + WORKSPACE_SPACING;
+                // Match a toolbar divider: 8px separator and a 2px tile gap on each side.
+                *y += bounds.height + TOOLBAR_DIVIDER_SIZE + 4.;
             }
             DockNode::Split { first, second, .. } => {
                 visit(first, content, y, groups);
@@ -859,7 +860,8 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
             }
         }
     }
-    let mut y = content.y;
+    // The leading divider separates the expand control from the first tile group.
+    let mut y = content.y + TOOLBAR_DIVIDER_SIZE + 2.;
     visit(node, content, &mut y, &mut groups);
     let empty = Bounds {
         y: y.min(grip.y),

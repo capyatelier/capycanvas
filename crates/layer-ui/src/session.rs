@@ -481,6 +481,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         true
     }
+    fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
+        matches!(self.state.platform, Platform::Android | Platform::Web)
+            && self
+                .state
+                .customization
+                .drawer
+                .as_ref()
+                .and_then(|d| d.anchor.tile())
+                .is_some_and(|old| old.panel == anchor.panel && old != anchor)
+            && self
+                .state
+                .workspace
+                .layout
+                .panel(anchor.panel)
+                .is_ok_and(|panel| {
+                    panel.tiles().iter().any(|tile| {
+                        tile.id == anchor.tile && tile.control.drawer_columns().is_some()
+                    })
+                })
+    }
+
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
@@ -551,24 +572,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                         )
                         .is_some_and(|p| p.anchor.contains(position[0], position[1]))
                 {
-                    reply.change = self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::CloseExpanded,
-                    })?;
-                    // Another tile should select/open on this same click. A
-                    // bare canvas contact only dismisses and must not paint.
-                    reply.handled = if self.state.partial_zen() {
+                    let tile = if self.state.partial_zen() {
                         self.state
                             .workspace
                             .layout
                             .zen_toolbars(viewport)
                             .tile_at(position)
-                            .is_none()
                     } else {
                         self.layout(viewport)
                             .tile_at(&self.state.workspace.layout, position)
                             .or_else(|| self.state.customization.drawer_tile_at(position))
-                            .is_none()
                     };
+                    // Preserve the open drawer until an eligible button in its
+                    // toolbar activates on release (or the contact is cancelled).
+                    if !tile.is_some_and(|anchor| self.switches_toolbar_drawer(anchor)) {
+                        reply.change = self.dispatch(UiAction::Customize {
+                            action: CustomizationAction::CloseExpanded,
+                        })?;
+                        // Other tiles can still activate; bare canvas only dismisses.
+                        reply.handled = tile.is_none();
+                    }
                 }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
@@ -1924,6 +1947,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .find(|t| t.id == tile)
                     .is_some_and(|t| t.choice.selected && t.enabled);
+                if !selected
+                    && control.selectable()
+                    && self.switches_toolbar_drawer(TileAnchor { panel, tile })
+                {
+                    let selected =
+                        self.dispatch(control.action().ok_or("This tool is unavailable")?)?;
+                    let mut opened = self.dispatch(UiAction::Customize {
+                        action: CustomizationAction::ToggleToolDrawer {
+                            anchor: TileAnchor { panel, tile },
+                        },
+                    })?;
+                    opened.regions |= selected.regions;
+                    opened.canvas_wake |= selected.canvas_wake;
+                    return Ok(opened);
+                }
                 if matches!(
                     self.state.platform,
                     Platform::Gtk
@@ -2422,6 +2460,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .iter()
                 .filter_map(|d| match d.anchor {
                     DrawerAnchor::Column { group, origin, .. } => {
+                        // These hosts draw the sidebar selection and connector at the visible tab.
+                        let origin =
+                            if matches!(self.state.platform, Platform::Android | Platform::Web) {
+                                self.state.workspace.layout.active_panel(origin)?
+                            } else {
+                                origin
+                            };
                         ContentDrawer::for_column(&self.state.workspace.layout, group, origin).ok()
                     }
                     _ => None,
@@ -9959,6 +10004,69 @@ mod tests {
     }
 
     #[test]
+    fn column_drawer_anchor_follows_tab_and_sidebar_selection_on_android_and_web() {
+        for platform in [Platform::Android, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            let viewport = [1200., 900.];
+            s.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport })
+                .unwrap();
+            let toggle = |s: &mut UiSession<Recorder>, panel| {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::ToggleColumnDrawer { group: 8, panel },
+                })
+                .unwrap();
+            };
+            toggle(&mut s, Panel::Layers);
+            s.dispatch(UiAction::SelectPanelTab {
+                group: 8,
+                panel: Panel::Properties,
+            })
+            .unwrap();
+            let drawer = &s.state.customization.column_drawers[0];
+            assert!(matches!(
+                drawer.anchor,
+                DrawerAnchor::Column {
+                    origin: Panel::Properties,
+                    ..
+                }
+            ));
+            assert_eq!(drawer.columns, vec![vec![Panel::Properties]]);
+            let layout = &s.state.workspace.layout;
+            let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
+            let column = &resolved.collapsed[0];
+            let expected = column
+                .groups
+                .iter()
+                .flat_map(|g| &g.icons)
+                .find(|i| i.panel == Panel::Properties)
+                .unwrap()
+                .bounds
+                .intersection(column.content)
+                .unwrap();
+            assert_eq!(
+                drawer
+                    .placement(layout, viewport, &[500.], false)
+                    .unwrap()
+                    .anchor,
+                expected
+            );
+            // The former opening button switches back; the current one closes the drawer.
+            toggle(&mut s, Panel::Layers);
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            assert!(matches!(
+                s.state.customization.column_drawers[0].anchor,
+                DrawerAnchor::Column {
+                    origin: Panel::Layers,
+                    ..
+                }
+            ));
+            toggle(&mut s, Panel::Layers);
+            assert!(s.state.customization.column_drawers.is_empty());
+        }
+    }
+
+    #[test]
     fn collapsed_drawers_are_persistent_per_column_and_follow_tab_selection() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
@@ -11835,6 +11943,156 @@ mod tests {
         .unwrap();
         assert!(app.state.customization.expanded.is_none());
     }
+    #[test]
+    fn android_and_web_switch_eligible_toolbar_drawers_on_the_first_click() {
+        for platform in [Platform::Android, Platform::Web] {
+            for zen in [false, true] {
+                let mut s = session();
+                s.set_platform(platform);
+                s.state.workspace.zen_mode = zen;
+                s.state.settings.total_zen = false;
+                let viewport = [1200., 900.];
+                let tiles = s
+                    .state
+                    .workspace
+                    .layout
+                    .panel(Panel::Toolbar)
+                    .unwrap()
+                    .tiles()
+                    .to_vec();
+                let brush = tiles
+                    .iter()
+                    .find(|t| {
+                        t.control
+                            == ToolbarControl::Command {
+                                command: CommandId::Brush,
+                            }
+                    })
+                    .unwrap()
+                    .id;
+                let eraser = tiles
+                    .iter()
+                    .find(|t| {
+                        t.control
+                            == ToolbarControl::Command {
+                                command: CommandId::Eraser,
+                            }
+                    })
+                    .unwrap()
+                    .id;
+                let color = tiles
+                    .iter()
+                    .find(|t| t.control == ToolbarControl::Color)
+                    .unwrap()
+                    .id;
+                let activate = |s: &mut UiSession<Recorder>, tile| {
+                    s.dispatch(UiAction::ActivateTile {
+                        panel: Panel::Toolbar,
+                        tile,
+                    })
+                    .unwrap()
+                };
+                activate(&mut s, brush);
+                assert!(
+                    s.state.customization.drawer.is_none(),
+                    "A closed drawer still requires selecting first"
+                );
+                activate(&mut s, brush);
+                for tile in [eraser, color, brush] {
+                    let previous = s.state.customization.drawer.as_ref().unwrap().clone();
+                    let old = previous
+                        .placement(
+                            &s.state.workspace.layout,
+                            viewport,
+                            &vec![400.; previous.columns.len()],
+                            zen,
+                        )
+                        .unwrap();
+                    let next = ContentDrawer::for_tile(
+                        &s.state.workspace.layout,
+                        TileAnchor {
+                            panel: Panel::Toolbar,
+                            tile,
+                        },
+                    )
+                    .unwrap();
+                    let target = next
+                        .placement(
+                            &s.state.workspace.layout,
+                            viewport,
+                            &vec![400.; next.columns.len()],
+                            zen,
+                        )
+                        .unwrap();
+                    let reply = chrome(
+                        &mut s,
+                        ChromeEvent::Contact {
+                            position: [target.anchor.x + 4., target.anchor.y + 4.],
+                            canvas: false,
+                        },
+                        ChromeFacts {
+                            content_drawer: Some(old.bounds),
+                            drawer_connection: old.connection().map(|c| c.bounds),
+                            ..Default::default()
+                        },
+                    );
+                    assert!(!reply.handled);
+                    assert_eq!(
+                        s.state.customization.drawer.as_ref().unwrap(),
+                        &previous,
+                        "Press retains the drawer until activation"
+                    );
+                    let change = activate(&mut s, tile);
+                    assert_eq!(s.state.customization.drawer.as_ref().unwrap(), &next);
+                    assert_ne!(change.regions & regions::CUSTOMIZATION, 0);
+                    if tile != color {
+                        assert_eq!(
+                            s.state.brush.tool,
+                            if tile == brush {
+                                Tool::Brush
+                            } else {
+                                Tool::Eraser
+                            }
+                        );
+                        assert_ne!(
+                            change.regions & regions::BRUSH,
+                            0,
+                            "The same reply publishes the selected tool"
+                        );
+                        assert!(
+                            s.panel_view(Panel::Toolbar)
+                                .unwrap()
+                                .tiles
+                                .iter()
+                                .find(|t| t.id == tile)
+                                .unwrap()
+                                .choice
+                                .selected
+                        );
+                    }
+                    assert!(
+                        !s.switches_toolbar_drawer(TileAnchor {
+                            panel: Panel::Commands,
+                            tile
+                        }),
+                        "A different toolbar cannot switch this drawer"
+                    );
+                }
+                activate(&mut s, brush);
+                assert!(
+                    s.state.customization.drawer.is_none(),
+                    "Clicking the current opener closes it"
+                );
+                activate(&mut s, color);
+                invoke(&mut s, CommandId::Eraser);
+                assert!(
+                    s.state.customization.drawer.is_none(),
+                    "Tool shortcuts still dismiss the drawer"
+                );
+            }
+        }
+    }
+
     #[test]
     fn tool_drawer_selection_dismissal_and_configuration_are_core_policy() {
         let mut s = session();
