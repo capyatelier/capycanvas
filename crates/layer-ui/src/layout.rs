@@ -2039,6 +2039,7 @@ impl DockLayout {
 
     /// Both individual tabs and whole groups use one transactional move path.
     /// Group moves preserve tab order, active tab and the group's identity.
+    /// Moves preserve each panel's tab visibility preference, including merges.
     pub fn move_item(
         &mut self,
         viewport: [f32; 2],
@@ -2130,16 +2131,6 @@ impl DockLayout {
         {
             return Err("Top and bottom docks only support standalone toolbars".into());
         }
-        // Crossing back from floating to docked restores a header, not the
-        // hidden-tab preference from an earlier drag. Toolbar grips and
-        // multi-tab groups keep their existing rules.
-        if previous_float.is_some()
-            && moving.len() == 1
-            && selected.kind() == PanelKind::Content
-            && dock_edge.is_some()
-        {
-            next.panel_mut(selected)?.hide_tab = false;
-        }
         let source = before.groups.iter().find(|g| g.id == source_group);
         let tile_size = next.panel(selected)?.tile_style.size();
         let moved_width = if tiles {
@@ -2159,13 +2150,6 @@ impl DockLayout {
         };
         match target {
             DockTarget::Float { position } => {
-                if let DockNode::Tabs { panels, .. } = &moving
-                    && let [panel] = panels.as_slice()
-                    && panel.kind() == PanelKind::Content
-                    && previous_float.is_none()
-                {
-                    next.panel_mut(*panel)?.hide_tab = true;
-                }
                 let width = previous_float.as_ref().map(|f| f.width).unwrap_or_else(|| {
                     if tiles {
                         next.panel(selected).unwrap().tile_style.floating_width()
@@ -2241,10 +2225,6 @@ impl DockLayout {
                 let index = index.min(panels.len());
                 panels.splice(index..index, moved);
                 *active = selected;
-                let merged = panels.clone();
-                for panel in merged {
-                    next.panel_mut(panel)?.hide_tab = false;
-                }
                 next.fit_tabs(group);
             }
             DockTarget::Split { group, edge } => {
@@ -5266,11 +5246,14 @@ mod tests {
     }
 
     #[test]
-    fn docking_a_lone_floating_panel_shows_its_tab_for_every_dock_target() {
+    fn moving_a_panel_preserves_tab_visibility_for_every_dock_target() {
         let viewport = [1600., 1200.];
         for hidden in [false, true] {
             for target_kind in 0..4 {
                 let mut layout = DockLayout::default();
+                layout.panel_mut(Panel::Sizes).unwrap().hide_tab = hidden;
+                layout.panel_mut(Panel::Layers).unwrap().hide_tab = true;
+                let preferences = layout.panels.clone();
                 let item = DockItem::Panel {
                     panel: Panel::Sizes,
                 };
@@ -5283,7 +5266,7 @@ mod tests {
                         },
                     )
                     .unwrap();
-                layout.panel_mut(Panel::Sizes).unwrap().hide_tab = hidden;
+                assert_eq!(layout.panels, preferences, "Floating preserves preferences");
                 let group = layout.panel_group(Panel::Layers).unwrap();
                 let target = match target_kind {
                     0 => DockTarget::Edge {
@@ -5305,7 +5288,10 @@ mod tests {
                     _ => DockTarget::Tab { group, index: None },
                 };
                 layout.move_item(viewport, item, target).unwrap();
-                assert!(!layout.panel(Panel::Sizes).unwrap().hide_tab);
+                assert_eq!(
+                    layout.panels, preferences,
+                    "Docking preserves both panels' preferences"
+                );
                 let resolved = layout.workspace(
                     viewport[0],
                     viewport[1],
@@ -5317,12 +5303,47 @@ mod tests {
                     .iter()
                     .find(|g| g.panels.contains(&Panel::Sizes))
                     .unwrap();
-                assert!(!docked.floating && docked.tabs_visible);
-                assert!(docked.footer_grip.is_none());
+                assert!(!docked.floating);
+                assert_eq!(docked.tabs_visible, target_kind == 3 || !hidden);
+                assert_eq!(docked.footer_grip.is_some(), target_kind != 3 && hidden);
+                if target_kind == 3 {
+                    // A merged group shows tabs without clearing either preference.
+                    // Moving the whole group, then tearing one tab out, preserves both.
+                    layout
+                        .move_item(
+                            viewport,
+                            DockItem::Group { group },
+                            DockTarget::Float {
+                                position: [800., 500.],
+                            },
+                        )
+                        .unwrap();
+                    layout
+                        .move_item(
+                            viewport,
+                            item,
+                            DockTarget::Float {
+                                position: [450., 500.],
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(layout.panels, preferences);
+                    let resolved = layout.workspace(
+                        viewport[0],
+                        viewport[1],
+                        crate::HEADER_HEIGHT,
+                        crate::STATUS_HEIGHT,
+                    );
+                    let separate = resolved
+                        .groups
+                        .iter()
+                        .find(|g| g.active == Panel::Sizes)
+                        .unwrap();
+                    assert_eq!(separate.tabs_visible, !hidden);
+                }
             }
         }
-        // Moving a manually hidden docked panel between docks does not cross
-        // the floating boundary and must retain the user's hide-tab choice.
+        // Direct dock-to-dock moves preserve the same preference.
         let mut layout = DockLayout::default();
         layout.panel_mut(Panel::Sizes).unwrap().hide_tab = true;
         layout

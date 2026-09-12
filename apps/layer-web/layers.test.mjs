@@ -130,7 +130,7 @@ export async function checkLayers({ call, evaluate, settle }) {
   await evaluate("layerApp.dispatch({type:'move_panel',panel:'sizes',viewport:[innerWidth,innerHeight],target:{kind:'float',position:[550,430]}})");
   await settle();
   const grip = await evaluate(`(() => { const g=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('sizes'));
-    if(g.tabs_visible)throw Error('Floating panel must hide its tab');
+    if(!g.tabs_visible)throw Error('Floating preserves the visible tab bar');
     const r=document.querySelector('[data-group="'+g.id+'"] .panel-grip').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
   const edge=await evaluate("({x:innerWidth-2,y:innerHeight*.5})");
   await call("Input.dispatchMouseEvent",{type:"mouseMoved",...grip});
@@ -142,6 +142,6 @@ export async function checkLayers({ call, evaluate, settle }) {
   assert.ok(await evaluate("document.querySelector('.dock-tab[data-panel=sizes]')!==null"));
   await screenshot("05-tab-shown-after-docking");
   await evaluate("layerApp.dispatch({type:'invoke',command:'undo_workspace'})");
-  assert.deepEqual(await evaluate("(()=>{const g=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('sizes'));return[g.floating,g.tabs_visible]})()"),[true,false]);
+  assert.deepEqual(await evaluate("(()=>{const g=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('sizes'));return[g.floating,g.tabs_visible]})()"),[true,true]);
   console.log("PASS: layer thumbnails, references, whole-row selection, mask menu, shared shortcuts/tools and docking tab visibility");
 }

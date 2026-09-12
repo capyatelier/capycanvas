@@ -22,11 +22,35 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
   const move=async p=>{last=p;await call(pointer==="mouse"?"Input.dispatchMouseEvent":"Input.dispatchTouchEvent",pointer==="mouse"?{type:"mouseMoved",...p,button:held?"left":"none",buttons:held?1:0}:{type:"touchMove",touchPoints:[{id:1,...p}]});await wait();};
   const release=async()=>{await call(pointer==="mouse"?"Input.dispatchMouseEvent":"Input.dispatchTouchEvent",pointer==="mouse"?{type:"mouseReleased",...last,button:"left",buttons:0,clickCount:1}:{type:"touchEnd",touchPoints:[]});held=false;await wait();};
   const click=async p=>{await press(p);await release();};
+  const cancel=async()=>{
+    if(pointer==="touch")await call("Input.dispatchTouchEvent",{type:"touchCancel",touchPoints:[]});
+    else {await evaluate("document.querySelector('#workspace').dispatchEvent(new PointerEvent('pointercancel',{pointerId:1,bubbles:true}))");await release();}
+    held=false;await wait();
+  };
   const open=async()=>{await customize({type:"set_column_collapsed",group:41,collapsed:true});await click(center(await rect('.collapsed-column [data-panel="brushes"]')));await wait();assert.ok(await evaluate(`!!document.querySelector('${drawer} .drawer-tabs')`));};
   const history=async before=>{const after=await snap();assert.notDeepEqual(after,before);await send({type:"invoke",command:"undo_workspace"});assert.deepEqual(await snap(),before);await send({type:"invoke",command:"redo_workspace"});assert.deepEqual(await snap(),after);};
   await evaluate(`window.__drawerActions=[];window.__drawerDispatch=layerApp.app.dispatch.bind(layerApp.app);layerApp.app.dispatch=a=>{if(a.type==='measure_column_drawers'||a.type==='drag_workspace')window.__drawerActions.push(structuredClone(a));return window.__drawerDispatch(a)};`);
   try {
     for(pointer of ["mouse","touch"]) {
+      // Lifting and redocking a singleton preserve its visible or hidden header.
+      for(const hidden of [false,true]) {
+        const singleton=structuredClone(fixture);
+        Object.assign(singleton.layout.bands[0].root,{panels:["sizes"],active:"sizes"});
+        singleton.layout.panels.find(p=>p.id==="sizes").hide_tab=hidden;
+        await send({type:"restore_workspace",workspace:singleton});
+        const grip=()=>rect('.dock-group[data-panel="sizes"] .panel-grip');
+        const placed=()=>evaluate("layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('sizes'))");
+        const before=await snap(),away=await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
+        await press(center(await grip()));await move(away);
+        assert.equal((await placed()).floating,true);assert.equal((await placed()).tabs_visible,!hidden);
+        assert.deepEqual((await snap()).layout.panels,before.layout.panels);
+        await cancel();assert.deepEqual(await snap(),before);
+        await press(center(await grip()));await move(away);await release();await history(before);
+        const floated=await snap();
+        await press(center(await grip()));await move(await evaluate("({x:innerWidth-2,y:innerHeight*.5})"));await release();
+        assert.equal((await placed()).floating,false);assert.equal((await placed()).tabs_visible,!hidden);
+        assert.deepEqual((await snap()).layout.panels,before.layout.panels);await history(floated);
+      }
       // Tabs move one panel; the grip and unused header move the complete group.
       for(const source of ["active","inactive","grip","empty"]) {
         console.log(`Checking ${pointer} drawer ${source}`);
@@ -40,6 +64,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         assert.deepEqual(measured,b,"Rust receives displayed drawer bounds");
         await move(away);assert.equal((await snap()).layout.floating.length,1,`${pointer} ${source} live tear-off: ${JSON.stringify(await evaluate("({status:document.querySelector('#status').textContent,drawer:layerApp.state().customization.column_drawers})"))}`);
         await release();
+        assert.deepEqual((await snap()).layout.panels,before.layout.panels,"Tear-off preserves tab preferences");
         const moved=await group(source==="inactive"?"sizes":"brushes");
         assert.equal(moved.panels.length,["grip","empty"].includes(source)?3:1,`${pointer} ${source}`);
         await history(before);
@@ -53,9 +78,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
       // A cancelled gesture restores the source group and its open drawer.
       await send({type:"restore_workspace",workspace:fixture});await open();before=await snap();
       await press(center(await rect(`${drawer} .drawer-tabs .dock-tab[data-panel="brushes"]`)));await move(await evaluate("({x:innerWidth*.5,y:innerHeight*.55})"));
-      if(pointer==="touch")await call("Input.dispatchTouchEvent",{type:"touchCancel",touchPoints:[]});
-      else {await evaluate("document.querySelector('#workspace').dispatchEvent(new PointerEvent('pointercancel',{pointerId:1,bubbles:true}))");await release();}
-      held=false;await wait();assert.deepEqual(await snap(),before);assert.ok(await evaluate(`!!document.querySelector('${drawer}:not([inert])')`));
+      await cancel();assert.deepEqual(await snap(),before);assert.ok(await evaluate(`!!document.querySelector('${drawer}:not([inert])')`));
       // Scrolling clips hit rectangles, while the group grip stays fixed.
       const overflow=structuredClone(fixture);
       Object.assign(overflow.layout.bands[0].root,{panels:["brushes","sizes","tool_settings","navigator","stats"],tab_style:"icon_name"});
@@ -85,6 +108,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         const hint=await evaluate("(()=>{const n=document.querySelector('.drop-indicator');return{hidden:n.hidden,status:document.querySelector('#status').textContent}})()");
         assert.equal(hint.hidden,false,`${pointer} ${zone}: ${JSON.stringify(hint)}`);
         await release();const target=await group("layers");
+        assert.deepEqual((await snap()).layout.panels,before.layout.panels,"Dropping preserves tab preferences");
         if(["top","bottom"].includes(zone))assert.notEqual(target.id,41);else assert.equal(target.id,41);
         if(zone==="tab")assert.equal(target.panels[0],"layers");
         if(zone==="merge")assert.equal(target.panels.length,6);
@@ -92,7 +116,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
       }
       const shot=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${dir}/${pointer}.png`,Buffer.from(shot.data,"base64"));
       assert.equal(await evaluate("document.querySelector('#status').textContent"),"");
-      console.log(`PASS: ${pointer} drawer panel/group drag, tab reorder, insertion, merge, top/bottom splits, clipped tab hits, cancel, undo/redo`);
+      console.log(`PASS: ${pointer} drawer panel/group drag, tab reorder, insertion, merge, top/bottom splits, clipped tab hits, preserved tab visibility, cancel, undo/redo`);
     }
   } finally {await evaluate("layerApp.app.dispatch=window.__drawerDispatch;delete window.__drawerDispatch;delete window.__drawerActions");if(held)await release();await send({type:"restore_workspace",workspace:saved});}
 }

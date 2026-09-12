@@ -278,7 +278,8 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   await drag(await point(tab("sizes")), { x: 540, y: 440 }, async () => {
     assert.equal((await group("sizes")).floating, true);
     assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"), true);
-    assert.equal((await config("sizes")).hide_tab, true);
+    assert.equal((await config("sizes")).hide_tab, false);
+    assert.equal((await group("sizes")).tabs_visible, true);
     await shot("live-panel-tearoff");
   });
   assert.equal((await group("sizes")).floating, true);
@@ -305,11 +306,11 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   assert.notEqual((await snapshot()).layout.floating[0].height, undefined);
   await clickAt(await point(grip("sizes")), 2);
   assert.equal((await snapshot()).layout.floating[0].height, undefined);
-  assert.equal((await config("sizes")).hide_tab, true);
-  await clickAt(await point(grip("sizes")), 2); assert.equal((await config("sizes")).hide_tab, false);
-  await shot("panel-cycle-tab-shown");
+  assert.equal((await config("sizes")).hide_tab, false);
   await clickAt(await point(grip("sizes")), 2); assert.equal((await config("sizes")).hide_tab, true);
   await shot("panel-cycle-tab-hidden");
+  await clickAt(await point(grip("sizes")), 2); assert.equal((await config("sizes")).hide_tab, false);
+  await shot("panel-cycle-tab-shown");
   await reset(); await float("toolbar");
   g = await group("toolbar");
   const handle = g.resize_handles.find(h=>h.edge==="bottom_right").bounds;

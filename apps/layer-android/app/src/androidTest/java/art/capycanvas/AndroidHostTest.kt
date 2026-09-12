@@ -585,24 +585,59 @@ class AndroidHostTest {
         assertNull(host.actionError)
         capture("layers-paper-selected")
     }
-    @Test fun dockingLoneFloatingPanelShowsTabs() {
-        floatPanel("sizes")
-        val id = group("sizes").getInt("id")
-        assertFalse(group("sizes").getBoolean("tabs_visible"))
+    @Test fun panelDraggingPreservesTabVisibility() {
+        val fixture = JSONObject(defaultWorkspace)
+        fixture.getJSONObject("layout").apply {
+            fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id, "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "automatic")
+            put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "sizes")),
+                obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("fit_tab_groups", JSONArray()); put("column_scroll", JSONArray())
+            put("next_id", maxOf(44, getInt("next_id")))
+        }
+        fixture.put("zen_mode", false)
         val workspace = compose.onNodeWithTag("workspace")
-        val root = workspace.fetchSemanticsNode().boundsInRoot
-        val start = compose.onNodeWithTag("group-grip-$id").fetchSemanticsNode().boundsInRoot.center - root.topLeft
-        workspace.performTouchInput { down(start); moveTo(androidx.compose.ui.geometry.Offset(root.width-2f,root.height*.5f),300); up() }
-        compose.waitUntil(10_000) { !group("sizes").getBoolean("floating") }
-        assertTrue(group("sizes").getBoolean("tabs_visible"))
-        compose.onNodeWithTag("tab-sizes").assertIsDisplayed()
-        capture("panel-tab-shown-after-docking")
-        action(obj("type" to "invoke","command" to "undo_workspace"))
-        assertTrue(group("sizes").getBoolean("floating"))
-        assertFalse(group("sizes").getBoolean("tabs_visible"))
-        action(obj("type" to "invoke","command" to "redo_workspace"))
-        assertFalse(group("sizes").getBoolean("floating"))
-        assertTrue(group("sizes").getBoolean("tabs_visible"))
+        fun saved() = state().getJSONObject("workspace").toString()
+        fun visible(hidden: Boolean) {
+            assertEquals(!hidden, group("sizes").getBoolean("tabs_visible"))
+            if (hidden) compose.onNodeWithTag("tab-sizes").assertDoesNotExist()
+            else compose.onNodeWithTag("tab-sizes").assertIsDisplayed()
+        }
+        for (mouse in listOf(true, false)) for (hidden in listOf(false, true)) {
+            action(obj("type" to "restore_workspace", "workspace" to fixture))
+            customize(obj("type" to "set_tab_hidden", "panel" to "sizes", "hidden" to hidden))
+            val id = group("sizes").getInt("id")
+            val root = workspace.fetchSemanticsNode().boundsInRoot
+            fun begin(end: androidx.compose.ui.geometry.Offset) {
+                val start = compose.onNodeWithTag("group-grip-$id").fetchSemanticsNode().boundsInRoot.center - root.topLeft
+                if (mouse) workspace.performMouseInput { moveTo(start); press(); moveTo(end, 300) }
+                else workspace.performTouchInput { down(start); moveTo(end, 300) }
+                compose.waitForIdle()
+            }
+            fun finish(cancelled: Boolean = false) {
+                if (mouse) workspace.performMouseInput { if (cancelled) cancel() else release() }
+                else workspace.performTouchInput { if (cancelled) cancel() else up() }
+                compose.waitForIdle(); assertNull(host.actionError)
+            }
+            fun history(before: String, after: String) {
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, saved())
+                action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(after, saved())
+            }
+            val before = saved()
+            val center = androidx.compose.ui.geometry.Offset(root.width * .5f, root.height * .55f)
+            begin(center)
+            compose.waitUntil(10_000) { group("sizes").getBoolean("floating") }
+            visible(hidden)
+            finish(true); assertEquals(before, saved()); visible(hidden)
+            begin(center)
+            compose.waitUntil(10_000) { group("sizes").getBoolean("floating") }
+            visible(hidden); finish()
+            val floated = saved(); history(before, floated)
+            begin(androidx.compose.ui.geometry.Offset(root.width - 2f, root.height * .5f)); finish()
+            compose.waitUntil(10_000) { !group("sizes").getBoolean("floating") }
+            visible(hidden)
+            val docked = saved(); history(floated, docked); visible(hidden)
+            capture("panel-drag-tabs-${if (mouse) "mouse" else "touch"}-$hidden")
+        }
     }
 
     @Test fun workspaceMenusManageVisibilityNamesAndHistory() {
@@ -875,8 +910,9 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { group("sizes").getJSONObject("bounds").number("x") > first.number("x") + 20 }
         assertTrue("Continued drag: $first -> ${group("sizes")}", group("sizes").getJSONObject("bounds").number("x") > first.number("x") + 20)
         val id = group("sizes").getInt("id")
-        assertFalse(group("sizes").getBoolean("tabs_visible"))
+        assertTrue(group("sizes").getBoolean("tabs_visible"))
         capture("workspace-live-tearoff")
+        val natural = JSONObject(group("sizes").getJSONObject("bounds").toString())
         val density = compose.activity.resources.displayMetrics.density
         for (edge in listOf("left", "right", "top", "bottom", "top_left", "top_right", "bottom_left", "bottom_right")) {
             val before = JSONObject(group("sizes").getJSONObject("bounds").toString())
@@ -885,10 +921,13 @@ class AndroidHostTest {
             compose.onNodeWithTag("resize-$id-$edge").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(dx, dy) * density, 350) }
             compose.waitUntil(10_000) { group("sizes").getJSONObject("bounds").toString() != before.toString() }
             compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
-            compose.waitUntil(10_000) { kotlin.math.abs(group("sizes").getJSONObject("bounds").number("width") - first.number("width")) < .5f &&
-                kotlin.math.abs(group("sizes").getJSONObject("bounds").number("height") - first.number("height")) < .5f }
-            assertFalse("First double-click resets $edge, not the tab", group("sizes").getBoolean("tabs_visible"))
+            compose.waitUntil(10_000) { kotlin.math.abs(group("sizes").getJSONObject("bounds").number("width") - natural.number("width")) < .5f &&
+                kotlin.math.abs(group("sizes").getJSONObject("bounds").number("height") - natural.number("height")) < .5f }
+            assertTrue("First double-click preserves the tab after resetting $edge", group("sizes").getBoolean("tabs_visible"))
         }
+        compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { !group("sizes").getBoolean("tabs_visible") }
+        capture("workspace-floating-hidden-tab")
         compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
         compose.waitUntil(10_000) { group("sizes").getBoolean("tabs_visible") }
         capture("workspace-floating-shown-tab")

@@ -8932,20 +8932,8 @@ fn native_hidden_tabs() {
             .unwrap();
         capture_popover(&menu, &format!("{dir}/tab-hidden-menu-{theme:?}.png"));
         let popup = menu.clone().downcast::<gtk::PopoverMenu>().unwrap();
-        let actions = popup.menu_model().unwrap().item_link(2, "section").unwrap();
-        assert_eq!(
-            actions
-                .item_attribute_value(0, "label", None)
-                .unwrap()
-                .get::<String>()
-                .unwrap(),
-            "Configure Brush size panel…"
-        );
-        let action = actions
-            .item_attribute_value(0, "action", None)
-            .unwrap()
-            .get::<String>()
-            .unwrap();
+        let action = menu_action(&popup.menu_model().unwrap(), "Configure Brush size panel…")
+            .expect("Hidden panels expose their configuration action");
         popup.activate_action(&action, None).unwrap();
         pump(300);
         assert_eq!(state(&w).customization.expanded, Some(panel));
@@ -9041,7 +9029,7 @@ fn native_hidden_tabs() {
             });
         }
         pump(150);
-        assert!(!state(&w).workspace.layout.panel(panel).unwrap().hide_tab);
+        assert!(state(&w).workspace.layout.panel(panel).unwrap().hide_tab);
         assert_eq!(
             w.groups
                 .borrow()
@@ -9050,18 +9038,18 @@ fn native_hidden_tabs() {
                 .unwrap()
                 .tabs
                 .len(),
-            1
+            0
         );
         assert!(
             find_named(
                 w.surface.upcast_ref(),
                 &format!("panel-footer-grip-{group}")
             )
-            .is_none()
+            .is_some()
         );
         capture_reference(
             &w,
-            &format!("{dir}/tab-shown-after-docking-{theme:?}.png"),
+            &format!("{dir}/tab-hidden-after-docking-{theme:?}.png"),
             1.0,
         );
         w.dispatch(UiAction::Invoke {

@@ -7628,9 +7628,17 @@ mod tests {
     }
 
     #[test]
-    fn lone_panels_hide_tabs_when_floated_and_show_when_docked() {
+    fn dragging_panels_preserves_tab_visibility_and_history() {
         let viewport = [1600.0, 1200.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
             for style in TabStyle::ALL {
                 for hidden in [false, true] {
                     for destination in ["float", "edge", "merge", "cancel"] {
@@ -7719,11 +7727,10 @@ mod tests {
                             .into_iter()
                             .find(|g| g.panels.contains(&panel))
                             .unwrap();
-                        assert!(
-                            floating.floating
-                                && !floating.tabs_visible
-                                && floating.footer_grip.is_some()
-                        );
+                        assert!(floating.floating);
+                        assert_eq!(floating.tabs_visible, !hidden);
+                        assert_eq!(floating.footer_grip.is_some(), hidden);
+                        assert_eq!(app.state.workspace.layout.panels, before.layout.panels);
                         let position = match destination {
                             "edge" => [1599.0, 600.0],
                             "merge" => {
@@ -7765,14 +7772,8 @@ mod tests {
                                 style
                             }
                         );
-                        assert_eq!(
-                            config.hide_tab,
-                            match destination {
-                                "float" => true,
-                                "edge" => false,
-                                _ => false,
-                            }
-                        );
+                        assert_eq!(config.hide_tab, hidden);
+                        assert_eq!(app.state.workspace.layout.panels, before.layout.panels);
                         let result = app
                             .layout(viewport)
                             .groups
@@ -7780,7 +7781,7 @@ mod tests {
                             .find(|g| g.panels.contains(&panel))
                             .unwrap();
                         assert_eq!(result.floating, destination == "float");
-                        assert_eq!(result.tabs_visible, !config.hide_tab);
+                        assert_eq!(result.tabs_visible, destination == "merge" || !hidden);
                         if destination == "merge" {
                             assert!(result.panels.len() > 1);
                             assert!(
@@ -9555,7 +9556,7 @@ mod tests {
                     } else {
                         assert_eq!(
                             app.state.workspace.layout.panel(panel).unwrap().hide_tab,
-                            step == 1
+                            step == 0
                         );
                     }
                     let after = app.state.workspace.clone();
