@@ -73,7 +73,10 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
-    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nconst assetPaths = {};',
+    "workspace-store.js": "export const store = {};",
+    "workspace-manager.js": "export const manager = {};",
+    "workspace-worker.js": 'import init from "./pkg/layer_web.js"; import {store} from "./workspace-store.js";',
+    "app.js": 'import {store} from "./workspace-store.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nconst assetPaths = {};',
     "system-status.js": "export const status = true;",
     "editor-panels.js": "export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
@@ -119,7 +122,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["app.js", "system-status.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
+  for (const path of ["app.js", "workspace-store.js", "workspace-manager.js", "workspace-worker.js", "system-status.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);
