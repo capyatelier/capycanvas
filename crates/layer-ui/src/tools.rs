@@ -456,18 +456,65 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
     }
 }
 
-#[derive(Default)]
-pub(crate) struct ToolMemory {
+/// Latest semantic overrides. Built-in defaults are resolved by this installation;
+/// merely loading or remembering a brush never rewrites an explicit override.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceToolMemory {
     tools: BTreeMap<Tool, u32>,
     groups: BTreeMap<ToolGroup, u32>,
-    brushes: BTreeMap<u32, BrushSnapshot>,
+    pub overrides: BTreeMap<u32, BTreeMap<String, f32>>,
 }
-impl ToolMemory {
-    pub fn remember(&mut self, id: u32, brush: &BrushSnapshot) {
+pub(crate) type ToolMemory = WorkspaceToolMemory;
+impl WorkspaceToolMemory {
+    pub fn remember(&mut self, id: u32, _brush: &BrushSnapshot) {
         let group = group(id);
         self.tools.insert(group.tool(), id);
         self.groups.insert(group, id);
-        self.brushes.insert(id, brush.clone());
+    }
+    pub fn set_override(&mut self, id: u32, setting: &str, value: f32) -> Result<(), String> {
+        let defaults = layer_core::default_brush(preset(id)?);
+        crate::tool_settings::edit(&defaults, setting, value)?;
+        let default = crate::tool_settings::controls(&defaults)
+            .into_iter()
+            .find(|c| c.id == setting)
+            .ok_or("Unknown tool setting")?
+            .value;
+        if value == default {
+            if let Some(values) = self.overrides.get_mut(&id) {
+                values.remove(setting);
+                if values.is_empty() {
+                    self.overrides.remove(&id);
+                }
+            }
+        } else {
+            self.overrides
+                .entry(id)
+                .or_default()
+                .insert(setting.into(), value);
+        }
+        Ok(())
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        for (&tool, &id) in &self.tools {
+            preset(id)?;
+            if group(id).tool() != tool {
+                return Err("Invalid remembered tool".into());
+            }
+        }
+        for (&saved_group, &id) in &self.groups {
+            preset(id)?;
+            if group(id) != saved_group {
+                return Err("Invalid remembered tool group".into());
+            }
+        }
+        for (&id, values) in &self.overrides {
+            let mut brush = layer_core::default_brush(preset(id)?);
+            for (setting, &value) in values {
+                brush = crate::tool_settings::edit(&brush, setting, value)?;
+            }
+        }
+        Ok(())
     }
     pub fn tool(&self, tool: Tool) -> u32 {
         self.tools
@@ -482,10 +529,14 @@ impl ToolMemory {
             .unwrap_or_else(|| group.default_preset())
     }
     pub fn brush(&self, preset: DefaultBrushPreset) -> BrushSnapshot {
-        self.brushes
-            .get(&(preset as u32))
-            .cloned()
-            .unwrap_or_else(|| layer_core::default_brush(preset))
+        let mut brush = layer_core::default_brush(preset);
+        if let Some(values) = self.overrides.get(&(preset as u32)) {
+            for (setting, &value) in values {
+                brush = crate::tool_settings::edit(&brush, setting, value)
+                    .expect("validated workspace brush override");
+            }
+        }
+        brush
     }
 }
 

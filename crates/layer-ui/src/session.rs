@@ -19,7 +19,10 @@ pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, Re
 mod application_menu;
 #[path = "document_files.rs"]
 mod document_files;
+#[path = "workspace_session.rs"]
+mod workspace_session;
 pub use application_menu::{ApplicationLink, ApplicationMenu};
+pub use workspace_session::PreparedWorkspace;
 #[path = "effects.rs"]
 mod effects;
 #[path = "filter_loading.rs"]
@@ -190,6 +193,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .clone();
         workspace.layout.measurements.clear();
         workspace.layout.column_scroll.clear();
+        workspace.zen_mode = self.state.workspace.zen_mode;
         workspace
     }
     pub fn poll_navigator_preview(
@@ -1660,12 +1664,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 NumericControl::brush_size().validate(value, "Brush size")?;
                 self.state.brush.diameter = value;
                 self.apply_brush()?;
+                self.tools
+                    .set_override(self.state.brush.preset, "size", value)?;
                 (BRUSH, false)
             }
             UiAction::SetBrushOpacity { value } => {
                 NumericControl::percent().validate(value, "Opacity")?;
                 self.state.brush.opacity = value;
                 self.apply_brush()?;
+                self.tools
+                    .set_override(self.state.brush.preset, "opacity", value)?;
                 (BRUSH, false)
             }
             UiAction::SetColor { rgba } => {
@@ -1700,6 +1708,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.brush.opacity = brush.opacity;
                 self.engine.set_brush(brush).map_err(error)?;
                 self.apply_brush()?;
+                self.tools
+                    .set_override(self.state.brush.preset, &id, value)?;
                 (BRUSH, false)
             }
             UiAction::SelectLayer { id } => {
@@ -3300,6 +3310,177 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn durable_workspace_history_resumes_redo_and_keeps_abandoned_revisions() {
+        let mut s = session();
+        let original = s.state.workspace.layout.clone();
+        s.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            target: DockTarget::Float {
+                position: [400., 200.],
+            },
+            viewport: [1200., 900.],
+        })
+        .unwrap();
+        let moved = s.state.workspace.layout.clone();
+        s.dispatch(UiAction::SetBrushSize { value: 83. }).unwrap();
+        invoke(&mut s, CommandId::ZenMode);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout, original);
+        assert!(s.state.workspace.zen_mode);
+        assert_eq!(s.state.brush.diameter, 83.);
+        let captured = s.capture_workspace().unwrap();
+        assert_eq!(captured.history.revisions.len(), 2);
+        let encoded = serde_json::to_string(&captured).unwrap();
+        let mut reopened = session();
+        reopened
+            .adopt_workspace(
+                PreparedWorkspace::new(serde_json::from_str(&encoded).unwrap()).unwrap(),
+            )
+            .unwrap();
+        let document = reopened.engine.document().clone();
+        invoke(&mut reopened, CommandId::RedoWorkspace);
+        assert_eq!(reopened.state.workspace.layout, moved);
+        assert!(reopened.state.workspace.zen_mode);
+        assert_eq!(reopened.state.brush.diameter, 83.);
+        invoke(&mut reopened, CommandId::UndoWorkspace);
+        reopened
+            .dispatch(UiAction::MovePanel {
+                panel: Panel::Sizes,
+                target: DockTarget::Float {
+                    position: [600., 300.],
+                },
+                viewport: [1200., 900.],
+            })
+            .unwrap();
+        let recovered = reopened.capture_workspace().unwrap();
+        assert!(recovered.history.redo.is_empty());
+        assert!(
+            recovered
+                .history
+                .revisions
+                .values()
+                .any(|r| r.layout == moved)
+        );
+        assert_eq!(reopened.engine.document(), &document);
+        assert!(!reopened.engine.can_undo());
+    }
+
+    #[test]
+    fn layout_reset_and_switch_keep_independent_working_values_and_document_history() {
+        let mut s = session();
+        let baseline = s.state.workspace.layout.clone();
+        invoke(&mut s, CommandId::AddLayer);
+        let document = s.engine.document().clone();
+        let blank = s.capture_workspace().unwrap();
+        s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "flow".into(),
+            value: 0.32,
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetColor {
+            rgba: [0.1, 0.2, 0.3, 1.],
+        })
+        .unwrap();
+        invoke(&mut s, CommandId::ZenMode);
+        assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 1);
+        s.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            target: DockTarget::Float {
+                position: [400., 200.],
+            },
+            viewport: [1200., 900.],
+        })
+        .unwrap();
+        let working = s.workspace_working_state();
+        let painting = s.capture_workspace().unwrap();
+        s.restore_workspace_layout(baseline.clone(), "Reset layout")
+            .unwrap();
+        assert_eq!(s.state.workspace.layout, baseline);
+        assert_eq!(s.workspace_working_state(), working);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(&s.state.workspace.layout, painting.history.layout());
+        s.adopt_workspace(PreparedWorkspace::new(blank.clone()).unwrap())
+            .unwrap();
+        assert_eq!(s.workspace_working_state(), blank.working);
+        assert!(!s.command(CommandId::UndoWorkspace).enabled);
+        s.adopt_workspace(PreparedWorkspace::new(painting.clone()).unwrap())
+            .unwrap();
+        assert_eq!(s.workspace_working_state(), working);
+        assert_eq!(s.engine.document(), &document);
+        assert!(s.engine.can_undo());
+        assert_eq!(s.engine.configured_brush().flow, 0.32);
+    }
+
+    #[test]
+    fn sparse_overrides_only_reset_the_setting_explicitly_edited() {
+        let mut s = session();
+        let id = s.state.brush.preset;
+        let defaults = layer_core::default_brush(preset(id).unwrap());
+        let mut saved = s.capture_workspace().unwrap();
+        // A previously explicit value can become equal to an updated default.
+        saved
+            .working
+            .tools
+            .overrides
+            .insert(id, [("flow".into(), defaults.flow)].into());
+        s.adopt_workspace(PreparedWorkspace::new(saved).unwrap())
+            .unwrap();
+        s.dispatch(UiAction::SetBrushSize { value: 91. }).unwrap();
+        assert_eq!(
+            s.workspace_working_state().tools.overrides[&id]["flow"],
+            defaults.flow
+        );
+        s.dispatch(UiAction::SelectBrush {
+            id: Tool::Eraser.default_preset(),
+        })
+        .unwrap();
+        s.dispatch(UiAction::SelectBrush { id }).unwrap();
+        assert_eq!(s.state.brush.diameter, 91.);
+        s.dispatch(UiAction::SetToolSetting {
+            id: "flow".into(),
+            value: defaults.flow,
+        })
+        .unwrap();
+        assert!(!s.workspace_working_state().tools.overrides[&id].contains_key("flow"));
+        s.dispatch(UiAction::SetBrushSize {
+            value: defaults.diameter,
+        })
+        .unwrap();
+        assert!(s.workspace_working_state().tools.overrides.is_empty());
+        assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 1);
+    }
+
+    #[test]
+    fn workspace_adoption_rejects_invalid_state_and_active_artwork_without_side_effects() {
+        let mut s = session();
+        let captured = s.capture_workspace().unwrap();
+        let mut invalid = captured.clone();
+        invalid
+            .working
+            .tools
+            .overrides
+            .insert(0, [("future_setting".into(), 0.2)].into());
+        assert!(PreparedWorkspace::new(invalid).is_err());
+        let prepared = PreparedWorkspace::new(captured.clone()).unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+        let document = s.engine.document().clone();
+        let working = s.workspace_working_state();
+        assert!(s.adopt_workspace(prepared).is_err());
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.workspace_working_state(), working);
+        s.pen(event(&s, 2, PenPhase::Cancel, 0.)).unwrap();
+        s.frame(3, 3).unwrap();
+        s.workspace_history.begin(&s.state.workspace);
+        assert!(s.capture_workspace().is_err());
+        assert!(
+            s.adopt_workspace(PreparedWorkspace::new(captured).unwrap())
+                .is_err()
+        );
+        s.workspace_history.cancel(&mut s.state.workspace);
     }
 
     #[test]
