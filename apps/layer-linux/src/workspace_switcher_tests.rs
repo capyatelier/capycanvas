@@ -1,5 +1,171 @@
 use super::*;
+use crate::workspace::manager::now_ms;
 use layer_workspace::{DEFAULT_WORKSPACES, ManagerPage};
+
+#[test]
+#[ignore = "requires isolated workspace storage and a native GTK display"]
+fn native_active_workspace_delete() {
+    check_active_workspace_delete(false);
+}
+
+#[test]
+#[ignore = "requires isolated workspace storage and a native GTK display"]
+fn native_active_workspace_delete_with_occupied_default() {
+    check_active_workspace_delete(true);
+}
+
+fn check_active_workspace_delete(occupied_default: bool) {
+    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    let app = native_test_app("art.capycanvas.WorkspaceDelete");
+    let w = Workspace::new(&app);
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    let manager = w.workspaces.manager.as_ref().unwrap();
+    let original = manager.current().unwrap().capture().unwrap();
+    let create = |name: &str| {
+        glib::MainContext::default().block_on(async {
+            let incoming = manager
+                .create_workspace(name, None, false, now_ms())
+                .await
+                .unwrap();
+            w.workspaces.adopt(&w, Ok(incoming)).await;
+        });
+        pump(100);
+        manager.active_id().unwrap()
+    };
+    let deleted = create("Delete Me");
+    let other = layer_workspace::WorkspaceManager::new(manager.store.clone(), Platform::Gtk);
+    if occupied_default {
+        let incoming = glib::MainContext::default()
+            .block_on(other.prepare_switch(DEFAULT_WORKSPACES[1].0, now_ms()))
+            .unwrap();
+        other.activate(incoming);
+    }
+    let replacement = DEFAULT_WORKSPACES[if occupied_default { 0 } else { 1 }].0;
+    let expected = glib::MainContext::default()
+        .block_on(manager.load(replacement))
+        .unwrap()
+        .entity
+        .capture()
+        .unwrap();
+    for confirm in [false, true] {
+        w.workspaces.ui.show(&w, ManagerPage::Workspaces);
+        pump(400);
+        let more = menu_button(&row(&w, &deleted)).unwrap();
+        more.popup();
+        pump(100);
+        find_button(more.popover().unwrap().upcast_ref(), "Delete…")
+            .unwrap()
+            .emit_clicked();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let button = loop {
+            pump(20);
+            assert!(
+                find_named(w.window.upcast_ref(), "workspace-item-choice").is_none(),
+                "deleting the active workspace should not require a replacement picker"
+            );
+            if let Some(button) = find_button(w.window.upcast_ref(), "Delete") {
+                break button;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "delete confirmation did not open"
+            );
+        };
+        let dialog = button.ancestor(adw::AlertDialog::static_type()).unwrap();
+        find_button(&dialog, if confirm { "Delete" } else { "Cancel" })
+            .unwrap()
+            .emit_clicked();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            pump(20);
+            let is_deleted = glib::MainContext::default()
+                .block_on(manager.load(&deleted))
+                .unwrap()
+                .entity
+                .metadata
+                .deleted_at_ms
+                .is_some();
+            if (!confirm && !dialog.is_mapped())
+                || (confirm && is_deleted && manager.active_id().as_deref() == Some(replacement))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "delete did not finish: {:?}",
+                manager.error()
+            );
+        }
+        if !confirm {
+            assert_eq!(manager.active_id().as_ref(), Some(&deleted));
+            assert!(manager.switcher_ids().contains(&deleted));
+            assert!(
+                glib::MainContext::default()
+                    .block_on(manager.load(&deleted))
+                    .unwrap()
+                    .entity
+                    .metadata
+                    .deleted_at_ms
+                    .is_none()
+            );
+            find_button(w.window.upcast_ref(), "Cancel")
+                .unwrap()
+                .emit_clicked();
+            pump(300);
+        }
+    }
+    pump(300);
+    assert!(find_named(w.window.upcast_ref(), &format!("workspace-row-{deleted}")).is_none());
+    assert!(
+        find_named(
+            w.header.upcast_ref(),
+            &format!("workspace-switch-{deleted}")
+        )
+        .is_none()
+    );
+    assert!(!manager.switcher_ids().contains(&deleted));
+    assert_eq!(manager.current().unwrap().capture().unwrap(), expected);
+    if occupied_default {
+        assert_eq!(other.current().unwrap().capture().unwrap(), original);
+        assert!(other.lease_valid(now_ms()));
+    }
+    w.workspaces.ui.close();
+    pump(300);
+    w.window.close();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while w.window.is_visible() {
+        pump(20);
+        assert!(Instant::now() < deadline, "acknowledged close");
+    }
+    drop(w);
+    pump(30);
+    let reopened = Workspace::new(&app);
+    reopened.window.present();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !reopened.workspaces.ready.get() || reopened.workspaces.busy.get() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    let manager = reopened.workspaces.manager.as_ref().unwrap();
+    assert_eq!(manager.active_id().as_deref(), Some(replacement));
+    assert!(
+        !manager
+            .rows(ManagerPage::Workspaces, "", now_ms())
+            .iter()
+            .any(|row| row.id == deleted)
+    );
+    assert!(!manager.switcher_ids().contains(&deleted));
+    reopened.window.close();
+    pump(200);
+    glib::MainContext::default()
+        .block_on(other.close())
+        .unwrap();
+}
 
 fn send(dir: &std::path::Path, step: &mut usize, events: serde_json::Value) {
     std::fs::write(

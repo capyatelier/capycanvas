@@ -76,3 +76,35 @@ Linux tests select offscreen Vulkan; other hosts retain their native GPU backend
 The editor check includes actual Navigator pointer hits and a rendered-pixel
 check that zoomed paper appears through empty header space. These checks do not
 establish complete editor parity or hardware performance.
+
+### Focused browser debugging
+
+Use a recent Node.js and Chrome/Chromium. With the development server above
+running, run one focused suite per invocation from the repository root:
+
+```bash
+LAYER_TEST_VERBOSE=1 node apps/layer-web/test.mjs --headless --workspace-manager
+node apps/layer-web/test.mjs --headless --workspace-switcher
+node apps/layer-web/test.mjs --headless --workspace-focus
+```
+
+The [harness](../../apps/layer-web/test.mjs) launches a fresh temporary browser
+profile, waits for Wasm/WebGPU and workspace readiness, and removes the profile
+on exit. It uses Chrome DevTools Protocol directly; no Playwright installation
+is needed. Rebuild with `bash apps/layer-web/build.sh` after Rust changes.
+
+Follow [workspace-manager.test.mjs](../../apps/layer-web/workspace-manager.test.mjs)
+and [workspace-switcher.test.mjs](../../apps/layer-web/workspace-switcher.test.mjs)
+for DOM queries, real pointer injection, state checks and reload assertions.
+`evaluate` reads `layerApp.state()` and `JSON.parse(layerApp.app.workspace_view())`;
+`call` sends CDP input or captures screenshots. Wait for operations to finish,
+and check rendered controls as well as stored state. The switcher suite accepts
+`LAYER_TEST_ARTIFACTS` for its screenshot directory.
+
+Failures save `artifacts/ui/web-failure.png` and print page errors and GPU
+diagnostics; `LAYER_TEST_VERBOSE=1` also exposes browser stderr. A headless GPU
+startup failure or blank canvas needs checking against those diagnostics before
+attributing it to UI code. Headless mode still requires supported hardware
+WebGPU. On Linux, compare with a headed run on an isolated Wayland compositor via
+`bash tools/performance/workspace-motion.sh web --workspace-manager`; see the
+[Linux guide](linux.md#focused-ui-debugging) for that runner's dependencies.
