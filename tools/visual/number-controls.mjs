@@ -69,5 +69,7 @@ export async function captureNumberControls({fixture, width, height, scale, outp
   const png=Buffer.from(shot.data,'base64');
   assert.equal(png.readUInt32BE(16),width*scale);assert.equal(png.readUInt32BE(20),height*scale);
   await writeFile(output+'/web-'+fixture.name+'.png',png);
+  if(fixture.require_geometry_parity)assert(geometry.within_one_point,
+    'Numeric geometry differs by more than one logical pixel: '+JSON.stringify(geometry));
   console.log('Captured 30 production browser numeric controls: '+fixture.name);
 }

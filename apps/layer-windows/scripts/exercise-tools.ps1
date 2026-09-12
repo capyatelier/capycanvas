@@ -1,6 +1,23 @@
 param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CapyNumberKeys {
+ [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
+ [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
+ [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+ [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
+ public static void Key(uint process,ushort key) {
+   uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
+   if(owner!=process)throw new Exception("Review does not own keyboard focus; no keys sent.");
+   var inputs=new[]{new Input{type=1,keyboard=new Keyboard{key=key}},new Input{type=1,keyboard=new Keyboard{key=key,flags=2}}};
+   if(SendInput(2,inputs,40)!=2)throw new Exception("Windows rejected numeric editing key.");
+ }
+}
+'@
 $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected an isolated CapyCanvas review process'}
 function Model {
@@ -11,7 +28,7 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
     do{if(& $Condition){return};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
 }
-Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review startup did not complete' 45
+Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Review startup did not complete' 45
 if(!(Model).windows_isolated_settings){throw 'Use an isolated review settings profile'}
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 function Find([string]$Value,$Type=[System.Windows.Automation.ControlType]::Button,[switch]$Id){
@@ -76,7 +93,10 @@ function Check-Projection {
 }
 if(!@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count){
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
-    (Control 'Tool panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    $window=(Model).application_menus|Where-Object id -eq 'window'
+    $toolMenu=$window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.panel -eq 'tool_settings'}
+    if(!$toolMenu){throw 'Shared Tool panel menu is missing'}
+    (Control $toolMenu.label ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count -gt 0} 'Tool panel did not open'
 }
 if(!@((Model).layout.groups|Where-Object active -eq 'tool_settings').Count){Invoke-Id 'panel-tab-tool_settings'}
@@ -90,6 +110,17 @@ Focus (Field 'opacity')
 Wait-Until {[Math]::Abs((Value 'flow')-.42) -lt .0001} 'Flow expression was not committed through the shared core'
 if(((Field 'flow').GetRuntimeId() -join ':') -ne $original){throw 'A value update replaced the tool field'}
 if(((Control 'tool-subtool-0' -Id).GetRuntimeId() -join ':') -ne $subtool){throw 'A value update replaced the subtool button'}
+# A range edit replaces an invalid text draft and must keep the formatted units.
+Draft 'flow' 'invalid'
+$flowSlider=Control 'tool-setting-flow-slider' ([System.Windows.Automation.ControlType]::Slider) -Id
+Focus $flowSlider
+$flowSlider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(1)
+Wait-Until {[Math]::Abs((Value 'flow')-1) -lt .0001} 'Slider did not replace the numeric draft'
+Focus (Field 'opacity')
+Wait-Until {(Field 'flow').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '100.0 %'} 'Slider lost units or retained the invalid numeric draft'
+if((Control 'tool-setting-flow-increase' -Id).Current.IsEnabled){throw 'Increase remained enabled at the numeric maximum'}
+Draft 'flow' '42';Focus (Field 'opacity')
+Wait-Until {[Math]::Abs((Value 'flow')-.42) -lt .0001} 'Flow did not restore after the slider draft check'
 # Native focus can leave the field before an accessibility invocation runs.
 # That may commit to the old brush; the detached draft must never overwrite
 # the newly selected brush, including when focus moves again afterwards.
@@ -126,6 +157,21 @@ Invoke-Control 'Undo'
 # All catalog tools must be reachable and project the actual shared schema.
 $tools=@('pen','pencil','brush','eraser','airbrush','decoration','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill')
 foreach($tool in $tools){Select-Tool $tool;Check-Projection}
+# Exercise real keyboard routing through the native spin field and Rust policy.
+Select-Tool 'auto_select'
+Draft 'gap_closing' '6 * 2'
+[CapyNumberKeys]::Key($ProcessId,0x0D)
+Wait-Until {(Value 'gap_closing') -eq 12} 'Enter did not commit the spin expression'
+[CapyNumberKeys]::Key($ProcessId,0x26)
+Wait-Until {(Value 'gap_closing') -eq 13} 'Up did not step the spin control'
+[CapyNumberKeys]::Key($ProcessId,0x28)
+Wait-Until {(Value 'gap_closing') -eq 12} 'Down did not step the spin control'
+Draft 'gap_closing' 'invalid'
+[CapyNumberKeys]::Key($ProcessId,0x26)
+Wait-Until {(Field 'gap_closing').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'invalid'} 'Invalid spin input was discarded'
+[CapyNumberKeys]::Key($ProcessId,0x1B)
+Wait-Until {(Field 'gap_closing').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '12'} 'Escape did not cancel the invalid spin draft'
+if((Value 'gap_closing') -ne 12){throw 'Invalid spin input changed the shared value'}
 # A long brush schema must retain its actual native scroll container and offset
 # when a visible slider changes a value. An offscreen UIA slider intentionally
 # scrolls into view, so it cannot test this retention invariant.
@@ -140,12 +186,22 @@ while($cursor){
     $cursor=$walker.GetParent($cursor)
 }
 if(!$scroll){throw 'Long tool settings did not expose native scrolling'}
-$slider=Control 'tool-setting-water_load-slider' ([System.Windows.Automation.ControlType]::Slider) -Id
-Focus $slider
+# The automation scroll request focuses the first numeric field. Let that
+# field's queued bring-into-view finish before issuing the explicit scroll.
+Focus (Field 'size')
+$settled=@{key='';count=0}
+Wait-Until {
+    $geometry=@($scroll.Current.VerticalScrollPercent,$scroll.Current.VerticalViewSize,(Field 'size').Current.BoundingRectangle.ToString()) -join ':'
+    if($geometry -eq $settled.key){$settled.count++}else{$settled.key=$geometry;$settled.count=0}
+    $settled.count -ge 3
+} 'Initial numeric focus did not settle'
 $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,100)
 Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-100) -lt .01} 'Tool panel did not finish scrolling'
 $scrollIdentity=$cursor.GetRuntimeId() -join ':'
 $slider=Control 'tool-setting-water_load-slider' ([System.Windows.Automation.ControlType]::Slider) -Id
+if($slider.Current.IsOffscreen){throw 'Scroll retention requires a visible slider'}
+Focus $slider
+Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-100) -lt .01} 'Focusing the visible slider changed scrolling'
 $slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.35)
 Wait-Until {[Math]::Abs((Value 'water_load')-.35) -lt .0001} 'Tool slider did not update shared water load'
 if(($cursor.GetRuntimeId() -join ':') -ne $scrollIdentity -or [Math]::Abs($scroll.Current.VerticalScrollPercent-100) -gt .01){throw 'Tool edit replaced or reset scrolling'}
@@ -175,6 +231,6 @@ Check-Projection
 Invoke-Id 'tool-action-cancel_transform'
 Wait-Until {@((Model).state.tool_actions|Where-Object command -eq 'cancel_transform').Count -eq 0} 'Transform cancel did not finish'
 Select-Tool 'pen'
-[pscustomobject]@{tool_and_subtool_projection='passed';shared_numeric_expression='passed';retained_fields_and_buttons='passed';retained_scrolling='passed';
+[pscustomobject]@{tool_and_subtool_projection='passed';shared_numeric_expression='passed';spin_keyboard_editing='passed';slider_cancels_numeric_draft='passed';retained_fields_and_buttons='passed';retained_scrolling='passed';
     stale_tool_draft='passed';target_context_replacement='passed';figure_schema_change='passed';gradient_subtools='passed';ruler_toggle='passed';transform_cancel='passed';
     scope='native UI Automation and shared state; physical input and full-editor visual parity remain open'}|ConvertTo-Json

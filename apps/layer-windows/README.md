@@ -932,3 +932,62 @@ native and Wasm builds and strict Windows Clippy passing. Full-image differences
 remain, including panel shadows, numeric controls, layer rows and system glyphs.
 Full editor visual/gesture parity, physical input, DPI/device recovery, packaging,
 strict GPU reference agreement and final 120 Hz acceptance remain open.
+
+## Numeric control comparison
+
+Panel controls use a 24-DIP formatted value row above a 24-DIP track, shared
+six-DIP gaps and label insets, and a thumb-free grey range. A retained native
+TextBox handles editing; an unfocused formatted readout avoids reserving caret
+space in the shared layout. Spin fields use a 60 x 32 entry and adjacent 32-DIP
+steps. Native keys, expressions, units, bounds and slider mapping use the Rust
+numeric policy. A slider change cancels a previous text draft. Step icons reflect
+both numeric bounds and disabled ancestors.
+
+Preferences place descriptions in the name/value header above the range, with
+34-DIP value fields, 32-DIP tracks, accent fill and a visible native thumb. Numeric
+content retains the same width and label alignment as surrounding settings.
+
+The review executable replaces only the application entry point when
+CapyControlFixture=true. Normal builds continue to use App.cpp. The synthetic
+fixture uses production Windows numeric controls and shared Rust models, with
+no GPU document or user storage. It captures 30 controls at 160, 226 and 320-DIP
+widths, covering bounds, intermediate values, long labels and disabled controls.
+Keep review outputs separate from the production executable:
+
+~~~powershell
+cargo run --locked -p layer-windows --example number-fixture -- artifacts/windows/numeric-matrix
+$numberOutput=Join-Path (Get-Location) 'artifacts/windows/NumberReview/'
+$numberObjects=Join-Path (Get-Location) 'artifacts/windows/obj/NumberReview/'
+msbuild apps/layer-windows/CapyCanvas.vcxproj /m /p:Configuration=Debug /p:Platform=x64 /p:CapyControlFixture=true "/p:OutDir=$numberOutput" "/p:IntDir=$numberObjects"
+$env:CAPY_CHROME=Join-Path $env:ProgramFiles 'Google/Chrome/Application/chrome.exe'
+foreach($theme in @('light','dark')) {
+    ./apps/layer-windows/scripts/capture-number-controls.ps1 -Executable (Join-Path $numberOutput 'CapyCanvas.exe') -FixtureFile "artifacts/windows/numeric-matrix/fixture-windows-$theme.json"
+    $native=Get-Content "artifacts/windows/numeric-matrix/native-windows-$theme.json" -Raw|ConvertFrom-Json
+    node tools/visual/chrome-capture.mjs 734 652 $native.scale artifacts/windows/numeric-matrix $theme number-controls "artifacts/windows/numeric-matrix/native-windows-$theme.json"
+    if($LASTEXITCODE -ne 0){throw 'Numeric browser comparison failed'}
+}
+~~~
+
+Pass CapyPackages as in the development guide when packages are stored outside
+the checkout. Captures retain the complete raw client and record the measured
+surface boundary. The browser uses its production DOM/CSS and fails if a required
+control is missing or geometry differs by more than one logical pixel. The
+native fixture also checks formatted text, step availability and disabled icon
+opacity. These controls do not exercise a painting workload or physical input.
+
+The numeric milestone passes all 30 production controls in each theme at 1.5
+scale, with a maximum geometry difference of 0.021 logical pixels and no missing
+or extra controls. The complete, zero-tolerance image comparisons still differ
+in 4.31–4.34% of pixels; geometry acceptance does not establish raster identity.
+The Pen & Input settings layout was visually inspected in both themes.
+
+Native tools, Preferences/status, color, effects and layers checks pass, including
+real Enter/Up/Down/Escape routing, expression and invalid-draft handling, and
+retained control/scroll behavior. Production and review native builds, Wasm,
+strict Windows Clippy and 442 unit tests pass (four explicit GPU tests excluded).
+Four production editor captures retain the header, Tool Set and camera checks;
+whole-editor raster acceptance remains open. Integration includes the other
+ports through ebc507a. The shared drag convention, physical input, mixed-DPI and
+device recovery, packaging, strict renderer reference agreement and final 120 Hz
+painting/input acceptance still need completion. See the implementation history
+for the scope and remaining renderer failure.

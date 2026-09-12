@@ -137,8 +137,8 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             text.Children().Clear();
             auto numericField=number(data,titleText,object(kind,L"control"),
                 [data=data,id]{return num(object(rowFor(data,id),L"kind"),L"value");},
-                [data=data,id](double value){edit(data,id,N(value));},bindings,&commits);
-            if(!str(row,L"description").empty())text.Children().Append(description(data,str(row,L"description")));
+                [data=data,id](double value){edit(data,id,N(value));},bindings,&commits,false,L"",false,
+                NumberPresentation{true,str(row,L"description")});
             text.Children().InsertAt(0,numericField);Grid::SetColumnSpan(text,2);
         }else if(type==L"switch"){
             ToggleSwitch control;control.MinWidth(0);control.OnContent(box_value(L""));control.OffContent(box_value(L""));

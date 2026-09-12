@@ -138,7 +138,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     [weak,id]{if(auto self=weak.lock())return num(find(array(self->data->state,L"tool_settings"),L"id",id),L"value");return 0.;},
                     [weak,id,context](double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
                         self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));},fields,nullptr,false,L"tool-setting-"+id);
-                AutomationProperties::SetAutomationId(control,L"tool-setting-"+id);root.Children().Append(control);
+                AutomationProperties::SetAutomationId(control,L"number-root-tool-setting-"+id);root.Children().Append(control);
             }
             for(auto value:actions){
                 auto item=value.GetObject();auto id=str(item,L"command");auto command=find(array(data->state,L"commands"),L"id",id);

@@ -6,7 +6,7 @@ if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected a controlled CapyCanvas re
 $watch=[Diagnostics.Stopwatch]::StartNew()
 do {$app.Refresh();if($app.HasExited){throw 'Review app exited'};if($app.MainWindowHandle -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100} while($watch.Elapsed.TotalSeconds -lt 30)
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
-$script:scope=$root
+$script:settingsScope=$root
 function Read-Model {
     try {
         $snapshot=Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
@@ -17,7 +17,7 @@ function Read-Model {
 function Find-Control([string]$Name,$Type) {
     $nameCondition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name)
     $typeCondition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type)
-    $scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new($nameCondition,$typeCondition))
+    $script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new($nameCondition,$typeCondition))
 }
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$TimeoutSeconds=5) {
     $watch=[Diagnostics.Stopwatch]::StartNew()
@@ -25,8 +25,9 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$TimeoutSecond
     throw $Message
 }
 function Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
-    Wait-Until {Find-Control $Name $Type} "Missing control: $Name"
-    Find-Control $Name $Type
+    $hit=@{element=$null}
+    Wait-Until {$hit.element=Find-Control $Name $Type;$null -ne $hit.element} "Missing control: $Name"
+    $hit.element
 }
 function Invoke-Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
     (Control $Name $Type).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -50,14 +51,13 @@ function Edit-Text([string]$Name,[string]$Value) {
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
 }
 function Open-Preferences {
-    $script:scope=$root
+    $script:settingsScope=$root
     Invoke-Control 'Preferences'
-    Wait-Until {Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)} 'Preferences did not become visible after an open request'
-    $script:scope=Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+    $script:settingsScope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences {
     Invoke-Control 'Close'
-    $script:scope=$root
+    $script:settingsScope=$root
     Wait-Until {!(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }
 Wait-Until {Read-Model} 'Launch this review instance with CAPY_TRACE_UI=1 and pass its ui-state.json file' 30
@@ -71,10 +71,10 @@ $originalTheme=(Read-Model).state.settings.theme
 $restoreTheme=if($originalTheme -eq 'dark'){'Dark'}elseif($originalTheme -eq 'light'){'Light'}else{'System'}
 foreach($choice in @('Light','Dark',$restoreTheme)){
     (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    $script:scope=$root
+    $script:settingsScope=$root
     (Control $choice ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Read-Model).state.settings.theme -eq $(if($choice -eq 'System'){$null}else{$choice.ToLowerInvariant()})} 'Color theme preference did not update'
-    $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+    $script:settingsScope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 $base=Read-Text 'Dark theme base color'
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
@@ -149,11 +149,11 @@ function Set-ClockPreference([string]$Policy){
     Invoke-Control 'Appearance'
     $picker=Control 'Show battery and clock' ([System.Windows.Automation.ControlType]::ComboBox)
     $picker.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    $script:scope=$root
+    $script:settingsScope=$root
     $choice=@{always='Always';never='Never';fullscreen='In fullscreen mode'}[$Policy]
     (Control $choice ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Read-Model).state.settings.show_clock -eq $Policy} 'Shared status preference did not change'
-    $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+    $script:settingsScope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
     Close-Preferences
 }
 Add-Type -TypeDefinition @'

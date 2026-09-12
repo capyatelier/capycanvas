@@ -26,7 +26,7 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
     do{if(& $Condition){return};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
 }
-Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review startup did not complete' 45
+Wait-Until {$app.Refresh();$app.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Review startup did not complete' 45
 if(!(Model).windows_isolated_settings){throw 'Use an isolated review settings profile'}
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button){
@@ -73,8 +73,18 @@ function Capture([string]$Name){
     & $Python (Join-Path $repo 'tools/visual/check_color_wheel.py') $png $json --oracle (Join-Path $repo 'target/debug/examples/color_wheel_reference.exe') --output (Join-Path $run ($Name+'-report.json'))
     if($LASTEXITCODE -ne 0){throw "Color pixel comparison failed: $Name"}
 }
+$window=(Model).application_menus|Where-Object id -eq 'window'
+$colorMenu=$window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.panel -eq 'color'}
+if(!$colorMenu){throw 'Shared Color panel menu is missing'}
+# Reopen from a hidden baseline so the current default's docked Color tab does
+# not leave the wheel clipped while its numeric fields receive native focus.
+if($colorMenu.selected){
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+    (Control $colorMenu.label ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {!@((Model).layout.groups|Where-Object {$_.panels -contains 'color'}).Count} 'Color panel did not hide'
+}
 & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
-(Control 'Color panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+(Control $colorMenu.label ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
 $null=Control 'Color wheel' ([System.Windows.Automation.ControlType]::Image)
 $original=(Control 'Hue' ([System.Windows.Automation.ControlType]::Edit)).GetRuntimeId() -join ':'
 Component 'Hue' 0 '120 + 30' 150 'Saturation'
@@ -92,7 +102,11 @@ Capture 'hls'
 Edit 'Hue' '270'
 Invoke-Control 'Background color'
 Wait-Until {(Model).state.colors.paint_slot -eq 'background'} 'Background slot was not selected'
-if(((Model).state.colors.foreground|ConvertTo-Json -Compress) -ne ($before|ConvertTo-Json -Compress)){throw 'Changing slots committed a stale draft'}
+# Focus loss may commit to the old foreground before the slot action runs.
+# After switching, the old draft must never reach the new background owner.
+$before=(Model).state.colors.foreground
+Focus (Control 'Hue' ([System.Windows.Automation.ControlType]::Edit))
+Focus (Control 'Lightness' ([System.Windows.Automation.ControlType]::Edit))
 if(((Model).state.colors.background|ConvertTo-Json -Compress) -ne '[1.0,1.0,1.0,1.0]' -and ((Model).state.colors.background|ConvertTo-Json -Compress) -ne '[1,1,1,1]'){throw 'Changing slots overwrote the background'}
 Invoke-Control 'Transparent paint'
 Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent paint was not selected'

@@ -55,7 +55,7 @@ which remains authoritative for availability, dependencies, application and
 persistence. The separate legacy preference-slider action has been removed.
 
 GTK calls the policy directly; web uses `WebApp.number_input`; Android uses
-the stateless `Native.number` JNI call. No GPU handle/lock or UI-state snapshot
+the stateless `Native.number` JNI call, and Windows uses `capy_number`. No GPU handle/lock or UI-state snapshot
 is needed to evaluate a number. Hosts own native focus, gesture capture,
 unfinished text and transient display state only.
 

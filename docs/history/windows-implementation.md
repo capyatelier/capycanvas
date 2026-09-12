@@ -1643,3 +1643,59 @@ analysis through 219cda5. Both new Chrome capture scenarios remain available.
 Native builds, the tool regression fixture and the strengthened lifecycle fixture
 pass; the merged Chrome runner passes the four hardware editor captures and Tool
 Set geometry checks. Capture artifacts and isolated profiles stay ignored/local.
+
+## Native numeric controls and editing — 2026-09-12
+
+Windows panel numbers now follow the shared 24-DIP value/track rows, label
+insets, six-DIP gaps, rounded spin fields, formatted value widths and disabled
+step appearance. A retained TextBox owns native editing and accessibility; a
+plain unfocused readout avoids the hidden caret gutter affecting the shared
+layout. Unchanged text reuses its measured width. The implementation lives in
+NumberControl.cpp so changing the common control no longer recompiles every
+panel. Compact layer opacity and value-only color entries retain their shared
+numeric policy and target guards.
+
+Preferences use 34-DIP value fields, 32-DIP ranges, accent fill and native thumbs.
+Descriptions remain with the title above the track. The Pen & Input page was
+visually inspected in light and dark themes. Enter commits, Escape cancels, and
+spin Up/Down route through preview key handling before TextBox consumes them.
+A slider replaces an invalid text draft and restores formatted units. Numeric
+math, bounds, stepping, parsing and formatting continue to use shared Rust.
+
+A separate opt-in review entry point instantiates production Windows controls
+from a Rust-generated synthetic sheet, without a document or user storage.
+Thirty controls in each theme cover three widths, endpoints, intermediate values,
+long labels and disabled ancestors. Native value/step/opacity assertions pass,
+as do the browser's required geometry checks: no missing or extra controls and
+maximum error 0.020203 logical pixels at 1.5 scale. Full unmasked zero-tolerance
+comparisons retain raster differences in 4.34% of light and 4.31% of dark pixels.
+These results establish control geometry, not identical native/browser pixels.
+
+Native tools, settings/status, color, effects and layers fixtures pass. Coverage
+includes actual Enter/Up/Down/Escape delivery to the owned native window,
+expressions and invalid drafts, retained controls, model/context replacement,
+preview painting and exact undo. UI Automation scroll setup now settles the first
+field's queued bring-into-view before requesting the final offset; subsequent
+visible-slider edits retain both the scroll object and position. Preferences
+lookup retains the actual observed dialog/control instead of a second lookup.
+Color startup waits for workspace adoption and checks that a departed slot's
+draft cannot affect the newly selected slot.
+
+Production and fixture native builds, release Wasm, strict Windows Clippy and
+442 unit tests pass (24 host, 278 UI, 91 Windows, 49 workspace; four explicit GPU
+tests excluded). The latest four production editor captures at 960 x 660 logical
+and 1.5 scale retain header error at most 1.665 physical pixels, Tool Set error
+at most 0.501, and matching camera viewport/zoom/translation/work area. Full-image
+raster differences remain, including shadows, layer rows and color/control
+rendering details. Main integration through ebc507a includes other-port work and
+the shared drag rules; the merged Chrome runner passes both numeric themes and
+all four editor captures.
+
+The broader renderer's existing strict filter-reference failure remains open
+(maximum channel error 30 versus tolerance 1); this milestone does not replace
+that reference or relax the gate. Whole-editor visual/gesture/scroll/overlap
+parity, the drag pickup convention, physical pressure/tilt/eraser/touch input,
+mixed-DPI/suspend/device recovery, distribution packaging and final sustained
+120 Hz painting plus physical input-to-present acceptance remain open. No
+presentation benchmark ran. Profiles, documents, captures, logs and binaries
+remain ignored/local. The goal remains active.
