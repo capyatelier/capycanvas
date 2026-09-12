@@ -549,6 +549,54 @@ class AndroidInteractionTest {
             }
     }
 
+    @Test fun collapsedDividerDropsHaveForgivingTargetsAndAlignedPreviews() {
+        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
+        for (edge in listOf("left", "right")) {
+            fixture.getJSONObject("layout").put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to edge, "extent" to 252, "root" to obj("kind" to "split", "id" to 41,
+                    "axis" to "vertical", "fraction" to .5, "first" to tabs(42, "brushes"), "second" to tabs(43, "sizes"))),
+                obj("id" to 44, "edge" to if (edge == "left") "right" else "left", "extent" to 252,
+                    "root" to tabs(45, "layers", "properties", "adjustments")))))
+            for (pointer in pointerTools) for (mode in listOf("-15", "0", "15", "merge", "cancel")) {
+                tool = pointer; restore()
+                for (id in listOf(42, 45)) customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to true))
+                val before = workspace()
+                val tile = bounds("column-icon-sizes")
+                val divider = bounds("column-divider-41-1").center
+                assertEquals("Native/shared separator alignment", tile.top - 6 * density, divider.y, 1f)
+                val destination = if (mode == "merge") tile.center else divider + Offset(0f, (mode.toFloatOrNull() ?: 15f) * density)
+                event(MotionEvent.ACTION_DOWN, bounds("column-icon-layers").center); SystemClock.sleep(700)
+                event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
+                event(MotionEvent.ACTION_MOVE, destination)
+                waitFor("$edge/$pointer/$mode preview") { host.workspaceGeometry?.hint != null && exists("workspace-drop-hint") }
+                settle()
+                assertEquals("Pickup closes the held menu", 0, popupCount())
+                val hint = host.workspaceGeometry!!.hint!!
+                val target = hint.getJSONObject("target")
+                if (mode == "merge") assertEquals("tab", target.getString("kind"))
+                else {
+                    assertEquals("split", target.getString("kind")); assertEquals(43, target.getInt("group"))
+                    assertEquals("top", target.getString("edge"))
+                    assertEquals("Preview stays on the divider", divider.y, bounds("workspace-drop-hint").center.y, 1f)
+                }
+                event(if (mode == "cancel") MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP); settle()
+                assertFalse(exists("workspace-drop-hint"))
+                if (mode == "cancel") { assertEquals(before, workspace()); continue }
+                val after = workspace()
+                assertEquals(0, state().getJSONObject("workspace").getJSONObject("layout").array("floating").length())
+                val column = snapshot().getJSONObject("layout").array("collapsed").objects().first { it.getInt("id") == 41 }
+                val groups = column.array("groups").objects()
+                assertEquals(if (mode == "merge") 2 else 3, groups.size)
+                val panels = groups[1].array("icons").objects().map { it.getString("panel") }
+                if (mode == "merge") assertTrue("Center still merges tabs", "layers" in panels && "sizes" in panels)
+                else assertEquals(listOf("layers"), panels)
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
+                action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(after, workspace())
+            }
+        }
+    }
+
     @Test fun emptyHeadersCollapseButTabsDoNot() {
         fixture.getJSONObject("layout").array("bands").objects().forEach { it.getJSONObject("root").put("tab_style", "icon") }
         for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (id in listOf(41, 43)) {
