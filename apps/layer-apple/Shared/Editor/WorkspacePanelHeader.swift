@@ -26,7 +26,7 @@ struct WorkspacePanelHeader: View {
     }
     @ViewBuilder private var tabs: some View {
         ForEach(group["panels"].array.indices, id: \.self) { index in
-            let tab = store.snapshot["panels"].array.first { $0["id"].string == group["panels"][index].string } ?? JSON()
+            let tab = store.panel(group["panels"][index].string)
             let selected = tab["id"].string == group["active"].string
             Button { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) } label: {
                 HStack(spacing: 6) {

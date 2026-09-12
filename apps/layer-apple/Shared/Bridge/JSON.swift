@@ -4,8 +4,18 @@ import Foundation
 struct JSON: @unchecked Sendable {
     let raw: Any
     init(_ raw: Any = NSNull()) { self.raw = raw }
-    subscript(_ key: String) -> JSON { JSON((raw as? [String: Any])?[key] ?? NSNull()) }
+    // Keep each container in its original representation. Decoded Foundation
+    // dictionaries otherwise bridge every member on each UI field access;
+    // sending Swift-created dictionaries through NSDictionary has the inverse cost.
+    subscript(_ key: String) -> JSON {
+        if type(of: raw) is NSDictionary.Type { return JSON((raw as! NSDictionary)[key] ?? NSNull()) }
+        return JSON((raw as? [String: Any])?[key] ?? NSNull())
+    }
     subscript(_ index: Int) -> JSON {
+        if type(of: raw) is NSArray.Type {
+            let values = raw as! NSArray
+            return index >= 0 && index < values.count ? JSON(values[index]) : JSON()
+        }
         let values = raw as? [Any] ?? []
         return values.indices.contains(index) ? JSON(values[index]) : JSON()
     }

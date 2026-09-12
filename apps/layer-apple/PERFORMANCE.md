@@ -336,6 +336,174 @@ not close the 90 Hz Mac / 120 Hz iPad performance gates. Further investigation
 must include drawable waiting and presentation scheduling as well as the
 remaining ten-minute workload matrix.
 
+## Native UI lookup investigation
+
+The shared Swift transport now reads Foundation-decoded dictionaries and arrays
+in their original representation. Native Swift containers retain their Swift
+lookup path. Previously, each decoded dictionary field access could bridge the
+whole dictionary into Swift; an earlier iPad CPU profile attributes substantial
+main-thread work to these lookups. This supporting change has not established
+an overall drawing-performance improvement.
+
+The recursive transport check covers 219,911 values, including all 40 captured
+wire snapshots, plus native/Foundation containers, missing fields, array bounds,
+Unicode, full-width unsigned integers, immutable replacements and round trips.
+Both Release targets build, and the direct SwiftUI drawer/action check passes.
+These checks establish transport compatibility, not complete UI workflow or
+pixel parity.
+
+A CPU-only command-field traversal of those 40 snapshots, repeated in four
+alternating rounds of 100 traversals on the development Mac, averages 11.642 ms
+with the old decoded-container lookup and 2.990 ms with the candidate. Fully
+native Swift trees average 1.173 and 1.287 ms respectively; the representation
+check has a small cost there. A discarded Foundation-only variant took 4.804 ms
+for native trees, which is why the candidate preserves both lookup paths. These
+are whole-traversal component timings, not single-frame or physical iPad times.
+
+Forty-five-second physical `wet-watercolor-4k` runs before and after the lookup
+change retain the full workspace, prediction, recovery, ten-second warm-up and
+postlude. GPU timing is disabled. Source is `afa058a` plus the candidate for the
+after runs. No CPU sampler or build runs during these measured intervals. The
+pairs are exploratory; ordering, cache and thermal history are not calibrated.
+
+| Host / lookup | CPU owner p99 / max, ms | CPU frames over target | Continuous interval p99 / max, ms | Long continuous intervals / total |
+| --- | --- | --- | --- | --- |
+| iPad / previous | 8.757 / 10.196 | 54 | 16.667 / 41.667 | 67 / 4,922 |
+| iPad / candidate | 9.133 / 17.573 | 75 | 16.667 / 41.665 | 62 / 4,900 |
+| Mac / previous | 5.395 / 12.076 | 1 | 22.222 / 66.667 | 47 / 3,696 |
+| Mac / candidate | 5.499 / 7.348 | 0 | 22.222 / 55.556 | 47 / 3,709 |
+
+All four measured intervals complete with zero rejected input batches, renderer
+errors, recorder overflow, missing presentation callbacks and zero-time
+presentations. Their full traces retain zero-time presentations outside the
+measured interval: respectively 3, 1, 2 and 1 in table order. Continuous interval
+counts use the existing target-period plus 5% tolerance. Mac remains evaluated
+at 90 Hz and iPad at 120 Hz. The iPad CPU tail and both presentation gates remain
+open; a faster lookup benchmark does not close them.
+
+The ordinary before traces show many long presentation intervals with a long
+gap between frame admissions and no intervening denied display-link tick.
+The largest examples repeat shortly after stroke contact begins, with fast
+drawable acquisition in the following frame. This motivates investigating main
+run-loop/UI work as well as drawable waits; it does not by itself identify the
+blocking function.
+
+A headless hardware-backed state probe with both Apple presets confirms that
+stroke down/up legitimately changes roughly 100 UI fields, mostly menu/command
+enablement and toolbar/history controls; ordinary moves produce no new full
+snapshot. Suppressing those boundary updates would lose behavior. A subsequent
+25-second Mac Time Profiler run completes in a 27 MB bundle. In its segment after
+15 seconds, the main thread has 718 ms of sampled weight; 437 ms includes
+AttributeGraph updates, while JSON field access accounts for 48 ms inclusively.
+These sampled categories overlap and are diagnostic, not frame-budget evidence.
+This points the next investigation toward repeated UI graph work when applying
+required updates. Both probes remain local under `artifacts/apple-ui-state-probe`
+and `artifacts/apple-json-ui-profile-*`.
+
+Separate 45-second Metal System Trace recordings generated about 35 GB of data.
+Their analysis was stopped after prolonged CPU-heavy processing. They produced
+no accepted isolated-GPU result and are excluded from the table. The completed
+in-app 90-second traces recorded alongside them are diagnostic only. Partial
+Instruments bundles, frame traces, captures, build logs and detailed comparison
+reports remain in ignored `artifacts/apple-json-*`, `artifacts/apple-metal-*`
+and `artifacts/performance/*json-lookup*` paths.
+
+## Selective native UI observation
+
+Both Apple editors now retain one canonical immutable JSON snapshot and expose
+live, main-actor readers for fields and individual command, panel and menu
+entries. Required changes in stroke-boundary enablement still reach the UI.
+Unchanged readers no longer receive a whole-editor publication, and camera-only
+patches preserve the command/panel/menu indexes. The in-app menu view also owns
+its array reads, preventing menu enablement from invalidating the entire iPad
+editor through the header. Document and lifecycle consumers explicitly take
+immutable whole-state copies. Rust remains authoritative for values and actions.
+
+All related projections are staged before any observation signals are sent.
+Comparisons preserve key presence, nulls, Boolean/number distinctions, precise
+integers, signed zero and array order. Only previously read fields need their
+individual values compared; whole-object readers additionally detect changes
+to unread fields. This avoids allocating observation nodes and recursively
+comparing values for unused fields. Retained JSON values never become live
+mutable state.
+
+Standalone checks cover those semantics and all 54 local wire fixtures (40
+deterministic transport snapshots plus 14 hardware-backed stroke snapshots).
+An invisible SwiftUI hosting view verifies fresh rendered values, unchanged
+unrelated bodies, camera patches and no-op snapshots, including a child that
+retains a field reader without its parent rebuilding. Direct shared drawer,
+window-presentation and document workflow checks also pass. These checks use
+no system menu automation. They do not establish full visual or physical-input
+acceptance.
+
+An initial candidate compared every field. A completed 25-second Mac CPU profile
+showed 577 ms of main-thread sampled weight in its segment after 15 seconds,
+versus 718 ms in the preceding lookup-only profile. Inclusive AttributeGraph
+update weight fell from 437 to 283 ms, while `EditorStore.receive` rose from 9
+to 110 ms. These overlapping samples motivated the final restriction to read
+fields; they do not measure the final version or establish a frame-rate gain.
+The first candidate's clean 45-second pair likewise did not establish a cadence
+improvement: Mac long continuous intervals increased from 47/3,709 to 55/3,721,
+and iPad from 62/4,900 to 106/4,947. Raw profiles and intermediate comparisons
+remain private in ignored `artifacts/apple-projection-*` and
+`artifacts/performance/*ui-projection*` paths.
+
+The final implementation incorporates the shared changes through `9019e23`.
+All 307 relevant Rust checks pass (34 Apple bridge, 18 host, 255 UI; one existing
+hardware-only host check remains ignored). The final 40 value/byte snapshot
+pairs are identical, and their decoded values also match the preceding
+checkpoint. Both Release targets build, and the signed iPad build installs and
+launches. The command audit still covers all 62 commands on each host; inventory
+coverage alone does not close their behavioral acceptance.
+
+The final clean 45-second Mac `wet-watercolor-4k` run on the 90 Hz display
+records 3,764 measured presentations. CPU owner service p50/p95/p99/max is
+3.395/4.913/5.560/14.519 ms, with one frame above 11.11 ms. Continuous
+presentation interval p50/p95/p99/max is 11.111/11.111/22.222/44.445 ms;
+49 of 3,735 intervals exceed the target period plus 5% tolerance. The interval
+has no rejected input, renderer errors, recorder overflow, missing callbacks
+or zero-time presentations. There is one zero-time presentation outside it.
+Measured footprint grows 15.25 MiB and thermal state stays nominal. This is a
+short CPU/presentation observation with GPU timing disabled and does not
+establish a cadence improvement, physical-input latency or sustained acceptance.
+
+The final 45-second iPad run at 120 Hz records 4,995 measured presentations.
+CPU owner service p50/p95/p99/max is 2.061/3.509/9.095/12.703 ms, with 87 frames
+above 8.33 ms. Continuous interval p50/p95/p99/max is
+8.333/8.334/16.667/33.334 ms; 83 of 4,966 intervals exceed the target plus 5%
+tolerance. Its measured interval has no rejected input, renderer errors,
+overflow, missing callbacks or zero-time presentations. The complete trace
+contains six zero-time presentations outside that interval. Measured footprint
+falls 7.41 MiB and thermal state stays nominal. GPU timing is disabled. Neither
+the CPU tail nor presentation cadence meets the iPad acceptance target.
+
+The preceding iPad launch produced no trace and subsequently disappeared from
+the process list. Its short diagnostic CPU recording contained no samples;
+the cause of termination was not established. That attempt contributes no
+performance result. After confirming it had ended, the same installed binary
+was launched with console logging. The successful run above logged preparation,
+measurement completion and postlude before exporting a fresh trace. Console
+logging was connected for that iPad run, with phase messages only; no profiler
+or build ran during its measured interval. The final Mac run used no console
+connection. This environmental difference and the short sample sizes limit
+comparisons; neither host's results establish a frame-rate improvement.
+
+The later Android presentation and independent workspace-storage changes through
+`13d139c` are also integrated. They change no Apple source or existing dependency
+lock entries; the new storage crate is not an Apple dependency yet. New shared
+workspace-manager flows and tab-drag animation parity remain separate work.
+
+The final delivery additionally integrates tab-drag and workspace-transition
+changes through `f6c58a7`. Both Release builds, all 310 relevant Rust checks
+(34 Apple, 18 host, 258 UI), the direct drawer workflow and the 54-fixture Swift
+observation check pass. All 40 value/byte snapshot pairs still match the earlier
+values exactly. Both final apps complete a five-second 4K drawing smoke interval
+after warmup, followed by the normal postlude, without rejected input, renderer
+errors or missing/zero-time presentations in that interval. This establishes
+startup and drawing after integration; the 45-second timings above precede it.
+The smoke intervals do not establish performance acceptance. All completed
+benchmark processes are closed and the original Mac editor remains open.
+
 ## Capture locally
 
 Build with `CAPY_CONFIGURATION=Release` for performance investigations. See

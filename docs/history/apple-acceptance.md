@@ -70,6 +70,57 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Shared native snapshot observation — 2026-09-11
+
+Both Apple editors now observe individual snapshot fields and indexed command,
+panel and menu entries. Required stroke-boundary enablement changes still reach
+the controls, while unrelated SwiftUI readers avoid a whole-editor publication.
+The iPad's in-app menu array is read inside its own view, keeping menu changes
+local to that header component. Camera patches update the canonical state;
+document and lifecycle consumers explicitly take immutable copies. Related
+projections update together before notifications are sent. Transport values and
+editor actions remain owned by Rust. The shared JSON reader also avoids bridging
+a decoded Foundation dictionary in full for every field access.
+
+The integrated 40 transport fixtures match both the value/byte APIs and the
+preceding checkpoint exactly. Recursive JSON checks cover 219,911 values;
+observation checks preserve those fixtures and 14 hardware-backed stroke
+snapshots. An invisible SwiftUI host verifies actual rendered changes, unchanged
+unrelated bodies, retained readers and camera/no-op behavior. Direct shared
+drawer, document and window-presentation workflows pass without system menu
+automation. Both final Release targets build, and the signed app installs on the
+physical iPad. All 310 final Rust checks pass (34 Apple, 18 host, 258 UI;
+one existing hardware-only host check remains ignored). The command inventory
+still covers 62 commands, 11 panels and five settings pages for each Apple host;
+this does not imply complete workflow acceptance.
+
+Shared changes through `9019e23` are included in those builds and checks. Later
+Android presentation and independent workspace-storage additions through
+`13d139c` are integrated too, with no change to Apple source or its existing
+dependency lock entries. The incoming workspace manager and tab-drag animation
+behavior still require Apple parity work.
+
+The final synchronization also includes shared tab-drag and workspace-transition
+changes through `f6c58a7`. Both Release targets rebuild successfully; the direct
+drawer workflow, all 40 exact value/byte snapshot pairs and the 54-fixture Swift
+observation check pass again. Both final apps complete a brief 4K drawing smoke
+check with no rejected input, renderer errors or missing/zero-time presentations
+in its measured interval. These final checks establish startup and drawing;
+the longer hardware measurements in the performance guide precede this last merge.
+
+Local profiles show reduced UI graph work in an intermediate candidate but also
+exposed the cost of comparing unread fields, which the final implementation
+avoids. Short physical measurements do not establish a frame-rate improvement
+or close sustained performance acceptance. The
+[performance guide](../../apps/layer-apple/PERFORMANCE.md#selective-native-ui-observation)
+records the measured versions, cadence gaps and limitations. Current targets
+remain **90 Hz on Mac and 120 Hz on iPad**; Mac 120 Hz is explicitly deferred.
+Full UI/visual parity, physical input/lifecycle coverage, isolated GPU timing,
+physical input latency, the complete sustained workload matrix and existing
+filter-reference failures remain open. Raw traces, captures, profiles and device
+details stay in ignored artifacts; completed benchmark editors are closed while
+the artist's original Mac window is preserved.
+
 ## Shared native snapshot transport — 2026-09-11
 
 Both Apple targets now serialize full UI snapshots directly from the shared

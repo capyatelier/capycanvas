@@ -288,7 +288,7 @@ import UIKit
     private func released() {
         requestID = nil; busy = false; blocksEditor = false; finishing = false
         activeTask = nil; cancelling = false; exportPreparing = false
-        if let state = store?.state {
+        if let state = store?.state.json {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
             if requestID == nil { recovering = nil; externalURL = nil }

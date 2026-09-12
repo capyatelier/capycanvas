@@ -24,7 +24,8 @@ import SwiftUI
     private var bodies: [String: JSON] = [:]
     init(id: String, store: EditorStore) { self.id = id; self.store = store }
     func panel(_ id: JSON) -> JSON {
-        store?.snapshot["panels"].array.first { $0["id"].string == id.string } ?? bodies[id.string] ?? JSON()
+        if let panel = store?.panel(id.string), !panel.isNull { return panel }
+        return bodies[id.string] ?? JSON()
     }
     func refresh(_ next: JSON) {
         guard let store else { return }

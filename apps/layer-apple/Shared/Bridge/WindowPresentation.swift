@@ -10,7 +10,7 @@ import Foundation
     private var completed: UInt64 = 0
     private var observedFullscreen: Bool?
     var changeFullscreen: Change? {
-        didSet { if let store { receive(store.state) } }
+        didSet { if let store { receive(store.state.json) } }
     }
     init(store: EditorStore) { self.store = store }
 
@@ -27,7 +27,7 @@ import Foundation
             self.observe(fullscreen: actual)
             self.store?.dispatch(["type": "complete_request", "id": id, "error": error as Any? ?? NSNull()])
             if let error { self.store?.failure = error }
-            if let store = self.store { self.receive(store.state) }
+            if let store = self.store { self.receive(store.state.json) }
         }
     }
 
