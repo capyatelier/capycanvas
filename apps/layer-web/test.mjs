@@ -1,4 +1,5 @@
 import {checkDragPickup} from "./drag-pickup.test.mjs";
+import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
@@ -195,6 +196,9 @@ try {
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
   if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--column-drops")) {
+    await checkColumnDrops({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--drag-pickup")) {
     await checkDragPickup({call,evaluate,settle});

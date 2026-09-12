@@ -72,6 +72,12 @@ workspace publication, cancellation, and history. Do not add host-specific drop
 rules or full model refreshes to implement the pickup delay. The optimized
 `workspace_update()` contract remains the workspace motion path.
 
+Collapsed-column dividers create a new group using a shared 32-logical-pixel
+drop area centered on the visible divider. The thin blue preview stays on that
+divider; tile centers still join an existing group. Clip targets to the scrolling
+content and exclude the fixed expand/grip controls. GTK and Web regression:
+`tools/performance/workspace-motion.sh gtk --column-drops` (or `web`).
+
 This convention governs pickup for reordering and moving UI containers. It does
 not add holds to drawing, selection/transform handles, canvas/navigation drags,
 color wheels, curve/gradient handles, sliders, scrollbars, or resize handles.

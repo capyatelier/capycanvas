@@ -3,6 +3,8 @@
 //! Physical tablet/touch delivery remains a human test (not faked here).
 #[path = "drag_pickup_tests.rs"]
 mod drag_pickup;
+#[path = "column_drop_tests.rs"]
+mod column_drop;
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
 #[path = "workspace_drawer_style_tests.rs"]

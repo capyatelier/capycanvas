@@ -35,6 +35,27 @@ pub struct CollapsedColumnPlacement {
     pub groups: Vec<CollapsedGroup>,
 }
 impl CollapsedColumnPlacement {
+    fn divider_y(group: &CollapsedGroup) -> f32 {
+        // The 8px divider slot ends 2px above its following tile group.
+        group.bounds.y - TOOLBAR_DIVIDER_SIZE * 0.5 - 2.
+    }
+    fn divider_drop_hint(&self, group: &CollapsedGroup) -> DropHint {
+        DropHint {
+            target: DockTarget::Split {
+                group: group.group,
+                edge: Edge::Top,
+            },
+            bounds: Bounds {
+                x: self.content.x,
+                y: (Self::divider_y(group) - 1.5).clamp(
+                    self.content.y,
+                    (self.content.y + self.content.height - 3.).max(self.content.y),
+                ),
+                width: self.content.width,
+                height: 3.0_f32.min(self.content.height),
+            },
+        }
+    }
     pub fn expand_label(&self) -> &'static str {
         "Expand column"
     }
@@ -61,7 +82,7 @@ impl CollapsedColumnPlacement {
         self.empty.y = (bottom - offset + WORKSPACE_SPACING).min(self.grip.y);
         self.empty.height = (self.grip.y - self.empty.y).max(0.);
     }
-    /// Vertical strips insert tabs vertically; inter-group gaps create groups.
+    /// Vertical strips insert tabs vertically; divider neighborhoods create groups.
     /// Expand/grip controls and clipped overflow are never accidental targets.
     pub fn drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
         let [x, y] = point;
@@ -71,6 +92,15 @@ impl CollapsedColumnPlacement {
             || (!self.content.contains(x, y) && !self.empty.contains(x, y))
         {
             return None;
+        }
+        // Prefer a 32px target centered on each visible separator over adjacent
+        // tile edges. The actual gap is only 12px; tile centers still merge tabs.
+        // Check all separators first so the preceding group cannot steal a hit.
+        for group in &self.groups {
+            let divider_y = Self::divider_y(group);
+            if self.content.contains(x, divider_y) && (y - divider_y).abs() <= 16. {
+                return Some(self.divider_drop_hint(group));
+            }
         }
         for group in &self.groups {
             if group
@@ -104,13 +134,7 @@ impl CollapsedColumnPlacement {
                 });
             }
             if y < group.bounds.y {
-                return Some(DropHint {
-                    target: DockTarget::Split {
-                        group: group.group,
-                        edge: Edge::Top,
-                    },
-                    bounds: edge_line(group.bounds, Edge::Top),
-                });
+                return Some(self.divider_drop_hint(group));
             }
         }
         let last = self.groups.last()?;
@@ -1467,6 +1491,87 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_dividers_have_forgiving_targets_and_aligned_previews() {
+        for edge in [Edge::Left, Edge::Right] {
+            let mut layout = DockLayout::default();
+            layout.bands[0].edge = edge;
+            layout.bands[1].edge = if edge == Edge::Left {
+                Edge::Right
+            } else {
+                Edge::Left
+            };
+            layout.set_column_collapsed(5, true, VIEW).unwrap();
+            let r = geometry(&layout);
+            let c = &r.collapsed[0];
+            for (index, group) in c.groups.iter().enumerate() {
+                let divider_y = group.bounds.y - 6.;
+                for x in [c.bounds.x + 1., c.bounds.x + 18., c.bounds.x + 35.] {
+                    for offset in [-15., -8., 0., 8., 15.] {
+                        let y = divider_y + offset;
+                        if !c.content.contains(x, y) {
+                            continue;
+                        }
+                        let hint = c.drop_hint([x, y]).unwrap();
+                        assert_eq!(
+                            hint.target,
+                            DockTarget::Split {
+                                group: group.group,
+                                edge: Edge::Top,
+                            },
+                            "{edge:?} divider {index}, offset {offset}"
+                        );
+                        assert_eq!(hint.bounds.y + hint.bounds.height / 2., divider_y);
+                        assert_eq!(c.drop_hint([x, divider_y]).unwrap().target, hint.target);
+                    }
+                }
+                // The first/last icon centers still allow insertion on either
+                // side of a tab, even in a single-icon group between dividers.
+                for icon in &group.icons {
+                    for offset in [14., 22.] {
+                        assert!(
+                            matches!(c.drop_hint([c.bounds.x + 18., icon.bounds.y + offset])
+                            .unwrap().target, DockTarget::Tab { group: id, .. } if id == group.group)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_divider_targets_respect_scrolling_and_fixed_controls() {
+        let layout = DockLayout::default();
+        for offset in [0., 8., 32.] {
+            let mut c = resolve_column(
+                layout.node(4).unwrap(),
+                Bounds {
+                    x: 5.,
+                    y: 12.,
+                    width: TILE_SIZE,
+                    height: 110.,
+                },
+            );
+            c.scroll(offset);
+            let x = c.bounds.x + 18.;
+            for control in [c.expand, c.grip] {
+                assert!(c.drop_hint([x, control.y + control.height / 2.]).is_none());
+            }
+            for y in (c.content.y as i32)..((c.content.y + c.content.height) as i32) {
+                let hint = c.drop_hint([x, y as f32]).unwrap();
+                assert!(hint.bounds.y >= c.content.y);
+                assert!(hint.bounds.y + hint.bounds.height <= c.content.y + c.content.height);
+            }
+            if offset == 8. {
+                // A scrolled-away divider must not steal the exposed tile edge.
+                assert!(matches!(
+                    c.drop_hint([x, c.content.y + 3.]).unwrap().target,
+                    DockTarget::Tab { group: 5, .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn collapsed_drop_targets_keep_tab_and_group_insertion_distinct() {
         let mut layout = DockLayout::default();
         layout.set_column_collapsed(5, true, VIEW).unwrap();
@@ -1474,7 +1579,7 @@ mod tests {
         let c = &r.collapsed[0];
         let x = c.bounds.x + c.bounds.width * 0.5;
         let hint = r
-            .drop_hint(x, c.groups[0].bounds.y + 2., &[], true)
+            .drop_hint(x, c.groups[0].bounds.y + 14., &[], true)
             .unwrap();
         assert_eq!(
             hint.target,
@@ -1484,7 +1589,7 @@ mod tests {
             }
         );
         assert!(
-            r.drop_hint(x, c.groups[0].bounds.y + 2., &[], false)
+            r.drop_hint(x, c.groups[0].bounds.y + 14., &[], false)
                 .is_none()
         );
         layout

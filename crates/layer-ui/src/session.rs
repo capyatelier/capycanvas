@@ -9667,7 +9667,7 @@ mod tests {
                 let point = [
                     c.bounds.x + TILE_SIZE * 0.5,
                     match slot {
-                        0 => c.groups[0].bounds.y + 3.,
+                        0 => c.groups[0].bounds.y + 14.,
                         1 => c.groups[1].bounds.y - 3.,
                         _ => c.empty.y + 5.,
                     },
