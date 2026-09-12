@@ -78,6 +78,9 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.deepEqual((await capture()).working,changed.working);
     await menu('Layout History…'); assert.equal((await view()).enabled,false); await shot('history');
     assert.equal(await evaluate('document.querySelector(".workspace-manager input[type=search]")'),null);
+    const currentVersion=(await capture()).history.current;
+    assert.equal(await evaluate('document.querySelector(\'.workspace-choice[data-id="r0"] .workspace-row-title\').textContent'),'Starting layout');
+    assert.match(await evaluate(`document.querySelector('.workspace-choice[data-id="${currentVersion}"] .workspace-row-subtitle').textContent`),/^Current layout · /);
     await click('.workspace-choice[data-id="r0"]'); await click('.workspace-manager footer .suggested-action'); await idle();
     assert.deepEqual((await capture()).working,changed.working,'History restores layout and preserves tools');
     await send({type:'invoke',command:'undo_workspace'});

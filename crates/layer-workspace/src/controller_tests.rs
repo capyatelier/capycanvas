@@ -193,6 +193,77 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
 }
 
 #[test]
+fn history_rows_repair_legacy_labels_without_rewriting_saved_versions() {
+    let mut f = Fixture::new();
+    f.action(serde_json::json!({"type":"move_panel","panel":"layers","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
+    f.save();
+    let mut capture = f.host.session.capture_workspace().unwrap();
+    let current = capture.history.current.clone();
+    let moved_title = capture.history.revisions[&current].description.clone();
+    capture.history.revisions.get_mut("r0").unwrap().description = "Starting configuration".into();
+    capture
+        .history
+        .revisions
+        .get_mut(&current)
+        .unwrap()
+        .description = "Arrange panels and toolbars".into();
+    for (id, label) in [
+        ("r10", "Applied Painter Workspace Template"),
+        ("r11", "Reset to starting layout"),
+        ("r12", "Arrange panels and toolbars"),
+    ] {
+        let mut revision = capture.history.revisions[&current].clone();
+        revision.id = id.into();
+        revision.description = label.into();
+        capture.history.revisions.insert(id.into(), revision);
+    }
+    for revision in capture.history.revisions.values_mut() {
+        revision.timestamp_ms = 1000;
+    }
+    f.host
+        .session
+        .adopt_workspace(layer_ui::PreparedWorkspace::new(capture.clone()).unwrap())
+        .unwrap();
+    f.controller
+        .manager
+        .observe(capture.clone(), f.backend.now.get());
+    pollster::block_on(f.controller.manager.flush()).unwrap();
+    f.input(serde_json::json!({"type":"open","page":"history"}));
+    let rows = &f.controller.view.rows;
+    assert_eq!(
+        rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["r12", "r11", "r10", current.as_str(), "r0"]
+    );
+    assert_eq!(
+        rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(),
+        [
+            "Earlier layout",
+            "Restored starting layout",
+            "Loaded “Painter” layout",
+            moved_title.as_str(),
+            "Starting layout"
+        ]
+    );
+    assert!(
+        rows.iter()
+            .find(|r| r.id == current)
+            .unwrap()
+            .subtitle
+            .starts_with("Current layout · ")
+    );
+    assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+    assert_eq!(
+        f.controller.manager.current().unwrap().capture().unwrap(),
+        capture
+    );
+    f.input(serde_json::json!({"type":"filter","query":"Layers"}));
+    assert_eq!(f.controller.view.rows.len(), 1);
+    assert_eq!(f.controller.view.rows[0].id, current);
+    f.input(serde_json::json!({"type":"cancel"}));
+    assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+}
+
+#[test]
 fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();

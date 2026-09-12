@@ -362,21 +362,26 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .current()
                 .and_then(|e| e.capture().ok())
                 .map(|capture| {
-                    let mut revisions: Vec<_> = capture.history.revisions.into_values().collect();
-                    revisions.sort_by_key(|r| std::cmp::Reverse(r.timestamp_ms));
-                    revisions
+                    layout_history_versions(&capture.history)
                         .into_iter()
                         .filter(|r| {
                             r.description
                                 .to_lowercase()
                                 .contains(&self.query.to_lowercase())
                         })
-                        .map(|r| WorkspaceRow {
-                            id: r.id,
-                            title: r.description,
-                            subtitle: date(r.timestamp_ms),
-                            options: false,
-                            delete: false,
+                        .map(|r| {
+                            let subtitle = if r.id == capture.history.current {
+                                format!("Current layout · {}", date(r.timestamp_ms))
+                            } else {
+                                date(r.timestamp_ms)
+                            };
+                            WorkspaceRow {
+                                id: r.id,
+                                title: r.description,
+                                subtitle,
+                                options: false,
+                                delete: false,
+                            }
                         })
                         .collect()
                 })

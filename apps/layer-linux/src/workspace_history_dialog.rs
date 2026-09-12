@@ -102,55 +102,7 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
         .current()
         .ok_or_else(|| StoreError::invalid("Open a workspace first."))?
         .capture()?;
-    let mut versions = capture
-        .history
-        .revisions
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
-    // Older releases saved generic labels. Recover names where the retained
-    // undo/redo chain establishes the predecessor; never guess a branch's parent.
-    let chain: Vec<_> = capture
-        .history
-        .undo
-        .iter()
-        .chain(std::iter::once(&capture.history.current))
-        .chain(capture.history.redo.iter().rev())
-        .collect();
-    for version in &mut versions {
-        // Keep old saved descriptions readable in the current vocabulary.
-        if let Some(name) = version
-            .description
-            .strip_prefix("Applied ")
-            .and_then(|name| name.strip_suffix(" Workspace Template"))
-        {
-            version.description = format!("Loaded “{name}” layout");
-        } else if version.description == "Reset to starting layout" {
-            version.description = "Restored starting layout".into();
-        }
-        if version.description == "Arrange panels and toolbars" {
-            version.description = chain
-                .windows(2)
-                .find(|pair| pair[1] == &version.id)
-                .map(|pair| {
-                    layer_ui::layout_change_description(
-                        &capture.history.revisions[pair[0]].layout,
-                        &version.layout,
-                    )
-                })
-                .unwrap_or_else(|| "Earlier layout".into());
-        }
-    }
-    versions.sort_by(|a, b| {
-        b.timestamp_ms.cmp(&a.timestamp_ms).then_with(|| {
-            let n = |id: &str| {
-                id.strip_prefix('r')
-                    .and_then(|n| n.parse::<u64>().ok())
-                    .unwrap_or(0)
-            };
-            n(&b.id).cmp(&n(&a.id))
-        })
-    });
+    let versions = layer_workspace::layout_history_versions(&capture.history);
     let current = capture.history.current;
     let selected = Rc::new(RefCell::new(current.clone()));
     let versions = Rc::new(versions);
@@ -169,11 +121,6 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
     list.set_widget_name("workspace-history-items");
     list.add_css_class("boxed-list");
     for version in versions.iter() {
-        let title = if version.description == "Starting configuration" {
-            "Starting layout"
-        } else {
-            &version.description
-        };
         let time = glib::DateTime::from_unix_local((version.timestamp_ms / 1000) as i64)
             .and_then(|date| date.format("%b %e, %Y · %H:%M:%S"))
             .map(|s| s.to_string())
@@ -184,7 +131,7 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
             time
         };
         let row = adw::ActionRow::builder()
-            .title(title)
+            .title(&version.description)
             .subtitle(subtitle)
             .build();
         row.set_use_markup(false);
