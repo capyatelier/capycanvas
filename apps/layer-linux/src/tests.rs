@@ -3,6 +3,8 @@
 //! Physical tablet/touch delivery remains a human test (not faked here).
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
+#[path = "layer_hold_tests.rs"]
+mod layer_hold;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};

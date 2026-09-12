@@ -100,7 +100,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   workspace.addEventListener("pointerdown", (e) => {
     cancelHold(); heldPointer = null;
     const node = contextTarget(e.target);
-    if (e.pointerType !== "touch" || !node) return;
+    if (!node || e.button !== 0 || (e.pointerType !== "touch" && !node.closest(".layer-row"))) return;
     hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
       heldPointer = e.pointerId; cancelHold();
       showContext(node, [e.clientX, e.clientY]);

@@ -113,3 +113,28 @@ restoration and independent mask copies. The private-Wayland GTK review exercise
 actual menu activation, inline rename, imported-image Clear/Undo, mask copy/paste,
 group/ungroup, dark/light appearance and 110 additional layer rows. Generated
 review PNGs stay ignored under `artifacts/ui/layers-gtk/`.
+
+## Whole-row holds (2026-09-11)
+
+Web and GTK now allow holding row text, padding, thumbnails, mask/link controls,
+selection/visibility controls, or the grip, then reordering with the same contact.
+The menu closes when dragging starts and remains available when the hold is
+released without dragging. Mask holds retain their mask-specific context.
+Active name editing keeps its normal input behavior. Movement before a touch
+hold completes still scrolls the list; mouse holds also work.
+
+GTK groups the row's long-press gesture with its native drag source and claims
+the contact only after the hold. Web retains a pending pointer and prevents
+native touch panning only once the hold has won. Both keep the shared Rust layer
+drop action and its single undo/redo step.
+
+Validated with native Mutter input for GTK and Chrome mouse/touch input for Web:
+all eight row regions, release without dragging, content/mask targeting,
+cancellation, scrolling, and undo/redo passed. The existing Web long-press
+workspace/grip regression suite also passed. Reproduce on a private display:
+
+```sh
+tools/performance/workspace-motion.sh gtk --layer-hold
+tools/performance/workspace-motion.sh web --layer-hold
+tools/performance/workspace-motion.sh web --long-press-drag
+```

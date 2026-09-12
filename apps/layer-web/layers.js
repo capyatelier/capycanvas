@@ -94,17 +94,28 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     name.ondblclick = () => send({ op: "begin_rename", id: get().id });
     menu(row, get); menu(mask.b, get, true);
     Object.assign(record, { eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
-    let drag;
+    let drag, suppressClick;
     row.addEventListener("pointerdown", e => {
-      if (e.button || e.target.closest("input") || (e.pointerType === "touch" && !grip.contains(e.target)) || !get().can_drop_below) return;
-      drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId };
+      if (suppressClick) { row.removeEventListener("click", suppressClick, true); suppressClick = null; }
+      if (e.button || !e.isPrimary || e.target.closest("input") || !get().can_drop_below) return;
+      drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId,
+        waitForHold: e.pointerType === "touch" && !grip.contains(e.target), held: false };
     });
     row.addEventListener("workspace-context-claimed", e => {
       if (drag?.ghost) e.preventDefault();
-      else if (drag) row.setPointerCapture(drag.pointer);
+      else if (drag) { drag.held = true; row.setPointerCapture(drag.pointer); }
     });
+    // Keep native panning until a hold wins. Pointer capture alone cannot stop
+    // the browser taking the contact for scrolling after the menu opens.
+    row.addEventListener("touchmove", e => {
+      if (drag?.held && e.touches.length === 1) e.preventDefault();
+    }, { passive: false });
     row.addEventListener("pointermove", e => {
-      if (!drag) return;
+      if (!drag || drag.pointer !== e.pointerId) return;
+      if (drag.waitForHold && !drag.held) {
+        if (Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 8) drag = null;
+        return;
+      }
       if (!drag.ghost && Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 6) {
         dismissContext();
         row.setPointerCapture(e.pointerId); drag.ghost = row.cloneNode(true); drag.ghost.classList.add("layer-drag-preview");
@@ -124,24 +135,31 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     });
     const finish = e => {
-      if (!drag) return; const previous = drag; drag = null;
+      if (!drag || (e.pointerId != null && drag.pointer !== e.pointerId)) return;
+      const previous = drag; drag = null;
+      if (row.hasPointerCapture(previous.pointer)) row.releasePointerCapture(previous.pointer);
+      if ((previous.held || previous.ghost) && e.type === "pointerup") {
+        const suppress = e => { e.preventDefault(); e.stopImmediatePropagation(); };
+        suppressClick = suppress;
+        row.addEventListener("click", suppress, { once: true, capture: true });
+        setTimeout(() => row.removeEventListener("click", suppress, true), 400);
+      }
+      if (e.type !== "pointerup" && previous.held) dismissContext();
       if (previous.ghost) {
         previous.ghost.remove(); rows.querySelectorAll(".layer-row").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into"));
-        if (e.type === "pointerup") {
-          const suppress = e => { e.preventDefault(); e.stopImmediatePropagation(); };
-          row.addEventListener("click", suppress, { once: true, capture: true });
-          setTimeout(() => row.removeEventListener("click", suppress, true), 0);
-        }
         if (e.type === "pointerup" && previous.target) send(previous.target);
       }
     };
+    record.cancelDrag = () => finish({type:"pointercancel"});
     row.addEventListener("pointerup", finish); row.addEventListener("pointercancel", finish);
     row.addEventListener("lostpointercapture", finish);
     return record;
   }
+  const cancelDrags = () => { for (const r of records.values()) r.cancelDrag(); };
+  window.addEventListener("blur", cancelDrags);
   function refresh() {
     const epoch=String(state().document_file.epoch);
-    if(epoch!==documentEpoch){documentEpoch=epoch;revisions.clear();for(const id of owned)pending.delete(id);owned.clear();
+    if(epoch!==documentEpoch){cancelDrags();documentEpoch=epoch;revisions.clear();for(const id of owned)pending.delete(id);owned.clear();
       for(const r of records.values())for(const c of [r.content.image,r.mask.image])if(c)c.width=c.width;
     }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
@@ -156,6 +174,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     }
     const ids = new Set(state().layers.map(l => String(l.id)));
     for (const [id, record] of records) if (!ids.has(id)) {
+      record.cancelDrag();
       record.row.remove(); records.delete(id); revisions.delete(`${id}:false`); revisions.delete(`${id}:true`);
     }
     state().layers.forEach((layer, index) => {
@@ -212,5 +231,5 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh, dispose(){clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
+  return { refresh, dispose(){cancelDrags();window.removeEventListener("blur",cancelDrags);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
 }

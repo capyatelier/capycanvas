@@ -16,13 +16,14 @@ const workspaceDrawer = ARGV.includes('--workspace-drawer');
 const workspaceWindow = ARGV.includes('--workspace-window');
 const workspaceColumns = ARGV.includes('--workspace-columns');
 const workspaceTabs = ARGV.includes('--workspace-tabs');
-const workspaceHold = ARGV.includes('--workspace-hold');
+const layerHold = ARGV.includes('--layer-hold');
+const workspaceHold = ARGV.includes('--workspace-hold') || layerHold;
 const workspaceMenus = ARGV.includes('--workspace-menus');
 const workspaceWeb = ARGV.includes('--web-workspace-motion');
 const workspaceMotion = ARGV.includes('--workspace-motion') || workspaceWeb;
 const process = Gio.Subprocess.new([
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', '--workspace-motion', '--native-input'] : [
-        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+        'cargo', 'test', '--release', '-p', 'layer-linux', layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
 ], Gio.SubprocessFlags.NONE);
@@ -80,6 +81,10 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 events = null;
             } else {
                 const event = events[index++];
+                if (event.key) {
+                    send('NotifyKeyboardKeysym', '(ub)', [event.key, event.down]);
+                    return GLib.SOURCE_CONTINUE;
+                }
                 if (event.touch) {
                     if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
                     else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',

@@ -163,6 +163,7 @@ fn row_drag(
     root: &gtk::Box,
     name: &gtk::Stack,
     touch: bool,
+    held: &Rc<Cell<bool>>,
     owner: &Rc<RefCell<Weak<Workspace>>>,
     context: &gtk::PopoverMenu,
 ) -> gtk::DragSource {
@@ -170,6 +171,8 @@ fn row_drag(
     source.set_actions(gdk::DragAction::MOVE);
     source.set_propagation_phase(gtk::PropagationPhase::Capture);
     source.connect_prepare(glib::clone!(
+        #[strong]
+        held,
         #[weak]
         item,
         #[weak]
@@ -185,6 +188,7 @@ fn row_drag(
         move |source, x, y| {
             if name.visible_child_name().as_deref() == Some("edit")
                 || (!touch
+                    && !held.get()
                     && source
                         .current_event_device()
                         .is_some_and(|d| d.source() == gdk::InputSource::Touchscreen))
@@ -297,13 +301,15 @@ impl LayerPanel {
             move |_, event| {
                 if matches!(
                     event.event_type(),
-                    gdk::EventType::TouchEnd | gdk::EventType::TouchCancel
+                    gdk::EventType::TouchEnd
+                        | gdk::EventType::TouchCancel
+                        | gdk::EventType::ButtonRelease
                 ) && context.is_visible()
                     && !context.is_autohide()
                 {
                     context.popdown();
                     context.set_autohide(true);
-                    if event.event_type() == gdk::EventType::TouchEnd {
+                    if event.event_type() != gdk::EventType::TouchCancel {
                         context.popup();
                     }
                 }
@@ -575,6 +581,18 @@ impl LayerPanel {
                     }
                 ));
                 name_entry.add_controller(keys);
+                let held = Rc::new(Cell::new(false));
+                let drag = row_drag(item, &root, &name_stack, false, &held, &owner, &context);
+                root.add_controller(drag.clone());
+                grip.add_controller(row_drag(
+                    item,
+                    &root,
+                    &name_stack,
+                    true,
+                    &held,
+                    &owner,
+                    &context,
+                ));
                 for (widget, is_mask) in [
                     (root.clone().upcast::<gtk::Widget>(), false),
                     (mask.clone().upcast(), true),
@@ -599,44 +617,52 @@ impl LayerPanel {
                         }
                     ));
                     widget.add_controller(click);
-                    let hold = gtk::GestureLongPress::new();
-                    hold.set_touch_only(true);
-                    hold.connect_pressed(glib::clone!(
-                        #[strong]
-                        context,
-                        #[weak]
-                        item,
-                        #[weak]
-                        grip,
-                        #[strong]
-                        owner,
-                        move |g, x, y| {
-                            let Some(row) = row_state(&item) else { return };
-                            let Some(w) = owner.borrow().upgrade() else {
-                                return;
-                            };
-                            let on_grip = g.widget()
-                                .and_then(|widget| widget.pick(x, y, gtk::PickFlags::DEFAULT))
-                                .is_some_and(|picked| picked == grip || picked.is_ancestor(&grip));
-                            if !on_grip {
-                                g.set_state(gtk::EventSequenceState::Claimed);
-                            }
-                            // Preserve the grip's pending DragSource and touch
-                            // stream; other layer controls keep their usual menu.
-                            context.set_autohide(!on_grip);
-                            menu(&w, &context, &g.widget().unwrap(), row.id, is_mask, [x, y]);
+                }
+                let hold = gtk::GestureLongPress::new();
+                hold.set_propagation_phase(gtk::PropagationPhase::Capture);
+                hold.connect_begin(glib::clone!(
+                    #[strong]
+                    held,
+                    move |_, _| held.set(false)
+                ));
+                hold.connect_pressed(glib::clone!(
+                    #[strong]
+                    context,
+                    #[strong]
+                    held,
+                    #[weak]
+                    item,
+                    #[weak]
+                    root,
+                    #[weak]
+                    mask,
+                    #[weak]
+                    name_stack,
+                    #[strong]
+                    owner,
+                    move |g, x, y| {
+                        if name_stack.visible_child_name().as_deref() == Some("edit") {
+                            return;
                         }
-                    ));
-                    widget.add_controller(hold);
-                }
-                for (widget, touch) in [
-                    (root.clone().upcast::<gtk::Widget>(), false),
-                    (grip.clone().upcast(), true),
-                ] {
-                    widget.add_controller(row_drag(
-                        item, &root, &name_stack, touch, &owner, &context,
-                    ));
-                }
+                        let Some(row) = row_state(&item) else {
+                            return;
+                        };
+                        let Some(w) = owner.borrow().upgrade() else {
+                            return;
+                        };
+                        let is_mask = root
+                            .pick(x, y, gtk::PickFlags::DEFAULT)
+                            .is_some_and(|picked| picked == mask || picked.is_ancestor(&mask));
+                        held.set(row.can_drop_below);
+                        // Grouping preserves the row DragSource while claiming
+                        // the held contact from scrolling and child buttons.
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                        context.set_autohide(false);
+                        menu(&w, &context, root.upcast_ref(), row.id, is_mask, [x, y]);
+                    }
+                ));
+                root.add_controller(hold.clone());
+                hold.group_with(&drag);
                 let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
                 drop.connect_enter(glib::clone!(
                     #[weak]
