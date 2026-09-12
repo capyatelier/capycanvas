@@ -419,6 +419,12 @@ impl Entity {
             },
         }
     }
+    pub fn starting_layout(&self) -> Result<&DockLayout, StoreError> {
+        match &self.content {
+            ItemContent::Workspace { baseline, .. } => Ok(baseline),
+            _ => Err(StoreError::invalid("Choose a workspace.")),
+        }
+    }
     pub fn capture(&self) -> Result<WorkspaceCapture, StoreError> {
         match (&self.content, &self.working) {
             (ItemContent::Workspace { history, .. }, Some(working)) => Ok(WorkspaceCapture {

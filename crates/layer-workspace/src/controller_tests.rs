@@ -290,6 +290,62 @@ fn history_rows_repair_legacy_labels_without_rewriting_saved_versions() {
 }
 
 #[test]
+fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
+    let mut f = Fixture::new();
+    let baseline = f
+        .controller
+        .manager
+        .current()
+        .unwrap()
+        .starting_layout()
+        .unwrap()
+        .clone();
+    f.action(serde_json::json!({"type":"move_panel","panel":"layers","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
+    f.action(serde_json::json!({"type":"set_brush_size","value":73}));
+    f.save();
+    let before = f.host.session.capture_workspace().unwrap();
+    assert_ne!(before.history.layout(), &baseline);
+    for confirm in [false, true] {
+        let saved = f.controller.manager.current().unwrap();
+        f.input(serde_json::json!({"type":"form","kind":"reset"}));
+        assert_eq!(f.host.session.state().workspace.layout, baseline);
+        assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+        f.save();
+        assert_eq!(
+            f.controller.manager.current().unwrap(),
+            saved,
+            "preview is never persisted"
+        );
+        let prompt = f.controller.view.form.as_ref().unwrap();
+        assert_eq!(prompt.message, reset_prompt(&saved).unwrap().message);
+        assert!(prompt.message.contains("Window → Undo Workspace"));
+        f.input(if confirm {
+            serde_json::json!({"type":"submit","name":""})
+        } else {
+            serde_json::json!({"type":"cancel"})
+        });
+        if !confirm {
+            assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+            assert_eq!(
+                &f.host.session.state().workspace.layout,
+                before.history.layout()
+            );
+        }
+    }
+    let restored = f.host.session.capture_workspace().unwrap();
+    assert_eq!(restored.history.layout(), &baseline);
+    assert_eq!(restored.working, before.working);
+    assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
+    f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
+    assert_eq!(
+        &f.host.session.state().workspace.layout,
+        before.history.layout()
+    );
+    f.action(serde_json::json!({"type":"invoke","command":"redo_workspace"}));
+    assert_eq!(f.host.session.state().workspace.layout, baseline);
+}
+
+#[test]
 fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();

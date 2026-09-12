@@ -84,6 +84,118 @@ fn native_workspace_manager_visual() {
 
 #[test]
 #[ignore = "requires isolated workspace storage and a native GTK display"]
+fn native_starting_layout_preview() {
+    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    let app = native_test_app("art.capycanvas.StartingLayoutPreview");
+    let w = Workspace::new(&app);
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    let manager = w.workspaces.manager.as_ref().unwrap();
+    let baseline = manager
+        .current()
+        .unwrap()
+        .starting_layout()
+        .unwrap()
+        .clone();
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Layers,
+        target: DockTarget::Float {
+            position: [480., 220.],
+        },
+        viewport: [w.surface.width() as f32, w.surface.height() as f32],
+    });
+    w.dispatch(UiAction::SetBrushSize { value: 73. });
+    pump(400);
+    let capture = || {
+        w.gpu
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .session
+            .capture_workspace()
+            .unwrap()
+    };
+    let before = capture();
+    assert_ne!(before.history.layout(), &baseline);
+    let id = manager.active_id().unwrap();
+    for confirm in [false, true] {
+        let done = Rc::new(Cell::new(false));
+        glib::spawn_future_local(glib::clone!(
+            #[strong]
+            w,
+            #[strong]
+            id,
+            #[strong]
+            done,
+            async move {
+                w.workspaces
+                    .perform(&w, layer_workspace::ManagerAction::Reset(id))
+                    .await
+                    .unwrap();
+                done.set(true);
+            }
+        ));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let restore = loop {
+            pump(20);
+            if let Some(button) = find_button(w.window.upcast_ref(), "Restore") {
+                break button;
+            }
+            assert!(Instant::now() < deadline, "starting layout dialog opens");
+        };
+        pump(200);
+        let dialog = restore
+            .ancestor(adw::AlertDialog::static_type())
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        assert!(dialog.body().contains("Window → Undo Workspace"));
+        assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
+        assert_eq!(
+            capture(),
+            before,
+            "opening the preview does not change history or tools"
+        );
+        if confirm {
+            restore.emit_clicked();
+        } else {
+            find_button(dialog.upcast_ref(), "Cancel")
+                .unwrap()
+                .emit_clicked();
+        }
+        while !done.get() {
+            pump(20);
+            assert!(Instant::now() < deadline);
+        }
+        pump(200);
+        if !confirm {
+            assert_eq!(capture(), before);
+            assert_eq!(
+                &durable_layout(&state(&w).workspace.layout),
+                before.history.layout()
+            );
+        }
+    }
+    assert_eq!(capture().history.undo.len(), before.history.undo.len() + 1);
+    assert_eq!(capture().working, before.working);
+    assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::UndoWorkspace,
+    });
+    assert_eq!(
+        &durable_layout(&state(&w).workspace.layout),
+        before.history.layout()
+    );
+    w.window.close();
+    pump(300);
+}
+
+#[test]
+#[ignore = "requires isolated workspace storage and a native GTK display"]
 fn native_active_workspace_delete() {
     check_active_workspace_delete(false);
 }

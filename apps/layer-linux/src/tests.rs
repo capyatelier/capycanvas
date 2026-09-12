@@ -14171,7 +14171,7 @@ fn native_named_workspace_manager_library_and_history() {
     run(
         A::Reset(painting.clone()),
         None,
-        Some("Restore Starting Layout"),
+        Some("Restore"),
     );
     assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
     assert_eq!(state(&w).brush.diameter, 73.);
