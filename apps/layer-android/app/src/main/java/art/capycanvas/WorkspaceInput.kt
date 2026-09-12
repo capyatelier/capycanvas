@@ -15,6 +15,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.stylusHoverIcon
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -59,6 +60,7 @@ internal class DockInteraction(val host: CanvasHost) {
     private val columnDrawers = mutableMapOf<Int, JSONObject>()
     val anchors = mutableMapOf<String, Rect>()
     val tabs = mutableMapOf<String, JSONObject>()
+    val tabSlots = mutableMapOf<String, JSONObject>()
     val tabClips = mutableMapOf<Int, Rect>()
     private var frozenTabs = emptyList<JSONObject>()
     private var frozenTabGroup: Int? = null
@@ -76,11 +78,13 @@ internal class DockInteraction(val host: CanvasHost) {
     var expansion by mutableStateOf<JSONObject?>(null)
     var configurationHeight by mutableFloatStateOf(0f)
     var contextMenu by mutableStateOf<JSONObject?>(null)
+    var contactHeld by mutableStateOf(false)
     var contextAnchor = Rect.Zero
     var popupOpen = false
     private var active: JSONObject? = null
     private var position = Offset.Zero
     private var generation = 0
+    private var contextTarget: String? = null
     private val measurements = mutableMapOf<String, Pair<Float, Float>>()
 
     fun measureColumnDrawer(column: Int, group: Int?, bounds: Rect?) {
@@ -133,13 +137,16 @@ internal class DockInteraction(val host: CanvasHost) {
     fun anchorKey(item: JSONObject) = "${item.optString("kind").replace("ribbon", "panel")}:${item.optString("column")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
     fun context(target: JSONObject) {
         if (dragging) return
-        val anchor = anchors[anchorKey(target)] ?: return
+        val key = anchorKey(target)
+        val anchor = anchors[key] ?: return
+        if (contextTarget == key) return
+        contextTarget = key
         val request = generation
         host.query(obj("type" to "context", "target" to target)) {
             if (!dragging && request == generation) { contextAnchor = anchor; contextMenu = it as? JSONObject; refresh() }
         }
     }
-    fun closeContext() { contextMenu = null; refresh() }
+    fun closeContext() { generation++; contextTarget = null; contextMenu = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
         host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))
@@ -182,9 +189,10 @@ internal class DockInteraction(val host: CanvasHost) {
     fun start(action: JSONObject, point: Offset, cursor: Int) {
         host.beginWorkspaceGesture()
         active = action; position = point; dragging = true; generation++
+        contextMenu = null; contextTarget = null
         frozenPanel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
         frozenTabGroup = tabs.values.firstOrNull { it.optString("panel") == frozenPanel }?.getInt("group")
-        frozenTabs = tabs.values.filter { it.optInt("group") == frozenTabGroup }.map { JSONObject(it.toString()) }
+        frozenTabs = tabSlots.values.filter { it.optInt("group") == frozenTabGroup }.map { JSONObject(it.toString()) }
         frozenTabClip = frozenTabGroup?.let { tabClips[it] }?.let { Rect(it.left / density, it.top / density, it.right / density, it.bottom / density) }
         dragCursor = if (action.optJSONObject("item") != null) AndroidPointerIcon.TYPE_GRABBING else cursor
         refresh(); send("down")
@@ -240,10 +248,14 @@ internal class DockInteraction(val host: CanvasHost) {
 }
 
 /** Capture belongs to the stable workspace, not a tab or ribbon that Rust may
- * reparent during tear-off. Child clicks keep native timing and long-press. */
+ * reparent during tear-off. Long presses retain this original source and press
+ * position, including grips without a child click handler. */
 internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = pointerInput(dock) {
+    var dividerTap: Triple<Int, Long, Offset>? = null
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val previousTap = dividerTap
+        dividerTap = null
         if (dock.chromeRegions.values.any { it.contains(down.position) }) {
             val tab = dock.tabs.values.firstOrNull { it.getJSONObject("bounds").let { b ->
                 Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
@@ -263,14 +275,29 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
             }
             var started = false
             var released = false
+            var held = false
+            var remaining = viewConfiguration.longPressTimeoutMillis
+            var eventTime = down.uptimeMillis
+            val divider = source.action.takeIf { it.optString("type") == "drag_divider" }?.getInt("id")
+            dock.contactHeld = true
             try {
                 do {
-                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val event = if (!held && !started && source.context != null) {
+                        withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
+                    } else awaitPointerEvent(PointerEventPass.Initial)
+                    if (event == null) {
+                        held = true
+                        source.context?.let(dock::context)
+                        continue
+                    }
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    remaining = (remaining - (change.uptimeMillis - eventTime)).coerceAtLeast(1)
+                    eventTime = change.uptimeMillis
                     // Compose represents ACTION_CANCEL as an already-consumed
                     // release. Preserve the shared transaction before consuming it.
                     if (!change.pressed && change.isConsumed) break
-                    if (!started && (dock.popupOpen || dock.contextMenu != null || !dock.enabled)) break
+                    if (held) change.consume()
+                    if (dock.popupOpen || !dock.enabled) break
                     if (!started && change.pressed && (change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
                         dock.start(source.action, down.position / dock.density, source.cursor); started = true
                     }
@@ -278,9 +305,25 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
                         change.consume()
                         dock.move(change.position / dock.density)
                     }
-                    if (!change.pressed) { if (started) dock.finish(false); released = true; break }
+                    if (!change.pressed) {
+                        if (started) dock.finish(false)
+                        else if (divider != null && !held && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
+                            val gap = down.uptimeMillis - (previousTap?.second ?: 0)
+                            val band = dock.host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
+                                ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
+                            if (band && previousTap?.first == divider &&
+                                gap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
+                                (down.position - previousTap.third).getDistance() <= viewConfiguration.touchSlop * 2) {
+                                dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
+                            } else dividerTap = Triple(divider, change.uptimeMillis, change.position)
+                        }
+                        released = true; break
+                    }
                 } while (true)
-            } finally { if (started && !released) dock.finish(true) }
+            } finally {
+                if (started && !released) dock.finish(true)
+                dock.contactHeld = false
+            }
         }
     }
 }
@@ -311,16 +354,26 @@ internal val LocalDrawerClip = staticCompositionLocalOf { Rect.Zero }
     panel: String, clip: Rect, active: Boolean): Modifier {
     val key = "drawer:$column:$index"
     var bounds by remember { mutableStateOf(Rect.Zero) }
+    var natural by remember { mutableStateOf(Rect.Zero) }
     SideEffect {
         val r = bounds.intersect(clip)
+        if (active && natural.width > 0f) {
+            dock.tabSlots[key] = obj("group" to group, "index" to index, "panel" to panel,
+                "bounds" to obj("x" to natural.left / dock.density, "y" to natural.top / dock.density,
+                    "width" to natural.width / dock.density, "height" to natural.height / dock.density))
+        } else dock.tabSlots.remove(key)
         if (active && r.width > 0f && r.height > 0f) {
             dock.tabs[key] = obj("group" to group, "index" to index, "panel" to panel,
                 "bounds" to obj("x" to r.left / dock.density, "y" to r.top / dock.density,
                     "width" to r.width / dock.density, "height" to r.height / dock.density))
         } else dock.tabs.remove(key)
     }
-    DisposableEffect(dock, key) { onDispose { dock.tabs.remove(key) } }
-    return onGloballyPositioned { bounds = it.boundsInRoot().translate(-dock.origin) }
+    DisposableEffect(dock, key) { onDispose { dock.tabs.remove(key); dock.tabSlots.remove(key) } }
+    return onGloballyPositioned {
+        bounds = it.boundsInRoot().translate(-dock.origin)
+        val origin = it.positionInRoot() - dock.origin
+        natural = Rect(origin.x, origin.y, origin.x + it.size.width, origin.y + it.size.height)
+    }
 }
 
 @Composable internal fun Modifier.drawerTile(dock: DockInteraction, panel: String, tile: Int): Modifier {

@@ -1,5 +1,6 @@
 package art.capycanvas
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -28,13 +29,18 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.PopupProperties
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Header menus, context menus and configuration options render the same Rust
  * items. They never reconstruct eligibility, naming, defaults or commands. */
-@Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, dismiss: () -> Unit) {
+@Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false, dismiss: () -> Unit) {
+    // A focusable Android popup cancels the contact in the activity that opened
+    // it. Context menus must leave that contact with the original drag owner.
+    BackHandler(preserveContact, dismiss)
     DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu"),
+        properties = PopupProperties(focusable = !preserveContact),
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
         WorkspaceMenuItems(host, menu.array("sections"), dismiss, menu.getString("title"))
     }

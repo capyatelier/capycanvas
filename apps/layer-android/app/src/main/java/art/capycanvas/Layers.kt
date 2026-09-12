@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -75,11 +76,17 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     var panelOrigin by remember { mutableStateOf(Offset.Zero) }
     var drag by remember { mutableStateOf<LayerDrag?>(null) }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
+    var menuGeneration by remember { mutableIntStateOf(0) }
+    var contactHeld by remember { mutableStateOf(false) }
     var menuPoint by remember { mutableStateOf(Offset.Zero) }
     fun contextMenu(layer: JSONObject, mask: Boolean, point: Offset) {
+        if (drag != null) return
+        val request = ++menuGeneration
         val id = layer.getLong("id")
         host.layer(obj("op" to "context", "id" to id, "mask" to mask))
-        host.query(obj("type" to "layer_menu", "id" to id, "mask" to mask)) { menu = it as? JSONObject; menuPoint = point - panelOrigin }
+        host.query(obj("type" to "layer_menu", "id" to id, "mask" to mask)) {
+            if (request == menuGeneration && drag == null) { menu = it as? JSONObject; menuPoint = point - panelOrigin }
+        }
     }
     LaunchedEffect(host, epoch) {
         val revisions = mutableMapOf<String, Long>()
@@ -175,12 +182,14 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     val highlight=when { target==null -> 0; layer.getBoolean("group") && target.fraction>.25f && target.fraction<.75f -> 3; target.fraction<.5f -> 1; else -> 2 }
                     LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
                         context={mask,point -> contextMenu(layer,mask,point)},
+                        held={contactHeld=it},
                         drag={point,finished,cancelled ->
                             val origin=bounds[id] ?: return@LayerRow
                             if (finished) {
                                 val end=drag; drag=null
                                 if (!cancelled && end?.target!=null) host.layer(obj("op" to "drop","id" to id,"target" to end.target,"fraction" to end.fraction))
                             } else {
+                                if (drag == null) { menuGeneration++; menu = null }
                                 val to=currentLayers.find { it.getLong("id")!=id && bounds[it.getLong("id")]?.contains(point)==true }
                                 val fraction=to?.let { if (!it.getBoolean("can_drop_below")) 0f else bounds[it.getLong("id")]!!.let { r -> (point.y-r.top)/r.height } } ?: 0f
                                 drag=LayerDrag(id,origin.top,point,to?.getLong("id"),fraction)
@@ -203,7 +212,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 .alpha(.7f).background(colors.panel),preview=true)
         } }
         if (menu!=null) Box(Modifier.offset { IntOffset(menuPoint.x.roundToInt(),menuPoint.y.roundToInt()) }.size(1.dp)) {
-            WorkspaceMenu(host,menu!!) { menu=null }
+            WorkspaceMenu(host,menu!!,preserveContact=contactHeld) { menuGeneration++; menu=null }
         }
     }
 }
@@ -220,7 +229,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
 }
 
 @Composable private fun LayerRow(host:CanvasHost,layer:JSONObject,rename:Long,images:Map<String,ImageBitmap>,modifier:Modifier=Modifier,highlight:Int=0,
-    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
+    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},held:(Boolean)->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
     val colors=LocalPalette.current
     val id=layer.getLong("id")
     val latest by rememberUpdatedState(layer)
@@ -228,7 +237,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     var press by remember { mutableStateOf(Offset.Zero) }
     val density=LocalDensity.current.density
     fun select(mask:Boolean=false) = host.layer(obj("op" to "select","id" to id,"mask" to mask))
-    Row(modifier.fillMaxWidth().heightIn(min=40.dp).onGloballyPositioned { origin=it.boundsInRoot().topLeft }
+    Row(modifier.fillMaxWidth().heightIn(min=40.dp).then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned { origin=it.boundsInRoot().topLeft }
         .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
         .drawWithContent {
             drawContent()
@@ -237,17 +246,19 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 3 -> drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density)) }
         }.then(if(preview) Modifier else Modifier.pointerInput(id) {
             awaitEachGesture {
-                val down=awaitFirstDown(requireUnconsumed=false); press=down.position
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
                 val row=latest
                 val canDrag=row.getBoolean("can_drop_below") &&
                     (down.type!=PointerType.Touch || down.position.x>=size.width-20*density)
                 var dragging=false
+                held(true)
                 try { do {
-                    val event=awaitPointerEvent(); val change=event.changes.find { it.id==down.id } ?: break
-                    if (canDrag && !dragging && (change.position-down.position).getDistance()>6*density) dragging=true
+                    val event=awaitPointerEvent(PointerEventPass.Initial); val change=event.changes.find { it.id==down.id } ?: break
+                    if (!change.pressed && change.isConsumed) break
+                    if (canDrag && !dragging && change.pressed && (change.position-down.position).getDistance()>6*density) dragging=true
                     if (dragging) { change.consume(); drag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
                     if (!change.pressed) break
-                } while(true) } finally { if(dragging)drag(origin+down.position,true,true) }
+                } while(true) } finally { if(dragging)drag(origin+down.position,true,true); held(false) }
             }
         }.combinedClickable(onClick={select()},onLongClick={context(false,origin+press)}))
         .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {

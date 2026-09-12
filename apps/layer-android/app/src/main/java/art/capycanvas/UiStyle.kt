@@ -9,6 +9,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.IndicationNodeFactory
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
@@ -19,7 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -34,6 +37,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -49,6 +53,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.lerp
@@ -87,19 +94,32 @@ internal val LocalPalette = staticCompositionLocalOf<Palette> { error("Missing c
 internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Missing native host") }
 internal val HeaderTextPadding = 6.dp
 
-/** Nested tab/header click handlers otherwise stack Material's hover tint over
- * our tab shapes. Keep press and keyboard-focus feedback, including in drawers. */
+/** Tab colors never depend on hover/press. A focus-only indication also avoids
+ * Android's native ripple layer changing the rasterization of tab joins. */
 @Composable internal fun PanelHeaderFeedback(content: @Composable () -> Unit) {
-    val inherited = LocalRippleConfiguration.current
-    val configuration = remember(inherited) {
-        inherited?.let {
-            val alpha = it.rippleAlpha ?: RippleDefaults.RippleAlpha
-            RippleConfiguration(color = it.color, rippleAlpha = RippleAlpha(
-                draggedAlpha = alpha.draggedAlpha, focusedAlpha = alpha.focusedAlpha,
-                hoveredAlpha = 0f, pressedAlpha = alpha.pressedAlpha))
+    val accent = LocalPalette.current.accent
+    val indication = remember(accent) { PanelHeaderIndication(accent) }
+    CompositionLocalProvider(LocalRippleConfiguration provides null, LocalIndication provides indication, content = content)
+}
+
+private data class PanelHeaderIndication(val color: Color) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): Modifier.Node = object : Modifier.Node(), DrawModifierNode {
+        var focused by mutableStateOf(false)
+        override fun onAttach() {
+            coroutineScope.launch {
+                interactionSource.interactions.collect { interaction ->
+                    when (interaction) {
+                        is FocusInteraction.Focus -> focused = true
+                        is FocusInteraction.Unfocus -> focused = false
+                    }
+                }
+            }
+        }
+        override fun ContentDrawScope.draw() {
+            drawContent()
+            if (focused) drawRoundRect(color, cornerRadius = CornerRadius(6.dp.toPx()), style = Stroke(2.dp.toPx()))
         }
     }
-    CompositionLocalProvider(LocalRippleConfiguration provides configuration, content = content)
 }
 
 /** Editing/composition is native widget state. Rust remains authoritative for

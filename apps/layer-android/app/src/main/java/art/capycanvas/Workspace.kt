@@ -34,6 +34,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -290,7 +291,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             val anchor = dock.contextAnchor
             Box(Modifier.offset { IntOffset(anchor.left.roundToInt(), anchor.top.roundToInt()) }
                 .size((anchor.width / density).dp, (anchor.height / density).dp)) {
-                WorkspaceMenu(host, menu, dock::closeContext)
+                WorkspaceMenu(host, menu, preserveContact = dock.contactHeld, dismiss = dock::closeContext)
             }
         }
     }
@@ -423,7 +424,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     }
     DisposableEffect(group.getInt("id"), group.array("panels").toString()) {
         val prefix = "${group.getInt("id")}:"
-        onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.getInt("id")) }
+        onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabSlots.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.getInt("id")) }
     }
     Surface(modifier, color = colors.panel) {
         Column {
@@ -443,6 +444,9 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                                     // Contact handling needs the panel ID as well as the drop-target geometry.
                                     dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
                                         "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
+                                    val natural = (coords.positionInRoot() - dock.origin) / dock.density
+                                    dock.tabSlots["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
+                                        "bounds" to obj("x" to natural.x, "y" to natural.y, "width" to coords.size.width / dock.density, "height" to coords.size.height / dock.density))
                                 }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier)
                                 .zIndex(if (dock.isDraggedTab(id.toString())) 2f else if (selected) 1f else 0f)
                                 .workspaceTabMotion(host, group.getInt("id"), id.toString(), index, dock.density)

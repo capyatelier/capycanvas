@@ -374,7 +374,7 @@ class AndroidHostTest {
         assertNull(host.actionError)
     }
 
-    @Test fun panelHeadersDoNotHighlightOnMouseOrStylusHover() {
+    @Test fun panelHeadersDoNotHighlightOnMouseOrStylusHoverOrPress() {
         val fixture = JSONObject(defaultWorkspace)
         fixture.getJSONObject("layout").apply {
             fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
@@ -391,7 +391,14 @@ class AndroidHostTest {
         fun settle() { compose.waitForIdle(); SystemClock.sleep(180); compose.waitForIdle() }
         fun hover(point: androidx.compose.ui.geometry.Offset, tool: Int, eventAction: Int = MotionEvent.ACTION_HOVER_MOVE) {
             if (tool == MotionEvent.TOOL_TYPE_MOUSE) {
-                root.performMouseInput { if (eventAction == MotionEvent.ACTION_HOVER_EXIT) exit() else moveTo(point) }
+                root.performMouseInput {
+                    when (eventAction) {
+                        MotionEvent.ACTION_HOVER_EXIT -> exit()
+                        MotionEvent.ACTION_DOWN -> press()
+                        MotionEvent.ACTION_CANCEL -> { cancel(); moveTo(point) }
+                        else -> moveTo(point)
+                    }
+                }
             } else {
                 val window = root.fetchSemanticsNode().positionInWindow + point
                 instrumentation.runOnMainSync {
@@ -399,7 +406,11 @@ class AndroidHostTest {
                     val props = MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
                     val time = SystemClock.uptimeMillis()
                     val event = MotionEvent.obtain(time, time, eventAction, 1, arrayOf(props), arrayOf(coords), 0, 0, 1f, 1f, 1, 0, InputDevice.SOURCE_STYLUS, 0)
-                    try { compose.activity.window.decorView.dispatchGenericMotionEvent(event) }
+                    try {
+                        if (eventAction == MotionEvent.ACTION_DOWN || eventAction == MotionEvent.ACTION_CANCEL)
+                            compose.activity.window.decorView.dispatchTouchEvent(event)
+                        else compose.activity.window.decorView.dispatchGenericMotionEvent(event)
+                    }
                     finally { event.recycle() }
                 }
             }
@@ -447,10 +458,35 @@ class AndroidHostTest {
                         capture("panel-header-hover-$theme-$placement-$tool-$part")
                     }
                     assertEquals("$theme $placement $tool $part hover must leave header pixels unchanged", 0, changed)
+                    hover(point, tool, MotionEvent.ACTION_DOWN)
+                    try {
+                        val pressed = compose.onNodeWithTag(header).captureToImage().toPixelMap()
+                        var pressChanges = 0
+                        for (y in 0 until baseline.height) for (x in 0 until baseline.width) {
+                            if (baseline[x, y] != pressed[x, y]) pressChanges++
+                        }
+                        if (pressChanges > 0) capture("panel-header-press-$theme-$placement-$tool-$part")
+                        assertEquals("$theme $placement $tool $part press must leave header pixels unchanged", 0, pressChanges)
+                    } finally { hover(point, tool, MotionEvent.ACTION_CANCEL) }
                 }
                 hover(away, tool, MotionEvent.ACTION_HOVER_EXIT)
             }
         }
+    }
+
+    @Test fun panelHeadersRetainVisibleKeyboardFocus() {
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_TAB)
+        val tab = compose.onNodeWithTag("tab-brushes")
+        tab.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+        tab.assertIsFocused()
+        val pixels = tab.captureToImage().toPixelMap()
+        assertTrue("Keyboard focus has a visible blue outline", (0 until pixels.height).any { y ->
+            (0 until pixels.width).any { x -> pixels[x,y].let { color ->
+                kotlin.math.abs(color.red - 0x35/255f) < .02f &&
+                    kotlin.math.abs(color.green - 0x84/255f) < .02f &&
+                    kotlin.math.abs(color.blue - 0xe4/255f) < .02f
+            } }
+        })
     }
 
     @Test fun columnDrawersUseNativeMouseAndTouchDrag() {
