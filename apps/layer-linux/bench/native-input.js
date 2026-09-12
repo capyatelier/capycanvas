@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// Test-only virtual pointer through Mutter -> Wayland -> GTK. Run ONLY inside
+// Test-only virtual pointer through Mutter -> Wayland -> GTK/Chromium. Run ONLY inside
 // an isolated dbus-run-session + headless Mutter, never on a user's desktop.
 const {Gio, GLib} = imports.gi;
 if (!GLib.getenv('WAYLAND_DISPLAY')?.startsWith('layer-bench-'))
@@ -17,11 +17,14 @@ const workspaceWindow = ARGV.includes('--workspace-window');
 const workspaceColumns = ARGV.includes('--workspace-columns');
 const workspaceTabs = ARGV.includes('--workspace-tabs');
 const workspaceHold = ARGV.includes('--workspace-hold');
-const workspaceMotion = ARGV.includes('--workspace-motion');
 const workspaceMenus = ARGV.includes('--workspace-menus');
+const workspaceWeb = ARGV.includes('--web-workspace-motion');
+const workspaceMotion = ARGV.includes('--workspace-motion') || workspaceWeb;
 const process = Gio.Subprocess.new([
-    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
-    '--', '--ignored', '--test-threads=1', '--nocapture',
+    ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', '--workspace-motion', '--native-input'] : [
+        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+        '--', '--ignored', '--test-threads=1', '--nocapture',
+    ]),
 ], Gio.SubprocessFlags.NONE);
 let passed = false;
 process.wait_async(null, (p, result) => {
@@ -152,7 +155,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     });
     return GLib.SOURCE_REMOVE;
 });
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold ? 120000 : 60000, () => {
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold || workspaceMotion ? 120000 : 60000, () => {
     process.force_exit();
     loop.quit();
     return GLib.SOURCE_REMOVE;

@@ -3,9 +3,9 @@
 use crate::{Uploads, WgpuRasterizer};
 use layer_render::{CursorSegment, ViewState};
 
-/// A native UI's document overview, rendered into the existing canvas surface.
-/// Bounds and work-area corners use physical surface pixels. The host leaves
-/// this image rectangle transparent; native controls still paint above it.
+/// A native UI's document overview, sampled from the existing GPU image.
+/// Bounds and work-area corners use physical target-surface pixels. Hosts can
+/// place it in their main viewport or a retained native Navigator surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverviewPlacement {
     pub bounds: [f32; 4],
@@ -63,6 +63,7 @@ pub struct ViewportPresenter {
     overview_buffer: Option<wgpu::Buffer>,
     overviews: Vec<[f32; 24]>,
     overviews_changed: bool,
+    standalone_overview: bool,
 }
 
 impl ViewportPresenter {
@@ -73,6 +74,15 @@ impl ViewportPresenter {
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
         Self::with_device(&renderer.device, format)
+    }
+
+    /// A Navigator canvas owns its coverage instead of preserving the parent
+    /// viewport's rounded-window alpha. Present with `present_overviews`.
+    pub fn for_overviews(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
+        Self {
+            standalone_overview: true,
+            ..Self::for_renderer(renderer, format)
+        }
     }
 
     fn with_device(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self {
@@ -220,10 +230,11 @@ impl ViewportPresenter {
             overview_buffer: None,
             overviews: Vec::new(),
             overviews_changed: false,
+            standalone_overview: false,
         }
     }
 
-    /// Opt-in startup preparation. Hosts without in-surface overviews do not
+    /// Opt-in startup preparation. Hosts without overviews do not
     /// compile this pipeline or allocate overview buffers.
     pub fn prepare_overviews(&mut self, renderer: &WgpuRasterizer) {
         if self.overview_pipeline.is_some() {
@@ -253,7 +264,11 @@ impl ViewportPresenter {
                         color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
                         // The canvas already owns window coverage. Reapplying
                         // alpha blending here would thicken antialiased corners.
-                        alpha: wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add },
+                        alpha: if self.standalone_overview {
+                            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.alpha
+                        } else {
+                            wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
+                        },
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -353,6 +368,48 @@ impl ViewportPresenter {
         target: &wgpu::TextureView,
         view: ViewState,
         surround_linear: [f32; 4],
+    ) {
+        self.encode_content(renderer, encoder, target, view, surround_linear, false);
+    }
+
+    /// Render a retained native Navigator surface from the current GPU image.
+    /// Native placement and clipping can then move it without another GPU pass.
+    pub fn present_overviews(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        target: &wgpu::TextureView,
+        extent: [u32; 2],
+    ) {
+        assert!(
+            self.standalone_overview,
+            "use ViewportPresenter::for_overviews"
+        );
+        let mut encoder = renderer.device.create_command_encoder(&Default::default());
+        self.encode_content(
+            renderer,
+            &mut encoder,
+            target,
+            ViewState {
+                width_px: extent[0],
+                height_px: extent[1],
+                document_to_surface: [1., 0., 0., 1., 0., 0.],
+                background_rgba_linear: [0.; 4],
+            },
+            [0.; 4],
+            true,
+        );
+        renderer.queue.submit([encoder.finish()]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_content(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        view: ViewState,
+        surround_linear: [f32; 4],
+        overview_only: bool,
     ) {
         let Some(composite) = renderer.composite_view.as_ref() else {
             return;
@@ -469,7 +526,11 @@ impl ViewportPresenter {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(if overview_only {
+                            wgpu::Color::TRANSPARENT
+                        } else {
+                            wgpu::Color::BLACK
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -478,15 +539,17 @@ impl ViewportPresenter {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
-            pass.draw(0..3, 0..1);
+            if !overview_only {
+                pass.set_pipeline(&self.pipeline);
+                pass.draw(0..3, 0..1);
+            }
             if !self.overviews.is_empty() {
                 pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
             }
-            if !self.cursor_vertices.is_empty() {
+            if !overview_only && !self.cursor_vertices.is_empty() {
                 pass.set_pipeline(&self.cursor_pipeline);
                 pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));
                 pass.draw(0..6, 0..self.cursor_vertices.len() as u32);

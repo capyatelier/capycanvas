@@ -1,4 +1,4 @@
-//! In-surface overviews reuse scene pixels, without a preview target or readback.
+//! Native overviews reuse scene pixels without an intermediate preview or readback.
 use super::*;
 
 fn target(r: &WgpuRasterizer, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::Texture {
@@ -95,6 +95,27 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
         presenter.set_overviews(&r, &[inset]);
         presenter.present(&r, &surface, view(), [0.; 4]);
         let rendered = page_bytes(&r, &target);
+        // A retained native canvas has exactly the same overview pixels, with
+        // transparent margins for native panel backgrounds and clipping.
+        let mut native = ViewportPresenter::for_overviews(&r, format);
+        native.set_overviews(&r, &[inset]);
+        native.present_overviews(&r, &surface, [128, 128]);
+        let standalone = page_bytes(&r, &target);
+        for y in 0..128 {
+            for x in 0..128 {
+                let expected = if (8..56).contains(&x) && (8..56).contains(&y) {
+                    pixel(&rendered, x, y)
+                } else {
+                    &[0, 0, 0, 0]
+                };
+                assert_eq!(
+                    pixel(&standalone, x, y),
+                    expected,
+                    "native overview {x},{y}"
+                );
+            }
+        }
+        assert_eq!(r.composite_revision, revision);
         // Native scrolling crops pixels, not image coordinates. In particular,
         // clipping cannot stretch the remaining image or move its camera outline.
         presenter.set_overviews(

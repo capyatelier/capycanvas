@@ -19,6 +19,8 @@ import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
 import { checkMediumTiles } from "./tiles.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
+import { checkWorkspaceMotion } from "./workspace-motion.test.mjs";
+import { checkWorkspaceRendering } from "./workspace-rendering.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
@@ -161,7 +163,11 @@ try {
   if (!process.argv.includes("--fullscreen")) await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   if (process.argv.includes("--parity") || process.argv.includes("--preferences"))
     await call("Input.setIgnoreInputEvents", { ignore: true });
-  if (!process.argv.includes("--fullscreen")) await call("Emulation.setDeviceMetricsOverride", {
+  if (process.argv.includes("--native-input")) {
+    const {windowId} = await call("Browser.getWindowForTarget", {targetId:target.targetId}, null);
+    await call("Browser.setWindowBounds", {windowId,bounds:{windowState:"fullscreen"}}, null);
+    await call("Page.bringToFront");
+  } else if (!process.argv.includes("--fullscreen")) await call("Emulation.setDeviceMetricsOverride", {
     width: 1440,
     height: 1000,
     deviceScaleFactor: 1,
@@ -176,7 +182,19 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--long-press-drag")) {
+  if (process.argv.includes("--workspace-acceptance")) {
+    await checkEditor({call,evaluate,settle,canvasPixels});
+    await checkDrawerDragging({call,evaluate,settle});
+    await checkDragCursors({call,evaluate,settle});
+    await checkLongPressDragging({call,evaluate,settle});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--workspace-rendering")) {
+    await checkWorkspaceRendering({call,evaluate,settle});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--workspace-motion")) {
+    await checkWorkspaceMotion({call,evaluate,settle});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--long-press-drag")) {
     await checkLongPressDragging({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--drag-cursors")) {

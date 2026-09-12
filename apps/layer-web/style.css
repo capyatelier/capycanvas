@@ -92,7 +92,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-grip { cursor: grab; opacity: .65; }
 .panel-footer { flex: none; width: 100%; cursor: grab; touch-action: none; }
 .panel-footer > .panel-grip { width: 100%; height: 100%; }
-.panel-footer .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
+.panel-footer .panel-grip svg, .collapsed-column > .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
 /* 20px target, 7.2px-wide dots: shift 1.6px to leave the tab label's 8px inset. */
 .panel-grip svg { transform: translateX(-1.6px); }
 .dock-tabs > .panel-grip { flex: none; margin-left: auto; width: 20px; height: 24px; }
@@ -492,22 +492,18 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .color-swatch > span { display:block; height:22px; border-radius:3px; }
 .color-space { width:100%; margin-bottom:8px; }
 .navigator-control { display:flex; flex-direction:column; gap:2px; height:100%; min-height:0; }
-.navigator-overview { position:relative; width:100%; height:164px; flex:1 1 164px; min-height:0; touch-action:none; }
-.navigator-overview::before { content:""; position:absolute; inset:0; background:var(--bg); clip-path:var(--navigator-cutout); pointer-events:none; }
+.navigator-overview { position:relative; width:100%; height:164px; flex:1 1 164px; min-height:0; touch-action:none; background:var(--bg); }
+.navigator-surface { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 .overview-hole { position:absolute; outline:1px solid var(--border); pointer-events:none; }
 .navigator-buttons { display:flex; gap:2px; flex:0 0 32px; }
 .panel .navigator-buttons button { display:grid; place-items:center; flex:1; min-width:0; min-height:32px; padding:0; }
-.gpu-overview-surface, .gpu-overview-surface .panel-preview { background:transparent; }
-.gpu-overview-surface::before { content:""; position:absolute; inset:0; border-radius:inherit; background:var(--panel); clip-path:var(--overview-cutout); pointer-events:none; }
-.gpu-overview-surface > .panel-columns { z-index:1; }
-.gpu-overview-surface .dock-tabs { background:var(--panel); }
 .tile-divider { pointer-events:auto; }
 .tile-divider::after { content:""; position:absolute; inset:4px calc(50% - .5px); background:var(--border); }
 .toolbar-controls[data-axis="vertical"] .tile-divider::after { inset:calc(50% - .5px) 4px; }
 .collapsed-column { position:absolute; background:var(--panel); border-radius:8px; overflow:hidden; }
 .collapsed-column > *, .collapsed-content > * { position:absolute; }
 .collapsed-content { overflow:hidden; touch-action:pan-y; }
-.column-tab { padding:4px; }
+.column-tab { display:grid; place-items:center; padding:4px; }
 .column-expand { padding:0; }
 .zen-toolbars { display:none; }
 .partial-zen.zen-hidden > .zen-toolbars { display:contents; }

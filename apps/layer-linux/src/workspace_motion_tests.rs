@@ -10,13 +10,20 @@ fn native_workspace_motion_input() {
     w.window.maximize();
     w.window.present();
     pump(1600);
-    let original = state(&w).workspace;
+    // Explicitly restore the fixed tab fixture below. A fresh workspace store
+    // can finish loading the shipped preset after the realize callback.
+    let original = layer_ui::WorkspaceState::default();
     let mut step = 0;
     std::fs::write(dir.join("ready"), "ready").unwrap();
     let mut perform = |events: serde_json::Value| {
         std::fs::write(
-            dir.join(format!("step-{step}.json")),
+            dir.join(format!("step-{step}.json.tmp")),
             serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        std::fs::rename(
+            dir.join(format!("step-{step}.json.tmp")),
+            dir.join(format!("step-{step}.json")),
         )
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -240,7 +247,17 @@ fn native_workspace_motion_input() {
                     0.
                 }
             };
-            let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":0,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"placement_hz":hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>()),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>()});
+            let mut placement_cpu: Vec<_> = frames.iter().map(|f| f.1).collect();
+            placement_cpu.sort_by(f64::total_cmp);
+            assert!(!placement_cpu.is_empty(), "publish native placement");
+            if let Ok(minimum) = std::env::var("LAYER_MOTION_MIN_HZ") {
+                assert!(
+                    hz(&presented) >= minimum.parse::<f64>().unwrap(),
+                    "{touch}/{scenario}: {} Hz",
+                    hz(&presented)
+                );
+            }
+            let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":0,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"placement_ms":{"p50":placement_cpu[placement_cpu.len()/2],"p95":placement_cpu[placement_cpu.len()*95/100]},"placement_hz":hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>()),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>()});
             eprintln!("{report}");
             reports.push(report);
             if scenario == "tab" {

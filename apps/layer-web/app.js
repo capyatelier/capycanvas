@@ -230,6 +230,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
+    if (action.type === "measure_column_drawers" && workspaceGesture) workspaceGesture.hits = null;
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
         ...action,
@@ -253,11 +254,24 @@ function dispatch(action) {
 }
 function applyChange(change) {
   if (change.regions) {
-    state = app.state();
-    update(change.regions);
+    const presentation = app.workspace_update();
+    if (workspaceModelRevision !== presentation.model_revision) {
+      const moving = presentation.drag || workspacePresentation?.drag;
+      workspaceModelRevision = presentation.model_revision;
+      workspacePresentation = null;
+      state = app.state();
+      // A concurrent model change rebases retained placement too.
+      update(change.regions | (moving ? 1 : 0));
+    } else if (change.regions & 32) {
+      // Camera-only publications intentionally retain the model revision.
+      state.camera = app.camera();
+      update(32);
+    }
+    if (workspaceModelRevision === presentation.model_revision)
+      queueWorkspacePresentation(presentation);
   }
   if (change.canvas_wake) wake();
-  scheduleCursor();
+  if (!workspaceGesture?.started) scheduleCursor();
 }
 let cursorScheduled = false;
 function scheduleCursor() {
@@ -302,6 +316,7 @@ function wake() {
 function frame(now) {
   scheduled = false;
   try {
+    flushWorkspacePresentation();
     while (pending.length) {
       const batch = pending[0],
         count = app.pen(batch.records, batch.revision);
@@ -381,6 +396,8 @@ function tabLabel(tab, view) {
 }
 function arrange() {
   if (!app) return;
+  clearWorkspacePlacement();
+  if (workspaceGesture) workspaceGesture.hits = null;
   layout = app.layout(workspace.clientWidth, workspace.clientHeight);
   workspace.style.setProperty("--tab-bar-height", `${layout.tab_bar_height}px`);
   const live = new Set();
@@ -741,18 +758,19 @@ function clearTabSlide(drag) {
   drag.tabSlide.overlay.remove();
   drag.tabSlide = null;
 }
-function updateTabSlide(drag, e) {
+function updateTabSlide(drag, presentation) {
   const slide = drag.tabSlide;
   if (!slide) return;
-  const preview = app.tab_drag_preview([e.clientX, e.clientY]);
+  const preview = presentation?.preview;
   if (!preview) { clearTabSlide(drag); return; }
   for (const tab of slide.tabs) {
-    const offset = tab.source === drag.node ? preview.bounds.x - tab.hit.bounds.x
-      : preview.offsets.find(o => Number(o.index) === tab.hit.index).x;
-    tab.preview.style.transform = `translateX(${offset}px)`;
+    const offset = tab.source === drag.node ? preview.bounds.x - presentation.source.x
+      : preview.offsets.find(o => Number(o.index) === tab.hit.index)?.x || 0;
+    tab.preview.style.transform = `translateX(${deviceAligned(offset)}px)`;
   }
 }
 function workspaceCursor(cursor) {
+  if ((workspace.dataset.workspaceCursor || null) === (cursor || null)) return;
   if (cursor) {
     workspace.dataset.workspaceCursor = cursor;
     workspace.style.setProperty("--workspace-cursor", cursor);
@@ -761,17 +779,57 @@ function workspaceCursor(cursor) {
     workspace.style.removeProperty("--workspace-cursor");
   }
 }
-// DEPRECATED workspace presentation path. Expose UiSession::workspace_update
-// through Wasm (crates/layer-ui/src/workspace_update.rs); retain DOM/content while
-// model_revision is unchanged and apply the absolute geometry once per frame.
-// Preserve every DragWorkspace input phase and shared cancellation/history.
+// Shared workspace_update publication: retain DOM/content by model_revision.
+// Dispatch every input to Rust; replace only pending absolute presentation and
+// apply it on the display clock. No scaled textures or per-motion DOM rebuilds.
+let workspaceModelRevision, workspacePresentation, workspacePresentationFrame = 0;
+workspace.addEventListener("scroll", () => { if (workspaceGesture) workspaceGesture.hits = null; }, true);
+const workspacePlacements = new Set();
+const deviceAligned = value => Math.round(value * devicePixelRatio) / devicePixelRatio;
+function clearWorkspacePlacement() {
+  for (const node of workspacePlacements) node.style.removeProperty("transform");
+  workspacePlacements.clear();
+}
+function queueWorkspacePresentation(presentation) {
+  workspacePresentation = presentation;
+  if (!presentation.drag) {
+    flushWorkspacePresentation();
+  } else if (!workspacePresentationFrame) {
+    workspacePresentationFrame = requestAnimationFrame(function presentWorkspaceFrame() {
+      workspacePresentationFrame = 0;
+      flushWorkspacePresentation();
+    });
+  }
+}
+function flushWorkspacePresentation() {
+  const update = workspacePresentation;
+  workspacePresentation = null;
+  if (!update || update.model_revision !== workspaceModelRevision) return false;
+  const drag = update.drag, moving = drag?.group;
+  if (moving) {
+    const base = layout.groups.find(g => g.id === moving.id)?.bounds;
+    if (base) {
+      const transform = `translate(${deviceAligned(moving.bounds.x) - base.x}px, ${deviceAligned(moving.bounds.y) - base.y}px)`;
+      const nodes = [groups.get(moving.id), ...[...dividers.values()].filter(n => n.dragAction.group === moving.id)];
+      for (const node of nodes.filter(Boolean)) {
+        if (node.style.transform !== transform) node.style.transform = transform;
+        workspacePlacements.add(node);
+      }
+    }
+  } else clearWorkspacePlacement();
+  if (workspaceGesture) updateTabSlide(workspaceGesture, drag?.tab);
+  showDropHint(drag?.drop_hint);
+}
 function workspaceGestureEvent(phase, e) {
   const drag = workspaceGesture;
   if (!drag) return;
-  workspaceChrome?.measureColumnDrawers();
+  if (phase === "down" || phase === "up") {
+    workspaceChrome?.measureColumnDrawers();
+    drag.hits = null;
+  }
   dispatch({ ...drag.action, phase, position: [e.clientX, e.clientY],
     viewport: [workspace.clientWidth, workspace.clientHeight],
-    ...(drag.action.type === "drag_workspace" ? { tabs: tabHits() } : {}),
+    ...(drag.action.type === "drag_workspace" ? { tabs: drag.hits ??= tabHits() } : {}),
   });
 }
 function endWorkspaceGesture(e, cancel = false) {
@@ -814,10 +872,7 @@ workspace.addEventListener("pointermove", e => {
     if (drag.tabSlide) app.begin_tab_drag(drag.tabSlide.tabs.map(t => t.hit), drag.tabSlide.clip);
   }
   workspaceGestureEvent("move", e);
-  updateTabSlide(drag, e);
   if (drag.action.type === "drag_workspace") {
-    const hint = dropHint(e, drag.action.item);
-    showDropHint(hint);
     workspaceCursor("grabbing");
   } else {
     workspaceCursor(drag.cursor);

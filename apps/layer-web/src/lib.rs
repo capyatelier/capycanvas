@@ -18,7 +18,7 @@ pub struct WebApp {
     sequence: u64,
     startup: StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
-    overviews: Vec<editor::OverviewSlot>,
+    overviews: std::collections::BTreeMap<u32, editor::NavigatorSurface>,
 }
 
 #[derive(Deserialize)]
@@ -373,7 +373,7 @@ impl WebApp {
             sequence: 0,
             startup: StartupProgress::default(),
             deferred_contacts: Default::default(),
-            overviews: Vec::new(),
+            overviews: Default::default(),
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -568,6 +568,14 @@ impl WebApp {
 impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
         serialize(self.session.state())
+    }
+    /// Retain UI models by model_revision; ordinary workspace motion only
+    /// publishes absolute native geometry, tab presentation and drop feedback.
+    pub fn workspace_update(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.workspace_update())
+    }
+    pub fn camera(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.state().camera)
     }
     pub fn catalog(&self) -> Result<JsValue, JsValue> {
         serialize(&ui_catalog())
@@ -889,7 +897,7 @@ impl WebApp {
         let mut overlay = Vec::new();
         self.session.append_layer_overlay(&mut overlay);
         let scale = self.canvas.width() as f32 / self.canvas.client_width().max(1) as f32;
-        let overviews = self.overview_placements();
+        change.canvas_wake |= self.present_navigators()?;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         gpu.presenter
             .set_cursor(gpu.renderer.device(), &overlay, scale);
@@ -932,7 +940,6 @@ impl WebApp {
                 return Err(js("WebGPU surface validation failed"));
             }
         };
-        gpu.presenter.set_overviews(&gpu.renderer, &overviews);
         gpu.presenter.present(
             &gpu.renderer,
             &target.texture.create_view(&Default::default()),

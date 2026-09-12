@@ -1,7 +1,7 @@
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ app, state, workspace, canvas, element, button, icon, numberField, dispatch, asset, wake }) {
+export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake }) {
   const updates = new Map(), navigators = new Set();
-  let positioning = false, positions = "", documentKey = "";
+  let positioning = false, nextNavigator = 1;
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
   const control = (kind) => {
@@ -125,12 +125,13 @@ export function createEditorPanels({ app, state, workspace, canvas, element, but
     };
   }
   function navigatorPanel(root) {
-    const overview=element("div","navigator-overview"),hole=element("div","overview-hole");overview.append(hole);root.append(overview);
+    const overview=element("div","navigator-overview"),surface=element("canvas","navigator-surface"),hole=element("div","overview-hole");overview.append(surface,hole);root.append(overview);
     const controls=element("div","navigator-buttons");root.append(controls);
     const buttons=["zoom_out","zoom_in","rotate_left","rotate_right","flip_horizontal","flip_vertical"].map(id=>{const node=button("",()=>dispatch({type:"invoke",command:id}));node.dataset.navigatorCommand=id;controls.append(node);return[id,node];});
-    const record={root,overview,hole,container:null};navigators.add(record);
+    const record={id:nextNavigator++,root,overview,hole,size:""};navigators.add(record);
+    app.navigator_surface(record.id,surface);
     const resize=new ResizeObserver(queuePositions);resize.observe(overview);
-    root.navigatorDispose=()=>{resize.disconnect();navigators.delete(record);record.container?.classList.remove("gpu-overview-surface");queuePositions();};
+    root.navigatorDispose=()=>{resize.disconnect();navigators.delete(record);app.remove_navigator_surface(record.id);};
     let contact=null;
     const send=(e,phase)=>{const r=overview.getBoundingClientRect();dispatch({type:"navigator",phase,position:[e.clientX-r.x,e.clientY-r.y],viewport:[r.width,r.height]});};
     overview.addEventListener("pointerdown",e=>{if(e.button!==0)return;contact=e.pointerId;overview.setPointerCapture(contact);e.preventDefault();send(e,"down");});
@@ -139,35 +140,23 @@ export function createEditorPanels({ app, state, workspace, canvas, element, but
     for(const name of ["pointercancel","lostpointercapture"])overview.addEventListener(name,e=>{if(contact===e.pointerId){send(e,"cancel");contact=null;}});
     return()=>{for(const[id,node]of buttons){const c=state().commands.find(c=>c.id===id);if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;}queuePositions();};
   }
-  function visible(node) {
-    if(!node.isConnected)return false;
-    const group=node.closest(".dock-group");
-    if(group && (workspace.classList.contains("zen-hide-floating") && group.classList.contains("floating-panel")
-      || workspace.classList.contains("zen-hidden") && !group.classList.contains("floating-panel")))return false;
-    for(let p=node;p&&p!==workspace;p=p.parentElement){const s=getComputedStyle(p);if(s.display==="none"||s.visibility==="hidden"||s.opacity==="0")return false;}
-    return true;
-  }
   function updatePositions() {
-    const cutout=({x,y,width,height})=>`polygon(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,${x}px ${y}px,${x}px ${y+height}px,${x+width}px ${y+height}px,${x+width}px ${y}px,${x}px ${y}px)`;
-    positioning=false;const slots=[],surface=canvas.getBoundingClientRect(),scale=canvas.width/Math.max(1,surface.width);
+    positioning=false;
+    let resized=false;
     for(const record of navigators) {
-      const {overview,hole}=record,container=overview.closest(".content-drawer, .dock-group");
-      if(record.container!==container){record.container?.classList.remove("gpu-overview-surface");record.container=container;}
-      if(!container||!visible(overview)){container?.classList.remove("gpu-overview-surface");continue;}
-      const r=overview.getBoundingClientRect(),g=app.navigator_geometry(r.width,r.height);if(!g)continue;
-      let left=Math.max(r.left,surface.left),top=Math.max(r.top,surface.top),right=Math.min(r.right,surface.right),bottom=Math.min(r.bottom,surface.bottom);
-      for(let p=overview.parentElement;p&&p!==workspace;p=p.parentElement){const style=getComputedStyle(p);if([style.overflowX,style.overflowY].some(v=>v!=="visible")){const b=p.getBoundingClientRect();left=Math.max(left,b.left);right=Math.min(right,b.right);top=Math.max(top,b.top);bottom=Math.min(bottom,b.bottom);}}
-      if(right<=left||bottom<=top){container.classList.remove("gpu-overview-surface");continue;}
-      const image=g.image,c=container.getBoundingClientRect(),x=r.x-c.x+image.x,y=r.y-c.y+image.y;
-      container.classList.add("gpu-overview-surface");
-      container.style.setProperty("--overview-cutout",cutout({...image,x,y}));
-      overview.style.setProperty("--navigator-cutout",cutout(image));
-      Object.assign(hole.style,{left:`${image.x}px`,top:`${image.y}px`,width:`${image.width}px`,height:`${image.height}px`});
-      slots.push({bounds:[(r.x-surface.x)*scale,(r.y-surface.y)*scale,r.width*scale,r.height*scale],clip:[(left-surface.x)*scale,(top-surface.y)*scale,(right-left)*scale,(bottom-top)*scale],order:Number(getComputedStyle(container).zIndex)||0});
+      const {overview,hole}=record;
+      // CSS transforms do not resize this native GPU canvas. DOM compositing
+      // supplies scrolling, stacking and clipping without per-motion JS/GPU work.
+      const r=overview.getBoundingClientRect(),scale=devicePixelRatio||1;
+      const size=JSON.stringify([r.width,r.height,scale]);
+      if(size!==record.size){record.size=size;app.navigator_size(record.id,r.width,r.height,scale);resized=true;}
+      const g=app.navigator_geometry(r.width,r.height);
+      hole.hidden=!g;
+      if(g)Object.assign(hole.style,{left:`${g.image.x}px`,top:`${g.image.y}px`,width:`${g.image.width}px`,height:`${g.image.height}px`});
     }
-    const next=JSON.stringify(slots);if(next!==positions){positions=next;app.navigator_placements(slots);wake();}
+    if(resized)wake();
   }
   function queuePositions(){if(!positioning){positioning=true;requestAnimationFrame(updatePositions);}}
-  workspace.addEventListener("scroll",queuePositions,true);window.addEventListener("resize",queuePositions);
-  return {control,queuePositions,refresh(){for(const fn of updates.values())fn();const next=JSON.stringify(state().tabs.map(t=>[t.width,t.height]));if(next!==documentKey){documentKey=next;queuePositions();}}};
+  window.addEventListener("resize",queuePositions);
+  return {control,queuePositions,refresh(){for(const fn of updates.values())fn();}};
 }

@@ -22,7 +22,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   for(let i=0;i<4;i++)await invoke("zoom_in");
   const middle=await evaluate("Math.floor(innerWidth/2)");
   const header=await call("Page.captureScreenshot",{format:"png",fromSurface:true,clip:{x:middle,y:2,width:1,height:1,scale:1}});
-  const headerPixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,'+${JSON.stringify(header.data)};await image.decode();const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(image,0,0);return [...ctx.getImageData(0,0,1,1).data];})()`);
+  const headerPixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,'+${JSON.stringify(header.data)};await image.decode();const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return [...ctx.getImageData(0,0,1,1).data];})()`);
   assert.deepEqual(headerPixel,[255,255,255,255],"Zoomed paper must composite through empty header space");
   await invoke("fit_canvas");
   await invoke("fill");
@@ -58,7 +58,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   const pan=await evaluate('layerApp.state().camera.translation');
   await pointer(".dock-group .navigator-overview",.5,.5,[20,10]);
   assert.notDeepEqual(await evaluate('layerApp.state().camera.translation'),pan,"Navigator moves the camera");
-  assert.ok(await evaluate('!!document.querySelector(".gpu-overview-surface")'),"Navigator is composited through the GPU surface");
+  assert.ok(await evaluate('!!document.querySelector(".navigator-surface")'),"Navigator uses a native GPU surface");
   await evaluate('window.editorWorkspace=layerApp.app.workspace_persistence(); window.editorSettings=layerApp.state().settings; layerApp.dispatch({type:"restore_settings",settings:{...editorSettings,total_zen:false}})');
   await invoke("zen_mode");
   await evaluate('window.dispatchEvent(new PointerEvent("pointermove",{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:"mouse",bubbles:true}))');
