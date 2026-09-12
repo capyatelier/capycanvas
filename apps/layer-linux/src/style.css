@@ -27,8 +27,8 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .workspace-switcher { background: mix(var(--window-bg-color), var(--window-fg-color), .06); border: 1px solid alpha(var(--window-fg-color), .10); border-radius: 18px; padding: 3px; }
 .workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: 15px; background: transparent; box-shadow: none; font-weight: 500; }
 .workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
-.workspace-switcher button:checked { background: var(--accent-bg-color); color: var(--accent-fg-color); }
-.workspace-switcher button:checked:hover { background: mix(var(--accent-bg-color), var(--window-fg-color), .08); }
+.workspace-switcher button:checked { background: mix(var(--window-bg-color), var(--accent-bg-color), .28); color: var(--window-fg-color); }
+.workspace-switcher button:checked:hover { background: mix(var(--window-bg-color), var(--accent-bg-color), .36); }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .workspace-save-status { background: var(--window-bg-color); padding: 6px 0; color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }

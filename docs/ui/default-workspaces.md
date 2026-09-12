@@ -35,7 +35,7 @@ using CapyCanvas theme colors, type, and compact spacing.
 | Illustrator | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
 | Photographer | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
-Painter and Photographer use Medium toolbar tiles. Painter starts with Brush
+Painter uses Medium toolbar tiles; Photographer uses Small. Painter starts with Brush
 selected and no docked content panels. Photographer starts with Operation selected,
 devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
 the illustration Tool Set/Brush size columns and Diagnostics. Illustrator retains
@@ -64,6 +64,9 @@ the existing default arrangement and tool selection.
 - Seed idempotently. Upgrades retain existing workspaces and resume the previous
   active one. Existing user names win collisions: the seeded workspace receives
   a numeric suffix, which the pill also shows. Never overwrite user content.
+- The first Photographer arrangement used Medium tiles. On switching to an
+  untouched copy of that arrangement, update it and its starting layout to Small.
+  Keep renamed workspaces and brush edits; leave customized layout histories alone.
 
 ## Implementation and host integration
 
@@ -102,10 +105,14 @@ check that each workspace keeps its changes. Window → Workspaces contains
 New Workspace, Manage Workspaces, Layout History, Restore Starting Layout, and
 Reset All Brushes. The manager's plus button copies the current workspace.
 
-Validation: 313 shared tests pass (273 `layer-ui`, 40 `layer-workspace`). Six
+Validation: 314 shared tests pass (273 `layer-ui`, 41 `layer-workspace`). Six
 native GTK tests pass with isolated storage and a private Wayland compositor:
 real-pointer menus/pill/drawers/reset, manager previews/history, database restart
 and independent windows, ownership takeover, unavailable-storage close recovery,
 and fullscreen title/clock placement. Shared host, Apple, and Windows bridge
 compilation passes. Other platforms' native UI acceptance remains with their
 host implementations.
+
+The pill-color and Small-toolbar refinement reran the shared suite and native
+pointer test. The upgrade test also covers brush edits, renaming, preservation of
+customized layouts, durable publication, and repeated initialization.

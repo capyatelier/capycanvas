@@ -1,6 +1,49 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// Update only the untouched first Photographer arrangement, after its owner
+/// has been claimed. Brush edits and renamed workspaces remain intact.
+pub(super) fn updated_photographer_default(
+    entity: &Entity,
+    platform: Platform,
+) -> Option<ItemContent> {
+    use layer_ui::{Panel, TileStyle, WorkspacePreset};
+    if entity.id != DEFAULT_WORKSPACES[2].0 || !entity.metadata.builtin {
+        return None;
+    }
+    let ItemContent::Workspace {
+        history, baseline, ..
+    } = &entity.content
+    else {
+        return None;
+    };
+    if history.revisions.len() != 1 {
+        return None;
+    }
+    let layout = WorkspacePreset::Photographer.layout(platform);
+    let mut previous = layout.clone();
+    for panel in [Panel::Toolbar, Panel::Commands] {
+        previous
+            .panels
+            .iter_mut()
+            .find(|p| p.id == panel)?
+            .tile_style = TileStyle::Medium;
+    }
+    previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
+    if baseline != &previous || history.layout() != &previous {
+        return None;
+    }
+    let mut content = entity.content.clone();
+    if let ItemContent::Workspace {
+        history, baseline, ..
+    } = &mut content
+    {
+        history.revisions.values_mut().next()?.layout = layout.clone();
+        *baseline = layout;
+    }
+    Some(content)
+}
+
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     /// Migrate immutable legacy inputs atomically, once per source. Distinct
     /// scene sources remain distinct even when their layouts happen to match.

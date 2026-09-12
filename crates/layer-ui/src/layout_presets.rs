@@ -41,6 +41,11 @@ impl WorkspacePreset {
         let command = |command| ToolbarControl::Command { command };
         let drawer = |panel| ToolbarControl::Panel { panel };
         let mut layout = DockLayout::editor_default();
+        let tile_style = if self == Self::Painter {
+            TileStyle::Medium
+        } else {
+            TileStyle::Small
+        };
         let tools = if self == Self::Painter {
             vec![
                 command(Brush),
@@ -111,7 +116,7 @@ impl WorkspacePreset {
                 .collect();
             let config = layout.panels.iter_mut().find(|p| p.id == panel).unwrap();
             config.hide_tab = true;
-            config.tile_style = TileStyle::Medium;
+            config.tile_style = tile_style;
             config.content = PanelContent::Toolbar {
                 name: panel.label().into(),
                 tiles,
@@ -133,7 +138,7 @@ impl WorkspacePreset {
         layout.bands = vec![DockBand {
             id: 1,
             edge: Edge::Left,
-            extent: TileStyle::Medium.size()[0] + WORKSPACE_SPACING,
+            extent: tile_style.size()[0] + WORKSPACE_SPACING,
             root: tabs(2, &[Panel::Toolbar]),
         }];
         if self == Self::Painter {
@@ -244,6 +249,10 @@ mod tests {
     #[test]
     fn photographer_has_left_tools_and_two_right_columns() {
         let layout = WorkspacePreset::Photographer.layout(crate::Platform::Gtk);
+        assert_eq!(
+            layout.panel(Panel::Toolbar).unwrap().tile_style,
+            TileStyle::Small
+        );
         let resolved = layout.workspace(1600., 1000., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),

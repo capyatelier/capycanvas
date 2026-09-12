@@ -480,11 +480,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 ));
             }
             PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::invalid)?;
+            let content = migration::updated_photographer_default(&incoming.entity, self.platform);
             let mut metadata = incoming.entity.metadata.clone();
             metadata.last_used_ms = now;
             let mut batch = CommitBatch::prepare(
                 self.owner.clone(),
-                vec![update(&incoming, Some(metadata.clone()), None, None)?],
+                vec![update(
+                    &incoming,
+                    Some(metadata.clone()),
+                    content.clone(),
+                    None,
+                )?],
             )?;
             batch
                 .bindings
@@ -494,6 +500,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .push((format!("window:{}", self.owner.id), Some(id.into())));
             let receipt = self.publish(batch).await?;
             incoming.entity.metadata = metadata;
+            if let Some(content) = content {
+                incoming.entity.content = content;
+            }
             incoming.generations = receipt.items[0].1;
             Ok(incoming.clone())
         }

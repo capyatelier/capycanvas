@@ -203,6 +203,96 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
 }
 
 #[test]
+fn photographer_size_upgrade_preserves_brush_edits_and_customized_layouts() {
+    use layer_ui::{Panel, TileStyle, WorkspacePreset};
+    pollster::block_on(async {
+        for customized in [false, true] {
+            let f = Fixture::new();
+            let m = &f.manager;
+            let id = DEFAULT_WORKSPACES[2].0;
+            let stored = m.claim(id).await.unwrap();
+            let mut previous = WorkspacePreset::Photographer.layout(Platform::Gtk);
+            for panel in [Panel::Toolbar, Panel::Commands] {
+                previous
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.id == panel)
+                    .unwrap()
+                    .tile_style = TileStyle::Medium;
+            }
+            previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
+            let mut history = layer_ui::LayoutHistory::new(&previous);
+            if customized {
+                let mut edited = previous.clone();
+                edited.bands[1].extent += 60.;
+                history.append(&edited, "Resize Layers column");
+            }
+            let content = ItemContent::Workspace {
+                history,
+                baseline: previous,
+                origin: None,
+            };
+            let mut metadata = stored.entity.metadata.clone();
+            metadata.rename("My Photos", "", 2_000).unwrap();
+            let mut working = stored.entity.working.clone().unwrap();
+            working
+                .tools
+                .set_override(working.preset, "size", 73.)
+                .unwrap();
+            m.publish(
+                CommitBatch::prepare(
+                    m.owner.clone(),
+                    vec![
+                        update(
+                            &stored,
+                            Some(metadata),
+                            Some(content.clone()),
+                            Some(working.clone()),
+                        )
+                        .unwrap(),
+                    ],
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            m.release(&stored).await;
+
+            let reopened =
+                WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+            let incoming = reopened.prepare_switch(id, 3_000).await.unwrap();
+            assert_eq!(incoming.entity.metadata.name, "My Photos");
+            assert_eq!(incoming.entity.working.as_ref(), Some(&working));
+            if customized {
+                assert_eq!(incoming.entity.content, content);
+            } else {
+                let ItemContent::Workspace {
+                    history, baseline, ..
+                } = &incoming.entity.content
+                else {
+                    panic!("Expected workspace");
+                };
+                assert_eq!(
+                    baseline,
+                    &WorkspacePreset::Photographer.layout(Platform::Gtk)
+                );
+                assert_eq!(history.layout(), baseline);
+                assert_eq!(history.revisions.len(), 1);
+                assert_eq!(history.generation, 0);
+            }
+            assert_eq!(reopened.load(id).await.unwrap().entity, incoming.entity);
+            let saved_content = incoming.entity.content.clone();
+            reopened.activate(incoming);
+            reopened.close().await.unwrap();
+            let incoming = reopened.initialize(4_000).await.unwrap();
+            assert_eq!(incoming.entity.content, saved_content);
+            reopened.activate(incoming);
+            reopened.close().await.unwrap();
+        }
+    });
+}
+
+#[test]
 fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
     pollster::block_on(async {
         let directory = std::env::temp_dir().join(format!("capy-presets-upgrade-{}", new_id()));
