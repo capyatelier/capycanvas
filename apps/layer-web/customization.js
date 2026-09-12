@@ -68,6 +68,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (container === context && context.matches(":popover-open")) positionPopup(context);
   }
   function showContext(node, point) {
+    const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
+    if (!node.dispatchEvent(claimed)) return;
     const model = node.layerMenu ? node.layerMenu() : app.context_menu(JSON.parse(node.dataset.context));
     anchor = point;
     renderMenu(context, model, () => context.hidePopover());
@@ -91,13 +93,16 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   // scroll, drag or cancelled contact cancels it; never claim input editing.
   let hold, heldPointer = null;
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
+  function dismissContext() {
+    cancelHold();
+    if (context.matches(":popover-open")) context.hidePopover();
+  }
   workspace.addEventListener("pointerdown", (e) => {
     cancelHold(); heldPointer = null;
     const node = contextTarget(e.target);
     if (e.pointerType !== "touch" || !node) return;
     hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
       heldPointer = e.pointerId; cancelHold();
-      node.dispatchEvent(new Event("workspace-context-claimed", { bubbles: true }));
       showContext(node, [e.clientX, e.clientY]);
     }, 500) };
   });
@@ -493,7 +498,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, field, discardFields, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, dismissContext, field, discardFields, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

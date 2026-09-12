@@ -772,7 +772,7 @@ function endWorkspaceGesture(e, cancel = false) {
   workspaceCursor(null);
   if (workspace.hasPointerCapture(drag.id)) workspace.releasePointerCapture(drag.id);
   dropIndicator.hidden = true;
-  if (drag.started) { revealPointer = drag.id; e?.preventDefault(); e?.stopPropagation(); }
+  if (drag.started || drag.context) { revealPointer = drag.id; e?.preventDefault(); e?.stopPropagation(); }
   updateZen();
 }
 workspace.addEventListener("pointerdown", e => {
@@ -793,6 +793,7 @@ workspace.addEventListener("pointermove", e => {
   if (!drag.started) {
     const distance = Math.hypot(e.clientX - drag.start.clientX, e.clientY - drag.start.clientY);
     if (distance <= (drag.action.type === "drag_workspace" ? 8 : 0)) return;
+    customization.dismissContext();
     drag.started = true;
     // Capture on the stable workspace before Rust tears off/rebuilds a tab.
     workspace.setPointerCapture(e.pointerId);
@@ -819,7 +820,16 @@ workspace.addEventListener("lostpointercapture", e => {
   // stable workspace releases that child; only losing our own capture cancels.
   if (e.target === workspace) endWorkspaceGesture(e, true);
 });
-workspace.addEventListener("workspace-context-claimed", () => endWorkspaceGesture(null, true));
+workspace.addEventListener("workspace-context-claimed", e => {
+  const drag = workspaceGesture;
+  if (drag && (drag.node.contains(e.target) || e.target.contains(drag.node))) {
+    // A late native contextmenu event must not interrupt an existing drag.
+    if (drag.started) { e.preventDefault(); return; }
+    drag.context = true;
+    // Keep receiving this contact even when the menu covers the original tab.
+    workspace.setPointerCapture(drag.id);
+  } else endWorkspaceGesture(null, true);
+});
 workspace.addEventListener("dblclick", e => {
   if (e.target.closest(".dock-tab")) return;
   const node = e.target.closest("[data-workspace-drag]");
