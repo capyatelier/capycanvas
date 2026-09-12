@@ -95,6 +95,51 @@ fn browser_transactions_match_sqlite_contract() {
         1001,
     );
     execute(StoreRequest::List, 1001);
+    execute(StoreRequest::WorkspaceOrder, 1001);
+    let order = vec![first.id.clone(), second.id.clone()];
+    execute(
+        StoreRequest::UpdateWorkspaceOrder {
+            expected: None,
+            ids: order.clone(),
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateWorkspaceOrder {
+            expected: None,
+            ids: order.clone(),
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateWorkspaceOrder {
+            expected: None,
+            ids: vec![],
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateWorkspaceOrder {
+            expected: Some(order.clone()),
+            ids: vec![first.id.clone(), first.id.clone()],
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateWorkspaceOrder {
+            expected: Some(order.clone()),
+            ids: vec!["missing".into()],
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateWorkspaceOrder {
+            expected: Some(order.clone()),
+            ids: vec![second.id.clone(), first.id.clone()],
+        },
+        1001,
+    );
+    execute(StoreRequest::WorkspaceOrder, 1001);
     execute(StoreRequest::Switcher, 1001);
     let pins = vec![second.id.clone(), first.id.clone()];
     execute(
@@ -367,6 +412,7 @@ fn browser_schema_two_upgrade_preserves_existing_records_and_defaults_switcher()
     let mut value: serde_json::Value = serde_json::from_str(&old.encoded().unwrap()).unwrap();
     value["schema"] = serde_json::json!(2);
     value.as_object_mut().unwrap().remove("switcher");
+    value.as_object_mut().unwrap().remove("workspace_order");
     let mut upgraded = BrowserDatabase::decode(&value.to_string()).unwrap();
     assert!(
         matches!(upgraded.execute(StoreRequest::Load { id: entity.id.clone() }, 1000).unwrap(), StoreResponse::Entity(stored) if stored.entity == entity)
@@ -379,4 +425,22 @@ fn browser_schema_two_upgrade_preserves_existing_records_and_defaults_switcher()
         serde_json::from_str::<serde_json::Value>(&upgraded.encoded().unwrap()).unwrap()["schema"],
         SCHEMA_VERSION
     );
+}
+
+#[test]
+fn browser_schema_three_upgrade_preserves_switcher_preferences() {
+    let mut value = serde_json::to_value(BrowserDatabase::default()).unwrap();
+    value["schema"] = serde_json::json!(3);
+    value["switcher"] = serde_json::json!(["illustrator", "painter"]);
+    value.as_object_mut().unwrap().remove("workspace_order");
+    let mut upgraded = BrowserDatabase::decode(&value.to_string()).unwrap();
+    assert!(
+        matches!(upgraded.execute(StoreRequest::Switcher, 1000).unwrap(), StoreResponse::Switcher(Some(ids)) if ids == ["illustrator", "painter"])
+    );
+    assert!(matches!(
+        upgraded
+            .execute(StoreRequest::WorkspaceOrder, 1000)
+            .unwrap(),
+        StoreResponse::WorkspaceOrder(None)
+    ));
 }

@@ -357,20 +357,23 @@ impl ManagerUi {
             row.set_widget_name(&format!("workspace-row-{}", item.id));
             row.set_activatable(true);
             if compact {
+                row.add_css_class("workspace-manager-row");
+                let handle = gtk::Image::from_icon_name("layer-grip-symbolic");
+                handle.set_widget_name(&format!("workspace-reorder-handle-{}", item.id));
+                handle.add_css_class("workspace-reorder-handle");
+                handle.add_css_class("dim-label");
+                handle.set_pixel_size(12);
+                handle.set_size_request(16, 44);
+                handle.set_cursor_from_name(Some("grab"));
+                handle.set_tooltip_text(Some("Drag to reorder"));
+                handle.update_property(&[gtk::accessible::Property::Label("Drag to reorder")]);
+                row.add_prefix(&handle);
                 if pinned.contains(&item.id) {
-                    let handle = gtk::Image::from_icon_name("layer-grip-symbolic");
-                    handle.set_widget_name(&format!("workspace-reorder-handle-{}", item.id));
-                    handle.add_css_class("workspace-reorder-handle");
-                    handle.set_size_request(28, 44);
-                    handle.set_cursor_from_name(Some("grab"));
-                    handle.set_tooltip_text(Some("Drag to reorder in top bar"));
-                    row.add_prefix(&handle);
                     let pin = gtk::Image::from_icon_name("layer-pin-symbolic");
                     pin.add_css_class("dim-label");
                     pin.set_tooltip_text(Some("Shown in top bar"));
                     pin.update_property(&[gtk::accessible::Property::Label("Shown in top bar")]);
                     row.add_suffix(&pin);
-                    self.bind_reorder_row(w, &row, &item.id);
                 }
                 let active = manager.active_id().as_deref() == Some(&item.id);
                 if active {
@@ -401,6 +404,7 @@ impl ManagerUi {
                     self.add_switcher_actions(w, &more, &item.id, &pinned);
                     more.set_valign(gtk::Align::Center);
                     row.add_suffix(&more);
+                    self.bind_reorder_row(w, &row, &item.id, &more);
                 }
             }
             self.rows.borrow_mut().push(item.id);

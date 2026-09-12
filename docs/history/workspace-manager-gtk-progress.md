@@ -9,6 +9,23 @@ the design on 2026-09-12. Other hosts can proceed from the
 and platform acceptance checks remain outstanding. Earlier approval/status notes
 below describe historical checkpoints rather than the current gate.
 
+## Configurable switcher ready for review: 2026-09-12
+
+Manage Workspaces now controls the top bar through a per-row Show in top bar
+checkbox. Every row has a narrow left grip and supports reordering; shown rows
+also have pin indicators. The switcher follows the same order, skipping hidden
+entries. Right-click and hold open the row menu. A held contact can continue into
+a drag, closing the menu; release without dragging leaves it open. Mouse can drag row bodies, touch/pen hold first, and handles drag
+immediately for every device. Move Up / Move Down provide keyboard ordering.
+Settings save independently of workspace claims, layouts, tool settings, and
+previews. Native dialogs now receive their own keys during workspace previews.
+
+Validation: 331 shared tests pass, plus native mouse/touch/keyboard acceptance,
+menu regression, manager preview/history regression, and fullscreen header checks.
+A focused Wasm/IndexedDB test passes 39 storage cases. Shared, Android, Apple, and
+Windows bridges compile; the GTK release build succeeds. Hardware pen timing still
+needs a device check. [Review images and host contract](../ui/default-workspaces.md#configurable-switcher).
+
 ## Default workspaces and workspace-only simplification: 2026-09-12
 
 Added Painter, Illustrator, and Photographer as editable, undeletable defaults

@@ -341,7 +341,7 @@ fn schema_one_upgrade_keeps_entities_and_existing_delivery_hashes() {
         .unwrap();
     f.store
         .connection
-        .execute_batch("DROP TABLE cancelled_operations; DROP TABLE workspace_switcher; PRAGMA user_version=1;")
+        .execute_batch("DROP TABLE cancelled_operations; DROP TABLE workspace_switcher; DROP TABLE workspace_order; PRAGMA user_version=1;")
         .unwrap();
     let mut upgraded = f.connection();
     assert_eq!(
@@ -1087,4 +1087,30 @@ fn failed_worker_open_can_be_retried_after_storage_becomes_available() {
     );
     drop(worker);
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn schema_three_upgrade_preserves_workspaces_and_switcher_order() {
+    let mut f = Fixture::new();
+    let entity = f.create("Existing workspace");
+    let pins = vec![entity.entity.id.clone()];
+    f.store
+        .handle(StoreRequest::UpdateSwitcher {
+            expected: None,
+            ids: pins.clone(),
+        })
+        .unwrap();
+    f.store
+        .connection
+        .execute_batch("DROP TABLE workspace_order; PRAGMA user_version=3;")
+        .unwrap();
+    let mut upgraded = f.connection();
+    assert_eq!(upgraded.load(&entity.entity.id).unwrap(), entity);
+    assert!(
+        matches!(upgraded.handle(StoreRequest::Switcher).unwrap(), StoreResponse::Switcher(Some(ids)) if ids == pins)
+    );
+    assert!(matches!(
+        upgraded.handle(StoreRequest::WorkspaceOrder).unwrap(),
+        StoreResponse::WorkspaceOrder(None)
+    ));
 }

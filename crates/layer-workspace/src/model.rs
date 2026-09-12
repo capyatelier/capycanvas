@@ -4,7 +4,7 @@ use layer_ui::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 pub const HISTORY_BUDGET_BYTES: u64 = 100 * 1024 * 1024;
 pub const TRASH_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 pub const OWNER_LEASE_MS: u64 = 30_000;

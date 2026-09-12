@@ -17,6 +17,7 @@ struct State {
     older_failed_operations: Vec<CommitBatch>,
     items: Vec<ItemSummary>,
     switcher: Option<Vec<String>>,
+    workspace_order: Option<Vec<String>>,
     error: Option<StoreError>,
     error_operation: Option<String>,
 }

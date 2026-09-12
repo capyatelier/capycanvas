@@ -43,9 +43,9 @@ selection and explicit confirmation instead:
 - **Workspaces:** compact selectable list, top-right square + for New Workspace,
   per-row Rename/Delete options, Cancel and Switch to Workspace below the list.
   Included workspaces can be renamed and edited but cannot be deleted.
-  **Show in top bar** in each row's menu controls its switcher entry. Shown rows
-  appear first with a pin indicator and left drag handle; remaining rows are
-  alphabetical. Reordering and pinning preserve the active selection/preview and
+  **Show in top bar** in each row's menu controls its switcher entry. Every row
+  has a narrow left grip; shown rows also have a pin indicator. All rows can be
+  reordered. The top bar follows the same order, skipping unchecked entries. Reordering and pinning preserve the active selection/preview and
   save immediately. See [switcher details and storage contract](default-workspaces.md#configurable-switcher).
   Initially select the current workspace and disable its Switch button. An item
   already owned by another window offers Switch to Window through the existing
@@ -155,7 +155,8 @@ refactor is a prerequisite to starting the host work.
    the configured workspace IDs and preserves edits between switches. It initially
    shows the three defaults. Pinning and ordering apply across workspaces; the
    manager offers immediate handle dragging on touch, held dragging elsewhere,
-   and keyboard Move Up / Move Down. Layout
+   right-click/hold row menus with same-contact drag continuation,
+   and keyboard Move Up / Move Down for every row. Layout
    History and Restore Starting Layout preserve tool settings. Reset All Brushes
    resets all brush presets only in the current workspace; Cancel changes nothing.
    Default workspaces reject deletion through both UI and storage.

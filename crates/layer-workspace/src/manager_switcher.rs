@@ -22,23 +22,48 @@ pub(crate) fn validate_ids(ids: &[String]) -> Result<()> {
 }
 
 impl<S: WorkspaceStore> WorkspaceManager<S> {
+    /// Complete dialog order. New workspaces follow saved entries alphabetically.
+    /// Existing switcher-only preferences seed the order on upgrade.
+    pub fn workspace_ids(&self) -> Vec<String> {
+        let state = self.state.borrow();
+        let saved = state.workspace_order.as_ref().or(state.switcher.as_ref());
+        let defaults = DEFAULT_WORKSPACES
+            .iter()
+            .map(|(id, _)| (*id).into())
+            .collect();
+        let saved = saved.unwrap_or(&defaults);
+        let mut items: Vec<_> = state
+            .items
+            .iter()
+            .filter(|i| {
+                i.metadata.kind == ItemKind::Workspace && i.metadata.deleted_at_ms.is_none()
+            })
+            .collect();
+        items.sort_by_key(|i| {
+            (
+                saved
+                    .iter()
+                    .position(|id| id == &i.id)
+                    .unwrap_or(usize::MAX),
+                name_key(&i.metadata.name),
+                &i.id,
+            )
+        });
+        items.into_iter().map(|i| i.id.clone()).collect()
+    }
+
     /// None in storage is the original three defaults; an empty list hides it.
+    /// Visibility never changes the dialog order.
     pub fn switcher_ids(&self) -> Vec<String> {
         let state = self.state.borrow();
-        let ids = state.switcher.clone().unwrap_or_else(|| {
-            DEFAULT_WORKSPACES
-                .iter()
-                .map(|(id, _)| (*id).into())
-                .collect()
-        });
-        ids.into_iter()
-            .filter(|id| {
-                state.items.iter().any(|i| {
-                    &i.id == id
-                        && i.metadata.kind == ItemKind::Workspace
-                        && i.metadata.deleted_at_ms.is_none()
-                })
-            })
+        let defaults = DEFAULT_WORKSPACES
+            .iter()
+            .map(|(id, _)| (*id).into())
+            .collect();
+        let pinned = state.switcher.as_ref().unwrap_or(&defaults);
+        self.workspace_ids()
+            .into_iter()
+            .filter(|id| pinned.contains(id))
             .collect()
     }
 
@@ -50,7 +75,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         if let Some(ids) = &ids {
             validate_ids(ids)?;
         }
-        self.state.borrow_mut().switcher = ids;
+        let StoreResponse::WorkspaceOrder(order) =
+            self.store.execute(StoreRequest::WorkspaceOrder).await?
+        else {
+            return Err(StoreError::invalid("Unexpected workspace order reply."));
+        };
+        if let Some(order) = &order {
+            validate_ids(order)?;
+        }
+        let mut state = self.state.borrow_mut();
+        state.switcher = ids;
+        state.workspace_order = order;
         Ok(())
     }
 
@@ -59,10 +94,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         // write during publication is rejected by the store's atomic comparison.
         self.refresh().await?;
         self.refresh_switcher().await?;
-        let expected = self.state.borrow().switcher.clone();
-        let mut ids = self.switcher_ids();
-        match edit {
+        let request = match edit {
             SwitcherEdit::Show { id, visible } => {
+                let expected = self.state.borrow().switcher.clone();
+                let mut ids = self.switcher_ids();
                 if !self.items().iter().any(|i| {
                     i.id == id
                         && i.metadata.kind == ItemKind::Workspace
@@ -72,6 +107,21 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         "This workspace is no longer available.",
                     ));
                 }
+                // Freeze the initial/legacy row order before visibility changes.
+                if self.state.borrow().workspace_order.is_none() {
+                    let order = self.workspace_ids();
+                    let StoreResponse::WorkspaceOrder(saved) = self
+                        .store
+                        .execute(StoreRequest::UpdateWorkspaceOrder {
+                            expected: None,
+                            ids: order,
+                        })
+                        .await?
+                    else {
+                        return Err(StoreError::invalid("Unexpected workspace order reply."));
+                    };
+                    self.state.borrow_mut().workspace_order = saved;
+                }
                 if visible {
                     if !ids.contains(&id) {
                         ids.push(id);
@@ -79,12 +129,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 } else {
                     ids.retain(|i| i != &id);
                 }
+                StoreRequest::UpdateSwitcher { expected, ids }
             }
             SwitcherEdit::Move { id, before } => {
+                let expected = self.state.borrow().workspace_order.clone();
+                let mut ids = self.workspace_ids();
                 if !ids.contains(&id) || before.as_ref().is_some_and(|target| !ids.contains(target))
                 {
                     return Err(StoreError::invalid(
-                        "Only workspaces shown in the top bar can be reordered.",
+                        "This workspace is no longer available.",
                     ));
                 }
                 if before.as_ref() == Some(&id) {
@@ -96,15 +149,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .and_then(|target| ids.iter().position(|i| i == target))
                     .unwrap_or(ids.len());
                 ids.insert(index, id);
+                StoreRequest::UpdateWorkspaceOrder { expected, ids }
             }
-        }
-        let response = self
-            .store
-            .execute(StoreRequest::UpdateSwitcher { expected, ids })
-            .await;
+        };
+        let response = self.store.execute(request).await;
         match response {
             Ok(StoreResponse::Switcher(ids)) => {
                 self.state.borrow_mut().switcher = ids;
+                Ok(())
+            }
+            Ok(StoreResponse::WorkspaceOrder(ids)) => {
+                self.state.borrow_mut().workspace_order = ids;
                 Ok(())
             }
             Err(error) => {

@@ -22,7 +22,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
     }).finally(() => { opening = null; });
     return opening;
   }
-  const readOnly = new Set(["list", "load", "raw", "receipt", "binding", "legacy_import", "pending", "reopen", "switcher"]);
+  const readOnly = new Set(["list", "load", "raw", "receipt", "binding", "legacy_import", "pending", "reopen", "switcher", "workspace_order"]);
   async function transaction(request, pending = false) {
     const db = await open(), command = JSON.parse(request);
     return new Promise((resolve, reject) => {

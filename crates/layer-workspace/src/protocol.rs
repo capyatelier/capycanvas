@@ -296,6 +296,11 @@ pub enum StoreRequest {
         expected: Option<Vec<String>>,
         ids: Vec<String>,
     },
+    WorkspaceOrder,
+    UpdateWorkspaceOrder {
+        expected: Option<Vec<String>>,
+        ids: Vec<String>,
+    },
     Load {
         id: String,
     },
@@ -348,6 +353,7 @@ pub enum StoreRequest {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoreResponse {
     Switcher(Option<Vec<String>>),
+    WorkspaceOrder(Option<Vec<String>>),
     List(Vec<ItemSummary>),
     Entity(StoredEntity),
     Claim(Claim),

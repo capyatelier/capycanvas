@@ -23,6 +23,8 @@ pub struct BrowserDatabase {
     cancelled: BTreeSet<String>,
     #[serde(default)]
     switcher: Option<Vec<String>>,
+    #[serde(default)]
+    workspace_order: Option<Vec<String>>,
 }
 impl Default for BrowserDatabase {
     fn default() -> Self {
@@ -39,6 +41,7 @@ impl Default for BrowserDatabase {
             tombstones: Default::default(),
             cancelled: Default::default(),
             switcher: None,
+            workspace_order: None,
         }
     }
 }
@@ -60,7 +63,7 @@ impl BrowserDatabase {
     pub fn decode(text: &str) -> Result<Self> {
         let mut value: serde_json::Value = serde_json::from_str(text)?;
         let version = value.get("schema").and_then(|v| v.as_u64());
-        if version != Some(2) && version != Some(SCHEMA_VERSION as u64) {
+        if !version.is_some_and(|v| (2..=SCHEMA_VERSION as u64).contains(&v)) {
             return Err(StoreError::new(
                 ErrorKind::UnsupportedSchema,
                 "This workspace database uses an unsupported version. Its data has been preserved.",
@@ -161,13 +164,14 @@ impl BrowserDatabase {
         use StoreRequest::*;
         Ok(match request {
             Switcher => StoreResponse::Switcher(self.switcher.clone()),
+            WorkspaceOrder => StoreResponse::WorkspaceOrder(self.workspace_order.clone()),
             UpdateSwitcher { expected, ids } => {
                 validate_switcher_ids(&ids)?;
                 if self.switcher.as_ref() != Some(&ids) {
                     if self.switcher != expected {
                         return Err(StoreError::new(
                             ErrorKind::Conflict,
-                            "The workspace switcher changed in another window. Try again.",
+                            "Workspace preferences changed in another window. Try again.",
                         ));
                     }
                     for id in &ids {
@@ -183,6 +187,29 @@ impl BrowserDatabase {
                     self.switcher = Some(ids);
                 }
                 StoreResponse::Switcher(self.switcher.clone())
+            }
+            UpdateWorkspaceOrder { expected, ids } => {
+                validate_switcher_ids(&ids)?;
+                if self.workspace_order.as_ref() != Some(&ids) {
+                    if self.workspace_order != expected {
+                        return Err(StoreError::new(
+                            ErrorKind::Conflict,
+                            "Workspace preferences changed in another window. Try again.",
+                        ));
+                    }
+                    for id in &ids {
+                        let item = self.item(id)?;
+                        if item.entity.metadata.kind != ItemKind::Workspace
+                            || item.entity.metadata.deleted_at_ms.is_some()
+                        {
+                            return Err(StoreError::invalid(
+                                "This workspace is no longer available.",
+                            ));
+                        }
+                    }
+                    self.workspace_order = Some(ids);
+                }
+                StoreResponse::WorkspaceOrder(self.workspace_order.clone())
             }
             List => StoreResponse::List(
                 self.items

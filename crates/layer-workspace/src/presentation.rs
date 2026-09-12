@@ -186,10 +186,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         let active = self.active_id();
         let mut items = self.items();
-        let pinned = self.switcher_ids();
+        let order = self.workspace_ids();
         items.sort_by_key(|i| {
             let rank = if page == ManagerPage::Workspaces {
-                pinned
+                order
                     .iter()
                     .position(|id| id == &i.id)
                     .unwrap_or(usize::MAX)

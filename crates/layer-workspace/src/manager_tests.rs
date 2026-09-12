@@ -1290,11 +1290,24 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
         .unwrap();
         assert_eq!(m.switcher_ids().last(), Some(&custom.entity.id));
         assert_eq!(m.switcher_ids().len(), 3);
+        let pins = m.switcher_ids();
+        // Hidden rows can move anywhere without becoming visible in the bar.
+        m.edit_switcher(SwitcherEdit::Move {
+            id: defaults[2].clone(),
+            before: Some(defaults[1].clone()),
+        })
+        .await
+        .unwrap();
+        assert_eq!(m.workspace_ids()[0], defaults[2]);
+        assert_eq!(m.switcher_ids(), pins);
+        assert_eq!(m.load(&initial.entity.id).await.unwrap(), initial);
+
         let reopened =
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
         reopened.refresh().await.unwrap();
         reopened.refresh_switcher().await.unwrap();
         assert_eq!(reopened.switcher_ids(), m.switcher_ids());
+        assert_eq!(reopened.workspace_ids(), m.workspace_ids());
         for id in reopened.switcher_ids() {
             reopened
                 .edit_switcher(SwitcherEdit::Show { id, visible: false })

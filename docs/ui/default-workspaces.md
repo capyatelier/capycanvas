@@ -72,21 +72,25 @@ the existing default arrangement and tool selection.
 
 ## Configurable switcher
 
-Manage Workspaces keeps a single list. Workspaces shown in the top bar come first,
-in switcher order; the others follow alphabetically. Shown rows have a pin icon
-with the tooltip **Shown in top bar**, and a drag handle on the left. The current
-workspace retains its separate checkmark.
+Manage Workspaces keeps a single ordered list. Every row has a narrow, dimmed
+left grip. Workspaces shown in the top bar have a separate pin icon with the
+tooltip **Shown in top bar**. The current workspace retains its checkmark.
 
-Each row's **⋮** menu includes **Show in top bar**. Checking it appends that
-workspace to the switcher; unchecking removes it. New workspaces start unchecked.
-An empty selection hides the pill. The pill scrolls horizontally when its choices
-exceed the available width, rather than expanding the window's minimum width.
+Each row's **⋮** menu includes **Show in top bar**. Checking it shows that
+workspace in its list position; unchecking hides it without moving the row.
+New workspaces start unchecked. The top bar follows the list order, skipping
+unchecked entries. An empty selection hides the pill. The pill scrolls horizontally
+when its choices exceed the available width.
 
-Drag shown rows to change their order. Mouse can drag any non-button part of the row.
-Touch and pen can drag the handle immediately; the rest of the row requires a hold,
-following the [app-wide drag convention](drag-and-reorder.md). Ordinary touch swipes scroll the list. An insertion line shows
-the destination. Escape cancels the drag. **Move Up / Move Down** in the row menu
-provide keyboard access. Clicking a row still previews it; scrolling and dragging
+Drag any row to change its order, including unchecked rows. Moving a row never
+changes its visibility. Mouse can drag any non-button part of the row. Touch and
+pen can drag the handle immediately; the rest of the row requires a hold,
+following the [app-wide drag convention](drag-and-reorder.md). Ordinary touch
+swipes scroll the list. Right-click or hold opens the row menu. Moving with the
+same held contact closes the menu and starts dragging; release without movement
+leaves the menu open. An insertion line shows the destination. Escape cancels the
+drag. **Move Up / Move Down** is available for every row and supports keyboard
+access. Clicking still previews a workspace; menus, scrolling, and dragging
 preserve the selected row and its preview.
 
 Pinning and ordering save immediately, independently of the preview. Cancel closes
@@ -105,15 +109,20 @@ are also read-only; workspaces with this flag permit normal metadata, layout, an
 working-state writes. SQLite enforces both rules. The Web adapter must use the same
 distinction instead of rejecting every write to a builtin workspace.
 
-The shared manager exposes `switcher_ids`, `refresh_switcher`, and
-`edit_switcher(SwitcherEdit::{Show, Move})`. Read these preferences at startup,
-on focus, and when refreshing the manager. `StoreRequest::Switcher` returns an
-optional ordered list; `None` means the three defaults, while `Some([])` hides it.
-`UpdateSwitcher` atomically compares the previously read list before replacement.
-These requests need no workspace claim and change no workspace generations,
-settings, layout, or history. Invalid/deleted IDs are rejected; duplicate deliveries
-are idempotent. SQLite schema 3 adds a separate preference row and upgrades older
-databases. The browser reducer provides the same operations and upgrades schema 2.
+The shared manager exposes `workspace_ids` (complete dialog order), `switcher_ids`
+(visible subset), `refresh_switcher`, and `edit_switcher(SwitcherEdit::{Show, Move})`.
+Read preferences at startup, on focus, and when refreshing the manager.
+`StoreRequest::Switcher` returns optional visible IDs; `None` means the three
+defaults, while `Some([])` hides the bar. `WorkspaceOrder` returns the optional
+complete order. Without a saved order, existing switcher preferences seed it;
+new workspaces follow alphabetically. Visibility edits preserve this order.
+`UpdateSwitcher` and `UpdateWorkspaceOrder` atomically compare their respective
+previously read list before replacement. These requests need no workspace claim
+and change no workspace generations, settings, layout, or history. Invalid/deleted
+IDs are rejected; duplicate deliveries are idempotent. SQLite schema 4 adds row
+ordering alongside schema 3's visibility preference. Upgrades preserve previous
+workspaces and pins. The browser reducer supports the same operations and upgrades
+schema 2 and 3 snapshots.
 
 GTK's `workspace_switcher.rs` renders the pill and uses the shared manager.
 `UiSession::reset_workspace_brushes` performs the brush reset; hosts provide the
@@ -140,7 +149,7 @@ check that each workspace keeps its changes. Window → Workspaces contains
 New Workspace, Manage Workspaces, Layout History, Restore Starting Layout, and
 Reset All Brushes. The manager's plus button copies the current workspace.
 
-Validation: 314 shared tests pass (273 `layer-ui`, 41 `layer-workspace`). Six
+Initial preset validation: 314 shared tests passed (273 `layer-ui`, 41 `layer-workspace`). Six
 native GTK tests pass with isolated storage and a private Wayland compositor:
 real-pointer menus/pill/drawers/reset, manager previews/history, database restart
 and independent windows, ownership takeover, unavailable-storage close recovery,
@@ -154,15 +163,17 @@ customized layouts, durable publication, and repeated initialization.
 
 ## Switcher acceptance
 
-The integrated shared suite passes 329 tests (278 `layer-ui`, 51 `layer-workspace`).
+The integrated shared suite passes 331 tests (278 `layer-ui`, 53 `layer-workspace`).
 
 Run `bash apps/layer-linux/bench/workspace-switcher.sh` for isolated real mouse,
 touch, and keyboard verification. The test covers whole-row and handle dragging,
-immediate touch handles, held touch rows, long-list scrolling, keyboard Move Up,
-pinning custom workspaces, hiding every entry, drag cancellation, preview
+narrow grips on every row, immediate touch handles, held touch rows, right-click
+and hold menus, same-contact menu-to-drag continuation, long-list scrolling, keyboard Move Up,
+reordering hidden rows without pinning, pinning custom workspaces, hiding every
+entry, drag cancellation, preview
 preservation, and persisted choices after reopening. The shared suite covers
 cross-window preference updates, idempotency, conflict rejection, and SQLite/browser
-parity. A focused Wasm/IndexedDB run passes 31 storage contract cases. Native
+parity. A focused Wasm/IndexedDB run passes 39 storage contract cases. Native
 pen timing still needs a hardware check; the automated native driver covers
 mouse, touch, and keyboard. Shared, Android, Apple, and Windows bridges compile.
 

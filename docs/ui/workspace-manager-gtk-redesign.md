@@ -27,11 +27,13 @@ Undo Layout Change and Redo Layout Change describe what the top-level actions un
 
 The compact dialog has a selectable list, a square **+** button at the top right,
 and Cancel / Switch to Workspace buttons below the list. Rename and Delete remain
-in each row's options menu, alongside **Show in top bar** and, for shown entries,
-**Move Up / Move Down**. Shown workspaces appear first with a pin icon and a left
-handle. Dragging reorders the switcher while retaining the preview. Touch on the
-handle starts immediately; touch elsewhere requires a hold, so swiping still
-scrolls. Its explanation is:
+in each row's options menu, alongside **Show in top bar** and
+**Move Up / Move Down**. Every row has a narrow left grip; shown workspaces also
+have a pin icon. All rows can be reordered, with the top bar following the same
+order for its shown entries. Touch on the handle starts immediately; touch/pen
+elsewhere requires a hold, so swiping still scrolls. Right-click and hold open
+the row menu without changing the preview. Dragging with the same held contact
+closes the menu; release without movement keeps it open. Its explanation is:
 
 > Workspaces save your tool settings and layout for different tasks.
 
