@@ -128,6 +128,15 @@ adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
 Native focus changes are deferred until after SwiftUI updates to avoid entering
 the hosting responder graph recursively when accepting an expression.
 
+Numeric labels truncate within compact panels, leaving values readable. Spin
+fields keep the shared unit suffix when idle, with the value and both step buttons
+in one input surface. Sliders use the shared panel/text fill color and straight
+progress edge; endpoint buttons receive the shared disabled opacity. Both native
+text adapters use tabular digits. The
+[numeric-control comparison](../../tools/visual/README.md#numeric-editor-controls)
+includes both Apple presets/themes, width and endpoint cases, plus mounted-field
+checks of actual editor actions. Full UIKit and editor pixel parity remain open.
+
 The Color panel provides the shared HSV square / HLS triangle,
 foreground/background/transparent paint slots, swap and component expressions.
 Rust owns color conversion, hue memory, normalized geometry, hit regions and

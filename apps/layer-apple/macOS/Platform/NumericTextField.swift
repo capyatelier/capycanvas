@@ -32,7 +32,7 @@ struct NumericTextField: NSViewRepresentable {
         }
         if field.stringValue != text { field.stringValue = text }
         field.placeholderString = label
-        field.font = .systemFont(ofSize: fontSize)
+        field.font = .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
         field.textColor = NSColor(color); field.isEnabled = enabled
         field.setAccessibilityLabel(label); field.setAccessibilityIdentifier(identifier)
         if focused && field.currentEditor() == nil {

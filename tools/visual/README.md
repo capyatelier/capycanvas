@@ -53,6 +53,44 @@ rounding bound. That component geometry check does not waive full-image differen
 The native manifest also records the complete XAML capture boundary and retains
 the raw Windows client image, including the OS frame outside the app surface.
 
+## Numeric editor controls
+
+Capture the production SwiftUI number controls using current Rust catalog/tool
+models and formatting, then compare the production browser controls at the same
+dimensions. The fixture covers both Apple presets and themes, three panel widths,
+slider endpoints/intermediate values, spin fields with units and disabled states.
+It also drives the mounted AppKit text-field delegates through actual editor
+actions: valid/invalid expressions, unit display, stepping, cancellation and an
+external value update while a draft is unfinished.
+
+```sh
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/NumbersMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_NUMBER_CAPTURES="$PWD/artifacts/apple-numbers" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/number-controls.swift
+node tools/visual/chrome-capture.mjs 734 652 2 artifacts/apple-numbers light number-controls \
+  artifacts/apple-numbers/native-0-light.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-numbers/web-0-light.png artifacts/apple-numbers/native-0-light.png \
+  --output artifacts/apple-numbers/diff-0-light
+```
+
+Repeat Chrome/comparison for preset `1` and theme `dark`, matching the fixture
+name and theme argument. Each pair contains 30 complete controls and 198 measured
+rectangles. Geometry reports retain every position/size error, missing/extra
+rectangles and a separate one-point bound. Measurements are disabled in ordinary
+Apple editors. Browser text/fills come from the fixture's Rust numeric results;
+this fixture does not duplicate numeric policy or test browser numeric actions.
+
+After the numeric-control correction, all 792 compared rectangles fall within
+one logical point; non-label control geometry is exact except fractional value
+text widths. Full-image exact comparison still fails: light/dark differing-pixel
+fractions are 4.862%/5.052%, with mean absolute channel errors 3.604/3.746 levels
+and maxima 204/200. The previous captures differed at 14.762%/14.880% of pixels.
+Retain text rasterization/baseline and disabled-text differences without masking
+or tolerance waivers. These invisible AppKit captures and delegate checks cover
+shared Apple components; physical UIKit widgets, pointer delivery, full-editor
+pixels and sustained performance require separate evidence.
+
 ## Complete header components
 
 This fast fixture renders the actual shared Apple header in an invisible AppKit

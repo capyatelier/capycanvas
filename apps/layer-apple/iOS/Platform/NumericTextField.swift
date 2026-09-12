@@ -27,7 +27,7 @@ struct NumericTextField: UIViewRepresentable {
     func updateUIView(_ field: Field, context: Context) {
         context.coordinator.parent = self
         if field.text != text { field.text = text }
-        field.placeholder = label; field.font = .systemFont(ofSize: fontSize)
+        field.placeholder = label; field.font = .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
         field.textColor = UIColor(color); field.isEnabled = enabled
         field.accessibilityLabel = label; field.accessibilityIdentifier = identifier
         field.cancel = cancel; field.step = step; field.submit = submit

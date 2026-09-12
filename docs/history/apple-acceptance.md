@@ -76,6 +76,35 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared numeric-control geometry and unit display — 2026-09-12
+
+The shared Apple number control now truncates labels without wrapping or hiding
+the formatted value. Spin fields display Rust's unit suffix while idle and group
+the value, minus and plus buttons in the shared order and input surface. Both
+native text adapters use tabular digits. Slider progress uses the panel/text
+color mixture with a straight internal edge, and step buttons use the shared
+disabled opacity at limits and when unavailable.
+
+Four complete native/Chrome component pairs cover 120 controls across both Apple
+presets, themes, three widths, endpoints and disabled states. All 792 measured
+rectangles are within one logical point. Full raw pixel comparisons still fail:
+light/dark differing fractions fall from 14.762%/14.880% to 4.862%/5.052%, with
+mean channel errors falling from 8.266/8.705 to 3.604/3.746 levels. Text baseline,
+rasterization and disabled-text differences remain visible without masks.
+
+Mounted AppKit field-delegate checks pass on both presets through actual editor
+actions: expressions with units, invalid-draft preservation, stepping, Escape,
+and an external value change during an unfinished draft. These checks exercise
+the shared Apple control with its native Mac field and Rust owner; they do not
+establish physical UIKit input or pointer delivery. Reproduction is in the
+[numeric-control workflow](../../tools/visual/README.md#numeric-editor-controls).
+Both signed Release targets build and pass signature verification. All five
+shared numeric-policy checks and the pending-edit state checks pass. The active
+iPad session is preserved; this milestone adds no new device installation or
+hardware-performance result.
+Full feature/visual, physical input/lifecycle and sustained Mac 90 Hz / iPad
+120 Hz gates remain open. Save/Load Layout remains excluded.
+
 ## Targeted GPU execution analysis — 2026-09-12
 
 A short Instruments workflow now exports and analyzes actual GPU execution
