@@ -26,5 +26,5 @@ xcrun swiftc -parse-as-library -module-cache-path "$capture_root/modules" \
   "$apple_sources/Shared/Editor/EditorStyle.swift" \
   "$apple_sources/Shared/Editor/ColorSwatch.swift" \
   "$apple_sources/Shared/Editor/ToolbarTileContent.swift" \
-  "$apple_sources/tests/toolbar-capture.swift" -o "$capture_bundle/MacOS/Capture"
+  "${CAPY_COMPONENT_CAPTURE_SOURCE:-$apple_sources/tests/toolbar-capture.swift}" -o "$capture_bundle/MacOS/Capture"
 "$capture_bundle/MacOS/Capture" "$1" "$2"

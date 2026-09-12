@@ -505,9 +505,9 @@ on a canvas-facing column divider requests the shared default-width reset.
 Core tests cover Windows tear-off, cancellation, docking, tab reordering,
 stale geometry and undo/redo. Physical native dragging remains unaccepted.
 
-New Toolbar, Manage Toolbars and toolbar prompts use native WinUI dialogs with
-shared names, search, selection, validation and confirmation text. Tool choices
-are virtualized and native rows survive selection-only updates. Text drafts
+New Toolbar and Manage Toolbars use the saved-library flow described below.
+Toolbar prompts and Add Tools use native WinUI dialogs with shared names,
+search, selection, validation and confirmation text. Tool choices are virtualized and native rows survive selection-only updates. Text drafts
 survive delayed owner snapshots, cancellation waits for Core acknowledgement,
 and dialogs share the window's modal slot with Preferences and file operations.
 
@@ -517,8 +517,8 @@ and dialogs share the window's modal slot with Preferences and file operations.
 
 This isolated fixture covers catalog virtualization, retained selection, rapid
 name edits, validation, creation, rename, duplicate, insertion, manager selection,
-delete/cancel confirmation, workspace undo/redo, picker cancellation and closing
-with a picker open. Toolbar grips support keyboard context requests.
+delete/cancel confirmation, workspace undo/redo, New Toolbar cancellation and
+closing with its form open. Toolbar grips support keyboard context requests.
 
 Panel configuration uses the shared expansion placement, 200 ms transition,
 joined outline and configuration width (380 DIP, clamped by the viewport).
@@ -727,8 +727,8 @@ switching and restart. The second checks independent app instances and owner
 window activation. Both enforce the existing five-second close gate; the known
 intermittent final shader-worker join can still fail that gate. Profiles and
 captures stay local. New Window and runtime filter transport are implemented.
-Full visual/gesture parity, toolbar library round trips, lifecycle/device/DPI
-validation, distribution and final physical-input/presentation acceptance remain open.
+Full visual/gesture parity, lifecycle/device/DPI validation, distribution and
+final physical-input/presentation acceptance remain open.
 
 ## Runtime filter packages
 
@@ -776,3 +776,38 @@ a changed GPU preview. The separate hardware D3D12 test compares full-image byte
 for replacement, atomic rejection and library refresh without live migration.
 Profiles, copied test packages, captures and reports stay under ignored artifacts.
 Neither check establishes physical input latency or presentation performance.
+
+## Saved toolbar library
+
+New Toolbar asks for a name and an empty or saved starting toolbar, following the
+GTK flow and shared form. Manage Toolbars has This Workspace and Saved Toolbars
+tabs. Select a current toolbar and use Toolbar actions to save it to the library,
+replace it from a saved definition, or open its existing rename/duplicate/delete
+prompt. The primary button shows or hides the selected current toolbar. Add Tools
+continues to use the virtualized shared tool picker.
+
+Saved Toolbars provides Add to Workspace, Rename and Delete. Installed copies
+have independent panel/tile identities. A saved definition preserves control
+order, tile size and tab visibility, with no window position or panel identity.
+Library rename/delete does not alter installed copies. Replacement preserves the
+target placement; insertion and replacement each create one undoable layout change.
+The library and installed arrangements survive application restart through SQLite.
+
+All storage work uses the existing asynchronous workspace service. Read replies
+and row actions must still belong to the current dialog/page/selection. Confirmed
+copies finish through the canvas owner and durable save path. A failed save can
+retry the accepted capture without installing another copy; close drains an
+accepted copy even if its source read has not completed.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable <native-exe>
+./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable <native-exe>
+~~~
+
+The library fixture uses four isolated app launches to check save/restart,
+copy/restart, library rename, insertion, cancel/delete and survival of installed
+copies after library deletion. Every close still has a five-second gate. If a
+close exceeds it but the same process subsequently exits successfully, the fixture
+can gather the remaining functional results; it still fails overall for any slow
+close. Passing samples do not resolve the known intermittent shutdown delay.
+Profiles, databases, captures and logs stay local under ignored artifacts.

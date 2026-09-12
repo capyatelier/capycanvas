@@ -84,14 +84,29 @@ try{
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/toolbars-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned toolbar review $($review.Id)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
+    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Review did not start' 45
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $initial=@((Model).state.workspace.layout.panels).Count
     WindowCommand 'new_toolbar'
+    $null=Control 'workspace-manager'
+    Wait-Until {$null -ne (Model).windows_workspace_manager.prompt -and !(Model).windows_workspace_manager.loading} 'New Toolbar form did not open'
+    Wait-Until {!(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Toolbar form did not block painting'
+    Edit 'workspace-manager-name' ' '
+    InvokeDialog 'workspace-manager' 'Add to Workspace'
+    Wait-Until {(Model).windows_workspace_manager.error} 'Invalid toolbar name was not rejected'
+    $nameValue=(Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    foreach($draft in @('W','Windows','Windows tools','Windows tools review')){$nameValue.SetValue($draft)}
+    if($nameValue.Current.Value -ne 'Windows tools review'){throw 'A delayed snapshot overwrote the name draft'}
+    InvokeDialog 'workspace-manager' 'Add to Workspace'
+    Wait-Until {$null -eq (Find 'workspace-manager') -and @((Model).state.workspace.layout.panels).Count -eq $initial+1} 'Create did not add one empty toolbar'
+    $created=@((Model).panels|Where-Object title -eq 'Windows tools review')[0]
+    if(!$created -or $created.id -notlike 'toolbar:*' -or @($created.tiles).Count -ne 0){throw 'Empty toolbar did not have an independent identity'}
+    $toolbarId=$created.id
+    $gripId="ribbon-grip-$toolbarId"
+    ToolbarContext $gripId;Invoke 'Add Tools…' -Name
     $picker=Control 'tool-picker'
-    Wait-Until {$null -ne (Model).picker} 'Shared picker did not open'
-    if((DialogButton 'tool-picker' 'Create Toolbar').Current.IsEnabled){throw 'Empty selection enabled Create'}
-    Wait-Until {!(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Picker did not block painting'
+    Wait-Until {$null -ne (Model).picker} 'Shared tool picker did not open'
+    if((DialogButton 'tool-picker' ((Model).picker.confirm_label)).Current.IsEnabled){throw 'Empty selection enabled Add Tools'}
     $checks=$picker.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::CheckBox))
     if($checks.Count -ge @((Model).picker.choices).Count){throw 'Tool picker eagerly created the whole tool catalog'}
@@ -104,26 +119,15 @@ try{
     $pen.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).picker.selected_count -eq 1} 'Native checkbox did not select the shared tool'
     if(((Control 'picker-choice-command-pen').GetRuntimeId() -join ':') -ne $identity){throw 'Selection replaced its native row'}
-    Edit 'toolbar-name' ' '
-    Wait-Until {!(Model).picker.can_confirm} 'Invalid toolbar name was not rejected'
-    Wait-Until {!(DialogButton 'tool-picker' 'Create Toolbar').Current.IsEnabled} 'Invalid name left native confirmation enabled'
-    $nameValue=(Control 'toolbar-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-    foreach($draft in @('W','Windows','Windows tools','Windows tools review')){$nameValue.SetValue($draft)}
-    Wait-Until {(Model).picker.name -eq 'Windows tools review'} 'Rapid name edits did not reach shared state'
-    if($nameValue.Current.Value -ne 'Windows tools review'){throw 'A delayed snapshot overwrote the name draft'}
     Edit 'tool-picker-search' 'unmatched review search'
     Wait-Until {(Model).picker.selected_count -eq 1 -and @((Model).picker.choices).Count -eq 0} 'Search lost the selected hidden tool'
     Edit 'tool-picker-search' 'pen'
-    Wait-Until {(DialogButton 'tool-picker' 'Create Toolbar').Current.IsEnabled} 'Valid selection/name did not enable Create'
+    Wait-Until {(DialogButton 'tool-picker' ((Model).picker.confirm_label)).Current.IsEnabled} 'Valid selection did not enable Add Tools'
     Capture 'picker'
-    InvokeDialog 'tool-picker' 'Create Toolbar'
-    Wait-Until {$null -eq (Model).picker -and @((Model).state.workspace.layout.panels).Count -eq $initial+1} 'Create did not add one toolbar'
+    InvokeDialog 'tool-picker' ((Model).picker.confirm_label)
+    Wait-Until {$null -eq (Model).picker -and @((Toolbar $toolbarId).tiles).Count -eq 1} 'Picker did not add exactly one tool'
     Wait-Until {$null -eq (Find 'tool-picker') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Picker did not release its modal slot'
-    $created=@((Model).panels|Where-Object title -eq 'Windows tools review')[0]
-    if(!$created -or $created.id -notlike 'toolbar:*' -or @($created.tiles).Count -ne 1){throw 'Created toolbar does not match selection'}
-    $toolbarId=$created.id
-    if($created.tiles[0].control.command -ne 'pen'){throw 'Created toolbar contains the wrong control'}
-    $gripId="ribbon-grip-$toolbarId"
+    if((Toolbar $toolbarId).tiles[0].control.command -ne 'pen'){throw 'Created toolbar contains the wrong control'}
     ToolbarContext $gripId;Invoke 'Rename Windows tools review toolbar…' -Name
     $null=Control 'toolbar-prompt'
     if((Model).toolbar_prompt.name -ne 'Windows tools review'){throw 'Rename prompt lost its source name'}
@@ -161,36 +165,43 @@ try{
     WindowCommand 'undo_workspace'
     Wait-Until {@((Toolbar $toolbarId).tiles).Count -eq 1} 'Undo did not remove the inserted tool'
     WindowCommand 'manage_toolbars'
-    $manager=Control 'toolbar-manager'
-    (Control "managed-toolbar-$toolbarId").GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Wait-Until {(Model).toolbar_manager.selected -eq $toolbarId} 'Native manager did not select the owned toolbar'
-    InvokeDialog 'toolbar-manager' 'Delete Toolbar…'
+    $null=Control 'workspace-manager'
+    Wait-Until {!(Model).windows_workspace_manager.loading} 'Toolbar manager did not load'
+    $row=(Model).windows_workspace_manager.rows|Where-Object title -eq 'Windows tools review'
+    (Control ('workspace-manager-row-'+$row.id)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).windows_workspace_manager.selected -eq $row.id} 'Native manager did not select the owned toolbar'
+    Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
     $prompt=Control 'toolbar-prompt'
     Wait-Until {(Model).toolbar_prompt.destructive -and (Model).toolbar_prompt.message -like '*Windows tools review*'} 'Delete prompt does not name the owned toolbar'
     InvokeDialog 'toolbar-prompt' 'Cancel'
-    Wait-Until {$null -eq (Model).toolbar_prompt -and $null -ne (Find 'toolbar-manager')} 'Cancel did not return to manager'
+    Wait-Until {$null -eq (Model).toolbar_prompt -and $null -eq (Find 'workspace-manager')} 'Cancel did not return to the editor'
     if(@((Model).state.workspace.layout.panels).Count -ne $initial+1){throw 'Cancel deleted the toolbar'}
-    InvokeDialog 'toolbar-manager' 'Delete Toolbar…'
+    WindowCommand 'manage_toolbars'
+    $null=Control 'workspace-manager'
+    Wait-Until {!(Model).windows_workspace_manager.loading} 'Toolbar manager did not reload'
+    (Control ('workspace-manager-row-'+$row.id)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).windows_workspace_manager.selected -eq $row.id} 'Native manager did not restore selection'
+    Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
+    $null=Control 'toolbar-prompt'
     Capture 'delete-prompt'
     InvokeDialog 'toolbar-prompt' 'Delete Toolbar'
     Wait-Until {$null -eq (Model).toolbar_prompt -and @((Model).state.workspace.layout.panels).Count -eq $initial} 'Delete did not remove exactly the owned toolbar'
-    InvokeDialog 'toolbar-manager' 'Close'
-    Wait-Until {$null -eq (Find 'toolbar-manager')} 'Toolbar manager did not close'
+    Wait-Until {$null -eq (Find 'toolbar-prompt')} 'Toolbar prompt did not close'
     WindowCommand 'undo_workspace'
     Wait-Until {@((Model).state.workspace.layout.panels).Count -eq $initial+1} 'Workspace Undo did not restore the deleted toolbar'
     WindowCommand 'redo_workspace'
     Wait-Until {@((Model).state.workspace.layout.panels).Count -eq $initial} 'Workspace Redo did not delete the toolbar again'
     WindowCommand 'new_toolbar'
-    $null=Control 'tool-picker'
-    InvokeDialog 'tool-picker' 'Cancel'
-    Wait-Until {$null -eq (Model).picker -and $null -eq (Find 'tool-picker') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not close the picker and release painting'
+    $null=Control 'workspace-manager'
+    InvokeDialog 'workspace-manager' 'Cancel'
+    Wait-Until {$null -eq (Model).windows_workspace_manager -and $null -eq (Find 'workspace-manager') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'
     WindowCommand 'new_toolbar'
-    $null=Control 'tool-picker'
+    $null=Control 'workspace-manager'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{virtualized_picker='passed';retained_selection='passed';name_validation='passed';create_toolbar='passed';rename_and_history='passed';duplicate_and_history='passed';insert_tools_and_history='passed';manager_selection='passed';delete_cancel_confirm='passed';workspace_history='passed';picker_cancel='passed';close_with_picker='passed';zero_exit='passed';scope='native toolbar dialogs and shared actions; panel expansion, physical input and presentation are separate'}|ConvertTo-Json
+    [pscustomobject]@{virtualized_picker='passed';retained_selection='passed';name_validation='passed';create_toolbar='passed';rename_and_history='passed';duplicate_and_history='passed';insert_tools_and_history='passed';manager_selection='passed';delete_cancel_confirm='passed';workspace_history='passed';new_toolbar_cancel='passed';close_with_toolbar_form='passed';zero_exit='passed';scope='native toolbar dialogs and shared actions; panel expansion, physical input and presentation are separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

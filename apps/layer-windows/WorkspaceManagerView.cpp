@@ -11,7 +11,10 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     std::function<void()> changed;
     XamlRoot root{nullptr};
     ContentDialog dialog{nullptr};
-    StackPanel body,listing,promptBody;
+    StackPanel body,listing,promptBody,toolbarTabs;
+    Primitives::ToggleButton thisWorkspace,savedToolbars;
+    Button toolbarActions;
+    MenuFlyout toolbarMenu;
     Grid heading;
     TextBlock title,intro,error,progress,promptMessage;
     Button create,retry;
@@ -27,7 +30,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     std::map<std::wstring,Row> rows;
     std::vector<std::wstring> order;
     J snapshot,model;
-    hstring promptKey,choicesKey,focusSent;
+    hstring promptKey,choicesKey,focusSent,toolbarActionsKey,toolbarPage;
     uint64_t focusedRequest=0;
     std::optional<hstring> nameDraft,searchDraft;
     uint64_t active=0;
@@ -51,6 +54,15 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     void init() {
         body.Spacing(12);listing.Spacing(10);promptBody.Spacing(12);
+        toolbarTabs.Orientation(Orientation::Horizontal);toolbarTabs.Spacing(8);
+        thisWorkspace.Content(box_value(L"This Workspace"));savedToolbars.Content(box_value(L"Saved Toolbars"));
+        AutomationProperties::SetAutomationId(thisWorkspace,L"workspace-toolbar-current");
+        AutomationProperties::SetAutomationId(savedToolbars,L"workspace-toolbar-library");
+        toolbarTabs.Children().Append(thisWorkspace);toolbarTabs.Children().Append(savedToolbars);
+        thisWorkspace.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"toolbar_page")},{L"page",S(L"this_workspace")}}));});
+        savedToolbars.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"toolbar_page")},{L"page",S(L"toolbar_library")}}));});
+        toolbarActions.Content(box_value(L"Toolbar actions"));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
+        AutomationProperties::SetAutomationId(toolbarActions,L"workspace-toolbar-actions");toolbarActions.Flyout(toolbarMenu);
         heading.ColumnDefinitions().Append(ColumnDefinition());
         ColumnDefinition end;end.Width({1,GridUnitType::Auto});heading.ColumnDefinitions().Append(end);
         title.TextWrapping(TextWrapping::Wrap);title.Margin({0,0,12,0});
@@ -72,7 +84,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
         listing.Children().Append(search);listing.Children().Append(list);
         promptBody.Children().Append(promptMessage);promptBody.Children().Append(name);promptBody.Children().Append(choices);
-        body.Children().Append(intro);body.Children().Append(listing);body.Children().Append(promptBody);
+        body.Children().Append(toolbarTabs);body.Children().Append(intro);body.Children().Append(listing);body.Children().Append(toolbarActions);body.Children().Append(promptBody);
         body.Children().Append(progress);body.Children().Append(error);body.Children().Append(retry);
         create.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->dispatch(O({{L"type",S(L"create")}}));});
         retry.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->dispatch(O({{L"type",S(L"retry")}}));});
@@ -152,18 +164,35 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         if(!dialog||!model.Size())return;
         updating=true;struct Reset{bool& flag;~Reset(){flag=false;}}reset{updating};
         auto details=object(model,L"prompt");bool naming=details.Size()!=0,busy=flag(model,L"busy");
-        auto page=str(model,L"page");
+        auto page=str(model,L"page");bool toolbars=page==L"this_workspace"||page==L"toolbar_library";
+        if(page!=toolbarPage){toolbarPage=page;searchDraft.reset();}
+        toolbarTabs.Visibility(toolbars&&!naming?Visibility::Visible:Visibility::Collapsed);
+        thisWorkspace.IsChecked(page==L"this_workspace");savedToolbars.IsChecked(page==L"toolbar_library");
+        thisWorkspace.IsEnabled(!busy);savedToolbars.IsEnabled(!busy);
+        auto actions=array(model,L"toolbar_actions");auto actionKey=actions.Stringify();
+        if(actionKey!=toolbarActionsKey){
+            toolbarActionsKey=actionKey;toolbarMenu.Items().Clear();
+            for(auto value:actions){
+                auto data=value.GetObject();if(flag(data,L"primary"))continue;
+                auto action=object(data,L"action");MenuFlyoutItem item;item.Text(str(data,L"label"));item.IsEnabled(flag(data,L"enabled"));
+                AutomationProperties::SetAutomationId(item,L"workspace-toolbar-"+str(action,L"type"));
+                auto epoch=active;item.Click([weak=weak_from_this(),action,epoch](auto&&,auto&&){if(auto self=weak.lock())self->dispatch(epoch,O({{L"type",S(L"toolbar")},{L"action",action}}));});
+                toolbarMenu.Items().Append(item);
+            }
+        }
+        toolbarActions.Visibility(toolbars&&!naming&&toolbarMenu.Items().Size()?Visibility::Visible:Visibility::Collapsed);
+        toolbarActions.IsEnabled(!busy&&!flag(model,L"loading"));
         auto key=naming?str(details,L"title")+L":"+str(details,L"confirm"):L"";
         if(key!=promptKey){promptKey=key;nameDraft.reset();choicesKey=L"";}
         title.Text(naming?str(details,L"title"):str(model,L"title"));
         auto theme=str(object(snapshot,L"state"),L"theme",L"dark");
         dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         body.Width(std::max(200.,std::min(412.,double(root.Size().Width)-80.)));
-        list.Height(std::max(120.,std::min(280.,double(root.Size().Height)-330.)));
+        list.Height(std::max(120.,std::min(280.,double(root.Size().Height)-(toolbars?430.:330.))));
         heading.Width(body.Width());
         intro.Text(str(model,L"intro"));intro.Visibility(naming||intro.Text().empty()?Visibility::Collapsed:Visibility::Visible);
-        create.Visibility(!naming&&page==L"workspaces"?Visibility::Visible:Visibility::Collapsed);
-        create.IsEnabled(!busy&&!flag(model,L"loading"));AutomationProperties::SetName(create,L"New Workspace");
+        create.Visibility(!naming&&(page==L"workspaces"||page==L"this_workspace")?Visibility::Visible:Visibility::Collapsed);
+        create.IsEnabled(!busy&&!flag(model,L"loading"));AutomationProperties::SetName(create,page==L"this_workspace"?L"New Toolbar":L"New Workspace");
         listing.Visibility(naming||page==L"prompt"?Visibility::Collapsed:Visibility::Visible);
         promptBody.Visibility(naming?Visibility::Visible:Visibility::Collapsed);
         list.IsEnabled(!busy);search.IsEnabled(!busy);
@@ -192,7 +221,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         progress.Text(busy?L"Saving…":L"Loading…");progress.Visibility(busy||flag(model,L"loading")?Visibility::Visible:Visibility::Collapsed);
         retry.Visibility(flag(model,L"can_retry")?Visibility::Visible:Visibility::Collapsed);retry.IsEnabled(!busy);
         dialog.PrimaryButtonText(naming?str(details,L"confirm"):str(model,L"apply_label"));
-        dialog.IsPrimaryButtonEnabled(!busy&&(naming||flag(model,L"can_apply")&&!flag(model,L"loading")));
+        dialog.IsPrimaryButtonEnabled(!busy&&!flag(model,L"loading")&&(naming||flag(model,L"can_apply")));
         dialog.CloseButtonText(L"Cancel");
         dialog.DefaultButton(naming?ContentDialogButton::Primary:ContentDialogButton::None);
         cancelPending=false;
@@ -225,6 +254,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         if(dialog){dialog.Content(nullptr);dialog.Title(nullptr);}dialog=nullptr;
         if(!stopping&&!programmatic)dispatch(epoch,O({{L"type",S(L"cancel")}}));
         list.Items().Clear();rows.clear();order.clear();promptKey=L"";choicesKey=L"";nameDraft.reset();searchDraft.reset();
+        toolbarActionsKey=L"";toolbarPage=L"";toolbarMenu.Items().Clear();
         showing=false;programmatic=false;active=0;changed();
     }
     static hstring focusOwner(hstring const& owner) {

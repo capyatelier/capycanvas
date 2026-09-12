@@ -22,6 +22,13 @@ enum Completion {
     Save(Result<()>),
     Close(Result<()>),
     Manager(Result<Option<Box<StoredEntity>>>),
+    Toolbar(
+        Result<(
+            layer_workspace::ToolbarDefinition,
+            Option<layer_ui::Panel>,
+            Option<u32>,
+        )>,
+    ),
     Released,
     Export(std::result::Result<(), String>),
 }
@@ -198,6 +205,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         if let Some(completion) = self.operation.poll() {
             match completion {
                 Completion::Manager(result) => self.manager_completed(native, result, now),
+                Completion::Toolbar(result) => self.toolbar_completed(native, result, now, wall_ms),
                 Completion::Released => {}
                 Completion::Open(Ok(incoming)) => self.incoming = Some(*incoming),
                 Completion::Open(Err(error)) => {

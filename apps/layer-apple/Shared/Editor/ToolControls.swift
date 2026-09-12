@@ -4,7 +4,6 @@ import SwiftUI
 /// the desktop host. This includes non-paint tools and their command actions.
 struct ToolSetControls: View {
     @ObservedObject var store: EditorStore
-    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         VStack(spacing: 8) {
             ToolGroupsLayout {
@@ -38,10 +37,10 @@ struct ToolSetControls: View {
                         }
                     }
                 }.padding(.horizontal, 12).padding(.vertical, 4).frame(maxWidth: .infinity)
-                    .background(item["selected"].bool ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(!command.isNull && !command["enabled"].bool)
-                .opacity(!command.isNull && !command["enabled"].bool ? 0.4 : 1)
+            }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
+                .disabled(!command.isNull && !command["enabled"].bool)
+                .opacity(!command.isNull && !command["enabled"].bool ? 0.36 : 1)
                 .help(command.isNull ? item["label"].string : command["tooltip"].string)
                 .accessibilityLabel(item["label"].string)
                 .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])

@@ -3,6 +3,9 @@ use crate::workspace_service::ManagerInput as Input;
 use layer_ui::WorkspaceCommand as Command;
 use serde_json::Value;
 
+#[path = "toolbar_library_tests.rs"]
+mod toolbar_library_tests;
+
 #[test]
 fn another_owner_is_focused_without_claiming_or_switching_workspaces() {
     let mut f = Fixture::new();

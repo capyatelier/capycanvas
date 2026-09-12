@@ -1505,3 +1505,47 @@ GPU filter-reference agreement and shutdown timing remain open. Final sustained
 120 Hz painting and physical input-to-present benchmarks remain deferred until
 the rest of the app is ready. Profiles, packages used by tests, captures and
 reports remain ignored/local. This milestone does not complete the goal.
+
+## Saved toolbar library milestone — 2026-09-12
+
+Windows now connects New/Manage Toolbars to the shared SQLite library, following
+GTK's empty-or-saved New Toolbar form and This Workspace/Saved Toolbars views.
+Current toolbars expose shared visibility, save, replace and existing local
+rename/duplicate/delete actions. Saved entries can be added, renamed and deleted.
+No saved-layout, metadata, recovery-bin or update-version screens were added.
+
+Shared installation owns control order, independent panel/tile identities,
+display options, target placement and one-step layout history. Library rename
+or deletion preserves installed copies. The native service transports definitions
+asynchronously, checks ownership at adoption, observes the accepted layout and
+flushes before completing the operation. Persistence retry cannot install twice.
+Close retains accepted work queued behind a source read. Page changes cancel
+obsolete reads and reject delayed row/menu actions; forms wait for their choices
+before submission.
+
+Five new bridge tests cover save/restart/reuse, library rename/delete versus
+independent instances, empty creation, placement-preserving replacement, layout
+undo/redo, visibility persistence, stale page/selection callbacks, persistence
+retry and close during an accepted read. The four crates pass 436 unit tests
+(273 UI, 24 host, 90 Windows, 49 workspace; four explicit GPU tests ignored), strict Windows-crate Clippy and
+Rust/C++ builds. The four-launch native library fixture passes save/restart,
+copy/restart, library rename, insertion, cancel/delete, persistent removal and
+survival of independent copies. The toolbar-editing native regression also passes,
+including its final five-second exit. Workspace-manager actions and restart pass
+their functional checks, but its last process exceeds the five-second close gate.
+This Workspace was visually inspected; the updated shared inventory example also
+compiles on Windows.
+
+Earlier native runs during this milestone exceeded the unchanged five-second
+close gate. Later library launches all passed it; these samples do not fix or
+supersede the earlier failures. The fixture can continue after a slow but confirmed
+successful exit to gather remaining functional evidence, and still fails overall
+if any close exceeded five seconds. No input or presentation benchmark was run.
+
+Integration includes Apple inventory and selection/disabled styling through
+0b2e1cb. Full matched Chrome visual/gesture/scroll/overlap parity, physical pen/touch,
+mixed-DPI/device/suspend lifecycle, distribution packaging, strict GPU reference
+agreement and shutdown timing remain open. Final sustained 120 Hz painting and
+physical input-to-present acceptance remain deferred until the rest of the app is
+ready. Profiles, databases, captures and logs stay ignored/local. The goal remains
+active.

@@ -78,6 +78,11 @@ The [toolbar component capture](../../tools/visual/README.md#toolbar-components)
 compares all five styles with Chrome using actual SwiftUI controls and shared
 vector assets, without launching an editor or automating window/menu controls.
 Component evidence supplements the full-editor visual and physical input gates.
+Icon, toolbar and tool-choice selections now share the editor accent and one
+disabled-opacity step over the whole button, independent of the Mac system
+accent. The [control-color matrix](../../tools/visual/README.md#editor-control-colors)
+compares enabled/selected combinations in both themes and retains full raw
+pixel differences; UIKit rendering and full-editor acceptance remain separate.
 
 Docked, floating and drawer tab strips use natural label widths, horizontal
 scrolling and the shared 36-point icon-only size. Their moving visual copies use
@@ -203,22 +208,43 @@ supports search, alternate bindings, conflict replacement and resets; Settings
 search uses the shared results. The focused
 `EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
 and the resulting Zen action without automating the system menu bar. The shared
-inventory command emits the full default workspace, every command and panel's
-availability, all five settings pages, and representative menu/layer/shortcut
-states for **both** Apple policies. Schema 2 stores these under `platforms.ios`
-and `platforms.mac`; unavailable commands remain in the inventory. The
-[command review](command-coverage.json) classifies every command with separate
-platform notes and references to existing checks or implementation. Its audit
-detects added/removed commands, missing classifications and changed availability:
+inventory command emits the settled default document/workspace, every command
+and panel's availability, all five settings pages, and representative
+menu/layer/shortcut states for **both** Apple policies. Schema 3 stores these
+under `platforms.ios` and `platforms.mac`; unavailable commands remain visible.
+It also follows the actual tool-choice graph, including all shipped brushes,
+tool modes, settings and actions, and emits all three task workspace layouts,
+their registered panels and panel/group/tile/ribbon/Zen context menus. Managed
+workspace IDs are synthetic; the inventory never opens user storage. The
+`--gpu` mode seeds a disposable drawing through shared fill actions so transform
+controls can be enumerated with a real hardware renderer.
+
+The [command review](command-coverage.json) classifies all 62 commands, nine
+workspace service commands, 14 panel control types and six preference kinds,
+with Apple handler/check references. The audit detects catalog and availability
+drift, unvisited or unresolved tool choices, and missing control/service reviews:
 
 ```sh
-cargo run -p layer-host --example inventory > /tmp/capy-inventory.json
+cargo run -p layer-host --example inventory -- --gpu > /tmp/capy-inventory.json
 python3 apps/layer-apple/scripts/audit-commands.py /tmp/capy-inventory.json
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-menu-actions.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 ```
 
-Passing this audit establishes catalog coverage, not feature acceptance. The
-review records open work for each command group; all native workflows, dynamic
-controls, visual states and hardware performance still require their own evidence.
+The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
+the workspace scenarios include 133 context menus per preset. Without `--gpu`,
+renderer-dependent tool failures remain explicit and fail the expanded audit.
+Older schema 2 artifacts receive command-only checks with a warning.
+
+The direct Swift menu check dispatches actual shared menu payloads through the
+Apple editor and workspace service on both presets. It checks all nine routes,
+form cancellation, manager/history dismissal, host-request acknowledgement,
+workspace switch/return and document preservation using isolated storage and
+no OS menu automation. The companion manager check exercises confirmed forms
+and coordinator workflows. These macOS-hosted checks do not exercise UIKit
+widgets. Passing the audit establishes catalog coverage; complete native
+workflows, dynamic controls, visual states and hardware performance still
+require their own evidence. Save/Load Layout remains excluded.
 
 Mac customized controls can now invoke the shared Full Screen command. AppKit
 notifications update its selected state and icon after the window actually

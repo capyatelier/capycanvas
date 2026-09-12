@@ -7,12 +7,22 @@ use layer_ui::{
 use layer_workspace::{ManagerAction, ManagerPage};
 use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[path = "toolbar_library.rs"]
+mod toolbar_library;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Page {
+pub(crate) enum Page {
     Workspaces,
     History,
+    ThisWorkspace,
+    ToolbarLibrary,
     Prompt,
+}
+impl Page {
+    fn toolbars(self) -> bool {
+        matches!(self, Self::ThisWorkspace | Self::ToolbarLibrary)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -57,12 +67,16 @@ pub(crate) struct ManagerView {
     can_retry: bool,
     focus_owner: Option<String>,
     prompt: Option<Prompt>,
+    toolbar_actions: Vec<layer_workspace::ManagerButton>,
 }
 #[derive(Clone)]
 enum Mutation {
     Switch(String),
     Create,
     SaveToolbar(Panel),
+    NewToolbar { group: Option<u32> },
+    AddToolbar(String),
+    ReplaceToolbar(Panel),
     Rename(String),
     Delete(String),
     History(String),
@@ -85,6 +99,7 @@ pub(super) struct ManagerUi {
     prompt: Option<Mutation>,
     pending: Option<(Mutation, String, Option<String>)>,
     submitted: bool,
+    toolbar_installed: bool,
     retry: bool,
 }
 impl ManagerUi {
@@ -99,6 +114,7 @@ impl ManagerUi {
             prompt: None,
             pending: None,
             submitted: false,
+            toolbar_installed: false,
             retry: false,
         }
     }
@@ -123,6 +139,12 @@ pub(crate) enum ManagerInput {
         query: String,
     },
     Create,
+    ToolbarPage {
+        page: Page,
+    },
+    Toolbar {
+        action: ManagerAction,
+    },
     Rename {
         id: String,
     },
@@ -184,9 +206,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         if let Some(view) = &mut self.ui.view {
             view.loading = false;
             view.can_apply = false;
+            view.toolbar_actions.clear();
         }
     }
     fn preview_begin(&mut self, native: &mut NativeHost) -> Result<()> {
+        if self.ui.view.as_ref().is_some_and(|v| v.page.toolbars()) {
+            return Ok(());
+        }
         if !self.ui.preview {
             native
                 .session
@@ -201,6 +227,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         self.ui.view = None;
         self.ui.prompt = None;
         self.ui.pending = None;
+        self.ui.toolbar_installed = false;
         self.ui.layouts.clear();
         self.ui.epoch = self.ui.epoch.wrapping_add(1);
         native.session.end_workspace_transition();
@@ -253,6 +280,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 "",
                 "Restore This Version",
             ),
+            Page::ThisWorkspace => (
+                "Manage Toolbars".into(),
+                "Arrange the toolbars in this workspace.",
+                "",
+            ),
+            Page::ToolbarLibrary => (
+                "Manage Toolbars".into(),
+                "Save toolbars to reuse in any workspace.",
+                "Add to Workspace",
+            ),
             Page::Prompt => ("Workspaces".into(), "", ""),
         };
         self.ui.view = Some(ManagerView {
@@ -271,6 +308,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             can_retry: false,
             focus_owner: None,
             prompt: None,
+            toolbar_actions: Vec::new(),
         });
         if page == Page::History {
             self.history_rows()?;
@@ -368,7 +406,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         if matches!(view.page, Page::History | Page::Prompt) {
             return Ok(());
         }
-        let page = ManagerPage::Workspaces;
+        let page = match view.page {
+            Page::ThisWorkspace => ManagerPage::ThisWorkspace,
+            Page::ToolbarLibrary => ManagerPage::ToolbarLibrary,
+            _ => ManagerPage::Workspaces,
+        };
         let active = self.manager.active_id();
         let items = self.manager.items();
         view.rows = self
@@ -386,8 +428,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                     id: r.id,
                     title: r.title,
                     subtitle: r.subtitle,
-                    rename: !elsewhere,
-                    delete: !r.builtin && !elsewhere,
+                    rename: view.page != Page::ThisWorkspace && !r.builtin && !elsewhere
+                        || view.page == Page::Workspaces && !elsewhere,
+                    delete: view.page != Page::ThisWorkspace && !r.builtin && !elsewhere,
                 }
             })
             .collect();
@@ -410,7 +453,20 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             native.invalidate_snapshot();
             return Ok(());
         };
-        if view.page == Page::History {
+        if view.page == Page::ThisWorkspace {
+            let panel = serde_json::from_str(&id)
+                .map_err(|e| StoreError::invalid(format!("Invalid toolbar identity: {e}")))?;
+            let details = self.manager.toolbar_details(panel, true)?;
+            view.loading = false;
+            view.can_apply = details.actions.iter().any(|a| a.primary && a.enabled);
+            view.apply_label = details
+                .actions
+                .iter()
+                .find(|a| a.primary)
+                .map(|a| a.label.clone())
+                .unwrap_or_default();
+            view.toolbar_actions = details.actions;
+        } else if view.page == Page::History {
             let layout = self
                 .ui
                 .layouts
@@ -454,6 +510,24 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         let view = self.ui.view.as_mut().unwrap();
         view.loading = false;
         view.can_apply = primary.is_some_and(|a| a.enabled);
+        if view.page == Page::ToolbarLibrary {
+            view.apply_label = "Add to Workspace".into();
+            view.toolbar_actions = details
+                .actions
+                .into_iter()
+                .filter(|a| {
+                    matches!(
+                        a.action,
+                        ManagerAction::AddToolbar(_)
+                            | ManagerAction::Rename(_)
+                            | ManagerAction::Delete(_)
+                    )
+                })
+                .collect();
+            self.ui.selected = Some(stored);
+            native.invalidate_snapshot();
+            return Ok(());
+        }
         view.apply_label =
             if primary.is_some_and(|a| matches!(a.action, ManagerAction::SwitchToWindow(_))) {
                 "Switch to Window"
@@ -477,9 +551,25 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     }
     fn prompt(&mut self, native: &mut NativeHost, operation: Mutation) -> Result<()> {
         self.preview_restore(native);
+        if matches!(operation, Mutation::NewToolbar { .. }) {
+            self.ui.prompt = Some(operation);
+            let view = self.ui.view.as_mut().unwrap();
+            view.prompt = None;
+            view.loading = true;
+            view.error = None;
+            view.can_retry = false;
+            let manager = self.manager.clone();
+            let _ = self.ui.read.start(async move {
+                manager.refresh().await?;
+                Ok(ReadReply::Prompt(Box::new(manager.new_toolbar_prompt())))
+            });
+            native.invalidate_snapshot();
+            return Ok(());
+        }
         let action = match &operation {
             Mutation::Create => ManagerAction::New,
             Mutation::SaveToolbar(panel) => ManagerAction::SaveToolbar(*panel),
+            Mutation::ReplaceToolbar(panel) => ManagerAction::ReplaceToolbar(*panel),
             Mutation::Reset => ManagerAction::Reset(self.manager.active_id().unwrap()),
             Mutation::ResetBrushes => ManagerAction::ResetBrushes,
             Mutation::Rename(id) | Mutation::Delete(id) => {
@@ -515,6 +605,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         view.can_retry = false;
         let manager = self.manager.clone();
         let _ = self.ui.read.start(async move {
+            if matches!(action, ManagerAction::ReplaceToolbar(_)) {
+                manager.refresh().await?;
+            }
             manager
                 .prompt(&action, now_ms())
                 .await
@@ -577,17 +670,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 self.queue_mutation(native, Mutation::Switch(id), String::new(), None)?;
                 return Ok(());
             }
-            WorkspaceCommand::ManageToolbars | WorkspaceCommand::NewToolbar { .. } => {
-                let action = match command {
-                    WorkspaceCommand::NewToolbar { group } => {
-                        CustomizationAction::NewToolbar { group }
-                    }
-                    _ => CustomizationAction::ManageToolbars,
-                };
-                native
-                    .dispatch(UiAction::Customize { action })
-                    .map_err(StoreError::invalid)?;
-                return Ok(());
+            WorkspaceCommand::ManageToolbars => (Page::ThisWorkspace, None),
+            WorkspaceCommand::NewToolbar { group } => {
+                (Page::Prompt, Some(Mutation::NewToolbar { group }))
             }
             WorkspaceCommand::SaveToolbar { panel } => {
                 (Page::Prompt, Some(Mutation::SaveToolbar(panel)))
@@ -656,18 +741,33 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                     self.rows(native, false, now_ms())?;
                 }
             }
+            ManagerInput::ToolbarPage { page } => self.toolbar_page(native, page)?,
+            ManagerInput::Toolbar { action } => self.toolbar_action(native, action)?,
             ManagerInput::Create => {
-                if view.page == Page::Workspaces && view.prompt.is_none() {
-                    self.prompt(native, Mutation::Create)?;
+                if view.prompt.is_none() {
+                    if view.page == Page::Workspaces {
+                        self.prompt(native, Mutation::Create)?;
+                    } else if view.page == Page::ThisWorkspace {
+                        self.prompt(native, Mutation::NewToolbar { group: None })?;
+                    }
                 }
             }
             ManagerInput::Rename { id } => {
+                if view.loading || view.prompt.is_some() || !view.rows.iter().any(|r| r.id == id) {
+                    return Ok(());
+                }
                 self.prompt(native, Mutation::Rename(id))?;
             }
             ManagerInput::Delete { id } => {
+                if view.loading || view.prompt.is_some() || !view.rows.iter().any(|r| r.id == id) {
+                    return Ok(());
+                }
                 self.prompt(native, Mutation::Delete(id))?;
             }
             ManagerInput::Submit { name, choice } => {
+                if view.loading || view.prompt.is_none() {
+                    return Ok(());
+                }
                 if let Some(operation) = self.ui.prompt.clone() {
                     self.queue_mutation(native, operation, name.unwrap_or_default(), choice)?;
                 }
@@ -679,10 +779,21 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 let Some(id) = view.selected.clone() else {
                     return Ok(());
                 };
+                if view.page.toolbars() {
+                    if let Some(action) = view
+                        .toolbar_actions
+                        .iter()
+                        .find(|a| a.primary && a.enabled)
+                        .map(|a| a.action.clone())
+                    {
+                        self.toolbar_action(native, action)?;
+                    }
+                    return Ok(());
+                }
                 let operation = match view.page {
                     Page::Workspaces => Mutation::Switch(id),
                     Page::History => Mutation::History(id),
-                    Page::Prompt => return Ok(()),
+                    Page::Prompt | Page::ThisWorkspace | Page::ToolbarLibrary => return Ok(()),
                 };
                 self.queue_mutation(native, operation, String::new(), None)?;
             }
@@ -752,6 +863,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             return Ok(());
         }
         self.ui.pending = Some((operation, name, choice));
+        self.ui.toolbar_installed = false;
         self.ui.retry = false;
         let view = self.ui.view.as_mut().unwrap();
         view.busy = true;
@@ -800,6 +912,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 }
             }
             self.ui.submitted = true;
+            if matches!(
+                operation,
+                Mutation::NewToolbar { .. } | Mutation::AddToolbar(_) | Mutation::ReplaceToolbar(_)
+            ) {
+                self.submit_toolbar(native, operation, name, choice, now, wall_ms);
+                return;
+            }
             let manager = self.manager.clone();
             let retry = self.ui.retry;
             let _ = self.operation.start(async move {
@@ -833,6 +952,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                             Mutation::ResetBrushes => {
                                 manager.flush().await?;
                                 None
+                            }
+                            Mutation::NewToolbar { .. }
+                            | Mutation::AddToolbar(_)
+                            | Mutation::ReplaceToolbar(_) => {
+                                unreachable!("Toolbar installation has a canvas-owner completion")
                             }
                             Mutation::SaveToolbar(panel) => {
                                 manager.save_toolbar(panel, &name, wall_ms).await?;
@@ -927,7 +1051,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                     return;
                 }
                 let page = self.ui.view.as_ref().map(|v| v.page);
-                if switched || page == Some(Page::Prompt) || self.status.close_requested {
+                if switched
+                    || self.ui.toolbar_installed
+                    || page == Some(Page::Prompt)
+                    || self.status.close_requested
+                {
                     self.close_manager(native);
                 } else {
                     self.ui.prompt = None;

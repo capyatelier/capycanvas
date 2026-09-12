@@ -1,18 +1,54 @@
 //! Emit catalog, initial/settings views and representative dynamic layer menus.
 //! These fixtures support parity review; they are not a completeness proof.
-use layer_host::NativeHost;
-use layer_ui::{CommandId, Panel, Platform, SettingsPage, UiAction, WorkspaceState};
+use layer_host::{NativeHost, Renderer};
+use layer_ui::{
+    CommandId, ManagedWorkspace, Panel, Platform, PreparedWorkspace, SettingsPage, UiAction,
+    UiSession, WorkspaceCapture, WorkspaceChoice, WorkspacePreset,
+};
 use serde_json::{Value, json};
+#[path = "inventory/tools.rs"]
+mod tools;
+#[path = "inventory/workspaces.rs"]
+mod workspaces;
 
 fn apple_host(platform: Platform) -> NativeHost {
+    workspace_host(platform, WorkspacePreset::Illustrator)
+}
+
+fn workspace_host(platform: Platform, preset: WorkspacePreset) -> NativeHost {
     let mut host = NativeHost::new(platform).unwrap();
-    // Match capy_apple_create, including the full editor preset. NativeHost's
-    // session constructor alone uses a different, generic initial workspace.
-    host.dispatch(UiAction::RestoreWorkspace {
-        workspace: WorkspaceState::for_platform(platform),
-    })
+    let [width, height] = layer_ui::DEFAULT_DOCUMENT_EXTENT;
+    host.session = UiSession::from_project(
+        Renderer::default(),
+        layer_ui::new_drawing(width, height).unwrap(),
+        None,
+        [2400, 1800],
+    )
     .unwrap();
+    host.session.set_platform(platform);
     host.session.set_document_replacement(true);
+    // Match the settled app's task workspace and working tools. Bare C-ABI
+    // creation precedes the coordinator's adoption and omits its menu routes.
+    let layout = preset.layout(platform);
+    let mut capture = WorkspaceCapture::from_template(&layout).unwrap();
+    capture.working = preset.working_state();
+    host.session
+        .adopt_workspace(PreparedWorkspace::new(capture).unwrap())
+        .unwrap();
+    host.session
+        .configure_workspace_manager(ManagedWorkspace {
+            id: format!("inventory-{}", preset.name().to_ascii_lowercase()),
+            name: preset.name().into(),
+            baseline: layout,
+            choices: WorkspacePreset::ALL
+                .into_iter()
+                .map(|choice| WorkspaceChoice {
+                    id: format!("inventory-{}", choice.name().to_ascii_lowercase()),
+                    name: choice.name().into(),
+                })
+                .collect(),
+        })
+        .unwrap();
     host.resize(2400, 1800, 2.0).unwrap();
     host
 }
@@ -148,8 +184,12 @@ fn platform_inventory(platform: Platform) -> Value {
     let commands: Vec<_> = CommandId::ALL
         .iter()
         .map(|&id| {
-            json!({"id": id, "available": id.available_on(platform),
-            "initial": host.session.command(id)})
+            let mut candidate = apple_host(platform);
+            let initial = candidate.session.command(id);
+            let dispatched = id.available_on(platform) && initial.enabled;
+            let error = dispatched.then(|| candidate.dispatch(UiAction::Invoke { command: id }).err()).flatten();
+            json!({"id": id, "available": id.available_on(platform), "initial": initial,
+                "invocation": {"dispatched":dispatched,"error":error,"requests":candidate.session.state().requests}})
         })
         .collect();
     let panels: Vec<_> = Panel::ALL
@@ -163,14 +203,16 @@ fn platform_inventory(platform: Platform) -> Value {
     }
     json!({"initial": initial, "commands": commands, "panels": panels,
         "preferences": preferences, "menu_scenarios": menu_scenarios(platform),
-        "layer_scenarios": layer_scenarios(platform)})
+        "layer_scenarios": layer_scenarios(platform), "tool_scenarios": tools::inventory(platform),
+        "workspace_scenarios": workspaces::inventory(platform)})
 }
 
 fn main() {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "schema": 2,
+            "schema": 3,
+            "scope": "Shared models, not widget or pixel acceptance. Settled default drawing and task workspaces with synthetic managed identities; no user storage. --gpu additionally enumerates tools on a filled disposable drawing with a hardware renderer.",
             "catalog": layer_ui::ui_catalog(),
             "commands": CommandId::ALL.as_slice(),
             "platforms": {

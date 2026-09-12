@@ -51,7 +51,10 @@ The native File menu and pickers provide New, Open, Save, Save As and PNG Export
 Layers uses virtualized native rows and bounded asynchronous GPU thumbnails.
 Layer menus and editing controls share their policy with the other ports.
 The Layers image picker decodes oriented sRGB pixels on the document worker;
-shared Core owns insertion, Undo and embedded project assets. Panel configuration and toolbar management use shared layout and actions;
+shared Core owns insertion, Undo and embedded project assets. Panel configuration
+and toolbar management use shared layout and actions. New Toolbar can start empty
+or copy a saved definition; the native manager saves, adds, renames and deletes
+library entries while keeping installed copies independent.
 GPU Navigator previews use compositor clips when overlapping native panels.
 The full editor preset and titlebar-aware Zen layout are available. Incremental
 workspace messages retain panel models while native translation transforms move
@@ -74,6 +77,8 @@ cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-window
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ```
 
 The persistence fixture owns disposable profiles through the absolute

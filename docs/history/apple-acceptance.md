@@ -76,6 +76,72 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared editor control colors — 2026-09-12
+
+Shared icon buttons now use the editor accent rather than the Mac system accent.
+Icon, toolbar and tool-choice buttons use one shared style and apply disabled
+opacity to the whole control once, including its selected background. This
+removes extra native glyph dimming and fully opaque selection on disabled tiles.
+Layer drop markers and resize highlights also use the shared accent; the main
+editor tint references the same color definition on both Apple platforms.
+
+Real SwiftUI and browser widget factories are compared in light and dark themes,
+with all four enabled/selected combinations and three native accent environments.
+The old controls fail the focused color check by up to 44/45 RGB levels and
+change with the system accent. Corrected complete native rows are identical
+across accents; flat fill samples match Chrome exactly in dark mode and within
+one RGB level in light mode. Both fixtures contain 24 controls at 2× scale.
+
+Full raw comparisons remain failures and retain every pixel. Light/dark mean
+absolute channel errors fall from 5.028/4.330 to 0.354/0.236 levels. Exact
+differing-pixel fractions are still 35.517%/3.571%; the light result includes
+one-level fill rounding, and glyph/edge rasterization differences remain.
+This is AppKit component evidence for shared code, not physical UIKit capture
+or native interaction acceptance. Full visual, feature, physical input/lifecycle
+and sustained performance gates remain open for both platforms.
+
+Reproduction and the focused check's narrow scope are documented in
+[editor control colors](../../tools/visual/README.md#editor-control-colors).
+Raw fixtures, captures, comparisons and build/signing logs remain local and
+ignored. Both signed Release builds pass, and the updated iPad validation app
+installs on the attached device. Save/Load Layout remains excluded.
+
+## Expanded feature inventory and workspace menu actions — 2026-09-12
+
+The schema 3 inventory starts from the settled default drawing and task workspace
+with synthetic managed identities. This exposes production workspace service
+routes that bare host creation omitted. It records all 62 commands and their
+initial dispatch results, all three task workspaces and 133 panel/group/tile/
+ribbon/Zen context menus per Apple preset. Following the rendered tool-choice
+graph with a hardware renderer and disposable filled drawing resolves 80 tool
+choices and 28 setting IDs per preset, including transform controls.
+
+The Apple review now covers nine workspace service commands, 14 panel control
+types and six preference kinds, with implementation/check references. The audit
+passes for both presets. Negative probes reject missing brushes, unresolved
+tools, unknown panel controls, missing/duplicate workspace reviews and rejected
+initially enabled commands. Save/Load Layout stays excluded; the inventory
+continues to expose the existing unavailable iPad Full Screen capability.
+
+Direct Swift checks dispatch actual shared menu payloads through the Apple
+editor and workspace coordinator. All nine routes pass on both presets,
+including form cancellation, manager/history dismissal, request acknowledgement,
+switch/return, history timestamp persistence and document preservation. Existing
+confirmed-form and coordinator workflows also pass on both presets. These checks
+use isolated temporary storage, without OS menu automation or visible windows;
+they exercise shared Apple code on macOS, not native UIKit widgets.
+Both signed Release targets build successfully.
+The integrated Windows milestone `ba9849a` adds a shared filter-readiness query
+unused by Apple; all 273 shared UI tests and the inventory audit pass afterward.
+
+Reproduction is documented in the [Apple README](../../apps/layer-apple/README.md).
+The new inventory is a review aid, not complete UI acceptance: remaining dynamic
+document/filter states, native workflows and widgets, full visual parity,
+physical input/lifecycle coverage and sustained hardware performance remain
+open on both platforms. This milestone changes validation tooling and records;
+it adds no new drawing-runtime or hardware-performance evidence. Raw generated
+inventories and logs stay in ignored local artifacts.
+
 ## Shared Apple and web header alignment — 2026-09-12
 
 Both Apple targets use shared six-point menu/title/clock padding, fractional
