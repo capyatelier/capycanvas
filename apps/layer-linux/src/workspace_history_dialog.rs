@@ -118,6 +118,16 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
         .chain(capture.history.redo.iter().rev())
         .collect();
     for version in &mut versions {
+        // Keep old saved descriptions readable in the current vocabulary.
+        if let Some(name) = version
+            .description
+            .strip_prefix("Applied ")
+            .and_then(|name| name.strip_suffix(" Workspace Template"))
+        {
+            version.description = format!("Loaded “{name}” layout");
+        } else if version.description == "Reset to starting layout" {
+            version.description = "Restored starting layout".into();
+        }
         if version.description == "Arrange panels and toolbars" {
             version.description = chain
                 .windows(2)
@@ -145,7 +155,10 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
     let selected = Rc::new(RefCell::new(current.clone()));
     let versions = Rc::new(versions);
     let dialog = adw::AlertDialog::builder()
-        .heading("Layout History")
+        .heading(format!(
+            "Layout History — {}",
+            manager.active_name().unwrap_or_default()
+        ))
         .build();
     dialog.set_widget_name("workspace-layout-history");
     dialog.add_responses(&[("cancel", "Cancel"), ("restore", "Restore This Version")]);

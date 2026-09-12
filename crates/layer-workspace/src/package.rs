@@ -13,7 +13,7 @@ impl PackageKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::WorkspaceBackup => "Workspace Backup",
-            Self::Template => "Workspace Template",
+            Self::Template => "Layout",
             Self::Toolbar => "Saved Toolbar",
         }
     }

@@ -1084,7 +1084,7 @@ class AndroidHostTest {
         }
         assertTrue("Tabs grow the group", width >= tabWidths + 19)
         // Undoing workspace edits is independent of canvas undo and restores the toolbar.
-        workspaceMenu(); compose.onNodeWithText("Undo Workspace Change").performClick()
+        workspaceMenu(); compose.onNodeWithText("Undo Layout Change").performClick()
         compose.waitUntil(10_000) { group("toolbar").getInt("id") != destination }
         compose.onNodeWithTag("ribbon-grip-toolbar").performMouseInput { click(button = MouseButton.Secondary) }
         compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
@@ -1129,11 +1129,11 @@ class AndroidHostTest {
         compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
         compose.onNodeWithTag("close-toolbar-manager").performClick()
-        workspaceMenu(); compose.onNodeWithText("Undo Workspace Change").performClick()
+        workspaceMenu(); compose.onNodeWithText("Undo Layout Change").performClick()
         compose.waitUntil(10_000) { groups().any { copy in it.array("panels").values() } }
         action(obj("type" to "set_theme", "theme" to "dark"))
         workspaceMenu(); capture("workspace-menu-dark")
-        compose.onNodeWithText("Redo Workspace Change").performClick()
+        compose.onNodeWithText("Redo Layout Change").performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
     }
 

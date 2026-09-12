@@ -66,24 +66,18 @@ impl ManagedWorkspace {
                 choices,
                 vec![
                     command("New Workspace…", WorkspaceCommand::New, idle),
-                    command(
-                        "Save Layout as Workspace Template…",
-                        WorkspaceCommand::SaveAsTemplate,
-                        idle,
-                    ),
-                    command(
-                        "Reset Layout…",
-                        WorkspaceCommand::ResetLayout,
-                        idle && can_reset,
-                    ),
+                    command("Manage Workspaces…", WorkspaceCommand::Manage, true),
+                ],
+                vec![
+                    command("Save Layout…", WorkspaceCommand::SaveAsTemplate, idle),
+                    command("Manage Layouts…", WorkspaceCommand::ManageTemplates, true),
                 ],
                 vec![
                     command("Layout History…", WorkspaceCommand::LayoutHistory, idle),
-                    command("Manage Workspaces…", WorkspaceCommand::Manage, true),
                     command(
-                        "Manage Workspace Templates…",
-                        WorkspaceCommand::ManageTemplates,
-                        true,
+                        "Restore Starting Layout…",
+                        WorkspaceCommand::ResetLayout,
+                        idle && can_reset,
                     ),
                 ],
             ],

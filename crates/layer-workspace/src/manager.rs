@@ -394,10 +394,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     fn workspace_from_template(&self, template: &Entity, name: &str, now: u64) -> Result<Entity> {
         let ItemContent::Reusable { current, .. } = &template.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         let ReusableContent::Layout { layout } = &current.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         Ok(Entity::workspace(
             name,

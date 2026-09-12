@@ -383,3 +383,36 @@ Validation on the combined tree:
 
 Fresh manager screenshots were inspected and added to the review guide. Ready
 for the next GTK review; other-host work continues to await user approval.
+
+## Layout terminology and recovery grouping
+
+Replaced the user-facing Workspace Template terminology with Layout. The manager
+is titled Saved Layouts, reached through Manage Layouts; its save dialog and menu
+action read Save Layout. Workspaces now explains that it saves tool settings and
+a layout for different tasks; Layouts describes reusable tool/panel arrangements.
+The existing storage behavior already matches that distinction.
+
+Kept the baseline recovery action as Restore Starting Layout, with a confirmation
+that names the workspace. It restores that workspace's starting arrangement, not
+the most recently loaded saved layout. Layout History and Restore Starting Layout
+now share a menu section; Save Layout and Manage Layouts share a separate section.
+The history title includes the workspace name. Top-level Undo/Redo now say Layout
+Change, matching the scope of those actions. Existing generated history entries
+using the old terminology are translated for display without rewriting history.
+
+Serialized record kinds, command identifiers, and package formats remain stable.
+Web/Android test selectors were updated to match the shared Undo/Redo captions;
+no other-host manager implementation was started.
+
+Validation: 264 shared UI and 32 native store/coordinator tests pass. The native
+manager/history test passes in 19.01s (`/tmp/capy-workspace-review.kcOpVI`), including
+the renamed restore action, saved layout loading, preview cancellation, undo/redo,
+and lease renewal. Real pointer menu/+ checks pass in 9.96s
+(`/tmp/capy-workspace-menus.QSSdit`). Release build, diff checks, and Web test script
+syntax pass. Shared/build logs: `/tmp/workspace-layout-terms-shared.log`,
+`/tmp/workspace-layout-terms-build.log`. The final shorter toolbar deletion copy
+also passed all 264 UI tests (`/tmp/workspace-layout-terms-copy-check.log`).
+
+Inspected fresh manager, history, and menu screenshots and updated the review
+guide. The renamed layouts screenshot is `workspace-manager-gtk/layouts.png`.
+Ready for another GTK review before adapting other hosts.

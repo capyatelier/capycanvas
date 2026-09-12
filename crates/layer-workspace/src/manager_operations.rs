@@ -11,14 +11,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let mut template = self.load(id).await?.entity;
         let ItemContent::Reusable { current, previous } = &mut template.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         let selected = std::iter::once(&*current)
             .chain(previous.iter())
             .find(|v| v.id == version)
             .cloned()
             .ok_or_else(|| {
-                StoreError::invalid("This Workspace Template version is no longer available.")
+                StoreError::invalid("This saved layout version is no longer available.")
             })?;
         *current = selected;
         self.create_and_bind(
@@ -162,9 +162,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn duplicate_reusable(&self, id: &str, name: &str, now: u64) -> Result<String> {
         let mut entity = self.load(id).await?.entity;
         if entity.metadata.kind == ItemKind::Workspace {
-            return Err(StoreError::invalid(
-                "Choose a Workspace Template or saved toolbar.",
-            ));
+            return Err(StoreError::invalid("Choose a saved layout or toolbar."));
         }
         entity.id = new_id();
         entity.metadata.builtin = false;
@@ -185,9 +183,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let stored = self.claim(id).await?;
         let result: Result<()> = async {
             let ItemContent::Reusable { current, previous } = &stored.entity.content else {
-                return Err(StoreError::invalid(
-                    "Choose a Workspace Template or saved toolbar.",
-                ));
+                return Err(StoreError::invalid("Choose a saved layout or toolbar."));
             };
             if current.content.kind() != content.kind() {
                 return Err(StoreError::invalid(
@@ -223,9 +219,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn restore_reusable_version(&self, id: &str, version: &str, now: u64) -> Result<()> {
         let stored = self.load(id).await?;
         let ItemContent::Reusable { current, previous } = &stored.entity.content else {
-            return Err(StoreError::invalid(
-                "Choose a Workspace Template or saved toolbar.",
-            ));
+            return Err(StoreError::invalid("Choose a saved layout or toolbar."));
         };
         let selected = std::iter::once(current)
             .chain(previous)
@@ -240,13 +234,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let source = self.load(template_id).await?.entity;
         if source.metadata.deleted_at_ms.is_some() {
-            return Err(StoreError::invalid("This Workspace Template was deleted."));
+            return Err(StoreError::invalid("This saved layout was deleted."));
         }
         let ItemContent::Reusable { current, .. } = source.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         let ReusableContent::Layout { layout } = current.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         let id = self
             .active_id()
@@ -255,7 +249,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.publish_layout(
             &stored,
             &layout,
-            &format!("Applied {} Workspace Template", source.metadata.name),
+            &format!("Loaded “{}” layout", source.metadata.name),
             now,
         )
         .await
@@ -319,7 +313,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 if revision.is_some() {
                     "Restored earlier layout"
                 } else {
-                    "Reset to starting layout"
+                    "Restored starting layout"
                 },
                 now,
             )

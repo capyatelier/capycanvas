@@ -12,7 +12,7 @@ impl ManagerPage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspaces => "Workspaces",
-            Self::Templates => "Workspace Templates",
+            Self::Templates => "Saved Layouts",
             Self::ThisWorkspace => "This Workspace",
             Self::ToolbarLibrary => "Saved Toolbars",
         }
@@ -53,12 +53,12 @@ impl ManagerAction {
             Self::RecoverInterrupted => "Recover Interrupted Changes…",
             Self::Switch(_) => "Switch",
             Self::SwitchToWindow(_) => "Switch to Window",
-            Self::UseTemplate(_) => "Use Layout",
+            Self::UseTemplate(_) => "Load Layout",
             Self::EditAsWorkspace(_) => "Edit as Workspace…",
             Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
             Self::Duplicate(_) | Self::DuplicateToolbar(_) => "Duplicate…",
-            Self::SaveAsTemplate(_) => "Save Layout as Workspace Template…",
-            Self::Reset(_) => "Reset Layout…",
+            Self::SaveAsTemplate(_) => "Save Layout…",
+            Self::Reset(_) => "Restore Starting Layout…",
             Self::History(_) => "Layout History…",
             Self::UpdateFromCurrent(_) => "Replace with Current Layout…",
             Self::Delete(_) => "Delete…",
@@ -282,17 +282,13 @@ pub struct WorkspacePrompt {
     pub confirm: &'static str,
 }
 pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
-    let ItemContent::Workspace { origin, .. } = &entity.content else {
+    let ItemContent::Workspace { .. } = &entity.content else {
         return Err(StoreError::invalid("Choose a workspace."));
     };
-    let target = origin.as_ref().map_or_else(
-        || "starting layout".into(),
-        |o| format!("original {} layout", o.name),
-    );
     Ok(WorkspacePrompt {
-        title: "Reset Layout".into(),
-        message: format!("Return {} to its {target}?", entity.metadata.name),
-        confirm: "Reset Layout",
+        title: "Restore Starting Layout".into(),
+        message: format!("Restore “{}” to its starting layout?", entity.metadata.name),
+        confirm: "Restore Starting Layout",
     })
 }
 pub fn update_prompt(target: &Entity, source: &Entity) -> WorkspacePrompt {

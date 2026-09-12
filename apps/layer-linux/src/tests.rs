@@ -7350,10 +7350,10 @@ fn native_workspace_management() {
         drag.end();
         pump(100);
         workspace_menu.popup();
-        activate(&workspace_menu, "Undo Workspace Change");
+        activate(&workspace_menu, "Undo Layout Change");
         assert_eq!(placement(panel).bounds, p.bounds);
         workspace_menu.popup();
-        activate(&workspace_menu, "Redo Workspace Change");
+        activate(&workspace_menu, "Redo Layout Change");
         assert_eq!(placement(panel).bounds.x, p.bounds.x + 45.0);
 
         let floated = group(panel);
@@ -7560,13 +7560,13 @@ fn native_workspace_management() {
                 .downcast::<gtk::Button>()
                 .unwrap(),
         );
-        assert!(prompt().body().contains("Undo Workspace Change"));
+        assert!(prompt().body().contains("Undo Layout Change"));
         snapshot(&format!("delete-{theme:?}"));
         confirm_prompt();
         assert!(state(&w).workspace.layout.panel(panel).is_err());
         send(CustomizationAction::CloseToolbarManager);
         workspace_menu.popup();
-        activate(&workspace_menu, "Undo Workspace Change");
+        activate(&workspace_menu, "Undo Layout Change");
         assert_eq!(
             state(&w).workspace.layout.panel(panel).unwrap().title(),
             "Painting"
@@ -13648,7 +13648,7 @@ fn native_workspace_menu_input() {
             );
             let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(popup_point(&popup, &workspace), 272);
-            let templates = menu_label(popup.upcast_ref(), "Manage Workspace Templates…").unwrap();
+            let templates = menu_label(popup.upcast_ref(), "Manage Layouts…").unwrap();
             click(popup_point(&popup, &templates), 272);
             assert!(w.workspaces.ui.dialog.is_visible());
             assert!(find_button(w.window.upcast_ref(), "Load Layout").is_some());
@@ -13691,7 +13691,7 @@ fn native_workspace_menu_input() {
                     .unwrap()
                     .heading()
                     .as_deref(),
-                Some("Save Workspace Template")
+                Some("Save Layout")
             );
             let cancel = find_button(&prompt, "Cancel")
                 .unwrap()
@@ -13957,7 +13957,7 @@ fn native_named_workspace_manager_templates_library_and_history() {
     run(
         A::SaveAsTemplate(painting.clone()),
         Some("Illustration"),
-        Some("Save Workspace Template"),
+        Some("Save Layout"),
     );
     let template = manager
         .items()
@@ -14202,7 +14202,11 @@ fn native_named_workspace_manager_templates_library_and_history() {
         }
     }
     run(A::Switch(painting.clone()), None, None);
-    run(A::Reset(painting.clone()), None, Some("Reset Layout"));
+    run(
+        A::Reset(painting.clone()),
+        None,
+        Some("Restore Starting Layout"),
+    );
     assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
     assert_eq!(state(&w).brush.diameter, 73.);
     w.dispatch(UiAction::Invoke {

@@ -468,9 +468,9 @@ impl NativeWorkspaces {
                 "Duplicate and Switch",
             ),
             A::SaveAsTemplate(_) => (
-                "Save Workspace Template",
-                "Save this layout to reuse in any workspace.",
-                "Save Workspace Template",
+                "Save Layout",
+                "Save this tool and panel arrangement to reuse in any workspace.",
+                "Save Layout",
             ),
             A::SaveToolbar(_) => (
                 "Save to Toolbar Library",
@@ -479,7 +479,7 @@ impl NativeWorkspaces {
             ),
             _ => (
                 "New Workspace",
-                "Create a layout for a task, such as sketching or painting.",
+                "Keep tool settings and a layout for a task, such as painting.",
                 "Create and Switch",
             ),
         };

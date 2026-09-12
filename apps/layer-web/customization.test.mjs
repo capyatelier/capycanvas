@@ -230,11 +230,11 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     await click(`.managed-toolbars button[data-panel="${duplicate}"]`);
     await click("#delete-managed-toolbar");
     await shot(`delete-${theme}`);
-    assert.match(await evaluate("document.querySelector('#toolbar-prompt').textContent"), /Undo Workspace Change/);
+    assert.match(await evaluate("document.querySelector('#toolbar-prompt').textContent"), /Undo Layout Change/);
     await click("#confirm-toolbar"); assert.equal(await config(duplicate), undefined);
     await click("#toolbar-manager .dialog-close");
-    await workspaceMenu(); await choose("Undo Workspace Change", "#workspace-menu"); assert.ok(await config(duplicate));
-    await workspaceMenu(); await choose("Redo Workspace Change", "#workspace-menu"); assert.equal(await config(duplicate), undefined);
+    await workspaceMenu(); await choose("Undo Layout Change", "#workspace-menu"); assert.ok(await config(duplicate));
+    await workspaceMenu(); await choose("Redo Layout Change", "#workspace-menu"); assert.equal(await config(duplicate), undefined);
     await context(grip(custom)); await choose(`Hide Study ${theme} toolbar`);
     assert.equal(await group(custom), undefined); assert.ok(await config(custom));
     await workspaceMenu(); await choose(`Study ${theme} toolbar`, "#workspace-menu"); assert.ok(await group(custom));

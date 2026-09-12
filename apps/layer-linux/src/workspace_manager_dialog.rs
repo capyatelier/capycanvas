@@ -218,7 +218,7 @@ impl ManagerUi {
         let compact = matches!(page, ManagerPage::Workspaces | ManagerPage::Templates);
         let empty = gtk::Label::new(Some(match page {
             ManagerPage::Workspaces => "No matching workspaces.",
-            ManagerPage::Templates => "No matching Workspace Templates.",
+            ManagerPage::Templates => "No matching layouts.",
             _ => "No matching toolbars.",
         }));
         margins(&empty, 18);
@@ -243,10 +243,10 @@ impl ManagerUi {
         });
         self.intro.set_text(match page {
             ManagerPage::Workspaces => {
-                "Workspaces save your tool and panel layouts for different tasks."
+                "Workspaces save your tool settings and layout for different tasks."
             }
             ManagerPage::Templates => {
-                "Workspace Templates save tool and panel layouts to reuse in any workspace."
+                "Layouts save tool and panel arrangements to reuse in any workspace."
             }
             ManagerPage::ThisWorkspace => "Arrange the toolbars in this workspace.",
             ManagerPage::ToolbarLibrary => "Save toolbars to reuse in any workspace.",
@@ -286,7 +286,7 @@ impl ManagerUi {
         };
         *self.create_action.borrow_mut() = action;
         let create_label = if page == ManagerPage::Templates {
-            "Save Current Layout as Workspace Template"
+            "Save Current Layout"
         } else {
             "New Workspace"
         };

@@ -361,10 +361,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_workspace_idle().is_ok(),
                 durable_layout(&self.state.workspace.layout) != workspace.baseline,
             );
-            let toolbars = ContextMenuItem::submenu(
-                "Quick Access Toolbars",
-                vec![toolbars, toolbar_actions],
-            );
+            let toolbars =
+                ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
@@ -1366,17 +1364,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
+        let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
+            "Restore Starting Layout…"
+        } else {
+            id.label()
+        };
         CommandState {
             checkable: id.is_toggle(),
             icon: self.command_icon(id),
             id,
-            label: if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-                "Reset Layout…"
-            } else {
-                id.label()
-            },
+            label,
             tooltip: self.state.settings.action_tooltip(
-                id.label(),
+                label,
                 &UiAction::Invoke { command: id },
                 self.state.platform,
             ),
@@ -3469,7 +3468,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let (enabled, selected) = self.command_flags(id);
             let icon = self.command_icon(id);
             let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-                "Reset Layout…"
+                "Restore Starting Layout…"
             } else {
                 id.label()
             };
@@ -3479,6 +3478,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || previous.icon != icon
                     || previous.label != label
                 {
+                    if previous.label != label {
+                        previous.tooltip = self.state.settings.action_tooltip(
+                            label,
+                            &UiAction::Invoke { command: id },
+                            self.state.platform,
+                        );
+                    }
                     previous.enabled = enabled;
                     previous.selected = selected;
                     previous.icon = icon;
@@ -3908,7 +3914,7 @@ mod tests {
                 .sections
                 .iter()
                 .flatten()
-                .any(|i| i.label == "Save Layout as Workspace Template…")
+                .any(|i| i.label == "Save Layout…")
         );
         assert!(menu.sections[2].iter().any(|i| i.label == "Layers"));
         assert!(
@@ -3918,12 +3924,35 @@ mod tests {
         );
         assert_eq!(menu.sections.len(), 3);
         let workspaces = &menu.sections[1][0];
+        assert_eq!(
+            workspaces
+                .sections
+                .iter()
+                .skip(1)
+                .map(|section| {
+                    section
+                        .iter()
+                        .map(|item| item.label.as_str())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec!["New Workspace…", "Manage Workspaces…"],
+                vec!["Save Layout…", "Manage Layouts…"],
+                vec!["Layout History…", "Restore Starting Layout…"],
+            ]
+        );
+        assert!(
+            s.command(CommandId::ResetLayout)
+                .tooltip
+                .contains("Restore Starting Layout")
+        );
         assert!(
             workspaces
                 .sections
                 .iter()
                 .flatten()
-                .any(|item| item.label == "Manage Workspace Templates…")
+                .any(|item| item.label == "Manage Layouts…")
         );
         assert_eq!(menu.sections[1].len(), 2);
         let toolbars = &menu.sections[1][1];
@@ -6772,11 +6801,7 @@ mod tests {
             );
             let prompt = s.toolbar_prompt().unwrap();
             assert!(prompt.destructive && prompt.name.is_none());
-            assert!(
-                prompt
-                    .message
-                    .contains("Undo Workspace Change (Ctrl+Alt+Z)")
-            );
+            assert!(prompt.message.contains("Undo Layout Change (Ctrl+Alt+Z)"));
             let before = s.state.workspace.clone();
             edit(&mut s, CustomizationAction::ConfirmToolbar);
             assert!(s.state.workspace.layout.panel(copied.id).is_err());

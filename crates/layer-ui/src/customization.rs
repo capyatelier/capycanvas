@@ -1327,7 +1327,7 @@ impl ToolbarPrompt {
             name_label: "Toolbar name",
             message: if destructive {
                 format!(
-                    "Delete “{}” and its tools, not just hide it? You can restore it with Workspace → Undo Workspace Change{shortcut}.",
+                    "Delete “{}” and its tools? You can restore it with Undo Layout Change{shortcut}.",
                     self.name
                 )
             } else {

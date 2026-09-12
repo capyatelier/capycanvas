@@ -389,7 +389,7 @@ fn workspace_template_replaces_current_layout_without_creating_a_workspace() {
         );
         assert_eq!(
             after.history.revisions[&after.history.current].description,
-            "Applied Inking Workspace Template"
+            "Loaded “Inking” layout"
         );
         if let (
             ItemContent::Workspace {
