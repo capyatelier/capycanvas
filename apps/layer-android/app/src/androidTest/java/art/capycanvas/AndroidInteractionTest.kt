@@ -558,14 +558,16 @@ class AndroidInteractionTest {
                     "axis" to "vertical", "fraction" to .5, "first" to tabs(42, "brushes"), "second" to tabs(43, "sizes"))),
                 obj("id" to 44, "edge" to if (edge == "left") "right" else "left", "extent" to 252,
                     "root" to tabs(45, "layers", "properties", "adjustments")))))
-            for (pointer in pointerTools) for (mode in listOf("-15", "0", "15", "merge", "cancel")) {
+            for (pointer in pointerTools) for (mode in listOf("-8", "-5", "0", "5", "8", "cancel")) {
+                val offset = mode.toFloatOrNull() ?: 5f
+                val merge = kotlin.math.abs(offset) > 6f
                 tool = pointer; restore()
                 for (id in listOf(42, 45)) customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to true))
                 val before = workspace()
                 val tile = bounds("column-icon-sizes")
                 val divider = bounds("column-divider-41-1").center
                 assertEquals("Native/shared separator alignment", tile.top - 6 * density, divider.y, 1f)
-                val destination = if (mode == "merge") tile.center else divider + Offset(0f, (mode.toFloatOrNull() ?: 15f) * density)
+                val destination = divider + Offset(0f, offset * density)
                 event(MotionEvent.ACTION_DOWN, bounds("column-icon-layers").center); SystemClock.sleep(700)
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
                 event(MotionEvent.ACTION_MOVE, destination)
@@ -574,8 +576,10 @@ class AndroidInteractionTest {
                 assertEquals("Pickup closes the held menu", 0, popupCount())
                 val hint = host.workspaceGeometry!!.hint!!
                 val target = hint.getJSONObject("target")
-                if (mode == "merge") assertEquals("tab", target.getString("kind"))
-                else {
+                if (merge) {
+                    assertEquals("tab", target.getString("kind"))
+                    assertEquals(if (offset < 0) 42 else 43, target.getInt("group"))
+                } else {
                     assertEquals("split", target.getString("kind")); assertEquals(43, target.getInt("group"))
                     assertEquals("top", target.getString("edge"))
                     assertEquals("Preview stays on the divider", divider.y, bounds("workspace-drop-hint").center.y, 1f)
@@ -587,9 +591,9 @@ class AndroidInteractionTest {
                 assertEquals(0, state().getJSONObject("workspace").getJSONObject("layout").array("floating").length())
                 val column = snapshot().getJSONObject("layout").array("collapsed").objects().first { it.getInt("id") == 41 }
                 val groups = column.array("groups").objects()
-                assertEquals(if (mode == "merge") 2 else 3, groups.size)
-                val panels = groups[1].array("icons").objects().map { it.getString("panel") }
-                if (mode == "merge") assertTrue("Center still merges tabs", "layers" in panels && "sizes" in panels)
+                assertEquals(if (merge) 2 else 3, groups.size)
+                val panels = groups[if (merge && offset < 0) 0 else 1].array("icons").objects().map { it.getString("panel") }
+                if (merge) assertTrue("Adjacent tile still merges tabs", "layers" in panels && (if (offset < 0) "brushes" else "sizes") in panels)
                 else assertEquals(listOf("layers"), panels)
                 action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
                 action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(after, workspace())

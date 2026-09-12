@@ -93,12 +93,12 @@ impl CollapsedColumnPlacement {
         {
             return None;
         }
-        // Prefer a 32px target centered on each visible separator over adjacent
-        // tile edges. The actual gap is only 12px; tile centers still merge tabs.
+        // The total target is one third of a tile (12px), centered on the
+        // separator. Adjacent tile bodies retain their tab insertion targets.
         // Check all separators first so the preceding group cannot steal a hit.
         for group in &self.groups {
             let divider_y = Self::divider_y(group);
-            if self.content.contains(x, divider_y) && (y - divider_y).abs() <= 16. {
+            if self.content.contains(x, divider_y) && (y - divider_y).abs() <= TILE_SIZE / 6. {
                 return Some(self.divider_drop_hint(group));
             }
         }
@@ -1491,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_dividers_have_forgiving_targets_and_aligned_previews() {
+    fn collapsed_dividers_have_one_third_tile_targets_and_aligned_previews() {
         for edge in [Edge::Left, Edge::Right] {
             let mut layout = DockLayout::default();
             layout.bands[0].edge = edge;
@@ -1506,7 +1506,7 @@ mod tests {
             for (index, group) in c.groups.iter().enumerate() {
                 let divider_y = group.bounds.y - 6.;
                 for x in [c.bounds.x + 1., c.bounds.x + 18., c.bounds.x + 35.] {
-                    for offset in [-15., -8., 0., 8., 15.] {
+                    for offset in [-5., 0., 5.] {
                         let y = divider_y + offset;
                         if !c.content.contains(x, y) {
                             continue;
@@ -1522,6 +1522,12 @@ mod tests {
                         );
                         assert_eq!(hint.bounds.y + hint.bounds.height / 2., divider_y);
                         assert_eq!(c.drop_hint([x, divider_y]).unwrap().target, hint.target);
+                    }
+                    for (offset, tab_group) in [(-7., index.checked_sub(1)), (7., Some(index))] {
+                        if let Some(tab_group) = tab_group {
+                            assert!(matches!(c.drop_hint([x, divider_y + offset]).unwrap().target,
+                                DockTarget::Tab { group: id, .. } if id == c.groups[tab_group].group));
+                        }
                     }
                 }
                 // The first/last icon centers still allow insertion on either

@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[path = "layout_columns.rs"]
 mod columns;
 pub use columns::{CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, ColumnIcon};
+#[cfg(test)]
+#[path = "layout_tile_group_tests.rs"]
+mod tile_group_tests;
 
 pub const TILE_SIZE: f32 = 36.0;
 /// Six standard toolbar tiles, including their five two-pixel gaps.
@@ -817,6 +820,11 @@ pub enum DockTarget {
         panel: Panel,
         /// Insert before this stable tile ID; absent appends.
         before: Option<u32>,
+    },
+    /// Make the moved tool its own group at an existing toolbar separator.
+    TileGroup {
+        panel: Panel,
+        divider: u32,
     },
 }
 
@@ -1872,6 +1880,13 @@ impl DockLayout {
             .find(|t| t.id == tile)
             .ok_or("The dragged tool no longer exists")?
             .clone();
+        if let DockTarget::TileGroup {
+            panel: destination,
+            divider,
+        } = target
+        {
+            return self.move_tile_group(panel, source, destination, divider);
+        }
         let DockTarget::Tile {
             panel: destination,
             before,
@@ -1897,6 +1912,63 @@ impl DockLayout {
             .and_then(|id| tiles.iter().position(|t| t.id == id))
             .unwrap_or(tiles.len());
         tiles.insert(index, source);
+        Ok(())
+    }
+
+    fn move_tile_group(
+        &mut self,
+        panel: Panel,
+        source: ToolbarTile,
+        destination: Panel,
+        divider: u32,
+    ) -> Result<(), String> {
+        if source.control == ToolbarControl::Divider {
+            return Err("A separator cannot form a tool group".into());
+        }
+        let tiles = self.panel(destination)?.tiles();
+        let index = tiles
+            .iter()
+            .position(|t| t.id == divider && t.control == ToolbarControl::Divider)
+            .ok_or("The target separator no longer exists")?;
+        // A tool already alone on either side is already a separate group.
+        // Do not manufacture empty groups or allocate IDs for a no-op drop.
+        if panel == destination {
+            let alone_before = index > 0
+                && tiles[index - 1].id == source.id
+                && (index == 1 || tiles[index - 2].control == ToolbarControl::Divider);
+            let alone_after = tiles.get(index + 1).is_some_and(|t| t.id == source.id)
+                && tiles
+                    .get(index + 2)
+                    .is_none_or(|t| t.control == ToolbarControl::Divider);
+            if alone_before || alone_after {
+                return Ok(());
+            }
+        }
+        // Plan after removal and reserve an ID before either toolbar changes.
+        // Reuse a following separator (or the toolbar end) when possible.
+        let needs_separator = tiles[index + 1..]
+            .iter()
+            .find(|t| panel != destination || t.id != source.id)
+            .is_some_and(|t| t.control != ToolbarControl::Divider);
+        let separator_id = self.next_tile_id;
+        let next_id = self
+            .next_tile_id
+            .checked_add(u32::from(needs_separator))
+            .ok_or("Toolbar tile ID space exhausted")?;
+        self.remove_tool(panel, source.id)?;
+        let tiles = self.panel_mut(destination)?.tiles_mut()?;
+        let index = tiles.iter().position(|t| t.id == divider).unwrap() + 1;
+        tiles.insert(index, source);
+        if needs_separator {
+            tiles.insert(
+                index + 1,
+                ToolbarTile {
+                    id: separator_id,
+                    control: ToolbarControl::Divider,
+                },
+            );
+        }
+        self.next_tile_id = next_id;
         Ok(())
     }
 
@@ -2068,7 +2140,7 @@ impl DockLayout {
         if let DockItem::Column { column } = item {
             return self.move_column(viewport, column, target);
         }
-        if matches!(target, DockTarget::Tile { .. }) {
+        if matches!(target, DockTarget::Tile { .. } | DockTarget::TileGroup { .. }) {
             return Err("Only tools can be dropped inside a toolbar".into());
         }
         if let DockTarget::Split { group, .. } = target
@@ -2190,7 +2262,7 @@ impl DockLayout {
                     next.fit_tabs(moving_id);
                 }
             }
-            DockTarget::Tile { .. } => unreachable!(),
+            DockTarget::Tile { .. } | DockTarget::TileGroup { .. } => unreachable!(),
             DockTarget::Edge { .. } | DockTarget::BesideBand { .. } => {
                 let (edge, index) = match target {
                     DockTarget::Edge { edge, outer } => {
@@ -3215,6 +3287,86 @@ impl DockLayout {
 }
 
 impl ResolvedLayout {
+    /// A divider gets a centered target one third of the toolbar tile's extent
+    /// along its flow axis. Other tile bodies keep the ordinary insertion path.
+    pub fn tile_group_drop_hint(&self, point: [f32; 2], config: &DockLayout) -> Option<DropHint> {
+        for group in self.groups.iter().rev() {
+            let Some(tiles) = &group.tiles else { continue };
+            let mut body = group.bounds;
+            if group.tabs_visible {
+                body.y += TAB_BAR_HEIGHT;
+                body.height -= TAB_BAR_HEIGHT;
+            }
+            if !body.contains(point[0], point[1]) {
+                continue;
+            }
+            let local = [point[0] - body.x, point[1] - body.y];
+            if tiles.grip.is_some_and(|b| b.contains(local[0], local[1])) {
+                return None;
+            }
+            let config = config.panel(group.active).ok()?;
+            let horizontal = group.axis == Axis::Horizontal;
+            let size = config.tile_style.size()[if horizontal { 0 } else { 1 }] / 3.;
+            let clip = Bounds {
+                width: body.width,
+                height: body.height,
+                ..Bounds::default()
+            };
+            for (tile, b) in config.tiles().iter().zip(&tiles.tiles) {
+                if tile.control != ToolbarControl::Divider {
+                    continue;
+                }
+                let center = [b.x + b.width / 2., b.y + b.height / 2.];
+                if !clip.contains(center[0], center[1]) {
+                    continue;
+                }
+                let zone = if horizontal {
+                    Bounds {
+                        x: center[0] - size / 2.,
+                        width: size,
+                        ..*b
+                    }
+                } else {
+                    Bounds {
+                        y: center[1] - size / 2.,
+                        height: size,
+                        ..*b
+                    }
+                };
+                if !zone.contains(local[0], local[1]) {
+                    continue;
+                }
+                let line = if horizontal {
+                    Bounds {
+                        x: center[0] - 1.5,
+                        width: 3.,
+                        ..*b
+                    }
+                } else {
+                    Bounds {
+                        y: center[1] - 1.5,
+                        height: 3.,
+                        ..*b
+                    }
+                };
+                let line = line.intersection(clip)?;
+                return Some(DropHint {
+                    target: DockTarget::TileGroup {
+                        panel: group.active,
+                        divider: tile.id,
+                    },
+                    bounds: Bounds {
+                        x: body.x + line.x,
+                        y: body.y + line.y,
+                        ..line
+                    },
+                });
+            }
+            return None;
+        }
+        None
+    }
+
     pub fn tile_drop_hint(&self, point: [f32; 2], config: &DockLayout) -> Option<DropHint> {
         for group in self.groups.iter().rev() {
             let Some(tiles) = &group.tiles else { continue };

@@ -45,13 +45,14 @@ fn native_collapsed_divider_drop_input() {
             .set_column_collapsed(8, true, viewport)
             .unwrap();
         for touch in [false, true] {
-            // Offsets +/-15 are over neighboring tiles, outside the old 12px gap.
+            // +/-5px belongs to the divider; +/-8px joins a neighboring group.
             for (offset, merge, cancel) in [
-                (-15., false, false),
+                (-5., false, false),
                 (0., false, false),
-                (15., false, false),
-                (0., true, false),
-                (15., false, true),
+                (5., false, false),
+                (-8., true, false),
+                (8., true, false),
+                (5., false, true),
             ] {
                 println!(
                     "Checking {edge:?}, touch={touch}, offset={offset}, merge={merge}, cancel={cancel}"
@@ -65,14 +66,8 @@ fn native_collapsed_divider_drop_input() {
                 let column = r.collapsed.iter().find(|c| c.id == 4).unwrap();
                 let group = &column.groups[1];
                 let divider_y = group.bounds.y - 6.;
-                let destination = [
-                    column.bounds.x + 18.,
-                    if merge {
-                        group.bounds.y + 18.
-                    } else {
-                        divider_y + offset
-                    },
-                ];
+                let destination = [column.bounds.x + 18., divider_y + offset];
+                let merge_group = if offset < 0. { 5 } else { 6 };
                 let strip = find_named(w.surface.upcast_ref(), "collapsed-column-4").unwrap();
                 let separator = find_css(&strip, "collapsed-group")
                     .unwrap()
@@ -124,7 +119,9 @@ fn native_collapsed_divider_drop_input() {
                     )
                 });
                 if merge {
-                    assert!(matches!(hint.target, DockTarget::Tab { group: 6, .. }));
+                    assert!(
+                        matches!(hint.target, DockTarget::Tab { group, .. } if group == merge_group)
+                    );
                 } else {
                     assert_eq!(
                         hint.target,
@@ -163,7 +160,7 @@ fn native_collapsed_divider_drop_input() {
                 assert!(layout.is_collapsed(4));
                 assert!(layout.floating.is_empty());
                 if merge {
-                    assert_eq!(layout.panel_group(Panel::Layers).unwrap(), 6);
+                    assert_eq!(layout.panel_group(Panel::Layers).unwrap(), merge_group);
                 } else {
                     let column = w
                         .resolved()
@@ -187,8 +184,163 @@ fn native_collapsed_divider_drop_input() {
             }
         }
     }
+    for edge in [Edge::Top, Edge::Left] {
+        let mut fixture = layer_ui::WorkspaceState::default();
+        let old = fixture
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .to_vec();
+        for tile in old {
+            fixture.layout.remove_tool(Panel::Toolbar, tile.id).unwrap();
+        }
+        fixture
+            .layout
+            .insert_tools(
+                Panel::Toolbar,
+                None,
+                &[
+                    ToolbarControl::Command {
+                        command: CommandId::Brush,
+                    },
+                    ToolbarControl::Command {
+                        command: CommandId::Eraser,
+                    },
+                    ToolbarControl::Divider,
+                    ToolbarControl::Command {
+                        command: CommandId::Lasso,
+                    },
+                    ToolbarControl::Command {
+                        command: CommandId::Hand,
+                    },
+                ],
+            )
+            .unwrap();
+        fixture
+            .layout
+            .move_panel(
+                viewport,
+                Panel::Toolbar,
+                DockTarget::Edge { edge, outer: true },
+            )
+            .unwrap();
+        let ids = fixture
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>();
+        for touch in [false, true] {
+            for (offset, cancel) in [(-5., false), (5., false), (8., false), (5., true)] {
+                println!(
+                    "Checking toolbar {edge:?}, touch={touch}, offset={offset}, cancel={cancel}"
+                );
+                w.dispatch(UiAction::RestoreWorkspace {
+                    workspace: fixture.clone(),
+                });
+                pump(300);
+                let before = saved();
+                let bounds = |id| {
+                    find_named(w.surface.upcast_ref(), &format!("tile-{id}"))
+                        .unwrap()
+                        .compute_bounds(&w.surface)
+                        .unwrap()
+                };
+                let b = bounds(ids[0]);
+                let start = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
+                let b = bounds(ids[2]);
+                let center = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
+                let mut point = center;
+                point[if edge == Edge::Top { 0 } else { 1 }] += offset;
+                perform(if touch {
+                    serde_json::json!([{"touch":"down","point":start}])
+                } else {
+                    serde_json::json!([{"point":start},{"down":true}])
+                });
+                pump(800);
+                perform(if touch {
+                    serde_json::json!([{"touch":"move","point":point}])
+                } else {
+                    serde_json::json!([{"point":point}])
+                });
+                let hint = w
+                    .drop_hint
+                    .borrow()
+                    .clone()
+                    .expect("toolbar divider preview");
+                if offset <= 6. {
+                    assert_eq!(
+                        hint.target,
+                        DockTarget::TileGroup {
+                            panel: Panel::Toolbar,
+                            divider: ids[2]
+                        }
+                    );
+                    assert!((hint.bounds.x + hint.bounds.width / 2. - center[0]).abs() < 1.);
+                    assert!((hint.bounds.y + hint.bounds.height / 2. - center[1]).abs() < 1.);
+                } else {
+                    assert!(matches!(hint.target, DockTarget::Tile { .. }));
+                }
+                if cancel {
+                    perform(
+                        serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
+                    );
+                }
+                perform(if touch {
+                    serde_json::json!([{"touch":"up"}])
+                } else {
+                    serde_json::json!([{"down":false}])
+                });
+                assert!(w.workspace_drag.borrow().is_none());
+                assert!(w.drop_hint.borrow().is_none());
+                if cancel {
+                    assert_eq!(saved(), before);
+                    continue;
+                }
+                let after = saved();
+                let layout = state(&w).workspace.layout;
+                let tiles = layout.panel(Panel::Toolbar).unwrap().tiles();
+                let expected = if offset <= 6. {
+                    vec![
+                        ids[1],
+                        ids[2],
+                        ids[0],
+                        ids[4] + 1,
+                        ids[3],
+                        ids[4],
+                    ]
+                } else {
+                    vec![ids[1], ids[2], ids[0], ids[3], ids[4]]
+                };
+                assert_eq!(tiles.iter().map(|t| t.id).collect::<Vec<_>>(), expected);
+                assert_eq!(
+                    tiles
+                        .iter()
+                        .filter(|t| t.control == ToolbarControl::Divider)
+                        .count(),
+                    if offset <= 6. { 2 } else { 1 }
+                );
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::UndoWorkspace,
+                });
+                pump(150);
+                assert_eq!(saved(), before);
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::RedoWorkspace,
+                });
+                pump(150);
+                assert_eq!(saved(), after);
+            }
+        }
+    }
     println!(
-        "PASS: native mouse/touch separator drops at +/-15px, aligned previews, tile merging, cancellation, undo/redo on both sides"
+        "PASS: native mouse/touch toolbar group drops, centered previews on both axes, adjacent insertion, cancellation and one-step undo/redo"
+    );
+    println!(
+        "PASS: native mouse/touch separator drops at +/-5px, adjacent tiles at +/-8px, aligned previews, cancellation, undo/redo on both sides"
     );
     std::fs::write(dir.join("finished"), "finished").unwrap();
     w.window.destroy();
