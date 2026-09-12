@@ -1,5 +1,9 @@
 # Workspace manager plan review
 
+Historical review of the original proposal. For the user-approved UI and current
+host rollout scope, use the [implementation handoff](workspace-manager-host-handoff.md).
+The removed maintenance/export screens discussed below are not rollout requirements.
+
 Reviewed 2026-09-11. A separate reviewer received the plan and repository path
 with no conversation history. It examined the design, relevant implementation
 and primary browser documentation. This record describes design corrections;

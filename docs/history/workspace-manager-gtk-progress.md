@@ -3,9 +3,11 @@
 Target: implement [the proposal](../ui/workspace-manager-proposal.md) on GTK,
 validate it in the native application, and obtain user approval before adapting
 other hosts. Publish notable, tested milestones to main and integrate concurrent
-main changes. GTK implementation and automated/native acceptance checks are now
-complete through milestone 5; user review and approval remain pending. This record
-does not claim approval or acceptance of the other hosts.
+main changes. GTK implementation and validation are complete, and the user approved
+the design on 2026-09-12. Other hosts can proceed from the
+[approved handoff](../ui/workspace-manager-host-handoff.md). Their implementations
+and platform acceptance checks remain outstanding. Earlier approval/status notes
+below describe historical checkpoints rather than the current gate.
 
 ## Milestone 1: shared state and restoration
 
@@ -416,3 +418,25 @@ also passed all 264 UI tests (`/tmp/workspace-layout-terms-copy-check.log`).
 Inspected fresh manager, history, and menu screenshots and updated the review
 guide. The renamed layouts screenshot is `workspace-manager-gtk/layouts.png`.
 Ready for another GTK review before adapting other hosts.
+
+## User approval and host handoff — 2026-09-12
+
+The user approved the design as sufficient for other-platform implementation.
+Finalized the Load Layout menu caption and the `<workspace name> Layout` default
+name, and recorded approval in the visual reference. The native pointer test
+now checks the actual default name in the + save dialog; it passes in 9.93s
+(`/tmp/capy-workspace-menus.7TsOLw`). The release build also passes
+(`/tmp/workspace-approved-build.log`). Fresh menu/save-dialog screenshots were
+inspected and added to the guide. The existing focused shared menu test passed
+when its final caption was changed.
+
+Added [the host handoff](../ui/workspace-manager-host-handoff.md) with approved
+scope, shared APIs, platform work, coordination of common bridge changes, and
+acceptance requirements. Marked the original proposal/review as historical and
+corrected the UI guides' obsolete statements that GTK had no named workspaces.
+Internal compatibility names and stored formats remain intact; unexposed legacy
+APIs are not instructions to restore removed UI features.
+
+GTK implementation, validation, and user approval are complete. There is no
+remaining GTK cleanup prerequisite for the other hosts; their platform-specific
+storage/bridge, lifecycle, migration, UI, and acceptance work is next.

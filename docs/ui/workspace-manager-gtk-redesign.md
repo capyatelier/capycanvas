@@ -1,7 +1,9 @@
-# GTK workspace manager review
+# Approved GTK workspace manager design
 
-Updated for the latest user feedback, 2026-09-12. Ready for another GTK review
-before adapting other hosts.
+Approved by the user on 2026-09-12, including the final Load Layout menu label
+and the default saved-layout name. This is the visual reference for other hosts;
+use the [host implementation handoff](workspace-manager-host-handoff.md) for scope,
+integration responsibilities, and acceptance checks.
 
 ## Menus
 
@@ -11,7 +13,7 @@ in the main Window menu. Its entries keep their short names.
 Workspaces groups its commands by purpose:
 
 - New Workspace / Manage Workspaces
-- Save Layout / Manage Layouts
+- Save Layout / Load Layout
 - Layout History / Restore Starting Layout
 
 Undo Layout Change and Redo Layout Change describe what the top-level actions undo.
@@ -45,6 +47,10 @@ introduction is:
 
 > Layouts save tool and panel arrangements to reuse in any workspace.
 
+The menu entry is **Load Layout…**; the dialog title is **Saved Layouts**. Save
+Layout suggests **<workspace name> Layout**, for example **Painting Layout**.
+The name remains editable; existing-name conflicts use the normal naming dialog.
+
 Selecting a row previews the layout without applying it. Load Layout applies the
 selection to the **current workspace** and closes the dialog, creating one undoable
 layout change. Cancel or closing restores the original layout. The included
@@ -54,6 +60,8 @@ Recently Deleted, backups, import/export, and version-management controls remain
 absent from these managers.
 
 ![Saved layout list with preview](workspace-manager-gtk/layouts.png)
+
+![Save Layout name](workspace-manager-gtk/save-layout.png)
 
 ## Layout History
 
@@ -75,7 +83,7 @@ Close the older GTK instance and run from the repository root:
 cargo run --locked --release -p layer-linux
 ```
 
-Review Window → Workspaces, both managers, and Layout History. Save a layout
+Check Window → Workspaces, both managers, and Layout History. Save a layout
 using **+**, move a panel, preview that saved layout, then load it
 and undo the change. Also preview another workspace and cancel before trying
 Switch to Workspace.

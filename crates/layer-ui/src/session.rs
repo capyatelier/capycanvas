@@ -3938,7 +3938,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 vec!["New Workspace…", "Manage Workspaces…"],
-                vec!["Save Layout…", "Manage Layouts…"],
+                vec!["Save Layout…", "Load Layout…"],
                 vec!["Layout History…", "Restore Starting Layout…"],
             ]
         );
@@ -3952,7 +3952,7 @@ mod tests {
                 .sections
                 .iter()
                 .flatten()
-                .any(|item| item.label == "Manage Layouts…")
+                .any(|item| item.label == "Load Layout…")
         );
         assert_eq!(menu.sections[1].len(), 2);
         let toolbars = &menu.sections[1][1];

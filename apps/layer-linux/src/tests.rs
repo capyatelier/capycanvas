@@ -13648,7 +13648,7 @@ fn native_workspace_menu_input() {
             );
             let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(popup_point(&popup, &workspace), 272);
-            let templates = menu_label(popup.upcast_ref(), "Manage Layouts…").unwrap();
+            let templates = menu_label(popup.upcast_ref(), "Load Layout…").unwrap();
             click(popup_point(&popup, &templates), 272);
             assert!(w.workspaces.ui.dialog.is_visible());
             assert!(find_button(w.window.upcast_ref(), "Load Layout").is_some());
@@ -13693,6 +13693,19 @@ fn native_workspace_menu_input() {
                     .as_deref(),
                 Some("Save Layout")
             );
+            assert_eq!(
+                entry.downcast_ref::<gtk::Entry>().unwrap().text().as_str(),
+                format!(
+                    "{} Layout",
+                    w.workspaces
+                        .manager
+                        .as_ref()
+                        .unwrap()
+                        .active_name()
+                        .unwrap()
+                )
+            );
+            crate::capture(&w, dir.join("Save-Layout.png").to_str().unwrap());
             let cancel = find_button(&prompt, "Cancel")
                 .unwrap()
                 .compute_bounds(&w.window)

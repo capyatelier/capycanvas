@@ -65,9 +65,14 @@ complete dock layout, and Zen mode. Save that value using Serde; restore it via
 `UiAction::RestoreWorkspace { workspace }`. Validation rejects unsupported
 versions, missing/duplicate panels, invalid selections/ratios/extents, duplicate
 node IDs, and invalid ID allocation state before any live state changes. A
-restore does not edit the document or move the current camera. Android, Apple and web persist workspace state across launches; GTK
-currently starts from its default. A named-workspace picker is not implemented.
-Hosts handle storage rather than reconstructing layout decisions from widgets.
+restore does not edit the document or move the current camera. This is the legacy
+single-workspace API. GTK's approved named-workspace manager uses `WorkspaceCapture`,
+`PreparedWorkspace`, and `layer-workspace` to preserve separate tool settings,
+layout history/navigation, and the starting layout. Other hosts must follow the
+[workspace-manager handoff](workspace-manager-host-handoff.md) when migrating;
+do not implement named switching with `RestoreWorkspace`, which clears history.
+Hosts provide asynchronous storage transport rather than reconstructing layout
+decisions from widgets.
 
 `UiSession::layout` supplies the standard workspace rectangles.
 `UiSession::drop_hint` validates a proposed target with the same transactional

@@ -435,7 +435,9 @@ impl NativeWorkspaces {
         let mut name = match &action {
             A::Rename(_) => source.as_ref().unwrap().entity.metadata.name.clone(),
             A::Duplicate(_) => format!("{} Copy", source.as_ref().unwrap().entity.metadata.name),
-            A::SaveAsTemplate(_) => source.as_ref().unwrap().entity.metadata.name.clone(),
+            A::SaveAsTemplate(_) => {
+                format!("{} Layout", source.as_ref().unwrap().entity.metadata.name)
+            }
             A::SaveToolbar(panel) => manager
                 .current()
                 .unwrap()

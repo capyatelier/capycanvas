@@ -64,9 +64,12 @@ resize behavior and configuration.
 
 [`WorkspaceState`](../../crates/layer-ui/src/workspace.rs) is the durable layout
 value. Transient menus, native widgets and unfinished gestures are not serialized.
-Android, Apple and web persist this state across launches; GTK currently starts
-from its default layout. There is no named-workspace picker.
-Workspace undo is separate from document undo. A drag is treated as one layout
+GTK now uses `layer-workspace` for named workspaces, saved layouts, automatic
+saving, and durable layout history. Workspaces include latest tool settings;
+saved layouts contain reusable arrangements. Other hosts' legacy workspace
+persistence remains the migration source as they adopt the
+[approved workspace-manager design and handoff](workspace-manager-host-handoff.md).
+Layout undo is separate from document undo. A drag is treated as one layout
 change, and cancelling it restores the original arrangement.
 
 ## Zen mode and the camera

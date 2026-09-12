@@ -70,7 +70,7 @@ impl ManagedWorkspace {
                 ],
                 vec![
                     command("Save Layout…", WorkspaceCommand::SaveAsTemplate, idle),
-                    command("Manage Layouts…", WorkspaceCommand::ManageTemplates, true),
+                    command("Load Layout…", WorkspaceCommand::ManageTemplates, true),
                 ],
                 vec![
                     command("Layout History…", WorkspaceCommand::LayoutHistory, idle),

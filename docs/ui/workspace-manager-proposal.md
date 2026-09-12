@@ -1,9 +1,18 @@
 # Workspace manager proposal
 
-Design proposal, 2026-09-11, updated with the workspace-storage discussion.
+**Historical proposal.** GTK is implemented and its design was approved on
+2026-09-12. Start other-host work from the
+[approved implementation handoff](workspace-manager-host-handoff.md) and
+[GTK visual reference](workspace-manager-gtk-redesign.md). Those documents
+supersede this proposal's UI, terminology, feature list, and implementation status.
+In particular, do not reintroduce the removed backup/export, Recently Deleted,
+metadata/version-management, or template-management screens described below.
+The storage/ownership rationale remains useful background alongside current code.
+
+Original design proposal, 2026-09-11, updated with the workspace-storage discussion.
 Based on the reviewed working tree and the official product documentation linked
-below. This describes intended behavior; the proposed manager and persistence
-changes are not implemented. A future raster document format is assumed for
+below. The remaining text records the original intended behavior and pre-implementation
+code assessment. A future raster document format was assumed for
 planning and is outside this workspace task.
 
 ## Recommendation
