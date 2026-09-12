@@ -87,7 +87,7 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
     }
     Row(Modifier.testTag("system-status"),
         horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.height(36.dp).testTag("system-clock").semantics(mergeDescendants = true) {}.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.height(36.dp).testTag("system-clock").semantics(mergeDescendants = true) {}.padding(horizontal = HeaderTextPadding), contentAlignment = Alignment.Center) {
             Text(time, maxLines = 1, fontWeight = FontWeight.Medium)
         }
         battery?.let {

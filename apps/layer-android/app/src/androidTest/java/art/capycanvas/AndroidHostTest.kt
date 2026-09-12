@@ -71,6 +71,85 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun panelHeadersDoNotHighlightOnMouseOrStylusHover() {
+        val fixture = JSONObject(defaultWorkspace)
+        fixture.getJSONObject("layout").apply {
+            fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+                "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
+            put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
+                obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("next_id", maxOf(44, getInt("next_id")))
+        }
+        fixture.put("zen_mode", false)
+        val root = compose.onNodeWithTag("workspace")
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
+        fun settle() { compose.waitForIdle(); SystemClock.sleep(180); compose.waitForIdle() }
+        fun hover(point: androidx.compose.ui.geometry.Offset, tool: Int, eventAction: Int = MotionEvent.ACTION_HOVER_MOVE) {
+            if (tool == MotionEvent.TOOL_TYPE_MOUSE) {
+                root.performMouseInput { if (eventAction == MotionEvent.ACTION_HOVER_EXIT) exit() else moveTo(point) }
+            } else {
+                val window = root.fetchSemanticsNode().positionInWindow + point
+                instrumentation.runOnMainSync {
+                    val coords = MotionEvent.PointerCoords().apply { x = window.x; y = window.y }
+                    val props = MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
+                    val time = SystemClock.uptimeMillis()
+                    val event = MotionEvent.obtain(time, time, eventAction, 1, arrayOf(props), arrayOf(coords), 0, 0, 1f, 1f, 1, 0, InputDevice.SOURCE_STYLUS, 0)
+                    try { compose.activity.window.decorView.dispatchGenericMotionEvent(event) }
+                    finally { event.recycle() }
+                }
+            }
+            settle()
+        }
+        for (theme in listOf("light", "dark")) for (placement in listOf("docked", "floating", "drawer")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "restore_workspace", "workspace" to fixture))
+            if (placement == "floating") {
+                action(obj("type" to "move_group", "group" to 41,
+                    "target" to obj("kind" to "float", "position" to JSONArray(listOf(350, 240))), "viewport" to viewport()))
+            } else if (placement == "drawer") {
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                compose.onNodeWithTag("column-icon-brushes").performTouchInput { click() }
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-header-41").fetchSemanticsNodes().isNotEmpty() }
+            }
+            settle()
+            val header = if (placement == "drawer") "column-drawer-header-41" else "group-header-41"
+            val tab = if (placement == "drawer") "drawer-tab-" else "tab-"
+            val grip = bounds(if (placement == "drawer") "column-drawer-grip-41" else "group-grip-41")
+            val away = root.fetchSemanticsNode().boundsInRoot.let { androidx.compose.ui.geometry.Offset(it.width * .7f, it.height * .8f) }
+            val points = listOf("active" to bounds("${tab}brushes").center, "inactive" to bounds("${tab}sizes").center,
+                "empty" to androidx.compose.ui.geometry.Offset(grip.left - 8f, grip.center.y), "grip" to grip.center)
+            for (tool in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+                hover(away, tool, MotionEvent.ACTION_HOVER_ENTER)
+                // Prove each native hover stream reaches Compose, and that the
+                // suppression stays scoped to panel headers, not other controls.
+                val menu = compose.onNodeWithTag("application-menu-file")
+                val menuBefore = menu.captureToImage().toPixelMap()
+                hover(bounds("application-menu-file").center, tool)
+                val menuHovered = menu.captureToImage().toPixelMap()
+                assertTrue("$tool hover still highlights ordinary controls", (0 until menuBefore.height).any { y ->
+                    (0 until menuBefore.width).any { x -> menuBefore[x, y] != menuHovered[x, y] }
+                })
+                hover(away, tool)
+                val baseline = compose.onNodeWithTag(header).captureToImage().toPixelMap()
+                for ((part, point) in points) {
+                    hover(point, tool)
+                    val actual = compose.onNodeWithTag(header).captureToImage().toPixelMap()
+                    var changed = 0
+                    for (y in 0 until baseline.height) for (x in 0 until baseline.width) {
+                        if (baseline[x, y] != actual[x, y]) changed++
+                    }
+                    if (changed > 0 || (tool == MotionEvent.TOOL_TYPE_MOUSE && part == "active")) {
+                        capture("panel-header-hover-$theme-$placement-$tool-$part")
+                    }
+                    assertEquals("$theme $placement $tool $part hover must leave header pixels unchanged", 0, changed)
+                }
+                hover(away, tool, MotionEvent.ACTION_HOVER_EXIT)
+            }
+        }
+    }
+
     @Test fun columnDrawersUseNativeMouseAndTouchDrag() {
         val fixture = JSONObject(defaultWorkspace)
         fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id, "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")

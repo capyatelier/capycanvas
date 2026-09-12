@@ -335,7 +335,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                         }
                         Box {
                             Box(Modifier.height(36.dp).testTag("application-menu-$id").clip(RoundedCornerShape(6.dp)).background(colors.surround)
-                                .clickable { open = true }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                                .clickable { open = true }.padding(horizontal = HeaderTextPadding), contentAlignment = Alignment.Center) {
                                 Text(menu.getString("label"), fontWeight = FontWeight.Bold)
                             }
                             if (open) model?.let { WorkspaceMenu(host, it) { open = false } }
@@ -345,7 +345,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
             if (showTitle) state.array("tabs").optJSONObject(0)?.let { tab ->
                 Text("${tab.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${tab.optInt("width")} × ${tab.optInt("height")}",
-                    Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = 12.dp),
+                    Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = HeaderTextPadding),
                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Android always uses an immersive fullscreen workspace.
@@ -381,45 +381,47 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     }
     Surface(modifier, color = colors.panel) {
         Column {
-            if (tabsVisible) Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
-                .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                    onDoubleClick = { dock.doubleClickHandle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
-                    group.array("panels").values().forEachIndexed { index, id ->
-                        val p = panels[id.toString()] ?: return@forEachIndexed
-                        val selected = id == active
-                        val content = p.getJSONObject("tab")
-                        val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id))
-                            .onGloballyPositioned { coords ->
-                                val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
-                                // Contact handling needs the panel ID as well as the drop-target geometry.
-                                dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
-                                    "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
-                            }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier).zIndex(if (selected) 1f else 0f)
-                            .drawBehind {
-                                if (selected) {
-                                    val r = 6.dp.toPx(); val w = size.width; val h = size.height
-                                    val path = Path().apply {
-                                        moveTo(r, 0f); lineTo(w-r, 0f); quadraticTo(w, 0f, w, r)
-                                        lineTo(w, h-r); quadraticTo(w, h, w+r, h)
-                                        lineTo(-r, h); quadraticTo(0f, h, 0f, h-r)
-                                        lineTo(0f, r); quadraticTo(0f, 0f, r, 0f); close()
+            if (tabsVisible) PanelHeaderFeedback {
+                Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
+                    .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
+                        onDoubleClick = { dock.doubleClickHandle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
+                        group.array("panels").values().forEachIndexed { index, id ->
+                            val p = panels[id.toString()] ?: return@forEachIndexed
+                            val selected = id == active
+                            val content = p.getJSONObject("tab")
+                            val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id))
+                                .onGloballyPositioned { coords ->
+                                    val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
+                                    // Contact handling needs the panel ID as well as the drop-target geometry.
+                                    dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
+                                        "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
+                                }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier).zIndex(if (selected) 1f else 0f)
+                                .drawBehind {
+                                    if (selected) {
+                                        val r = 6.dp.toPx(); val w = size.width; val h = size.height
+                                        val path = Path().apply {
+                                            moveTo(r, 0f); lineTo(w-r, 0f); quadraticTo(w, 0f, w, r)
+                                            lineTo(w, h-r); quadraticTo(w, h, w+r, h)
+                                            lineTo(-r, h); quadraticTo(0f, h, 0f, h-r)
+                                            lineTo(0f, r); quadraticTo(0f, 0f, r, 0f); close()
+                                        }
+                                        drawPath(path, colors.panel)
                                     }
-                                    drawPath(path, colors.panel)
                                 }
+                                .combinedClickable(onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to id)) },
+                                    onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 8.dp)
+                            Row(tab, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
+                                if (content.getBoolean("show_icon")) SharedIcon(p.getString("icon"), if (content.getBoolean("show_name")) null else p.getString("title"), Modifier.testTag("tab-icon-$id"))
+                                if (content.getBoolean("show_name")) Text(p.getString("title"), Modifier.testTag("tab-name-$id"), fontWeight = FontWeight.Bold)
                             }
-                            .combinedClickable(onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to id)) },
-                                onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 8.dp)
-                        Row(tab, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
-                            if (content.getBoolean("show_icon")) SharedIcon(p.getString("icon"), if (content.getBoolean("show_name")) null else p.getString("title"), Modifier.testTag("tab-icon-$id"))
-                            if (content.getBoolean("show_name")) Text(p.getString("title"), Modifier.testTag("tab-name-$id"), fontWeight = FontWeight.Bold)
                         }
                     }
+                    Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
+                        .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
+                            onDoubleClick = { dock.doubleClickHandle(groupItem) },
+                            onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
                 }
-                Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
-                    .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                        onDoubleClick = { dock.doubleClickHandle(groupItem) },
-                        onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
             }
             Box(Modifier.weight(1f)) {
                 if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")

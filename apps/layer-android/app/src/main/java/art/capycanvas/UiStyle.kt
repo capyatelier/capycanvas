@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -84,6 +85,22 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
 }
 internal val LocalPalette = staticCompositionLocalOf<Palette> { error("Missing core palette") }
 internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Missing native host") }
+internal val HeaderTextPadding = 6.dp
+
+/** Nested tab/header click handlers otherwise stack Material's hover tint over
+ * our tab shapes. Keep press and keyboard-focus feedback, including in drawers. */
+@Composable internal fun PanelHeaderFeedback(content: @Composable () -> Unit) {
+    val inherited = LocalRippleConfiguration.current
+    val configuration = remember(inherited) {
+        inherited?.let {
+            val alpha = it.rippleAlpha ?: RippleDefaults.RippleAlpha
+            RippleConfiguration(color = it.color, rippleAlpha = RippleAlpha(
+                draggedAlpha = alpha.draggedAlpha, focusedAlpha = alpha.focusedAlpha,
+                hoveredAlpha = 0f, pressedAlpha = alpha.pressedAlpha))
+        }
+    }
+    CompositionLocalProvider(LocalRippleConfiguration provides configuration, content = content)
+}
 
 /** Editing/composition is native widget state. Rust remains authoritative for
  * accepted values, but an asynchronous acknowledgement must not reset an IME's
