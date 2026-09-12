@@ -242,41 +242,28 @@ impl NativeWorkspaces {
             A::Delete(id) => {
                 let stored = self.selected(&id).await?;
                 let active = manager.active_id().as_deref() == Some(&id);
-                let mut replacement = None;
-                if active {
-                    let choices: Vec<_> = manager
-                        .items()
-                        .into_iter()
-                        .filter(|i| {
-                            i.id != id
-                                && i.metadata.kind == ItemKind::Workspace
-                                && i.metadata.deleted_at_ms.is_none()
-                        })
-                        .map(|i| (i.id, i.metadata.name))
-                        .collect();
-                    if !choices.is_empty() {
-                        let Some(id) = dialog::choice_dialog(
-                            w,
-                            "Switch Before Deleting",
-                            "Choose which workspace to use after deleting this one.",
-                            "Continue",
-                            &choices,
-                        )
-                        .await
-                        else {
-                            return Ok(());
-                        };
-                        replacement = Some(id);
-                    }
-                }
+                let replacement = if active {
+                    manager.refresh().await?;
+                    let items = manager.items();
+                    let now = now_ms();
+                    // Prefer Illustrator, then another available built-in workspace.
+                    let replacement = [1, 0, 2].into_iter().find_map(|index| {
+                        let default_id = layer_workspace::DEFAULT_WORKSPACES[index].0;
+                        let item = items.iter().find(|item| item.id == default_id)?;
+                        let available = item.id != id
+                            && item.metadata.deleted_at_ms.is_none()
+                            && !item.claim.as_ref().is_some_and(|claim| {
+                                claim.owner != manager.owner && claim.expires_at_ms > now
+                            });
+                        available.then(|| item.id.clone())
+                    }).ok_or_else(|| StoreError::invalid("All default workspaces are open in other windows. Close one of those windows before deleting this workspace."))?;
+                    Some(replacement)
+                } else {
+                    None
+                };
                 let message = format!(
-                    "Delete “{}”?{}",
-                    stored.entity.metadata.name,
-                    if active && replacement.is_none() {
-                        " You’ll switch to a new default workspace."
-                    } else {
-                        ""
-                    }
+                    "Delete “{}”? This is permanent.",
+                    stored.entity.metadata.name
                 );
                 if !dialog::confirm(w, "Delete", &message, "Delete", true).await {
                     return Ok(());

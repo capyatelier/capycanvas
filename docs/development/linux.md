@@ -80,3 +80,35 @@ The [testing guide](testing.md) lists GTK interaction and shared-engine checks.
 The [UI implementation record](../history/ui-implementation.md) and
 [Wayland feasibility record](../history/wayland-subsurface-feasibility.md) explain
 past integration decisions and measurements.
+
+### Focused UI debugging
+
+Run from the repository root in a Wayland session. Use fresh storage for each
+test process so workspace and settings tests cannot change your normal setup:
+
+```bash
+gtk_test_dir=$(mktemp -d)
+CAPY_WORKSPACE_DIR="$gtk_test_dir/workspaces" \
+LAYER_SETTINGS_FILE="$gtk_test_dir/settings.json" \
+GDK_BACKEND=wayland GSK_RENDERER=vulkan G_DEBUG=fatal-criticals RUST_BACKTRACE=1 \
+  cargo test --locked --release -p layer-linux \
+  workspace::tests::workspace_switcher_tests::native_active_workspace_delete \
+  -- --ignored --exact --test-threads=1 --nocapture >"$gtk_test_dir/test.log" 2>&1
+cat "$gtk_test_dir/test.log"
+```
+
+Find related cases in [tests.rs](../../apps/layer-linux/src/tests.rs) and its
+test modules, including [workspace_switcher_tests.rs](../../apps/layer-linux/src/workspace_switcher_tests.rs).
+Reuse `native_test_app`, widget lookup helpers and `pump` to exercise actual GTK
+dialogs; wait for workspace readiness and operation completion before assertions.
+Persistence cases should verify reopening as well as the visible rows.
+
+For real pointer/hold/drag delivery, use
+`bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.
+That [runner](../../tools/performance/workspace-motion.sh) provides an isolated
+D-Bus session, private Wayland runtime, temporary storage and log paths; it needs
+Mutter with headless support, GJS and PipeWire in addition to the prerequisites
+above. Its compositor setup can also wrap a focused Cargo test like the one above.
+Headless Mutter still needs a working Vulkan GPU. Keep native input injection on
+that private display; the [input driver](../../apps/layer-linux/bench/native-input.js)
+must not control an ordinary desktop session.

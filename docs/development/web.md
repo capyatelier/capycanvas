@@ -79,7 +79,8 @@ establish complete editor parity or hardware performance.
 
 ## Debug headless Chrome
 
-With the development server running in another terminal and Node.js 22 or newer:
+Run from the repository root with the development server in another terminal,
+Node.js 22 or newer, and Chrome/Chromium:
 
 ```bash
 LAYER_TEST_VERBOSE=1 LAYER_TEST_ARTIFACTS=artifacts/web-debug \
@@ -87,20 +88,30 @@ LAYER_TEST_VERBOSE=1 LAYER_TEST_ARTIFACTS=artifacts/web-debug \
 ```
 
 Select one scenario per run; other useful selectors are `--drawer-style`,
-`--drag-pickup`, `--workspace-manager` and `--workspace-switcher`. See the dispatch
+`--drag-pickup`, `--workspace-manager`, `--workspace-switcher` and `--workspace-focus`. See the dispatch
 in [`test.mjs`](../../apps/layer-web/test.mjs) for the full list. It launches Chrome
 with a temporary profile, uses Chrome DevTools Protocol (CDP) over
 `--remote-debugging-pipe`, and removes the profile afterward. It does not expose a
-TCP debugging port or rebuild the app. Verbose mode prints browser diagnostics;
-scenario-specific screenshots go to `LAYER_TEST_ARTIFACTS` when supported.
+TCP debugging port or require Playwright. Rebuild with
+`bash apps/layer-web/build.sh` after Rust changes; the test does not build. The
+runner waits for Wasm/WebGPU and workspace readiness. Verbose mode prints browser
+diagnostics; scenario-specific screenshots go to `LAYER_TEST_ARTIFACTS` when supported.
 
+Follow [workspace-manager.test.mjs](../../apps/layer-web/workspace-manager.test.mjs)
+and [workspace-switcher.test.mjs](../../apps/layer-web/workspace-switcher.test.mjs)
+for DOM queries, pointer input, state checks and reload assertions. Wait for
+operations to finish and check rendered controls as well as stored state.
 Reuse the runner's `call`, `evaluate` and `settle` helpers for CDP input,
 `Runtime.evaluate` and `Page.captureScreenshot`. Useful page expressions are
 `layerApp.state()`, `JSON.parse(layerApp.app.workspace_view())` and
-`layerApp.startupTimes`; check `#gpu-notice` if startup never completes. Preserve
-hardware WebGPU when diagnosing failures. For Linux window/focus checks that need
-headed Chrome, [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh)
-can run it inside an isolated Mutter compositor; see that script's prerequisites.
+`layerApp.startupTimes`; check `#gpu-notice` if startup never completes.
+
+On failure the runner attempts to save `artifacts/ui/web-failure.png` and prints
+page errors and GPU diagnostics. Check those when a headless run has a blank
+canvas or cannot start WebGPU; hardware WebGPU remains required. On Linux, compare
+with headed Chrome inside an isolated Mutter compositor using
+`bash tools/performance/workspace-motion.sh web --workspace-manager`; see the
+[Linux guide](linux.md#focused-ui-debugging) for that runner's dependencies.
 
 ## Test and debug Web on Android
 
