@@ -5,10 +5,9 @@ import SwiftUI
 
 @main struct WorkspaceDrawerChecks {
     @MainActor static func main() async throws {
-        setenv("CAPY_DISABLE_PERSISTENCE", "1", 1)
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
-        let store = EditorStore(platform: 1)
+        let store = EditorStore(platform: 1, persistence: EditorPersistence(root: nil))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 870),
             styleMask: [.borderless], backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false

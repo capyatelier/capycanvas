@@ -70,6 +70,75 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Shared Apple tab dragging — 2026-09-11
+
+Both Apple editors use the shared frozen tab-drag policy. Native headers capture
+complete natural tab widths and the visible strip before dragging; Rust returns
+the source position, neighbor offsets, insertion target and final release slot.
+Visual copies move independently of the original input rectangles. Neighbors
+use the web editor's 120 ms easing and respect Reduce Motion; the source follows
+without easing. Owner acknowledgements retire completed previews, and gesture
+tokens prevent an earlier cancellation from clearing a newer drag. Continuous
+motion retains the latest completed preview while a newer query is in flight.
+
+Docked and floating headers now scroll their natural-width labels, matching the
+drawer behavior. Icon-only tabs are 36 points wide. Selected tabs have the shared
+upper corners and concave lower shoulders; drawer and Navigator headers use the
+reference background. Visual copies retain their own rounded backgrounds and
+remain below the docking indicator, whose color and shape now match the shared
+reference. No platform-specific insertion algorithm is introduced.
+
+The extended workflow reproduced a drawer observation bug: quick Undo/Redo and
+reopening could preserve a drawer view with disabled gesture preferences. Its
+interaction state is now read inside the view that observes that drawer. Direct
+test stores also inject disabled persistence explicitly. Their previous
+environment switch was Debug-only and did not isolate standalone Swift binaries
+from earlier standalone-test preferences.
+
+The direct SwiftUI workflow covers both Apple presets, both themes and docked
+and drawer tabs: clipped natural geometry, unchanged hit rectangles during
+animation, halfway reversal, release between move events, exact workspace
+Undo/Redo, cancellation/restart and icon-only widths. It renders the actual
+compiled vector assets in an invisible AppKit host. Matching Chrome fixtures use
+the live web editor, real pointer events and committed workspace state. These
+component captures supplement physical and full-editor acceptance; an AppKit
+rendering of the iPad preset does not establish UIKit pixel parity. The focused
+iPad Simulator drawer workflow passed real touch reordering, tear-off, docking
+back and moving the whole group. It precedes the final cosmetic changes.
+
+Final integrated validation passes 315 Rust checks (35 Apple, 20 host, 260 UI;
+one existing hardware-only host check remains ignored), all eight direct SwiftUI
+tab cases and all eight Chrome pointer cases. The existing direct drawer,
+document and window-presentation checks also pass with explicit isolated storage.
+Both final Release targets build. The signed iPad app installs and both final
+apps complete a brief isolated ink drawing smoke check, including its postlude,
+with no renderer errors or rejected input. The one-second measured intervals
+have no missing or zero-time presentations. These checks establish startup and
+drawing, not sustained performance acceptance. Owned smoke editors are closed;
+the artist's existing Mac and iPad app processes are preserved.
+
+All 16 final before/drag tab-strip comparisons have identical clip rectangles
+and a maximum native/Chrome tab-rectangle difference of 0.6875 logical pixels.
+Exact sRGB comparisons still fail: 6.8585–8.0605% of pixels differ across the
+cases, including text, subpixel geometry and edge rasterization. No pixel masks,
+resampling or relaxed acceptance threshold are used. Full raw differences,
+overlays, heatmaps and per-case reports remain in ignored artifacts; these
+component results do not close the full-editor visual gate.
+
+Incoming shared changes through `c3840f5` are integrated. Apple uses its shared
+`BeginTabDrag` action. The compatibility snapshot transport remains in use;
+migration to incremental `workspace_update` publication remains a performance
+task. The final integrated Release builds, direct interaction checks and isolated
+ink smoke checks are repeated after this last merge. Automatic native panel
+measurement/fitting remains a parity gap; the clipped-tab comparison deliberately
+uses an explicitly resized column in both hosts. Incoming workspace-management
+and long-press continuation workflows still require Apple implementation and
+acceptance. Full UI/visual parity, physical input/lifecycle coverage, filter
+references and sustained 90 Hz Mac / 120 Hz iPad performance remain open.
+Mac 120 Hz is deferred. Raw logs, captures and private platform details stay in
+ignored artifacts. Reproduction commands are in the
+[tab comparison guide](../../tools/visual/README.md#workspace-tabs).
+
 ## Shared native snapshot observation — 2026-09-11
 
 Both Apple editors now observe individual snapshot fields and indexed command,

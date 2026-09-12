@@ -43,10 +43,12 @@ import AppKit
         }
     }
     @MainActor static func main() async throws {
-        setenv("CAPY_DISABLE_PERSISTENCE", "1", 1)
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
-        let mac = EditorStore(platform: 1), otherMac = EditorStore(platform: 1), ipad = EditorStore(platform: 0)
+        let persistence = EditorPersistence(root: nil)
+        let mac = EditorStore(platform: 1, persistence: persistence)
+        let otherMac = EditorStore(platform: 1, persistence: persistence)
+        let ipad = EditorStore(platform: 0, persistence: persistence)
         for store in [mac, otherMac, ipad] {
             try await wait("Initial editor state") { !store.state.isNull }
         }

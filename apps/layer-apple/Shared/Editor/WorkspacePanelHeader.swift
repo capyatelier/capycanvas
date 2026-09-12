@@ -10,38 +10,78 @@ struct WorkspacePanelHeader: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         HStack(spacing: 0) {
-            if drawer {
-                GeometryReader { viewport in
-                    ScrollView(.horizontal) { HStack(spacing: 0) { tabs } }
-                        .scrollIndicators(.hidden)
-                        .environment(\.workspaceClip, viewport.frame(in: .named("editor-workspace")).intersection(clip))
-                }
-            } else {
-                tabs
-                Spacer(minLength: 0)
+            GeometryReader { viewport in
+                ScrollView(.horizontal) { HStack(spacing: 0) { tabs } }
+                    .scrollIndicators(.hidden)
+                    .scrollDisabled(store.workspace.tabSlide.grab != nil)
+                    .environment(\.workspaceClip, viewport.frame(in: .named("editor-workspace")).intersection(clip))
+                    .clipped()
             }
             WorkspaceGroupGrip(store: store, group: group["id"], drawer: drawer).frame(width: 20, height: 36)
-        }.frame(height: 36).background(palette["tabbar"])
+        }.frame(height: 36).background(palette[drawer || group["active"].string == "navigator" ? "panel" : "tabbar"])
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw])))
     }
-    @ViewBuilder private var tabs: some View {
+    private var tabs: some View {
+        WorkspacePanelTabs(store: store, slide: store.workspace.tabSlide, group: group, drawer: drawer)
+    }
+}
+
+private struct WorkspacePanelTabs: View {
+    @ObservedObject var store: EditorStore
+    let slide: WorkspaceTabSlide
+    let group: JSON
+    let drawer: Bool
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    var body: some View {
         ForEach(group["panels"].array.indices, id: \.self) { index in
             let tab = store.panel(group["panels"][index].string)
             let selected = tab["id"].string == group["active"].string
             Button { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) } label: {
-                HStack(spacing: 6) {
-                    if tab["tab"]["show_icon"].bool { SharedIcon(name: tab["icon"].string) }
-                    if tab["tab"]["show_name"].bool { Text(tab["title"].string).fontWeight(.bold).lineLimit(1) }
-                }.padding(.horizontal, 8).frame(height: 36)
-                    .background(selected ? palette["panel"] : Color.clear)
-                    .contentShape(Rectangle())
+                WorkspaceTabLabel(tab: tab, selected: selected, palette: palette).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(tab["title"].string)
                 .accessibilityIdentifier((drawer ? "drawer-tab-" : "panel-tab-") + tab["id"].string)
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .modifier(WorkspaceContext(store: store, target: JSON(["kind": "panel", "panel": tab["id"].raw])))
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": tab["id"].raw])))
                 .modifier(WorkspaceTabMeasurement(group: group["id"].uint, index: index))
+                .zIndex(selected ? 1 : 0)
+                .opacity(slide.grab?.group == group["id"].uint && !slide.preview.isNull ? 0 : 1)
         }
+    }
+}
+
+struct WorkspaceTabLabel: View {
+    let tab: JSON
+    let selected: Bool
+    let palette: EditorPalette
+    var body: some View {
+        HStack(spacing: 6) {
+            if tab["tab"]["show_icon"].bool { SharedIcon(name: tab["icon"].string) }
+            if tab["tab"]["show_name"].bool { Text(tab["title"].string).fontWeight(.bold).lineLimit(1) }
+        }.padding(.horizontal, 8)
+            .frame(width: tab["tab"]["show_name"].bool ? nil : 36, height: 36)
+            .fixedSize(horizontal: true, vertical: false)
+            .background { if selected { WorkspaceTabShape().fill(palette["panel"]) } }
+    }
+}
+
+/// The shared tab silhouette: round upper corners and concave lower shoulders.
+/// The shoulders extend into adjacent slots; the strip clips its outer edges.
+private struct WorkspaceTabShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let r: CGFloat = 6, w = rect.width, h = rect.height
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: h - r))
+        path.addLine(to: CGPoint(x: 0, y: r))
+        path.addArc(center: CGPoint(x: r, y: r), radius: r, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        path.addLine(to: CGPoint(x: w - r, y: 0))
+        path.addArc(center: CGPoint(x: w - r, y: r), radius: r, startAngle: .degrees(270), endAngle: .degrees(360), clockwise: false)
+        path.addLine(to: CGPoint(x: w, y: h - r))
+        path.addArc(center: CGPoint(x: w + r, y: h - r), radius: r, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
+        path.addLine(to: CGPoint(x: -r, y: h))
+        path.addArc(center: CGPoint(x: -r, y: h - r), radius: r, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
+        path.closeSubpath()
+        return path.offsetBy(dx: rect.minX, dy: rect.minY)
     }
 }
 
@@ -66,9 +106,12 @@ private struct WorkspaceTabMeasurement: ViewModifier {
     @Environment(\.workspaceGesturesEnabled) private var enabled
     func body(content: Content) -> some View {
         content.background(GeometryReader { allocation in
-            let bounds = allocation.frame(in: .named("editor-workspace")).intersection(clip)
+            let full = allocation.frame(in: .named("editor-workspace"))
+            let bounds = full.intersection(clip)
             Color.clear.preference(key: WorkspaceTabs.self,
                 value: enabled && !bounds.isEmpty ? ["\(group):\(index)": bounds] : [:])
+                .preference(key: WorkspaceTabFrames.self,
+                    value: enabled && !full.isEmpty ? ["\(group):\(index)": WorkspaceTabFrame(bounds: full, clip: clip)] : [:])
         })
     }
 }

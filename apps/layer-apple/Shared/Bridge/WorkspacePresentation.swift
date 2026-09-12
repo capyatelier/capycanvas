@@ -5,6 +5,8 @@ import SwiftUI
 @MainActor final class WorkspacePresentation: ObservableObject {
     @Published private(set) var expansion = JSON()
     @Published private(set) var dropHint = JSON()
+    let tabSlide = WorkspaceTabSlide()
+    var tabFrames: [String: WorkspaceTabFrame] = [:]
     private weak var store: EditorStore?
     private var shownPanel: String?
     private var configurationHeight = 0.0
@@ -21,6 +23,7 @@ import SwiftUI
         var released = false
     }
     private var drag: Drag?
+    private var tabSlideToken: UUID?
     private var queryingDrop = false
     init(store: EditorStore) { self.store = store }
     func refresh() {
@@ -106,25 +109,55 @@ import SwiftUI
     // native placement/drawing; keep every DragWorkspace phase and Rust history.
     private func send(_ operation: Drag, phase: String) {
         guard operation.item["kind"].string != "tile", let store else { return }
+        var action: [String: Any]
         if !operation.item["type"].isNull {
-            var action = operation.item.object
-            action["phase"] = phase; action["position"] = [operation.point.x, operation.point.y]
-            action["viewport"] = store.snapshot["layout"]["viewport"].raw
-            store.dispatch(action); return
+            action = operation.item.object
+        } else {
+            action = ["type": "drag_workspace", "item": operation.item.raw, "tabs": tabs.map(\.raw)]
         }
-        store.dispatch(["type": "drag_workspace", "item": operation.item.raw, "phase": phase,
-            "position": [operation.point.x, operation.point.y], "viewport": store.snapshot["layout"]["viewport"].raw,
-            "tabs": tabs.map(\.raw)])
+        action["phase"] = phase; action["position"] = [operation.point.x, operation.point.y]
+        action["viewport"] = store.snapshot["layout"]["viewport"].raw
+        if phase == "up" || phase == "cancel" {
+            store.edit(action) { [weak self] error in
+                if let error { store.failure = error }
+                // Retire the visual with the committed layout, and never let an
+                // earlier completion erase a subsequently started gesture.
+                guard let self, self.tabSlideToken == operation.token else { return }
+                self.tabSlideToken = nil; self.tabSlide.clear()
+            }
+        } else {
+            store.dispatch(action)
+        }
     }
     func start(_ item: JSON, point: CGPoint) {
         if let drag { cancel(drag.item) }
         store?.contentDrawers.prepareDrag()
+        let tabGrab = grabTab(item, at: point)
         let operation = Drag(item: item, point: point); drag = operation
+        tabSlideToken = operation.token
         if item["kind"].string != "tile" {
             animation?.cancel(); animation = nil; expansion = JSON(); shownPanel = nil; geometryKey = ""
         }
         send(operation, phase: "down")
+        tabSlide.begin(tabGrab)
+        // The serial owner applies down before capturing its shared tab policy,
+        // and applies this capture before any subsequent move or release.
+        if let tabGrab { store?.dispatch(tabGrab.action) }
         refreshChrome()
+    }
+    private func grabTab(_ item: JSON, at point: CGPoint) -> WorkspaceTabSlide.Grab? {
+        guard item["kind"].string == "panel", let store else { return nil }
+        let groups = store.snapshot["layout"]["groups"].array
+            + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
+        guard let group = groups.first(where: { $0["panels"].array.contains { $0.string == item["panel"].string } }),
+            let source = group["panels"].array.firstIndex(where: { $0.string == item["panel"].string }) else { return nil }
+        let id = group["id"].uint
+        let frames = group["panels"].array.indices.compactMap { tabFrames["\(id):\($0)"] }
+        guard frames.count == group["panels"].array.count, frames.indices.contains(source),
+            frames[source].bounds.intersection(frames[source].clip).contains(point),
+            !frames[source].clip.isEmpty, !frames[source].clip.isInfinite else { return nil }
+        return WorkspaceTabSlide.Grab(group: id, source: source, frames: frames, clip: frames[source].clip,
+            panels: group["panels"].array.map { store.panel($0.string) }, active: group["active"].string)
     }
     func move(_ item: JSON, point: CGPoint, released: Bool = false) {
         guard drag?.item.stableKey == item.stableKey else { return }
@@ -138,23 +171,31 @@ import SwiftUI
     func cancel(_ item: JSON) {
         if let current = drag, current.item.stableKey == item.stableKey {
             send(current, phase: "cancel"); drag = nil; dropHint = JSON()
+            if current.item["kind"].string == "tile" { tabSlideToken = nil; tabSlide.clear() }
             refreshChrome()
         }
     }
     private func queryDrop() {
         guard let store, let request = drag, request.item["type"].isNull, !queryingDrop else { return }
         queryingDrop = true
-        store.query(["type": "drop", "item": request.item.raw,
+        store.query(["type": "workspace_drag_preview", "item": request.item.raw,
             "position": [request.point.x, request.point.y], "tabs": tabs.map(\.raw), "expansion": expansion.raw]) { [weak self] result in
             guard let self else { return }
             self.queryingDrop = false
             guard let current = self.drag, current.token == request.token else { self.queryDrop(); return }
-            guard current.point == request.point else { self.queryDrop(); return }
+            let hint = result["drop"]
             if current.released {
-                self.drag = nil; self.dropHint = JSON()
+                guard current.point == request.point else { self.queryDrop(); return }
+                self.drag = nil; self.dropHint = JSON(); self.tabSlide.clear()
                 self.refreshChrome()
-                if !result["action"].isNull { store.dispatch(result["action"]) }
-            } else { self.dropHint = result }
+                if !hint["action"].isNull { store.dispatch(hint["action"]) }
+            } else {
+                self.tabSlide.receive(result["tab"])
+                self.dropHint = hint
+                // Keep the latest completed visual while chasing newer input.
+                // Discarding every in-flight reply can starve a continuous drag.
+                if current.point != request.point { self.queryDrop() }
+            }
         }
     }
 }

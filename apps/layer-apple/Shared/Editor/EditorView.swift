@@ -77,6 +77,7 @@ struct EditorView<Canvas: View>: View {
                 return JSON(["group": parts[0], "index": parts[1], "bounds": ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]])
             }
         }
+        .onPreferenceChange(WorkspaceTabFrames.self) { store.workspace.tabFrames = $0 }
         .ignoresSafeArea().foregroundStyle(palette["text"])
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255))

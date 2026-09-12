@@ -577,6 +577,13 @@ impl NativeHost {
             PanelHandleTarget {
                 item: layer_ui::DockItem,
             },
+            WorkspaceDragPreview {
+                position: [f32; 2],
+                tabs: Vec<layer_ui::TabHit>,
+                item: layer_ui::DockItem,
+                #[serde(default)]
+                expansion: Option<layer_ui::PanelExpansion>,
+            },
             Drop {
                 position: [f32; 2],
                 tabs: Vec<layer_ui::TabHit>,
@@ -679,25 +686,21 @@ impl NativeHost {
                         .panel_handle_target(item)
                 )
             }
+            Query::WorkspaceDragPreview {
+                position,
+                tabs,
+                item,
+                expansion,
+            } => {
+                let drop = self.workspace_drop(position, &tabs, item, expansion);
+                json!({"drop": drop, "tab": self.session.tab_drag_preview(position)})
+            }
             Query::Drop {
                 position,
                 tabs,
                 item,
                 expansion,
-            } => self
-                .session
-                .drop_hint(self.logical, position, &tabs, item, expansion)
-                .map_or(Value::Null, |hint| {
-                    let action = item.move_action(hint.target.clone(), self.logical);
-                    let mut value = json!(hint);
-                    // Panel/group gestures use DragWorkspace for live movement,
-                    // grab offsets and one history transaction. Tile drops apply
-                    // a single action after their final preview has resolved.
-                    if matches!(item, layer_ui::DockItem::Tile { .. }) {
-                        value["action"] = json!(action);
-                    }
-                    value
-                }),
+            } => self.workspace_drop(position, &tabs, item, expansion),
             Query::Drawer {
                 column,
                 heights,
@@ -806,6 +809,27 @@ impl NativeHost {
             }
         };
         Ok(result)
+    }
+
+    fn workspace_drop(
+        &self,
+        position: [f32; 2],
+        tabs: &[layer_ui::TabHit],
+        item: layer_ui::DockItem,
+        expansion: Option<layer_ui::PanelExpansion>,
+    ) -> Value {
+        self.session
+            .drop_hint(self.logical, position, tabs, item, expansion)
+            .map_or(Value::Null, |hint| {
+                let action = item.move_action(hint.target.clone(), self.logical);
+                let mut value = json!(hint);
+                // Panel/group gestures commit through DragWorkspace, preserving
+                // grab offsets and one history transaction. Tiles apply an action.
+                if matches!(item, layer_ui::DockItem::Tile { .. }) {
+                    value["action"] = json!(action);
+                }
+                value
+            })
     }
 }
 

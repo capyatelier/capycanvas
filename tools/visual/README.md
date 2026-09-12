@@ -37,6 +37,47 @@ layer thumbnail pixels and layout. GPU attachment alone can precede the actual
 preview readbacks; a fixed delay is insufficient for a settled reference.
 The native scenario must use the same theme, document, workspace and camera.
 
+## Workspace tabs
+
+The direct Apple check runs the real shared SwiftUI headers and Rust owner in
+an invisible AppKit host, once for each Apple preset, theme and docked/drawer
+presentation. It checks natural clipped widths, frozen input rectangles,
+halfway reversal, release between move events, Undo/Redo, cancellation followed
+by a new gesture, and icon-only sizing. Every store injects disabled persistence;
+the check does not depend on Debug-only environment overrides. Optional captures
+use the built app's actual compiled vector assets in a temporary bundle:
+
+```sh
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/PerformanceMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_TAB_CAPTURE_DIRECTORY="$PWD/artifacts/apple-tabs" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-tabs.swift
+node tools/visual/chrome-capture.mjs 1200 870 2 artifacts/apple-tabs light workspace-tabs \
+  artifacts/apple-tabs/native-0-docked-light-before.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-tabs/web-0-docked-light-drag.png \
+  artifacts/apple-tabs/native-0-docked-light-drag.png --output artifacts/apple-tabs/diff-0-docked-light-drag
+```
+
+Use preset `1` for Mac, `drawer` for collapsed-column tabs, and `dark` for the
+second theme. Pair both `before` and `drag` images. The fixture restores exactly
+the same workspace in Chrome and records each host's full natural tab rectangles,
+visible strip, scale and preview. It deliberately resizes the column through an
+editor action so the last tab clips in both hosts. This tests manually sized
+strips; Apple automatic panel measurement/fitting remains a separate parity gap.
+Chrome uses real pointer events and checks the committed layout. The native
+fixture calls the shared gesture adapter directly; it does not establish UIKit
+touch routing or hardware rendering. Use the focused `testDrawerDragAndDock`
+workflow for native gesture coverage.
+
+Each image contains the complete measured tab strip, including clipping,
+backgrounds and the docking indicator. Differences are retained without masks or
+resampling. An AppKit rendering of the iPad preset is shared-component evidence,
+not an iPad hardware pixel baseline. All background, geometry and platform
+font/rasterization differences remain visible; exact comparison failure must not
+be described as passed editor parity.
+
+## Full editor captures
+
 For routine Mac visual work, open the built app and capture its frontmost editor
 window directly. This captures the composited Metal canvas and native controls,
 without clicking menus or running an XCTest session:

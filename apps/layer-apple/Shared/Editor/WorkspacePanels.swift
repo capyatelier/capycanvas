@@ -44,14 +44,15 @@ struct WorkspacePanels: View {
                 }
             }
             if !workspace.dropHint.isNull {
-                RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.2))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor, lineWidth: 2))
+                RoundedRectangle(cornerRadius: 2).fill(EditorPalette(source: store.state["palette"]).accent)
+                    .background { RoundedRectangle(cornerRadius: 3).fill(.black.opacity(0.2)).padding(-1) }
                     .placed(workspace.dropHint["bounds"]).allowsHitTesting(false).accessibilityHidden(true)
                     .zIndex(300)
             }
             if store.snapshot["partial_zen"].bool { WorkspaceZenToolbars(store: store) }
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
+            WorkspaceTabSlideOverlay(store: store, slide: workspace.tabSlide).zIndex(250)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .compositingGroup()
             .modifier(WorkspaceRootDrag(workspace: workspace))

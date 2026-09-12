@@ -7,12 +7,13 @@ import { join, resolve, extname, sep, dirname, basename } from 'node:path';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import {captureToolbarFixture} from './toolbar-fixture.mjs';
+import {captureWorkspaceTabs} from './workspace-tabs.mjs';
 const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light', scenario='initial', fixturePath] = process.argv.slice(2);
 const width = Number(widthArg), height = Number(heightArg), scale = Number(scaleArg);
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -71,6 +72,10 @@ try {
     assert.deepEqual(errors,[]);
   } else {
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp&&document.body.dataset.gpu==='ready')resolve(true);else if(performance.now()-start>25000)reject(new Error(document.querySelector('#gpu-notice')?.textContent||'GPU startup timeout'));else setTimeout(check,100);}check();})`);
+  if (scenario === 'workspace-tabs') {
+    await captureWorkspaceTabs({fixture: JSON.parse(await readFile(fixturePath, 'utf8')), output, evaluate, call});
+    assert.deepEqual(errors, []);
+  } else {
   const captures = [];
   for (const selectedTheme of [theme]) {
     await evaluate(`layerApp.dispatch({type:'system_theme_changed',theme:'${selectedTheme}'}); layerApp.dispatch({type:'invoke',command:'fit_canvas'});`);
@@ -113,6 +118,10 @@ try {
   await writeFile(`${output}/chrome-capture.json`,JSON.stringify({scenario,metrics,captures,errors},null,2));
   console.log(JSON.stringify({scenario,metrics,captures,errors},null,2));
   }
+  }
+} catch (error) {
+  if (errors.length) console.error(JSON.stringify({browserExceptions: errors}));
+  throw error;
 } finally {
   const exited = once(chrome,'exit');
   chrome.kill(); await exited;

@@ -55,6 +55,18 @@ compares all five styles with Chrome using actual SwiftUI controls and shared
 vector assets, without launching an editor or automating window/menu controls.
 Component evidence supplements the full-editor visual and physical input gates.
 
+Docked, floating and drawer tab strips use natural label widths, horizontal
+scrolling and the shared 36-point icon-only size. Their moving visual copies use
+Rust's frozen halfway points and clip bounds; native input measurements stay in
+their original slots. Neighbors animate for 120 ms, respecting Reduce Motion.
+Release and cancellation retire the preview after the owner acknowledges the
+layout transaction. A reopened drawer observes its own interaction state, so
+coalesced close/reopen and workspace history cannot leave its gestures disabled.
+The [tab comparison workflow](../../tools/visual/README.md#workspace-tabs) captures
+real shared SwiftUI headers and the corresponding live Chrome editor, without
+system-menu automation. Complete visual and automatic panel-sizing parity remain
+open; this focused workflow does not establish full editor acceptance.
+
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.

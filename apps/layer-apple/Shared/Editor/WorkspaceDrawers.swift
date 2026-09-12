@@ -79,8 +79,6 @@ struct WorkspaceContentDrawers: View {
         ForEach(drawers.items.values.sorted { $0.id < $1.id }) { drawer in
             WorkspaceContentDrawer(store: store, drawer: drawer)
                 .environment(\.workspaceLayer, drawer.id == "tool" ? 220 : 200)
-                .environment(\.workspaceGesturesEnabled, drawer.interactive && !store.snapshot["partial_zen"].bool)
-                .allowsHitTesting(drawer.interactive)
                 .zIndex(drawer.id == "tool" ? 220 : 200)
         }
     }
@@ -131,6 +129,11 @@ private struct WorkspaceContentDrawer: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier(drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id)
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // This view observes the drawer itself. Reading interactive in
+                // the parent list left a reopened drawer with stale disabled
+                // gesture preferences when its identity survived the close.
+                .environment(\.workspaceGesturesEnabled, drawer.interactive && !store.snapshot["partial_zen"].bool)
+                .allowsHitTesting(drawer.interactive)
                 .onPreferenceChange(DrawerHeights.self) { heights in for (column, height) in heights { drawer.measure(height, column: column) } }
         }
     }

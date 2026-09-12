@@ -12,7 +12,6 @@ import ImageIO
         }
     }
     @MainActor static func main() async throws {
-        setenv("CAPY_DISABLE_PERSISTENCE", "1", 1)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-files-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
@@ -35,7 +34,7 @@ import ImageIO
         precondition((try? Data(contentsOf: atomic)) == Data([1,2,3]))
         precondition((try? FileManager.default.contentsOfDirectory(atPath: root.path)) == ["atomic"])
         for platform: UInt32 in [0, 1] {
-            let store = EditorStore(platform: platform)
+            let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
             let target = root.appendingPathComponent("drawing-\(platform).capy")
             let invalid = root.appendingPathComponent("invalid-\(platform).capy")
             try Data("incomplete".utf8).write(to: invalid)

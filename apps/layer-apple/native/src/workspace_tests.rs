@@ -41,6 +41,108 @@ fn menu_action(menu: &Value, operation: &str) -> Value {
 }
 
 #[test]
+fn apple_tab_preview_uses_frozen_geometry_and_commits_the_same_slot() {
+    for platform in [0, 1] {
+        for collapsed in [false, true] {
+            let app = App::new(platform);
+            let group = unsafe { &*app.0 }
+                .host
+                .session
+                .state()
+                .workspace
+                .layout
+                .panel_group(layer_ui::Panel::Brushes)
+                .unwrap();
+            for panel in ["toolbar", "navigator"] {
+                app.action(json!({"type":"move_panel","panel":panel,"target":{"kind":"tab","group":group},"viewport":[1200,900]}));
+            }
+            let bounds = if collapsed {
+                customize(
+                    &app,
+                    json!({"type":"set_column_collapsed","group":group,"collapsed":true}),
+                );
+                customize(
+                    &app,
+                    json!({"type":"toggle_column_drawer","group":group,"panel":"toolbar"}),
+                );
+                let column = unsafe { &*app.0 }
+                    .host
+                    .session
+                    .state()
+                    .workspace
+                    .layout
+                    .collapsed_column_for_group(group)
+                    .unwrap();
+                let bounds = app
+                    .request(
+                        2,
+                        json!({"type":"drawer","column":column,"heights":[450],"progress":1}),
+                    )
+                    .unwrap()["placement"]["bounds"]
+                    .clone();
+                app.action(json!({"type":"measure_column_drawers","measurements":[{"group":group,"bounds":bounds}]}));
+                bounds
+            } else {
+                snapshot(&app)["layout"]["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|g| g["id"] == group)
+                    .unwrap()["bounds"]
+                    .clone()
+            };
+            let x = bounds["x"].as_f64().unwrap();
+            let y = bounds["y"].as_f64().unwrap();
+            let tabs = json!([
+                {"group":group,"index":2,"bounds":{"x":x+140.,"y":y,"width":60.,"height":36.}},
+                {"group":group,"index":0,"bounds":{"x":x,"y":y,"width":40.,"height":36.}},
+                {"group":group,"index":1,"bounds":{"x":x+40.,"y":y,"width":100.,"height":36.}}
+            ]);
+            let before = app.state()["workspace"].clone();
+            let drag = |phase: &str, delta: f64| {
+                app.action(json!({"type":"drag_workspace","item":{"kind":"panel","panel":"toolbar"},"phase":phase,"position":[x+41.+delta,y+18.],"viewport":[1200,900],"tabs":tabs}))
+            };
+            drag("down", 0.);
+            app.action(json!({"type":"begin_tab_drag","tabs":tabs,"clip":{"x":x+10.,"y":y,"width":190.,"height":36.}}));
+            let preview = |delta: f64| {
+                app.request(2, json!({"type":"workspace_drag_preview","item":{"kind":"panel","panel":"toolbar"},"position":[x+41.+delta,y+18.],"tabs":tabs})).unwrap()
+            };
+            assert_eq!(preview(29.)["tab"]["insertion"], 1);
+            let shifted = preview(30.);
+            assert_eq!(shifted["tab"]["insertion"], 3);
+            assert_eq!(shifted["drop"]["target"]["index"], 3);
+            assert_eq!(shifted["tab"]["offsets"][2]["x"], -100.);
+            assert_eq!(preview(1000.)["tab"]["bounds"]["x"], x + 100.);
+            assert_eq!(preview(29.)["tab"]["insertion"], 1);
+            // Commit a newer release point without any preceding move there.
+            drag("up", 30.);
+            assert!(preview(30.)["tab"].is_null());
+            let panels = unsafe { &*app.0 }
+                .host
+                .session
+                .state()
+                .workspace
+                .layout
+                .group_panels(group)
+                .unwrap();
+            assert_eq!(
+                panels,
+                &[
+                    layer_ui::Panel::Brushes,
+                    layer_ui::Panel::Navigator,
+                    layer_ui::Panel::Toolbar
+                ]
+            );
+            let after = app.state()["workspace"].clone();
+            app.invoke("undo_workspace");
+            assert_eq!(app.state()["workspace"], before);
+            app.invoke("redo_workspace");
+            assert_eq!(app.state()["workspace"], after);
+        }
+    }
+}
+
+#[test]
 fn apple_column_drawer_drags_preserve_history_and_accept_measured_drop_targets() {
     for platform in [0, 1] {
         for whole in [false, true] {
