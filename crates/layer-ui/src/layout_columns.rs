@@ -35,11 +35,31 @@ pub struct CollapsedColumnPlacement {
     pub groups: Vec<CollapsedGroup>,
 }
 impl CollapsedColumnPlacement {
-    fn divider_y(group: &CollapsedGroup) -> f32 {
-        // The 8px divider slot ends 2px above its following tile group.
-        group.bounds.y - TOOLBAR_DIVIDER_SIZE * 0.5 - 2.
+    fn divider_y(&self, group: &CollapsedGroup) -> f32 {
+        // The leading line is flush below Expand. Later dividers retain the
+        // toolbar's centered 8px slot and 2px tile gaps.
+        group.bounds.y
+            - if self.groups.first().is_some_and(|g| g.group == group.group) {
+                5.5
+            } else {
+                TOOLBAR_DIVIDER_SIZE * 0.5 + 2.
+            }
     }
     fn divider_drop_hint(&self, group: &CollapsedGroup) -> DropHint {
+        let center = self.divider_y(group);
+        // At the clip edge use a thinner preview instead of shifting its center
+        // away from the visible separator.
+        let half = 1.5_f32.min(self.content.height * 0.5);
+        let visible = (center - self.content.y).min(self.content.y + self.content.height - center);
+        let half = if visible > 0. {
+            half.min(visible)
+        } else {
+            half
+        };
+        let center = center.clamp(
+            self.content.y + half,
+            self.content.y + self.content.height - half,
+        );
         DropHint {
             target: DockTarget::Split {
                 group: group.group,
@@ -47,12 +67,9 @@ impl CollapsedColumnPlacement {
             },
             bounds: Bounds {
                 x: self.content.x,
-                y: (Self::divider_y(group) - 1.5).clamp(
-                    self.content.y,
-                    (self.content.y + self.content.height - 3.).max(self.content.y),
-                ),
+                y: center - half,
                 width: self.content.width,
-                height: 3.0_f32.min(self.content.height),
+                height: half * 2.,
             },
         }
     }
@@ -97,7 +114,7 @@ impl CollapsedColumnPlacement {
         // separator. Adjacent tile bodies retain their tab insertion targets.
         // Check all separators first so the preceding group cannot steal a hit.
         for group in &self.groups {
-            let divider_y = Self::divider_y(group);
+            let divider_y = self.divider_y(group);
             if self.content.contains(x, divider_y) && (y - divider_y).abs() <= TILE_SIZE / 6. {
                 return Some(self.divider_drop_hint(group));
             }
@@ -839,7 +856,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         width,
         ..bounds
     };
-    let top = (expand.y + expand.height + 2.).min(grip.y);
+    let top = (expand.y + expand.height).min(grip.y);
     let content = Bounds {
         y: top,
         height: (grip.y - WORKSPACE_SPACING - top).max(0.),
@@ -884,8 +901,8 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
             }
         }
     }
-    // The leading divider separates the expand control from the first tile group.
-    let mut y = content.y + TOOLBAR_DIVIDER_SIZE + 2.;
+    // No padding above the first divider; retain the space below its line.
+    let mut y = content.y + 6.;
     visit(node, content, &mut y, &mut groups);
     let empty = Bounds {
         y: y.min(grip.y),
@@ -1504,7 +1521,7 @@ mod tests {
             let r = geometry(&layout);
             let c = &r.collapsed[0];
             for (index, group) in c.groups.iter().enumerate() {
-                let divider_y = group.bounds.y - 6.;
+                let divider_y = group.bounds.y - if index == 0 { 5.5 } else { 6. };
                 for x in [c.bounds.x + 1., c.bounds.x + 18., c.bounds.x + 35.] {
                     for offset in [-5., 0., 5.] {
                         let y = divider_y + offset;
@@ -1525,8 +1542,10 @@ mod tests {
                     }
                     for (offset, tab_group) in [(-7., index.checked_sub(1)), (7., Some(index))] {
                         if let Some(tab_group) = tab_group {
-                            assert!(matches!(c.drop_hint([x, divider_y + offset]).unwrap().target,
-                                DockTarget::Tab { group: id, .. } if id == c.groups[tab_group].group));
+                            assert!(
+                                matches!(c.drop_hint([x, divider_y + offset]).unwrap().target,
+                                DockTarget::Tab { group: id, .. } if id == c.groups[tab_group].group)
+                            );
                         }
                     }
                 }
@@ -1547,7 +1566,7 @@ mod tests {
     #[test]
     fn collapsed_divider_targets_respect_scrolling_and_fixed_controls() {
         let layout = DockLayout::default();
-        for offset in [0., 8., 32.] {
+        for offset in [0., 1., 8., 32.] {
             let mut c = resolve_column(
                 layout.node(4).unwrap(),
                 Bounds {
@@ -1564,6 +1583,7 @@ mod tests {
             }
             for y in (c.content.y as i32)..((c.content.y + c.content.height) as i32) {
                 let hint = c.drop_hint([x, y as f32]).unwrap();
+                assert!(hint.bounds.height > 0.);
                 assert!(hint.bounds.y >= c.content.y);
                 assert!(hint.bounds.y + hint.bounds.height <= c.content.y + c.content.height);
             }

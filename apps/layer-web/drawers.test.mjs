@@ -181,11 +181,12 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       await customize({type:'set_column_collapsed',group:46,collapsed:true});
       const a=await rect('.column-tab[data-panel="brushes"]'),b=await rect('.column-tab[data-panel="sizes"]');
       const expand=await rect('.collapsed-column[data-column="46"] .column-expand');
-      assert.ok(Math.abs(a.top-expand.bottom-12)<.01,'Leading divider uses toolbar spacing below the expand button');
+      assert.ok(Math.abs(a.top-expand.bottom-6)<.01,'Leading divider only retains the space below its line');
+      assert.ok(Math.abs((await rect('.column-divider')).top-expand.bottom)<.01,'Leading line touches the expand button');
       assert.ok(Math.abs(b.top-a.bottom-12)<.01,'Collapsed groups use the toolbar divider plus its two gaps');
       const line=async(selector,horizontal,name)=>{
         const r=await rect(selector),p=[r.x+r.width/2,r.y+r.height/2];
-        assert.ok(Math.abs((horizontal?r.height:r.width)-8)<.01,'Divider keeps its 8px slot');
+        assert.ok(Math.abs((horizontal?r.height:r.width)-(name==='column-divider'?1:8))<.01,'Only the leading divider omits its top padding');
         const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${theme}-${name}.png`,Buffer.from(shot.data,'base64'));
         const colors=await sample(shot.data,[p,horizontal?[p[0],p[1]+2]:[p[0]+2,p[1]]]);
         assert.notDeepEqual(colors[0],colors[1],`${theme} ${name}: separator line is visible`);

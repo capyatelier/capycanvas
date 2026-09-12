@@ -83,15 +83,17 @@ impl Columns {
                 let expand = w.action_button(c.expand_label(), c.expand_action());
                 expand.set_widget_name(&format!("expand-column-{}", c.id));
                 expand.add_css_class("flat");
+                expand.add_css_class("column-expand");
                 let expand_icon = gtk::Image::new();
+                // The bundled resource is the canonical Web SVG, at Web's 16px size.
                 expand_icon.set_pixel_size(16);
                 expand.set_child(Some(&expand_icon));
                 expand.set_height_request(c.expand.height as i32);
                 root.append(&expand);
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
                 let mut buttons = Vec::new();
-                for group in &c.groups {
-                    content.append(&column_separator());
+                for (index, group) in c.groups.iter().enumerate() {
+                    content.append(&column_separator(index == 0));
                     let mini = gtk::Box::new(gtk::Orientation::Vertical, 2);
                     mini.set_valign(gtk::Align::Start);
                     mini.add_css_class("collapsed-group");
@@ -133,7 +135,6 @@ impl Columns {
                     .child(&content)
                     .build();
                 scroll.set_widget_name(&format!("column-scroll-{}", c.id));
-                scroll.set_margin_top(2);
                 scroll.set_margin_bottom(WORKSPACE_SPACING as i32);
                 // A fresh GtkAdjustment initially has an empty range. Seed it
                 // before restoring the offset, otherwise GTK clamps it to zero
@@ -256,17 +257,20 @@ impl Columns {
     }
 }
 
-fn column_separator() -> gtk::Box {
-    // The shared column layout uses the toolbar's 8px divider slot, with a 2px
-    // tile gap on each side. Include the leading divider in native scrolling.
+fn column_separator(leading: bool) -> gtk::Box {
+    // The leading line touches Expand; later dividers keep toolbar spacing.
     let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
     slot.add_css_class("toolbar-divider");
     slot.add_css_class("column-divider");
-    slot.set_height_request(8);
+    slot.set_height_request(if leading { 4 } else { 8 });
     slot.set_vexpand(false);
     let line = gtk::Separator::new(gtk::Orientation::Horizontal);
     line.set_halign(gtk::Align::Center);
-    line.set_valign(gtk::Align::Center);
+    line.set_valign(if leading {
+        gtk::Align::Start
+    } else {
+        gtk::Align::Center
+    });
     line.set_vexpand(true);
     slot.append(&line);
     slot

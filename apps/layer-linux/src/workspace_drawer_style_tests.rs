@@ -317,6 +317,11 @@ fn check_theme(
         }
         let mut lines = Vec::new();
         separators(&root, &mut lines);
+        let leading = lines[0].compute_bounds(&expand).unwrap();
+        assert!(
+            (leading.y() - expand.height() as f32).abs() <= 0.01,
+            "Leading divider touches the expand button"
+        );
         assert_eq!(
             lines.len(),
             column.groups.len(),

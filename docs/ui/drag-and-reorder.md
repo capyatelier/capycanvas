@@ -76,7 +76,9 @@ Collapsed-column dividers create a new group using a shared drop area with total
 height one third of a tile (12 logical pixels for a 36px tile), centered on the
 visible divider. The thin blue preview stays on that divider; adjacent tile bodies
 still join an existing group. Clip targets to the scrolling content and exclude
-the fixed expand/grip controls. GTK and Web regression:
+the fixed expand/grip controls. The leading divider touches the bottom of Expand;
+its blue preview may be thinner at the clip edge to stay centered on the line.
+GTK and Web regression:
 `tools/performance/workspace-motion.sh gtk --column-drops` (or `web`).
 
 Toolbar dividers use the same one-third-tile target along the toolbar's flow
