@@ -76,6 +76,57 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+The shared [drag convention](../ui/drag-and-reorder.md) also supersedes earlier
+gesture checkpoints: tile bodies require a hold for every device; list-row
+bodies require a hold for touch/pen while mouse remains immediate; grips and
+title/tab bars remain immediate. The [source inventory](../ui/drag-inventory.md#apple-macos-and-ipados)
+records required Apple tile gating and whole-row pickup work. Earlier successful
+workspace/layer tests do not establish these new device-specific requirements.
+Numeric sliders and other direct-manipulation controls retain their existing
+interaction without a reorder hold.
+
+## Shared compact layer opacity — 2026-09-12
+
+Both Apple targets now use the common numeric editor for layer opacity, removing
+its separate expression field, slider and pending-value handling. Compact mode
+reserves width from shared formatted limits, switches between readout and native
+entry, and retains the common expression/slider policy and acknowledgment state.
+Document/layer identity retires old drafts, and delayed edits check their target.
+Inline errors retain an outline and accessible/hover feedback even when a backend
+rejection arrives after entry closes. Formatted limit labels are cached on mount,
+without adding range-formatting calls to each slider update.
+
+The 72 invisible AppKit/Chrome pairs cover both Apple presets, both themes, three
+panel widths, 0/50/100 values and enabled/disabled state. All 216 complete idle
+control bounds are within one point, maximum 0.40625. Complete comparisons retain
+1,251,072 pixels: 49,352 differ exactly, per-case fractions 0.873–7.338%, weighted
+mean channel error 0.986982 and maximum 191. The previous implementation differed
+at 92,542 pixels with mean error 4.201418. Exact parity still fails; differences
+are retained. Native entry geometry and other font sizes remain outside this
+idle-component fixture. The standard numeric fixture's four complete images and
+792 geometry measurements remain unchanged, and both sets of mounted AppKit
+editing checks pass. Numeric acknowledgment/rollback checks also pass.
+
+The focused iPad Simulator workflow validates expression entry/correction,
+independent Properties readback, Undo/Redo, keyboard dismissal, layer switching
+with an invalid draft and slider input. Initial failures exposed two test
+assumptions: UIKit accessibility returns glyph bounds for the padded readout,
+and the onscreen keyboard covers the lower layer rows. The test now leaves full
+geometry to the measured layout fixture and uses the visible keyboard-dismiss
+control before switching targets. The final-source workflow passes; earlier
+failed results remain local evidence. The full initial editor comparison differs
+at 302,151 of 5,680,128 pixels (5.319440%), with mean channel error 1.075338 and
+maximum 255. Both final signed Release targets build and verify. The Mac test
+compiles but was not executed. The owned simulator is deleted, existing artist
+sessions are preserved, and the incoming PWA packaging-test update is integrated.
+Mac UI automation and physical-device execution remain separate from these tests.
+Reproduction is in the
+[compact-opacity guide](../../tools/visual/README.md#compact-layer-opacity).
+
+The remaining feature/visual/lifecycle matrix, physical rendering and sustained
+Mac 90 Hz / iPad 120 Hz performance gates remain open. Save/Load Layout remains
+excluded.
+
 ## Shared property and layer dropdowns — 2026-09-12
 
 Both Apple targets now use one dropdown component for property choices, Curves

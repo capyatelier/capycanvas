@@ -304,62 +304,21 @@ private struct LayerName: View {
     }
 }
 
-private struct LayerOpacityField: View {
+struct LayerOpacityField: View {
     @ObservedObject var store: EditorStore
-    @State private var text = ""
-    @State private var fill = 0.0
-    @State private var localValue: Double?
-    @State private var pendingValue: Double?
-    @State private var canceled = false
-    @State private var error: String?
-    @FocusState private var editing: Bool
-    private var value: Double { store.state["layer_tools"]["editing_layer"]["opacity"].number }
-    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
-        HStack(spacing: 4) {
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(palette["input"])
-                    Rectangle().fill(palette["text"].opacity(0.5)).frame(width: max(0, geometry.size.width * fill))
-                }.frame(height: 4).clipShape(Capsule()).frame(height: 24).contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0).onChanged { event in
-                        guard geometry.size.width > 0 else { return }
-                        resolve(["type": "position", "position": min(1, max(0, event.location.x / geometry.size.width))])
-                    })
-            }.frame(height: 24).accessibilityLabel("Layer opacity")
-                .accessibilityValue(text).accessibilityAdjustableAction { direction in resolve(["type": "step", "steps": direction == .increment ? 1 : -1]) }
-            TextField("Layer opacity", text: $text).textFieldStyle(.plain).multilineTextAlignment(.trailing)
-                .monospacedDigit().frame(width: 32).focused($editing).onSubmit { resolve(["type": "expression", "text": text]) }
-                .onKeyPress(.escape) { canceled = true; editing = false; format(); return .handled }
-        }.frame(height: 24).onAppear { localValue = value; format() }
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(error == nil ? Color.clear : Color.red, lineWidth: 1))
-            .accessibilityHint(error ?? "")
-            .onChange(of: value) { _, next in
-                if let pendingValue, abs(next - pendingValue) > 0.00001 { return }
-                pendingValue = nil; localValue = next
-                if !editing { format() }
+        let layer = store.state["layer_tools"]["editing_layer"]
+        let epoch = store.state["document_file"]["epoch"].uint
+        NumberControl(store: store, label: "Layer opacity", value: layer["opacity"].number,
+            control: store.catalog["layer_opacity"], identifier: "layer-opacity", inline: true) { value, completion in
+            // A late focus callback from a removed field must not edit another
+            // layer or a new document whose IDs happen to match the old one.
+            guard store.state["document_file"]["epoch"].uint == epoch,
+                  store.state["layer_tools"]["editing_layer"]["id"].uint == layer["id"].uint else {
+                completion(nil); return
             }
-            .onChange(of: store.state["layer_tools"]["editing_layer"]["id"].uint) { _, _ in
-                canceled = true; editing = false; pendingValue = nil; localValue = value; format()
-            }
-            .onChange(of: editing) { old, next in
-                if next { canceled = false }
-                if old && !next && !canceled { resolve(["type": "expression", "text": text]) }
-            }
-    }
-    private func format() {
-        do {
-            let result = try store.resolveNumber(store.catalog["layer_opacity"], value: localValue ?? value, operation: ["type": "format"])
-            if !editing { text = result["edit"].string }; fill = result["fill"].number; error = nil
-        } catch { self.error = error.localizedDescription }
-    }
-    private func resolve(_ operation: [String: Any]) {
-        do {
-            let result = try store.resolveNumber(store.catalog["layer_opacity"], value: localValue ?? value, operation: operation)
-            fill = result["fill"].number; text = result["edit"].string
-            localValue = result["value"].number; pendingValue = localValue; error = nil
-            store.dispatch(["type": "set_layer_opacity", "opacity": localValue!])
-        } catch { self.error = error.localizedDescription }
+            store.edit(["type": "set_layer_opacity", "id": layer["id"].raw, "opacity": value], completion: completion)
+        }.id("\(epoch):\(layer["id"].uint)")
     }
 }
 

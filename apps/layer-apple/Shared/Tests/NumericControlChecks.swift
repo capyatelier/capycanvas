@@ -1,6 +1,65 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func checkInlineLayerOpacity(in app: XCUIApplication) {
+        captureDefaultEditor(in: app)
+        let value = app.buttons["number-value-layer-opacity"]
+        let entry = app.textFields["number-entry-layer-opacity"]
+        let property = app.buttons["number-value-property-opacity"]
+        func expect(_ text: String) {
+            expectation(for: NSPredicate(format: "value == %@", text), evaluatedWith: value)
+            waitForExpectations(timeout: 5)
+        }
+        func command(_ name: String) {
+            workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", name)).firstMatch)
+        }
+        #if os(macOS)
+        let rows = app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        #else
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        #endif
+        let originalID = rows.element(boundBy: 0).identifier
+        let original = rows.matching(identifier: originalID).firstMatch.buttons["Edit layer content"]
+        expect("100")
+        // UIKit accessibility reports the glyph bounds for this SwiftUI
+        // readout. Compare complete control geometry in the layout fixture.
+        workspaceActivate(value)
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.typeText("25 + 25\n"); expect("50")
+        XCTAssertEqual(property.value as? String, "50.0 %")
+        command("Undo"); expect("100"); command("Redo"); expect("50")
+        workspaceActivate(value); entry.typeText("2 * (\n")
+        XCTAssertTrue(entry.exists); XCTAssertEqual(entry.value as? String, "2 * (")
+        XCTAssertEqual(property.value as? String, "50.0 %", "Invalid expressions must preserve opacity")
+        entry.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "20 + 22\n")
+        expect("42"); XCTAssertEqual(property.value as? String, "42.0 %")
+
+        let count = rows.count
+        workspaceActivate(app.buttons["layer-New layer"])
+        expectation(for: NSPredicate { _, _ in rows.count == count + 1 }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let addedID = rows.element(boundBy: 0).identifier
+        let added = rows.matching(identifier: addedID).firstMatch.buttons["Edit layer content"]
+        expect("100")
+        workspaceActivate(value); entry.typeText("7 +")
+        #if os(iOS)
+        // The keyboard covers the lower layer rows. Dismiss it while retaining
+        // the invalid draft, then switch targets through the visible thumbnail.
+        let hideKeyboard = app.buttons["Hide keyboard"]
+        XCTAssertTrue(hideKeyboard.waitForExistence(timeout: 5)); workspaceActivate(hideKeyboard)
+        XCTAssertEqual(entry.value as? String, "7 +")
+        #endif
+        workspaceActivate(original); expect("42")
+        XCTAssertFalse(entry.exists, "An unfinished draft must not move to another layer")
+        workspaceActivate(added); expect("100")
+        let track = app.descendants(matching: .any)["number-track-layer-opacity"].firstMatch
+        workspaceActivate(track)
+        expect("50")
+        command("Undo"); expect("100")
+        workspaceActivate(original); expect("42")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkBlendChoices(in app: XCUIApplication) {
         captureDefaultEditor(in: app)
         let property = app.buttons["property-blend"], compact = app.buttons["layer-blend"]

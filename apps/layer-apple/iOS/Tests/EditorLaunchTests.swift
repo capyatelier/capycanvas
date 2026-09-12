@@ -166,6 +166,14 @@ final class EditorLaunchTests: XCTestCase {
         checkBlendChoices(in: app)
     }
 
+    @MainActor func testInlineLayerOpacity() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch()
+        checkInlineLayerOpacity(in: app)
+    }
+
     @MainActor func testEditorControlLayout() {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()

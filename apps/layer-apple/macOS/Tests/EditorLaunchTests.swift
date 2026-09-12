@@ -171,6 +171,14 @@ final class EditorLaunchTests: XCTestCase {
         checkBlendChoices(in: app)
     }
 
+    @MainActor func testInlineLayerOpacity() {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch()
+        checkInlineLayerOpacity(in: app)
+    }
+
     @MainActor func testEditorControlLayout() {
         let app = editorCaptureApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

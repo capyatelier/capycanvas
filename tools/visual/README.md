@@ -96,6 +96,56 @@ or tolerance waivers. These invisible AppKit captures and delegate checks cover
 shared Apple components; physical UIKit widgets, pointer delivery, full-editor
 pixels and sustained performance require separate evidence.
 
+## Compact layer opacity
+
+Both Apple targets use the shared numeric control for layer opacity. Compact
+mode reserves width from the formatted range, shows a readout until editing,
+and uses the same expression parser, slider mapping, pending-edit handling and
+error feedback as other numeric fields. Changing the document or layer retires
+the old editor state; delayed callbacks check their original target before
+submitting an edit. Range formatting runs on mount, rather than every slider
+update. The ordinary slider/spin presentation remains unchanged.
+
+Capture the production layer-opacity wrapper with actual Rust models/actions,
+then the production browser `createNumberField` with `inline: true`:
+
+```sh
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_INLINE_CAPTURES="$PWD/artifacts/apple-inline-numbers" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/inline-number-controls.swift
+node tools/visual/chrome-capture.mjs 116 36 2 artifacts/apple-inline-numbers light inline-numbers \
+  artifacts/apple-inline-numbers/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-inline-numbers/web-0-light-226-100-enabled.png \
+  artifacts/apple-inline-numbers/native-0-light-226-100-enabled.png \
+  --output artifacts/apple-inline-numbers/diff-0-light-226-100-enabled
+```
+
+Repeat complete comparison for every manifest name. The 72 cases cover both
+Apple presets, both themes, three panel widths, values 0/50/100 and enabled or
+disabled state. The native host is invisible AppKit; UIKit and physical device
+coverage remains separate. `inline-number-geometry.json` retains every bound,
+error and missing/extra control; per-case reports also record the browser's
+measurement span and entry width. All 216 complete readout/track/root rectangles
+are within one point, maximum 0.40625. Native entry geometry and other font sizes
+are not covered by these idle-control captures.
+
+Complete comparisons retain 1,251,072 pixels: 49,352 differ exactly, with
+per-case fractions 0.873–7.338%, weighted mean channel error 0.986982 and maximum
+191. The previous implementation differed at 92,542 pixels with mean error
+4.201418. Exact pixel parity still fails; differences remain unmasked.
+
+The existing standard numeric fixture also passes both sets of AppKit delegate
+checks. Its four complete images and all 792 geometry measurements are unchanged.
+`EditorLaunchTests/testInlineLayerOpacity` exercises expression entry, invalid
+input/correction, independent Properties readback, Undo/Redo, keyboard dismissal,
+layer switching and the slider through the actual editor. UIKit accessibility
+reports the readout's glyph bounds, so those bounds are not a substitute for
+the complete SwiftUI layout measurements above.
+The final iPad Simulator workflow passes; the Mac test compiles but was not
+executed. Its full initial editor comparison differs at 302,151 of 5,680,128
+pixels (5.319440%), so full-editor pixel acceptance remains open.
+
 ## Property and layer choices
 
 Both Apple targets share the same dropdown component for property choices,

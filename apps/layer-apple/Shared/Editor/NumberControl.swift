@@ -7,12 +7,14 @@ struct NumberControl: View {
     let control: JSON
     var identifier = ""
     var valueOnly = false
+    var inline = false
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
     @State private var formatted = JSON()
     @State private var showsEntry = false
     @State private var horizontalDrag: Bool?
     @State private var editing = false
+    @State private var inlineMeasure = ""
     @Environment(\.isEnabled) private var enabled
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var slider: Bool { control["kind"].string == "slider" }
@@ -20,7 +22,17 @@ struct NumberControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if valueOnly { numericEntry }
+            if inline {
+                HStack(spacing: 4) {
+                    sliderTrack
+                    InlineNumberValueLayout(entrySize: showsEntry || field.dirty ? min(10, max(3, formatted["edit"].string.count)) : nil) {
+                        Text(inlineMeasure).monospacedDigit().padding(.horizontal, 6).hidden().accessibilityHidden(true)
+                        Text("8").monospacedDigit().hidden().accessibilityHidden(true)
+                        if showsEntry || field.dirty { numericEntry }
+                        else { valueButton }
+                    }
+                }
+            } else if valueOnly { numericEntry }
             else {
                 HStack(spacing: 6) {
                     Text(label).lineLimit(1).truncationMode(.tail)
@@ -36,57 +48,24 @@ struct NumberControl: View {
                     } else if showsEntry || field.dirty {
                         numericEntry.fixedSize()
                     } else {
-                        Button { showsEntry = true } label: {
-                            Text(formatted["text"].string).monospacedDigit().padding(.horizontal, 6).frame(height: 24)
-                        }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.36).fixedSize()
-                            .modifier(NumberControlMeasurement(id: key + ":value"))
-                            .accessibilityLabel(label)
-                            .accessibilityValue(formatted["text"].string)
-                            .accessibilityIdentifier("number-value-" + key)
+                        valueButton.fixedSize()
                     }
                 }.modifier(NumberControlMeasurement(id: key + ":header"))
             }
-            if slider && !valueOnly {
+            if slider && !valueOnly && !inline {
                 HStack(spacing: 6) {
                     stepButton(-1)
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(palette["input"])
-                            Rectangle().fill(palette["panel"])
-                                .overlay(palette["text"].opacity(0.5))
-                                .frame(width: max(0, geometry.size.width * formatted["fill"].number))
-                        }.frame(height: 4).clipShape(Capsule()).frame(maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                            .onTapGesture { location in position(location.x / max(1, geometry.size.width)) }
-                            // Preserve vertical scrolling through long tool-settings lists.
-                            .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { event in
-                                if horizontalDrag == nil {
-                                    horizontalDrag = abs(event.translation.width) > abs(event.translation.height)
-                                }
-                                if horizontalDrag == true {
-                                    position(event.location.x / max(1, geometry.size.width))
-                                }
-                            }.onEnded { _ in horizontalDrag = nil })
-                    }.frame(height: 24).modifier(NumberControlMeasurement(id: key + ":track"))
-                        .accessibilityElement().accessibilityLabel(label)
-                        .accessibilityValue(formatted["text"].string)
-                        .accessibilityAdjustableAction { direction in
-                            switch direction {
-                            case .increment: step(1)
-                            case .decrement: step(-1)
-                            @unknown default: break
-                            }
-                        }.accessibilityIdentifier("number-track-" + key)
+                    sliderTrack
                     stepButton(1)
                 }
             }
-            if let error = field.error {
+            if let error = field.error, !inline {
                 Text(error).font(.caption).foregroundStyle(.red).padding(.leading, 6)
                     .accessibilityIdentifier("number-error-" + key)
             }
         }
         .modifier(NumberControlMeasurement(id: key + ":root"))
-        .onAppear { field.receive(value); format() }
+        .onAppear { field.receive(value); format(); measureInlineRange() }
         .onChange(of: value) { _, next in field.receive(next); format() }
         .onChange(of: editing) { _, focused in
             if focused {
@@ -94,16 +73,66 @@ struct NumberControl: View {
             } else if commit() { showsEntry = false; format() }
         }
     }
+    private var valueButton: some View {
+        Button { showsEntry = true } label: {
+            Text(formatted["text"].string).monospacedDigit()
+                .frame(maxWidth: inline ? .infinity : nil, alignment: .trailing)
+                .padding(.horizontal, 6).frame(height: 24)
+        }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.36)
+            // An asynchronous rejection can arrive after text entry closes.
+            // Keep compact errors visible without expanding the layer header.
+            .overlay {
+                if inline && field.error != nil {
+                    RoundedRectangle(cornerRadius: 6).stroke(.red, lineWidth: 1).allowsHitTesting(false)
+                }
+            }
+            .modifier(NumberControlMeasurement(id: key + ":value"))
+            .accessibilityLabel(label).accessibilityValue(formatted["text"].string)
+            .accessibilityHint(field.error ?? "").help(field.error ?? label)
+            .accessibilityIdentifier("number-value-" + key)
+    }
+    private var sliderTrack: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(palette["input"])
+                Rectangle().fill(palette["panel"])
+                    .overlay(palette["text"].opacity(0.5))
+                    .frame(width: max(0, geometry.size.width * formatted["fill"].number))
+            }.frame(height: 4).clipShape(Capsule()).frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { location in position(location.x / max(1, geometry.size.width)) }
+                // Preserve vertical scrolling through long tool-settings lists.
+                .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { event in
+                    if horizontalDrag == nil {
+                        horizontalDrag = abs(event.translation.width) > abs(event.translation.height)
+                    }
+                    if horizontalDrag == true {
+                        position(event.location.x / max(1, geometry.size.width))
+                    }
+                }.onEnded { _ in horizontalDrag = nil })
+        }.frame(height: 24).modifier(NumberControlMeasurement(id: key + ":track"))
+            .accessibilityElement().accessibilityLabel(label)
+            .accessibilityValue(formatted["text"].string)
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: step(1)
+                case .decrement: step(-1)
+                @unknown default: break
+                }
+            }.accessibilityIdentifier("number-track-" + key)
+    }
     private var numericEntry: some View {
         NumericTextField(label: label,
             text: Binding(get: { field.text }, set: { field.text = $0; field.dirty = true }),
             focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step)
-            .frame(width: valueOnly ? nil : slider ? 80 : 48)
+            .frame(width: valueOnly || inline ? nil : slider ? 80 : 48)
             .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
             .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
             .modifier(NumberControlMeasurement(id: key + ":entry"))
+            .accessibilityHint(field.error ?? "")
+            .help(field.error ?? label)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(field.error == nil ? Color.clear : Color.red, lineWidth: 1)
                 .allowsHitTesting(false))
             .onAppear { if showsEntry { editing = true } }
@@ -133,6 +162,14 @@ struct NumberControl: View {
             if !field.dirty && !editing { field.text = formatted[slider ? "edit" : "text"].string }
         } catch { field.error = error.localizedDescription }
     }
+    private func measureInlineRange() {
+        guard inline else { return }
+        do {
+            let minimum = try store.resolveNumber(control, value: control["min"].number, operation: ["type": "format"])["text"].string
+            let maximum = try store.resolveNumber(control, value: control["max"].number, operation: ["type": "format"])["text"].string
+            inlineMeasure = (minimum.count >= maximum.count ? minimum : maximum).map { $0.isNumber ? "8" : String($0) }.joined()
+        } catch { field.error = error.localizedDescription }
+    }
     @discardableResult private func commit() -> Bool {
         guard field.dirty else { return true }
         return resolve(["type": "expression", "text": field.text])
@@ -160,6 +197,24 @@ struct NumberControl: View {
         } catch {
             field.error = error.localizedDescription
             return false
+        }
+    }
+}
+
+/// Reserve the formatted range's widest digit string in readout mode. Text
+/// entry additionally reserves its initial character count, like input.size.
+private struct InlineNumberValueLayout: Layout {
+    let entrySize: Int?
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+        let measure = subviews[0].sizeThatFits(.unspecified).width
+        let entry = entrySize.map { CGFloat($0) * ceil(subviews[1].sizeThatFits(.unspecified).width) + 12 } ?? 0
+        return CGSize(width: max(measure, entry), height: 24)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for view in subviews {
+            view.place(at: bounds.origin, anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
         }
     }
 }
