@@ -76,6 +76,40 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared Color panel layout and native actions — 2026-09-12
+
+Both Apple apps now use the shared Color panel layout: three paint slots with
+matching checkerboard/selected backgrounds, labeled Swap and full-width
+HSV-square/HLS-triangle buttons, and three vertical numeric slider controls.
+Rust still owns color conversion, values, hit policy, expressions and actions.
+
+Invisible AppKit captures cover both Apple presets, both themes, both color
+spaces, all selected paint slots and two widths. All 1,488 control/paint bounds
+across 48 production native/Chrome pairs are within one logical point. Full exact
+pixels still differ at 14.789–24.191% per image, with mean channel error 2.487
+across 22,233,600 pixels and maximum 207. Gradients, text and edges remain
+unmasked; AppKit component captures do not establish physical UIKit/Mac parity.
+Reproduction is in the [Color panel guide](../../tools/visual/README.md#complete-color-panels).
+
+The focused UIKit simulator workflow passes with the current workspace library:
+scrolling within the panel, wheel contacts, color-space changes, expression
+entry, foreground/background/transparent paint, a latched hue drag exiting
+transparency, empty-corner rejection and Swap. Both preset ABI checks also pass,
+including real GPU brush/eraser pixels and exact Undo. The Mac UI test target
+compiles; it was not executed. Both final signed Release apps build and pass
+signature verification. Existing native sessions are preserved and both owned
+test simulators are removed.
+
+Color captures now record accepted Rust hue/RGBA through opt-in debug-only
+accessibility metadata, replacing hard-coded post-touch colors. That improves
+the reference but does not resolve the observed HLS discrepancy: HSV passes
+853 interior samples within two channel levels; HLS has one of 680 samples at
+error 3 against the unchanged tolerance 2. The failed report and complete images
+are retained. The wheel renderer was not changed in this milestone. Its HLS
+sample failure, AppKit gradient differences and colored tab icon remain open,
+along with the full feature/visual/lifecycle and sustained Mac 90 Hz / iPad
+120 Hz gates. Save/Load Layout remains excluded.
+
 ## Current workspace UIKit workflows and full-editor references — 2026-09-12
 
 Full-editor/control-layout/numeric fixtures on both Apple targets now create an

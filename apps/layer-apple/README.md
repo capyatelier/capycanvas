@@ -176,6 +176,14 @@ captures plus measured wheel geometry for the shared
 [color sampling check](../../tools/visual/README.md). The headless ABI tests
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
+The Color panel shares the web layout on both Apple targets: three paint slots
+with a checkerboard/selected background, labeled Swap and color-space buttons,
+and three full numeric slider controls. Its fast
+[complete-panel fixture](../../tools/visual/README.md#complete-color-panels)
+compares 48 native/Chrome cases without visible native windows. The focused UI
+workflow records the actual accepted Rust color through opt-in debug metadata,
+so its color oracle does not assume ideal touch coordinates.
+
 Properties choice controls share an Apple button/popover projection, sizing the
 closed control to the longest option while keeping room for its row label.
 The layer blend control exposes its current value to accessibility.

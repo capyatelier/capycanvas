@@ -96,6 +96,49 @@ or tolerance waivers. These invisible AppKit captures and delegate checks cover
 shared Apple components; physical UIKit widgets, pointer delivery, full-editor
 pixels and sustained performance require separate evidence.
 
+## Complete Color panels
+
+The `color-panel` fixture renders the production shared Apple panel in invisible
+AppKit hosts and the production browser panel in Chrome. Rust supplies color
+models, geometry and formatted numeric values. It covers both Apple presets,
+light/dark themes, HSV/HLS, all three selected paint slots and 160/226-point
+widths: 48 complete panels. The native fixture requires a built Mac asset bundle.
+
+```sh
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_COLOR_CAPTURES="$PWD/artifacts/apple-color-panel/final" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-panel-capture.swift
+node tools/visual/chrome-capture.mjs 226 600 2 artifacts/apple-color-panel/final light color-panel \
+  artifacts/apple-color-panel/final/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-color-panel/final/web-0-light-hsv-foreground-226.png \
+  artifacts/apple-color-panel/final/native-0-light-hsv-foreground-226.png \
+  --output artifacts/apple-color-panel/final/diff-0-light-hsv-foreground-226
+```
+
+The manifest controls each browser viewport, scale and theme. Repeat the pixel
+comparison for every manifest name. Each geometry report retains 31 rectangles,
+including the paint interiors and all three numeric controls. All 1,488 measured
+rectangles are within one logical point. Measurement readers are disabled in
+ordinary editors; the fixture creates no visible native windows or drawing data.
+
+Full exact pixel comparison still fails, with 14.789–24.191% differing pixels
+across these AppKit pairs and mean channel error 2.487 over all 22,233,600 pixels.
+Gradient, text and edge differences remain unmasked. This establishes component
+geometry, not physical UIKit/Mac rendering or full-editor acceptance.
+
+The separate `testColorControls` workflow uses the real workspace library and
+scrolls inside the panel to reach the full numeric controls. Opt-in debug-only
+`CAPY_COLOR_PROBE` metadata records accepted Rust hue/RGBA for the existing
+wheel-color oracle; hard-coded colors after a rounded touch are not an accurate
+reference. Release builds ignore that variable. Native input, sampled color
+correctness and complete pixel parity remain distinct checks.
+
+The current simulator HSV capture passes 853 samples at the existing two-level
+channel tolerance. HLS still fails one of 680 samples at error 3, including after
+recording the actual Rust color. Retain that failure; neither the tolerance nor
+the wheel renderer was changed for this layout milestone.
+
 ## Complete header components
 
 This fast fixture renders the actual shared Apple header in an invisible AppKit

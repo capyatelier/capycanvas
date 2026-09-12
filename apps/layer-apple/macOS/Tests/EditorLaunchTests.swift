@@ -143,13 +143,14 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testColorControls() throws {
-        let app = editorTestApplication()
+        let app = editorCaptureApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"preferences","action":{"type":"edit","id":"theme","value":1}},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"set_color","rgba":[1,0,0,1]}]"#
+        app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
         app.launch()
-        checkColorControls(in: app) { mode, wheel in
+        checkColorControls(in: app) { mode, wheel, state in
             let window = app.windows.firstMatch
-            attachColorFixture(name: "mac-color-" + mode, space: mode,
+            attachColorFixture(name: "mac-color-" + mode, space: mode, state: state,
                 screenshot: window.screenshot(), viewport: window.frame, wheel: wheel)
         }
     }
