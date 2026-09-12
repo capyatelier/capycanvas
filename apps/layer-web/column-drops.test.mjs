@@ -26,7 +26,8 @@ export async function checkColumnDrops({call,evaluate,settle}) {
       ],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(46,fixture.layout.next_id)});
       fixture.zen_mode=false;
       for(device of ['mouse','touch','pen']) {
-        for(const mode of [-15,0,15,'merge','cancel']) {
+        for(const mode of [-8,-5,0,5,8,'cancel']) {
+          const merge=typeof mode==='number'&&Math.abs(mode)>6;
           await send({type:'restore_workspace',workspace:fixture});
           for(const group of [42,45])await send({type:'customize',action:{type:'set_column_collapsed',group,collapsed:true}});
           const before=await snapshot();
@@ -34,13 +35,13 @@ export async function checkColumnDrops({call,evaluate,settle}) {
           const separator=await evaluate("document.querySelector('.column-tab[data-panel=sizes]').previousElementSibling.getBoundingClientRect().toJSON()");
           const divider=center(separator);
           assert.equal(divider.y,tile.y-6,'DOM and shared separator alignment');
-          const destination=mode==='merge'?center(tile):{x:divider.x,y:divider.y+(mode==='cancel'?15:mode)};
+          const destination={x:divider.x,y:divider.y+(mode==='cancel'?5:mode)};
           await input('down',center(await rect('.column-tab[data-panel=layers]')));await wait(650);
           await input('move',await evaluate('({x:innerWidth*.5,y:innerHeight*.55})'));
           await input('move',destination);await wait(100);
           assert.equal(await evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')"),false,'Drag closes the held menu');
           assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"),false);
-          if(mode!=='merge') {
+          if(!merge) {
             const hint=await rect('.drop-indicator');
             assert.ok(Math.abs(center(hint).y-divider.y)<1,`${edge} ${device} ${mode}: preview centered on separator`);
           }
@@ -54,9 +55,9 @@ export async function checkColumnDrops({call,evaluate,settle}) {
           const after=await snapshot();
           const column=await evaluate('layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.id===41)');
           assert.equal(after.layout.floating.length,0);
-          if(mode==='merge') {
+          if(merge) {
             assert.equal(column.groups.length,2);
-            assert.ok(column.groups[1].icons.some(i=>i.panel==='layers'),'Tile center still joins the existing group');
+            assert.ok(column.groups[mode<0?0:1].icons.some(i=>i.panel==='layers'),'Adjacent tile edge joins the existing group');
           } else {
             assert.equal(column.groups.length,3,`${edge} ${device} ${mode}: creates a new group`);
             assert.deepEqual(column.groups[1].icons.map(i=>i.panel),['layers']);
@@ -66,7 +67,40 @@ export async function checkColumnDrops({call,evaluate,settle}) {
         }
       }
     }
-    console.log('PASS: browser mouse/touch/pen divider drops at +/-15px, aligned previews, tile merging, cancellation, undo/redo on both sides');
+    for(const edge of ['top','left']) {
+      const fixture=structuredClone(saved);
+      Object.assign(fixture.layout,{bands:[{id:40,edge,extent:36,root:tabs(41,['toolbar'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],next_id:Math.max(42,fixture.layout.next_id)});
+      fixture.zen_mode=false;
+      const ids=Array.from({length:5},()=>fixture.layout.next_tile_id++);
+      const controls=[{kind:'command',command:'brush'},{kind:'command',command:'eraser'},{kind:'divider'},{kind:'command',command:'lasso'},{kind:'command',command:'hand'}];
+      fixture.layout.panels.find(p=>p.id==='toolbar').content.tiles=ids.map((id,i)=>({id,control:controls[i]}));
+      const tile=id=>`.toolbar-controls [data-tile="${id}"]`;
+      for(device of ['mouse','touch','pen'])for(const mode of [-5,5,8,'cancel']) {
+        await send({type:'restore_workspace',workspace:fixture});
+        const before=await snapshot(),divider=center(await rect(tile(ids[2])));
+        const point={...divider};point[edge==='top'?'x':'y']+=mode==='cancel'?5:mode;
+        await input('down',center(await rect(tile(ids[0]))));await wait(650);
+        await input('move',point);await wait(100);
+        assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"),false);
+        if(mode!==8) {
+          const hint=center(await rect('.drop-indicator'));
+          assert.ok(Math.abs(hint.x-divider.x)<1&&Math.abs(hint.y-divider.y)<1,`${edge} ${device} ${mode}: toolbar preview on divider`);
+        }
+        if(mode==='cancel') {
+          await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+          await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+        }
+        await input('up');await wait(250);
+        assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"),true);
+        if(mode==='cancel') {assert.deepEqual(await snapshot(),before);continue;}
+        const after=await snapshot(),tiles=after.layout.panels.find(p=>p.id==='toolbar').content.tiles;
+        assert.deepEqual(tiles.map(t=>t.id),mode===8?[ids[1],ids[2],ids[0],ids[3],ids[4]]:[ids[1],ids[2],ids[0],fixture.layout.next_tile_id,ids[3],ids[4]]);
+        assert.equal(tiles.filter(t=>t.control.kind==='divider').length,mode===8?1:2);
+        await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await snapshot(),before);
+        await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await snapshot(),after);
+      }
+    }
+    console.log('PASS: browser mouse/touch/pen 12px column and toolbar divider targets, centered previews, separate tool groups, adjacent insertion, cancellation and undo/redo');
   } finally {
     if(down)await input('up');
     await send({type:'restore_workspace',workspace:saved});

@@ -1003,7 +1003,7 @@ visible thumbnail readbacks and retain native render bounds alongside raw UI
 Automation bounds, full client images and complete XAML images.
 
 Native layers, drawers, expansion and manager/restart checks pass, as do the
-production native/Wasm builds. Final integration through main 98294ff passes
+production native/Wasm builds. Integration through main 98294ff passes
 strict Windows Clippy, the Wasm check and 452 unit tests; four explicit hardware
 tests remain ignored. Whole-editor
 raster identity, configurable-switcher interactions, drag pickup, physical input,

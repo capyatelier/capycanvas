@@ -1750,3 +1750,7 @@ raster details, the existing strict GPU filter-reference failure, physical
 input, mixed DPI/lifecycle/recovery, distribution and final 120 Hz painting and
 input-latency acceptance. No presentation benchmark ran during this milestone.
 Review artifacts stay ignored and local; the implementation goal remains active.
+
+Publication also integrates concurrent main 76b4dd5, which adjusts shared divider
+targets and toolbar group creation. All 284 shared UI tests, strict Windows
+Clippy and the Wasm check pass after that merge.

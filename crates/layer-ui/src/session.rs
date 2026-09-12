@@ -1401,8 +1401,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .workspace
                 .layout
                 .column_drop_hint(&resolved, column, position)?
-        } else if matches!(item, DockItem::Tile { .. }) {
-            resolved.tile_drop_hint(position, &self.state.workspace.layout)?
+        } else if let DockItem::Tile { panel, tile } = item {
+            let layout = &self.state.workspace.layout;
+            let source = layout
+                .panel(panel)
+                .ok()?
+                .tiles()
+                .iter()
+                .find(|t| t.id == tile)?;
+            // Separators themselves still reorder as ordinary toolbar tiles.
+            let group_hint = (source.control != crate::ToolbarControl::Divider)
+                .then(|| resolved.tile_group_drop_hint(position, layout))
+                .flatten();
+            group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
             resolved.drop_hint(position[0], position[1], tabs, !docks_hidden)?
         };
