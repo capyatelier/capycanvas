@@ -96,8 +96,14 @@ class AndroidInteractionTest {
         val coords = arrayOf(MotionEvent.PointerCoords().apply {
             x = next.x + location[0]; y = next.y + location[1]; pressure = if (action == MotionEvent.ACTION_UP) 0f else .7f
         })
+        val source = when (tool) {
+            MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE
+            MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS
+            else -> InputDevice.SOURCE_TOUCHSCREEN
+        }
+        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) MotionEvent.BUTTON_PRIMARY else 0
         val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords,
-            0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_STYLUS) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_TOUCHSCREEN, 0)
+            0, buttons, 1f, 1f, 0, 0, source, 0)
         try {
             if (systemInput) {
                 val accepted = instrumentation.uiAutomation.injectInputEvent(motion, true)
@@ -112,7 +118,7 @@ class AndroidInteractionTest {
             // used to inspect a halfway/resize boundary on the real tablet.
             SystemClock.sleep(24)
             val stopped = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords,
-                0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_STYLUS) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_TOUCHSCREEN, 0)
+                0, buttons, 1f, 1f, 0, 0, source, 0)
             try {
                 assertTrue(instrumentation.uiAutomation.injectInputEvent(stopped, true))
             } finally { stopped.recycle() }
@@ -254,6 +260,84 @@ class AndroidInteractionTest {
             assertEquals(before, workspace())
             action(obj("type" to "invoke", "command" to "redo_workspace"))
             assertEquals(listOf("brushes", "tool_settings", "sizes"), group("sizes").array("panels").values())
+        }
+    }
+
+    @Test fun columnResizeRetainsControlsAndReflowsAtNativeSize() {
+        waitFor("resources ready", 60_000) { snapshot().optBoolean("shaders_ready") && !state().getJSONObject("filter_load").optBoolean("pending") }
+        for (pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER)) {
+            tool = pointer
+            for (panel in listOf("sizes", "toolbar", "navigator")) {
+                val configured = JSONObject(fixture.toString())
+                val bands = configured.getJSONObject("layout").getJSONArray("bands")
+                bands.getJSONObject(0).apply {
+                    put("extent", 252)
+                    put("root", obj("kind" to "tabs", "id" to 41, "panels" to JSONArray(listOf(panel)), "active" to panel, "tab_style" to "icon"))
+                }
+                // Keep each panel in one place, including the standalone toolbar.
+                bands.getJSONObject(1).put("root", obj("kind" to "tabs", "id" to 43,
+                    "panels" to JSONArray(listOf("layers")), "active" to "layers", "tab_style" to "icon"))
+                bands.remove(2)
+                action(obj("type" to "restore_workspace", "workspace" to configured))
+                assertNull(host.actionError)
+                val before = workspace()
+                val press = bounds("divider-40").center
+                val origin = bounds("workspace").left
+                val first = Offset(origin + (if (panel == "navigator") 220 else 120) * density, press.y)
+                val wide = Offset(origin + 420 * density, press.y)
+                event(MotionEvent.ACTION_DOWN, press)
+                event(MotionEvent.ACTION_MOVE, first); settle()
+                val retained = host.panelContent
+                val positions = mutableListOf<Rect>()
+                for ((index, position) in listOf(first, wide).withIndex()) {
+                    event(MotionEvent.ACTION_MOVE, position); settle()
+                    assertNull(host.actionError)
+                    assertTrue("Resize retains $panel controls", retained === host.panelContent)
+                    val allocation = group(panel).getJSONObject("bounds")
+                    val shown = bounds("group-41")
+                    assertEquals(allocation.number("width") * density, shown.width, 1.1f)
+                    assertEquals(allocation.number("height") * density, shown.height, 1.1f)
+                    positions.add(shown)
+                    if (panel == "sizes") {
+                        val presets = host.catalog.array("brush_sizes").values()
+                        val firstPreset = bounds("size-preset-${(presets[0] as Number).toInt()}")
+                        val thirdPreset = bounds("size-preset-${(presets[2] as Number).toInt()}")
+                        if (index == 0) assertTrue("Narrow presets wrap live", thirdPreset.top > firstPreset.top)
+                        else assertEquals("Wide presets share a row", firstPreset.top, thirdPreset.top, 1.1f)
+                    }
+                    if (panel == "toolbar") {
+                        val tiles = host.panelContent!!.array("panels").objects().first { it.getString("id") == panel }.array("tiles").objects()
+                        group(panel).getJSONObject("tiles").array("tiles").objects().forEachIndexed { tileIndex, rect ->
+                            if (tiles[tileIndex].getJSONObject("control").getString("kind") == "divider") return@forEachIndexed
+                            val tile = bounds("tile-toolbar-${tiles[tileIndex].getInt("id")}")
+                            assertEquals("Tile x follows shared reflow", shown.left + rect.number("x") * density, tile.left, 1.1f)
+                            assertEquals("Tile y follows shared reflow", shown.top + rect.number("y") * density, tile.top, 1.1f)
+                        }
+                    }
+                    if (panel == "navigator") {
+                        val overview = bounds("navigator-overview")
+                        assertTrue(shown.contains(overview.center))
+                        assertEquals(shown.width - 16 * density, overview.width, 1.1f)
+                    }
+                    if (pointer == MotionEvent.TOOL_TYPE_MOUSE) {
+                        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/resize-$panel-$index.png")
+                        file.parentFile!!.mkdirs()
+                        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                            file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                            bitmap.recycle()
+                        }
+                    }
+                }
+                assertTrue(positions[1].width > positions[0].width + 100 * density)
+                event(MotionEvent.ACTION_CANCEL); settle()
+                assertEquals("Cancel restores the workspace", before, workspace())
+                event(MotionEvent.ACTION_DOWN, press)
+                event(MotionEvent.ACTION_MOVE, wide); event(MotionEvent.ACTION_UP); settle()
+                val committed = workspace()
+                assertNotEquals(before, committed)
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
+                action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(committed, workspace())
+            }
         }
     }
 

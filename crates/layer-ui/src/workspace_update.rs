@@ -13,6 +13,16 @@
 //! Native transports include this object as `workspace_update` in both full
 //! snapshots and geometry-only packets; camera data can accompany either.
 //!
+//! Layout-aware consumers may additionally retain controls at `content_revision`.
+//! NativeHost::take_layout_update_bytes opts into packets containing `layout`,
+//! `workspace_layout`, `camera`, and `panel_measurements` when only dimensions or
+//! reflow measurements changed. Replace those absolute fields against matching
+//! content_revision before advancing model_revision. `workspace_layout` replaces
+//! bands, floating groups, collapsed columns and fit_tab_groups in the retained
+//! workspace; it is live gesture state, not a persistence request. Collapse/expand,
+//! content edits, completion and cancellation still publish full models. Existing
+//! consumers of take_update_bytes keep their original model_revision behavior.
+//!
 //! Capture tab slots/clip with BeginTabDrag and publish displayed drawer bounds
 //! with MeasureColumnDrawers. Tab presentation moves drawings, not the frozen
 //! insertion slots. Group placement moves native hit/clip/overview allocations
@@ -25,6 +35,10 @@ use serde::Serialize;
 pub struct WorkspaceUpdate {
     pub revision: u64,
     pub model_revision: u64,
+    /// Opt-in layout consumers retain controls/resources at this revision, but
+    /// must apply the accompanying resolved layout when model_revision changes.
+    /// Older consumers continue refreshing all models at model_revision.
+    pub content_revision: u64,
     /// None ends the presentation, including cancellation and undo/redo.
     pub drag: Option<WorkspaceDragPresentation>,
 }

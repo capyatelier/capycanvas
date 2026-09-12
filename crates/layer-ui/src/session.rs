@@ -84,6 +84,7 @@ pub struct UiSession<R: CanvasRenderer> {
     workspace_tab_drag: Option<crate::tab_drag::TabDrag>,
     workspace_drag_tabs: Vec<TabHit>,
     workspace_model_revision: u64,
+    workspace_content_revision: u64,
     workspace_history: workspace::WorkspaceHistory,
     workspace_transition: bool,
     workspace_read_only: bool,
@@ -139,6 +140,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             workspace_tab_drag: None,
             workspace_drag_tabs: Vec::new(),
             workspace_model_revision: 0,
+            workspace_content_revision: 0,
             workspace_history: workspace::WorkspaceHistory::default(),
             workspace_transition: false,
             workspace_read_only: false,
@@ -926,12 +928,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_model_revision
     }
 
+    /// Revision of retained controls/resources, excluding eligible resize layouts.
+    pub fn workspace_content_revision(&self) -> u64 {
+        self.workspace_content_revision
+    }
+
     /// One coherent presentation, usable directly by GTK, through Wasm, or via
     /// a native bridge. Geometry is in logical workspace units, never pixels.
     pub fn workspace_update(&self) -> WorkspaceUpdate {
         WorkspaceUpdate {
             revision: self.state.revision,
             model_revision: self.workspace_model_revision,
+            content_revision: self.workspace_content_revision,
             drag: self.workspace_drag.map(|drag| WorkspaceDragPresentation {
                 group: drag.floating.and_then(|id| {
                     self.layout(drag.viewport)
@@ -1550,6 +1558,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         use regions::*;
         let model_revision = self.workspace_model_revision;
+        let content_revision = self.workspace_content_revision;
+        // Only a dimension/measurement change with no open customization UI can
+        // retain content. Collapse/expand transitions still require full models.
+        let layout_only = !self.state.customization.is_open()
+            && !self.state.partial_zen()
+            && matches!(
+                &action,
+                UiAction::DragDivider {
+                    phase: ContactPhase::Move,
+                    ..
+                } | UiAction::MeasurePanels { .. }
+            );
+        let collapsed_before = layout_only.then(|| self.state.workspace.layout.collapsed.clone());
         let drag_before = self.workspace_drag;
         let moving_workspace = matches!(
             &action,
@@ -2466,6 +2487,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
         {
             self.workspace_model_revision = model_revision;
+            self.workspace_content_revision = content_revision;
+        }
+        if layout_only
+            && changed == (LAYOUT | CUSTOMIZATION)
+            && collapsed_before.as_ref() == Some(&self.state.workspace.layout.collapsed)
+            && !self.state.customization.is_open()
+        {
+            self.workspace_content_revision = content_revision;
         }
         Ok(change)
     }
@@ -3411,6 +3440,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.revision += 1;
             if regions != regions::CAMERA {
                 self.workspace_model_revision = self.state.revision;
+                self.workspace_content_revision = self.state.revision;
             }
         }
         UiChange {

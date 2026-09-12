@@ -107,6 +107,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var lastWorkspaceGroup: Pair<Int, androidx.compose.ui.geometry.Rect>? = null
         private set
+    private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
     private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.
     internal fun beginWorkspaceGesture() { lastWorkspaceGroup = null }
@@ -398,7 +399,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "camera_updates_published" to cameraUpdatesPublished,
             "workspace_updates_published" to workspaceUpdatesPublished,
             "publications" to rows(measuredPublications, publicationCount, 4),
-            "publication_fields" to JSONArray(listOf("native_ns", "parse_ns", "prepare_ns", "bytes")),
+            "publication_fields" to JSONArray(listOf("native_ns", "parse_ns", "prepare_ns", "utf16_units")),
             "panel_content_changes" to panelContentChanges,
             "pointer_allocations" to pointerAllocations,
             "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns")),
@@ -433,6 +434,34 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         val geometry = next.objectOrNull("workspace_update")?.let(WorkspaceGeometry::read)
         if (geometry != null) lastWorkspaceUpdate = geometry
+        if (!next.has("state") && next.has("layout") && geometry != null) {
+            workspaceUpdatesPublished++
+            val contentRevision = next.getJSONObject("workspace_update").getLong("content_revision")
+            recordPublication()
+            main.post {
+                val previous = snapshot ?: return@post
+                if (contentRevision != workspaceContentRevision || geometry.revision < (workspaceGeometry?.revision ?: -1L)) return@post
+                // A shallow snapshot retains every control/resource model. The
+                // resolved layout still drives native measurement and live reflow.
+                val updated = JSONObject().apply { previous.keys().forEach { put(it, previous.get(it)) } }
+                updated.put("layout", next.getJSONObject("layout"))
+                updated.put("panel_measurements", next.getJSONArray("panel_measurements"))
+                updated.put("workspace_update", next.getJSONObject("workspace_update"))
+                val camera = next.getJSONObject("camera")
+                previous.getJSONObject("state").apply {
+                    put("camera", camera); put("revision", geometry.revision)
+                    val workspaceLayout = getJSONObject("workspace").getJSONObject("layout")
+                    val patch = next.getJSONObject("workspace_layout")
+                    patch.keys().forEach { workspaceLayout.put(it, patch.get(it)) }
+                }
+                panelContent?.getJSONObject("state")?.put("camera", camera)
+                snapshot = updated
+                workspaceModelRevision = geometry.modelRevision
+                applyWorkspaceGeometry(geometry)
+                updateCameraReadout(camera)
+            }
+            return
+        }
         if (!next.has("state") && geometry != null) {
             workspaceUpdatesPublished++
             recordPublication()
@@ -502,6 +531,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         main.post {
             if (changedContent) panelContent = content
             snapshot = next
+            workspaceContentRevision = next.objectOrNull("workspace_update")?.optLong("content_revision", -1L) ?: -1L
             workspaceModelRevision = geometry?.modelRevision ?: -1L
             if (geometry != null) applyWorkspaceGeometry(geometry) else workspaceGeometry = null
             updateCameraReadout(state.getJSONObject("camera"))

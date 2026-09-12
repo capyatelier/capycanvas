@@ -26,7 +26,7 @@ impl NativeHost {
     /// by model_revision. This compatibility API keeps its existing wire format.
     /// Existing value consumers retain the same schema and publication policy.
     pub fn take_snapshot(&mut self) -> Option<Value> {
-        self.take_snapshot_with(serde_json::value::Serializer, false)
+        self.take_snapshot_with(serde_json::value::Serializer, false, false)
             .expect("Native snapshot contains JSON-compatible fields")
     }
 
@@ -38,7 +38,7 @@ impl NativeHost {
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
-            .take_snapshot_with(&mut serializer, false)?
+            .take_snapshot_with(&mut serializer, false, false)?
             .map(|()| bytes))
     }
 
@@ -50,7 +50,18 @@ impl NativeHost {
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
-            .take_snapshot_with(&mut serializer, true)?
+            .take_snapshot_with(&mut serializer, true, false)?
+            .map(|()| bytes))
+    }
+
+    /// Opt-in live reflow: retain controls at content_revision while applying a
+    /// complete resolved layout and current camera/measurements. Legacy update
+    /// consumers keep the existing full-refresh behavior for dimension changes.
+    pub fn take_layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
+        let mut bytes = Vec::new();
+        let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
+        Ok(self
+            .take_snapshot_with(&mut serializer, true, true)?
             .map(|()| bytes))
     }
 
@@ -58,6 +69,7 @@ impl NativeHost {
         &mut self,
         serializer: S,
         incremental: bool,
+        incremental_layout: bool,
     ) -> Result<Option<S::Ok>, S::Error> {
         let key = SnapshotKey {
             revision: self.session.state().revision,
@@ -108,6 +120,50 @@ impl NativeHost {
             self.last_snapshot = Some(key);
             return Ok(Some(snapshot));
         }
+        if incremental_layout
+            && let Some(update) = &update
+            && self.last_workspace_content_revision == Some(update.content_revision)
+            && self.last_snapshot.as_ref().is_some_and(|previous| {
+                SnapshotKey {
+                    revision: key.revision,
+                    ..previous.clone()
+                } == key
+            })
+        {
+            #[derive(Serialize)]
+            struct WorkspaceLayout<'a> {
+                bands: &'a [layer_ui::DockBand],
+                floating: &'a [layer_ui::FloatingGroup],
+                collapsed: &'a [layer_ui::CollapsedColumn],
+                fit_tab_groups: &'a [u32],
+            }
+            #[derive(Serialize)]
+            struct LayoutUpdate<'a> {
+                workspace_update: &'a layer_ui::WorkspaceUpdate,
+                layout: layer_ui::ResolvedLayout,
+                workspace_layout: WorkspaceLayout<'a>,
+                // work_area changes without a camera navigation revision.
+                camera: &'a layer_ui::Camera,
+                panel_measurements: &'a [layer_ui::PanelMeasurement],
+            }
+            let snapshot = LayoutUpdate {
+                workspace_update: update,
+                layout: self.session.layout(self.logical),
+                workspace_layout: WorkspaceLayout {
+                    bands: &self.session.state().workspace.layout.bands,
+                    floating: &self.session.state().workspace.layout.floating,
+                    collapsed: &self.session.state().workspace.layout.collapsed,
+                    fit_tab_groups: &self.session.state().workspace.layout.fit_tab_groups,
+                },
+                camera,
+                panel_measurements: &self.session.state().workspace.layout.measurements,
+            }
+            .serialize(serializer)?;
+            self.last_snapshot = Some(key);
+            self.last_workspace_model_revision = Some(update.model_revision);
+            self.last_camera_revision = Some(camera.revision);
+            return Ok(Some(snapshot));
+        }
         let workspace = self.session.durable_workspace();
         let changed_workspace = self.last_durable_workspace.as_ref() != Some(&workspace);
         let snapshot = self.serialize_snapshot(
@@ -117,6 +173,7 @@ impl NativeHost {
         )?;
         // A serializer failure cannot acknowledge an update that was not sent.
         self.last_snapshot = Some(key);
+        self.last_workspace_content_revision = update.as_ref().map(|u| u.content_revision);
         self.last_workspace_model_revision = update.map(|u| u.model_revision);
         self.last_camera_revision = Some(self.session.state().camera.revision);
         if changed_workspace {
@@ -291,6 +348,177 @@ mod tests {
             tabs: vec![],
         })
         .unwrap();
+    }
+
+    fn resize_divider(host: &mut NativeHost, phase: layer_ui::ContactPhase, x: f32) {
+        host.dispatch(UiAction::DragDivider {
+            id: 40,
+            phase,
+            position: [x, 300.],
+            viewport: host.logical,
+        })
+        .unwrap();
+    }
+    fn layout_update(host: &mut NativeHost) -> Value {
+        decoded(host.take_layout_update_bytes().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn resize_layout_updates_retain_content_and_match_full_models_and_history() {
+        use layer_ui::ContactPhase::*;
+        for platform in [
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+            Platform::Generic,
+        ] {
+            let mut host = host(platform);
+            workspace_fixture(&mut host);
+            let initial = layout_update(&mut host);
+            let saved = initial["state"]["workspace"].clone();
+            let retained = host.snapshot();
+            let content_revision = initial["workspace_update"]["content_revision"].clone();
+            resize_divider(&mut host, Down, 255.);
+            for x in [320., 420., 350.] {
+                resize_divider(&mut host, Move, x);
+                let packet = layout_update(&mut host);
+                let full = host.snapshot();
+                assert!(packet.get("state").is_none(), "{platform:?}: {packet}");
+                assert_eq!(
+                    packet["workspace_update"]["content_revision"],
+                    content_revision
+                );
+                assert_ne!(
+                    packet["workspace_update"]["model_revision"],
+                    initial["workspace_update"]["model_revision"]
+                );
+                assert_eq!(packet["layout"], full["layout"]);
+                assert_eq!(packet["camera"], full["state"]["camera"]);
+                assert_eq!(packet["panel_measurements"], full["panel_measurements"]);
+                for field in ["bands", "floating", "collapsed", "fit_tab_groups"] {
+                    assert_eq!(
+                        packet["workspace_layout"][field],
+                        full["state"]["workspace"]["layout"][field]
+                    );
+                }
+                for field in ["panels", "application_menus", "color_panel", "preferences"] {
+                    assert_eq!(retained[field], full[field], "Retained {field}");
+                }
+                assert!(host.take_layout_update_bytes().unwrap().is_none());
+            }
+            resize_divider(&mut host, Cancel, 350.);
+            assert_eq!(layout_update(&mut host)["state"]["workspace"], saved);
+            resize_divider(&mut host, Down, 255.);
+            resize_divider(&mut host, Move, 370.);
+            layout_update(&mut host);
+            resize_divider(&mut host, Up, 370.);
+            let committed = layout_update(&mut host);
+            assert_ne!(committed["state"]["workspace"], saved);
+            assert!(committed.get("workspace_persistence").is_some());
+            host.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            })
+            .unwrap();
+            assert_eq!(layout_update(&mut host)["state"]["workspace"], saved);
+            host.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            })
+            .unwrap();
+            assert_eq!(
+                layout_update(&mut host)["state"]["workspace"],
+                committed["state"]["workspace"]
+            );
+        }
+    }
+
+    #[test]
+    fn resize_content_changes_collapse_and_legacy_consumers_require_full_models() {
+        use layer_ui::ContactPhase::*;
+        let mut host = host(Platform::Android);
+        workspace_fixture(&mut host);
+        layout_update(&mut host);
+        resize_divider(&mut host, Down, 255.);
+        resize_divider(&mut host, Move, 320.);
+        // Existing incremental consumers still get their original full schema.
+        assert!(update(&mut host).get("state").is_some());
+        host.dispatch(UiAction::SetBrushSize { value: 37. })
+            .unwrap();
+        resize_divider(&mut host, Move, 340.);
+        assert_eq!(layout_update(&mut host)["state"]["brush"]["diameter"], 37.);
+        host.chrome_hidden = true;
+        resize_divider(&mut host, Move, 350.);
+        assert_eq!(layout_update(&mut host)["chrome_hidden"], true);
+        host.chrome_hidden = false;
+        layout_update(&mut host);
+        resize_divider(&mut host, Move, 20.);
+        let collapsed = layout_update(&mut host);
+        assert!(collapsed.get("state").is_some());
+        assert!(
+            !collapsed["layout"]["collapsed"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        resize_divider(&mut host, Move, 400.);
+        let expanded = layout_update(&mut host);
+        assert!(expanded.get("state").is_some());
+        assert!(
+            expanded["layout"]["collapsed"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        resize_divider(&mut host, Cancel, 400.);
+        assert!(layout_update(&mut host).get("state").is_some());
+    }
+
+    #[test]
+    fn reflow_measurements_and_failed_layout_serialization_preserve_revisions() {
+        use layer_ui::ContactPhase::*;
+        let mut host = host(Platform::Android);
+        workspace_fixture(&mut host);
+        let initial = layout_update(&mut host);
+        host.dispatch(UiAction::MeasurePanels {
+            measurements: vec![layer_ui::PanelMeasurement {
+                panel: layer_ui::Panel::Brushes,
+                tab_width: 80.,
+                content_height: 500.,
+            }],
+        })
+        .unwrap();
+        let measured = layout_update(&mut host);
+        assert_eq!(
+            measured["workspace_update"]["content_revision"],
+            initial["workspace_update"]["content_revision"]
+        );
+        assert_eq!(
+            measured["panel_measurements"],
+            host.snapshot()["panel_measurements"]
+        );
+        resize_divider(&mut host, Down, 255.);
+        resize_divider(&mut host, Move, 360.);
+        struct FailedWriter;
+        impl std::io::Write for FailedWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic write failure"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut serializer =
+            serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
+        assert!(
+            host.take_snapshot_with(&mut serializer, true, true)
+                .is_err()
+        );
+        let packet = layout_update(&mut host);
+        assert!(packet.get("state").is_none());
+        assert_eq!(packet["layout"], host.snapshot()["layout"]);
+        assert_eq!(packet["camera"], host.snapshot()["state"]["camera"]);
+        host.resize(2200, 1800, 2.).unwrap();
+        assert!(layout_update(&mut host).get("state").is_some());
     }
 
     #[test]
@@ -542,7 +770,10 @@ mod tests {
         let fail = |host: &mut NativeHost| {
             let mut serializer =
                 serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
-            assert!(host.take_snapshot_with(&mut serializer, false).is_err());
+            assert!(
+                host.take_snapshot_with(&mut serializer, false, false)
+                    .is_err()
+            );
         };
         let mut host = host(Platform::Mac);
         fail(&mut host);

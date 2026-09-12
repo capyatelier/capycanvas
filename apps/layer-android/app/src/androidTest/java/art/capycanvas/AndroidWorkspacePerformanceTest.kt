@@ -92,20 +92,32 @@ class AndroidWorkspacePerformanceTest {
             }
             fixture.put("zen_mode", false)
             val measuring = AtomicBoolean(false)
-            data class Frame(val duration: Long, val deadline: Long, val vsync: Long)
+            data class Frame(val duration: Long, val deadline: Long, val vsync: Long, val layout: Long, val draw: Long)
             val durations = mutableListOf<Frame>()
             val drawnRevisions = mutableSetOf<Long>()
+            var resizeNode: SemanticsNode? = null
+            var lastDrawnBounds: androidx.compose.ui.geometry.Rect? = null
+            var changedBounds = 0
             var lostMetrics = 0
             val frames = HandlerThread("workspace-frame-metrics").apply { start() }
             val listener = Window.OnFrameMetricsAvailableListener { _, metrics, dropped ->
                 if (measuring.get()) synchronized(durations) {
                     durations.add(Frame(metrics.getMetric(FrameMetrics.TOTAL_DURATION),
-                        metrics.getMetric(FrameMetrics.DEADLINE), metrics.getMetric(FrameMetrics.VSYNC_TIMESTAMP)))
+                        metrics.getMetric(FrameMetrics.DEADLINE), metrics.getMetric(FrameMetrics.VSYNC_TIMESTAMP),
+                        metrics.getMetric(FrameMetrics.LAYOUT_MEASURE_DURATION), metrics.getMetric(FrameMetrics.DRAW_DURATION)))
                     lostMetrics += dropped
                 }
             }
             val drawListener = android.view.ViewTreeObserver.OnDrawListener {
-                if (measuring.get()) host.workspaceGeometry?.revision?.let { drawnRevisions.add(it) }
+                if (measuring.get()) {
+                    host.workspaceGeometry?.revision?.let { drawnRevisions.add(it) }
+                    // Read the retained LayoutNode's actual allocation. A newly
+                    // received revision may still be awaiting recomposition.
+                    resizeNode?.boundsInRoot?.let { bounds ->
+                        if (lastDrawnBounds != bounds) changedBounds++
+                        lastDrawnBounds = bounds
+                    }
+                }
             }
             scenario.onActivity { owner.view.viewTreeObserver.addOnDrawListener(drawListener) }
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
@@ -147,7 +159,11 @@ class AndroidWorkspacePerformanceTest {
                         scenario.onActivity { retainedSnapshot = host.snapshot; retainedPanels = host.panelContent }
                         report(reset = true)
                         synchronized(durations) { durations.clear(); lostMetrics = 0 }
-                        scenario.onActivity { drawnRevisions.clear() }
+                        scenario.onActivity {
+                            drawnRevisions.clear(); changedBounds = 0
+                            resizeNode = if (resize) find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-41") else null
+                            lastDrawnBounds = resizeNode?.boundsInRoot
+                        }
                         measuring.set(true)
                         val traceName = "workspace-benchmark-${if (mouse) "mouse" else "touch"}-$mode"
                         android.os.Trace.beginAsyncSection(traceName, 1)
@@ -165,7 +181,12 @@ class AndroidWorkspacePerformanceTest {
                                 val elapsed = SystemClock.uptimeMillis() - start
                                 if (elapsed >= 5000) { finished.countDown() }
                                 else {
-                                    val progress = (sin(elapsed * Math.PI / 500) * .5 + .5).toFloat()
+                                    // Constant-speed resize sweeps avoid repeated pixels from
+                                    // easing near the ends, making actual allocation changes
+                                    // a useful measure of fresh resize geometry.
+                                    val cycle = (elapsed % 1000) / 500f
+                                    val progress = if (resize) (if (cycle <= 1f) cycle else 2f - cycle)
+                                        else (sin(elapsed * Math.PI / 500) * .5 + .5).toFloat()
                                     val point = if (mode == "floating") Offset(workspace.center.x + (progress - .5f) * workspace.width * .25f, workspace.center.y)
                                         else Offset(first.x + (last.x - first.x) * progress, first.y)
                                     eventOnMain(MotionEvent.ACTION_MOVE, point)
@@ -187,14 +208,16 @@ class AndroidWorkspacePerformanceTest {
                         val vsyncs = rows.map { it.vsync }.distinct().sorted()
                         val intervals = vsyncs.zipWithNext { a, b -> b - a }.sorted()
                         var drawn = 0
-                        scenario.onActivity { drawn = drawnRevisions.size }
+                        var changes = 0
+                        scenario.onActivity { drawn = drawnRevisions.size; changes = changedBounds }
                         assertTrue("Android must render while dragging", timings.isNotEmpty())
                         fun percentile(values: List<Long>, fraction: Double) = values[((values.size - 1) * fraction).toInt()] / 1_000_000.0
                         val metrics = report()
-                        if (!resize) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
+                        val expectRetained = !resize || InstrumentationRegistry.getArguments().getString("expectRetainedResize") != "false"
+                        if (expectRetained) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
                         scenario.onActivity {
                             if (!resize) assertSame(retainedSnapshot, host.snapshot)
-                            if (!resize) assertSame(retainedPanels, host.panelContent)
+                            if (expectRetained) assertSame(retainedPanels, host.panelContent)
                             val geometry = host.workspaceGeometry!!
                             if (geometry.group != null) {
                                 val shown = find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-${geometry.group}")!!.boundsInRoot
@@ -205,9 +228,15 @@ class AndroidWorkspacePerformanceTest {
                         }
                         val result = obj("mouse" to mouse, "mode" to mode, "elapsed_ms" to elapsed, "inputs" to samples,
                             "display_hz" to refreshRate, "debuggable" to BuildConfig.DEBUG,
+                            "trajectory" to if (resize) "triangle" else "sine",
                             "frames" to rows.size, "distinct_vsyncs" to vsyncs.size, "drawn_revisions" to drawn,
                             "frame_rate" to (vsyncs.size * 1000.0 / elapsed), "drawn_update_rate" to (drawn * 1000.0 / elapsed),
+                            "changed_bounds" to changes, "changed_bounds_rate" to (changes * 1000.0 / elapsed),
                             "frame_p50_ms" to percentile(timings, .5), "frame_p95_ms" to percentile(timings, .95),
+                            "layout_p50_ms" to percentile(rows.map { it.layout }.sorted(), .5),
+                            "layout_p95_ms" to percentile(rows.map { it.layout }.sorted(), .95),
+                            "draw_p50_ms" to percentile(rows.map { it.draw }.sorted(), .5),
+                            "draw_p95_ms" to percentile(rows.map { it.draw }.sorted(), .95),
                             "vsync_interval_p50_ms" to percentile(intervals, .5), "vsync_interval_p95_ms" to percentile(intervals, .95),
                             "deadline_misses" to rows.count { it.deadline > 0 && it.duration > it.deadline }, "lost_metrics" to lostMetrics,
                             "snapshot_attempts" to metrics.getLong("snapshot_attempts"), "snapshots" to metrics.getLong("snapshots_published"),
@@ -217,7 +246,7 @@ class AndroidWorkspacePerformanceTest {
                             val values = publicationRows.map { it.getLong(column) }.sorted()
                             if (values.isNotEmpty()) { result.put("${name}_p50_ms", percentile(values, .5)); result.put("${name}_p95_ms", percentile(values, .95)) }
                         }
-                        result.put("publication_bytes", publicationRows.sumOf { it.getLong(3) })
+                        result.put("publication_utf16_units", publicationRows.sumOf { it.getLong(3) })
                         result.put("panel_content_changes", metrics.getLong("panel_content_changes"))
                         Log.i(if (resize) "CapyResizePerf" else "CapyDragPerf", result.toString())
                     } finally {
