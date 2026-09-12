@@ -104,13 +104,17 @@ try {
     Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
     Wait-Until {(Preview-Hash "layer-$paint-thumbnail") -eq $original} 'Thumbnail pixels did not restore after Undo' 15
     if(((Control "layer-$paint-name").GetRuntimeId() -join ':') -ne $identity){throw 'Painting replaced the layer row'}
+    $opacitySlider=Control 'layer-opacity-slider'
+    $opacitySlider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.72)
+    Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.72) -lt .000001} 'Compact opacity slider did not reach the editing layer'
     Edit 'layer-opacity' '60';(Control 'layer-blend').SetFocus()
     Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.6) -lt .000001} 'Layer opacity not applied'
+    Wait-Until {[Math]::Abs((Control 'layer-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.6) -lt .000001} 'Opacity slider did not follow the numeric field'
     Choose 'layer-blend' 'Multiply'
     Wait-Until {(Model).state.layer_tools.editing_layer.blend -eq 1} 'Layer blend not applied'
     Invoke 'layer-alpha_lock';Wait-Until {(Model).state.layer_tools.editing_layer.alpha_locked} 'Alpha lock not applied'
     Invoke 'layer-lock';Wait-Until {(Model).state.layer_tools.editing_layer.locked} 'Edit lock not applied'
-    Wait-Until {!(Control 'layer-opacity').Current.IsEnabled -and !(Control 'layer-blend').Current.IsEnabled} 'Locked controls remained enabled'
+    Wait-Until {!(Control 'layer-opacity').Current.IsEnabled -and !(Control 'layer-opacity-slider').Current.IsEnabled -and !(Control 'layer-blend').Current.IsEnabled} 'Locked controls remained enabled'
     Invoke 'layer-lock';Wait-Until {!(Model).state.layer_tools.editing_layer.locked} 'Edit lock not cleared'
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer not created'

@@ -180,10 +180,12 @@ try{
     Wait-Until {Shown 'layers' 'layer_opacity'} 'Layer opacity visibility did not restore'
     Capture 'layers'
     Dismiss 'layers'
-    Invoke 'application-menu-window'
-    (Control 'Navigator panel' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    # Navigator is already present in the full editor preset.
     $null=Control 'panel-tab-navigator'
-    Start-Sleep -Milliseconds 250
+    # Constrain the full editor so the configuration's GPU overview overlaps
+    # the opaque Tool Set body; the wide preset leaves empty canvas below it.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1100 -Height 1000
+    Start-Sleep -Milliseconds 400
     Capture 'navigator-before'
     $configuration=Configure 'navigator'
     $null=Control 'navigator-overview' -Within $configuration

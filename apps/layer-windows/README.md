@@ -571,13 +571,32 @@ capture uses a measured 986 by 658 DIP viewport and Fit canvas, with actual
 display scale and uncropped client-image dimensions recorded locally. This
 supports comparison with `tools/visual/chrome-capture.mjs`.
 
-Main through f6c58a7 is integrated, including durable workspace history,
-GTK workspace storage and the other ports' drag updates. Windows integration
-with the new workspace store remains separate work. Runtime filter package
-import, packaging, physical gestures and full visual parity remain unfinished.
-Chrome comparisons still show differences in Tool Set button arrangement,
-header spacing, grips, disabled icon styling and some property/layer controls.
-Drawer clipping and all overlap/scroll/drag combinations require further
-acceptance. The intermittent final shader-worker join remains open even though
-these editor and Layers reviews exit within the five-second gate.
+The next styling pass aligns desktop header spacing, the shared grip asset,
+disabled icons, active-tab shoulders, compact layer opacity and property-choice
+rows. Tool Set follows the GTK/Android full-width preview arrangement; the Web
+reference differs there. Full visual parity remains unaccepted.
+
+Attached tabs use shared frozen geometry and insertion thresholds. Native
+Composition animations slide neighboring copies without moving original hit
+rectangles. The tab strip and scrolling content survive panel-body replacement
+during tear-off, preserving the active pointer capture. The bridge queues Down
+and BeginTabDrag together and uses the shared workspace_drag_preview query.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-tab-drag.ps1 -Executable <native-exe>
+~~~
+
+This fixture injects OS touch into its owned review window and checks two grab
+positions, fixed hit rectangles, release insertion, attached and detached
+cancellation, held floating movement and workspace Undo. A separate contact
+timer keeps delivering held frames while UI Automation or screenshot capture
+blocks the observation thread. It does not establish physical digitizer or
+latency acceptance.
+
+Main through 08a0c15 is integrated, including shared workspace motion publication
+and workspace manager/recovery infrastructure. Windows still needs to adopt the
+incremental motion publication path and connect the workspace store/manager.
+Runtime filter package import, packaging, physical gestures, DPI/device
+lifecycle, full visual parity and all overlap/scroll/drag combinations remain.
+The intermittent final shader-worker join remains open.
 Presentation benchmarking remains deferred.

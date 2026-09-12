@@ -77,7 +77,7 @@ try{
     Wait-Until {try{($color.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 280}catch{$false}} 'Color drawer did not reach shared width'
     Capture 'color'
     Invoke $colorId
-    Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Find 'Color wheel' -Name)} 'Repeating color tile did not close drawer'
+    Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Find 'tool-drawer')} 'Repeating color tile did not close drawer'
     ContextMenu 'panel-tab-sizes'
     Invoke 'Collapse column' -Name
     Wait-Until {@((Model).layout.collapsed).Count -gt 0} 'Column context action did not collapse'
@@ -93,25 +93,25 @@ try{
     Wait-Until {@((Model).layout.collapsed).Count -gt 0} 'Workspace Undo did not restore collapse'
     Invoke 'application-menu-window';Invoke 'redo_workspace'
     Wait-Until {@((Model).layout.collapsed).Count -eq 0} 'Workspace Redo did not restore expansion'
-    ContextMenu 'panel-tab-layers'
+    # The full editor groups Properties with Filters; Layers is independent.
+    ContextMenu 'panel-tab-properties'
     Invoke 'Collapse column' -Name
-    Invoke 'column-icon-layers'
-    Wait-Until {$null -ne (Find 'drawer-tab-properties')} 'Column drawer did not expose shared tabs'
-    $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'layers'})[0]
+    Invoke 'column-icon-properties'
+    Wait-Until {$null -ne (Find 'drawer-tab-adjustments')} 'Column drawer did not expose shared tabs'
+    $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'})[0]
     $rightDrawer=Control "column-drawer-$($right.anchor.column)"
     $grip=Control "drawer-grip-$($right.anchor.group)"
     if($grip.Current.HelpText -notmatch 'every panel'){throw 'Drawer is missing its whole-group drag handle'}
-    Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 320}catch{$false}} 'Layer drawer did not reach shared width'
-    Invoke 'drawer-tab-properties';Invoke 'drawer-tab-properties'
-    Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'}).Count -eq 1} 'Drawer tabs did not follow shared selection'
+    Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 320}catch{$false}} 'Properties drawer did not reach shared width'
+    Invoke 'drawer-tab-adjustments';Invoke 'drawer-tab-adjustments'
+    Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'adjustments'}).Count -eq 1} 'Drawer tabs did not follow shared selection'
     if($null -ne (Model).state.customization.expanded){throw 'Repeating a drawer tab opened configuration'}
     if(($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -ne 320){throw 'Drawer tab switch changed the shared column width'}
-    Capture 'properties-column'
-    Invoke 'column-icon-layers'
+    Capture 'filters-column'
+    Invoke 'column-icon-properties'
     Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Column origin did not close after tab switch'
     Invoke "expand-column-$($right.anchor.column)"
-    Invoke 'application-menu-window'
-    (Control 'Navigator panel' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+
     ContextMenu 'panel-tab-navigator'
     Invoke 'Collapse column' -Name
     Invoke 'column-icon-navigator'

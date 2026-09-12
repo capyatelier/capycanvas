@@ -48,7 +48,8 @@ Layer menus and editing controls share their policy with the other ports.
 The Layers image picker decodes oriented sRGB pixels on the document worker;
 shared Core owns insertion, Undo and embedded project assets. Panel configuration and toolbar management use shared layout and actions;
 GPU Navigator previews use compositor clips when overlapping native panels.
-The full editor docking layout and runtime filter package import remain in progress.
+The full editor preset and titlebar-aware Zen layout are available. Complete
+workspace gesture acceptance and runtime filter package import remain in progress.
 Project transport handles background work, save checkpoints and replacement of
 local files; export does not mark the editable project as saved.
 

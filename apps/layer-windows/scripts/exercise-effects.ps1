@@ -64,8 +64,14 @@ function Choose([string]$Id,[string]$Option){
     (Control $Id).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control $Option -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
+function Select-Panel([string]$Id){
+    # Repeating an active tab opens panel configuration. Insertion can select
+    # Properties itself, so select only when the shared active panel differs.
+    if(@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -eq 0){Invoke ('panel-tab-'+$Id)}
+    Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -gt 0} "Panel $Id did not become active"
+}
 function Select-Filter([string]$Id,[string]$Label){
-    Invoke 'Filters' -Name
+    Select-Panel 'adjustments'
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'adjustments'}).Count -gt 0} 'Filters tab did not open'
     if($null -ne (Model).state.filter_picker.search){Invoke 'filter-search-toggle'}
     Choose 'filter-category' 'All filters'
@@ -80,7 +86,7 @@ function Select-Filter([string]$Id,[string]$Label){
     } 'Search rows did not reach the native tree'
     Invoke ('filter-'+$Id)
     Wait-Until {(Model).state.layer_properties.description -eq $Label} 'Inserted filter did not become active'
-    Invoke 'Properties' -Name
+    Select-Panel 'properties'
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'properties'}).Count -gt 0} 'Properties did not appear'
 }
 function Preview-Hash([string]$Id){
@@ -118,7 +124,7 @@ try {
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     [CapyEffectsCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    Invoke 'Filters' -Name
+    Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Curves preview not ready' 20
     $original=Preview-Hash 'curves';if(!$original){throw 'No initial preview pixels'}
     $rowIdentity=(Control 'filter-curves').GetRuntimeId() -join ':'
@@ -138,7 +144,7 @@ try {
     Wait-Until {(Model).state.adjustments.Count -eq 0} 'Unmatched search did not empty picker'
     if(Find 'filter-curves'){throw 'Search left an old insert button'}
 
-    Invoke 'Properties' -Name
+    Select-Panel 'properties'
     Edit 'property-opacity' '60';(Control 'property-blend').SetFocus()
     Wait-Until {[Math]::Abs((Property 'opacity').value.value-.6) -lt .000001} 'Opacity not updated'
     Choose 'property-blend' 'Multiply';Wait-Until {(Property 'blend').value.value -eq 1} 'Blend not updated'
@@ -182,10 +188,14 @@ try {
     $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
     (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
-    Invoke 'Close' -Name
+    $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+    $close=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Close'),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+    $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     Capture 'alternate-theme'
-    Invoke 'Filters' -Name
+    Select-Panel 'adjustments'
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'adjustments'}).Count -gt 0} 'Filters tab did not reopen'
     Edit 'filter-search' 'C';Edit 'filter-search' 'Cur';Edit 'filter-search' 'Curves'
     Wait-Until {(Model).state.filter_picker.search -eq 'Curves'} 'Rapid search edits were lost'
@@ -196,10 +206,10 @@ try {
     Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 64 -and !(Model).state.document_file.busy} 'Document replacement failed' 45
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document dialog gate did not clear'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after document replacement not ready' 20
-    Invoke 'Properties' -Name
+    Select-Panel 'properties'
     Wait-Until {(Property 'opacity').value.value -eq 1 -and (Property 'blend').value.value -eq 0} 'Replacement reused old property values'
     if((Model).state.document_file.modified){throw 'Preview or stale property changed new document'}
-    Invoke 'Filters' -Name
+    Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Retained cache not shown on reopen' 15
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}

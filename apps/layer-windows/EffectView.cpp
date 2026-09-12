@@ -90,14 +90,22 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                         [property]{return num(object(property->model(),L"value"),L"value");},
                         [property](double v){property->set(N(v));},fields,nullptr,false,property->id()));
                 }else if(type==L"choice"){
-                    StackPanel row;row.Spacing(3);row.Children().Append(label(data,name));
-                    ComboBox choices;choices.MinWidth(0);choices.MinHeight(32);choices.HorizontalAlignment(HorizontalAlignment::Stretch);
-                    choices.FontSize(data->textSize());choices.Background(data->brush(L"input"));
+                    Grid row;row.ColumnSpacing(6);
+                    ColumnDefinition caption;caption.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(caption);
+                    ColumnDefinition choiceColumn;choiceColumn.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(choiceColumn);
+                    auto text=label(data,name);text.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(text);
+                    ComboBox choices;choices.MinWidth(0);choices.MinHeight(32);choices.Height(32);
+                    choices.HorizontalAlignment(HorizontalAlignment::Right);choices.Padding({6,0,0,0});
+                    choices.FontSize(data->textSize());choices.FontWeight(Windows::UI::Text::FontWeights::Bold());
+                    choices.Background(data->brush(L"input"));choices.BorderThickness({0,0,0,0});choices.CornerRadius({6,6,6,6});
+                    row.SizeChanged([weak=make_weak(choices)](auto&&,SizeChangedEventArgs const& event){
+                        if(auto choices=weak.get())choices.MaxWidth(std::max(48.f,event.NewSize().Width*.6f));
+                    });
                     for(auto option:array(kind,L"options"))choices.Items().Append(box_value(option.GetString()));
                     AutomationProperties::SetName(choices,name);AutomationProperties::SetAutomationId(choices,property->id());
                     choices.SelectionChanged([property,weak=make_weak(choices)](auto&&,auto&&){if(auto choices=weak.get();choices&&choices.SelectedIndex()>=0)property->set(N(choices.SelectedIndex()));});
                     fields.emplace_back([property,choices]{choices.SelectedIndex(int(num(object(property->model(),L"value"),L"value")));});
-                    row.Children().Append(choices);body.Children().Append(row);
+                    Grid::SetColumn(choices,1);row.Children().Append(choices);body.Children().Append(row);
                 }else if(type==L"toggle"){
                     CheckBox check;check.Content(label(data,name));check.MinHeight(32);check.MinWidth(0);
                     AutomationProperties::SetName(check,name);AutomationProperties::SetAutomationId(check,property->id());

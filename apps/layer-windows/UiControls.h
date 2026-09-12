@@ -80,6 +80,18 @@ inline Image icon(hstring name,hstring theme,double size=16){
     result.Source(Imaging::SvgImageSource(asset(L"icons/"+std::wstring(theme.c_str())+L"/"+file+L".svg")));
     result.IsHitTestVisible(false);return result;
 }
+// Use the same trailing grip asset, orientation and inset as GTK/Android.
+inline void orientGrip(FrameworkElement const& grip,bool vertical){
+    auto transform=grip.RenderTransform().try_as<CompositeTransform>();
+    if(!transform){transform=CompositeTransform();grip.RenderTransform(transform);}
+    transform.Rotation(vertical?90.:0.);
+    transform.TranslateX(vertical?0.:-1.6);transform.TranslateY(vertical?-1.6:0.);
+}
+inline Image panelGrip(hstring const& theme,bool vertical=false){
+    auto result=icon(L"grip",theme);result.Opacity(.65);
+    result.HorizontalAlignment(HorizontalAlignment::Center);result.VerticalAlignment(VerticalAlignment::Center);
+    result.RenderTransformOrigin({.5f,.5f});orientGrip(result,vertical);return result;
+}
 inline J numeric(J const& spec,double value,J const& operation){
     auto json=to_string(O({{L"control",spec},{L"value",N(value)},{L"operation",operation}}).Stringify());
     std::unique_ptr<char,decltype(&capy_string_free)> result(capy_number(json.c_str()),capy_string_free);
@@ -144,7 +156,7 @@ inline Button button(std::shared_ptr<WorkspaceData> const& data,hstring const& t
 }
 struct NumberState {double value=0;bool editing=false,dragging=false,formatting=false;};
 inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
-    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L""){
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false){
     auto local=std::make_shared<NumberState>();local->value=get();
     StackPanel root;root.Spacing(0);
     Grid header;ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
@@ -235,6 +247,13 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
         entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
         slider.Value(num(shown,L"fill"));
     });
+    if(inlineTrack){
+        // Compact layer controls retain the same shared value/expression rules
+        // and target guards as full numeric controls.
+        header.Children().RemoveAt(0);header.Children().InsertAt(0,slider);
+        header.ColumnSpacing(6);entry.Width(48);entry.MinWidth(0);
+        slider.MinWidth(0);root.Children().Append(header);return root;
+    }
     if(valueOnly){
         header.Children().RemoveAt(1);entry.ClearValue(FrameworkElement::WidthProperty());entry.MinWidth(0);
         entry.HorizontalAlignment(HorizontalAlignment::Stretch);entry.TextAlignment(TextAlignment::Center);
@@ -253,7 +272,10 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
         });
         step.Width(24);step.Height(24);step.Content(icon(direction<0?L"minus":L"plus",data->theme()));
         if(ranged){Grid::SetColumn(step,direction<0?0:2);trackRow.Children().Append(step);}else spin.Children().Append(step);
-        bindings.emplace_back([local,spec,step,direction]{step.IsEnabled(direction<0?local->value>num(spec,L"min"):local->value<num(spec,L"max"));});
+        bindings.emplace_back([local,spec,step,direction]{
+            bool enabled=direction<0?local->value>num(spec,L"min"):local->value<num(spec,L"max");
+            step.IsEnabled(enabled);step.Opacity(enabled?1.:.36);
+        });
     }
     Grid::SetColumn(slider,1);trackRow.Children().Append(slider);
     root.Children().Append(header);if(ranged)root.Children().Append(trackRow);return root;

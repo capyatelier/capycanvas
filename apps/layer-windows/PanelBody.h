@@ -24,5 +24,6 @@ private:
     std::vector<uint32_t> tileOrder;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Border> dividers;
     winrt::Microsoft::UI::Xaml::FrameworkElement tileGrip{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Image tileGripMark{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Grid sizes(double width);
 };

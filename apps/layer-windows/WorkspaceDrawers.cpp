@@ -170,23 +170,24 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     auto pick=button(data,str(panel,L"title"),[data=data,group=num(tabs,L"group"),panelId]{
                         data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(group)},{L"panel",S(panelId)}}));
                     });
-                    pick.Height(36);pick.Padding({8,4,8,4});
+                    pick.Height(36);pick.MinWidth(36);pick.Padding({8,4,8,4});pick.CornerRadius({6,6,0,0});
                     StackPanel labelRow;labelRow.Orientation(Orientation::Horizontal);labelRow.Spacing(6);
-                    labelRow.Children().Append(icon(str(panel,L"icon"),data->theme()));
-                    if(selected)labelRow.Children().Append(label(data,str(panel,L"title"),true));
-                    pick.Content(labelRow);if(selected)pick.Background(data->brush(L"panel"));
+                    auto presentation=object(panel,L"tab");
+                    if(flag(presentation,L"show_icon"))labelRow.Children().Append(icon(str(panel,L"icon"),data->theme()));
+                    if(flag(presentation,L"show_name"))labelRow.Children().Append(label(data,str(panel,L"title"),true));
+                    pick.Content(labelRow);
                     AutomationProperties::SetAutomationId(pick,L"drawer-tab-"+panelId);
                     auto item=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                         O({{L"group",N(group)},{L"index",N(index++)},{L"panel",S(panelId)}}));
-                    row.Children().Append(pick);
+                    row.Children().Append(panelTabShell(data,pick,selected));
                 }
                 ScrollViewer strip;strip.Content(row);strip.Background(data->brush(L"tabbar"));
                 strip.HorizontalScrollMode(ScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
                 strip.VerticalScrollMode(ScrollMode::Disabled);header.Children().Append(strip);
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
-                Border grip;grip.Background(clear());grip.Height(36);
-                grip.Child(icon(L"grip",data->theme()));
+                Border grip;grip.Background(clear());grip.Width(20);grip.Height(36);
+                grip.HorizontalAlignment(HorizontalAlignment::Left);grip.Child(panelGrip(data->theme()));
                 gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
                 AutomationProperties::SetAutomationId(grip,L"drawer-grip-"+to_hstring(uint32_t(group)));
                 AutomationProperties::SetName(grip,L"Move panel group");

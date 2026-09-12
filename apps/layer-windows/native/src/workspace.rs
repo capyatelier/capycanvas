@@ -22,6 +22,7 @@ fn request(json: &str) -> Result<Value, String> {
             "context"
             | "panel_handle_target"
             | "drop"
+            | "workspace_drag_preview"
             | "drawer"
             | "drawer_toolbar"
             | "expansion"
@@ -155,6 +156,88 @@ mod tests {
             assert!(result["error"].is_null());
         }
         assert_eq!(revision, host.session.engine().document().revision);
+    }
+    #[test]
+    fn windows_tab_capture_and_preview_use_frozen_shared_insertion() {
+        use layer_ui::{Bounds, ContactPhase, DockItem, Panel, TabHit, UiAction};
+        for offset in [2., 70.] {
+            let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+            initialize(&mut host).unwrap();
+            host.resize(986, 658, 1.).unwrap();
+            let before = host.session.state().workspace.layout.clone();
+            let revision = host.session.engine().document().revision;
+            let group = host
+                .session
+                .layout([986., 658.])
+                .groups
+                .into_iter()
+                .find(|g| g.panels.contains(&Panel::ToolSettings))
+                .unwrap();
+            let clip = Bounds {
+                height: 36.,
+                ..group.bounds
+            };
+            let tabs = vec![
+                TabHit {
+                    group: group.id,
+                    index: 0,
+                    bounds: Bounds { width: 80., ..clip },
+                },
+                TabHit {
+                    group: group.id,
+                    index: 1,
+                    bounds: Bounds {
+                        x: clip.x + 80.,
+                        width: 120.,
+                        ..clip
+                    },
+                },
+            ];
+            let press = [clip.x + offset, clip.y + 18.];
+            let item = DockItem::Panel {
+                panel: Panel::ToolSettings,
+            };
+            let action = |phase, position| UiAction::DragWorkspace {
+                item,
+                phase,
+                position,
+                viewport: [986., 658.],
+                tabs: tabs.clone(),
+            };
+            let down: crate::actions::Action = serde_json::from_value(json!({
+                "windows_tab_drag":{"tabs":tabs,"clip":clip},
+                "action":action(ContactPhase::Down,press)
+            }))
+            .unwrap();
+            down.dispatch(&mut host).unwrap();
+            let moved = [press[0] + 65., press[1]];
+            host.dispatch(action(ContactPhase::Move, moved)).unwrap();
+            let query =
+                json!({"type":"workspace_drag_preview","item":item,"tabs":tabs,"position":moved});
+            let result = metadata(super::query(&mut host, &query.to_string()).unwrap());
+            assert!(result["error"].is_null());
+            assert_eq!(result["result"]["tab"]["insertion"], 2);
+            assert_eq!(result["result"]["tab"]["offsets"][1]["x"], -80.);
+            // Release without an additional motion uses the identical partition.
+            host.dispatch(action(ContactPhase::Up, moved)).unwrap();
+            assert_eq!(
+                host.session
+                    .state()
+                    .workspace
+                    .layout
+                    .group_panels(group.id)
+                    .unwrap(),
+                &[Panel::Sizes, Panel::ToolSettings]
+            );
+            let ended = metadata(super::query(&mut host, &query.to_string()).unwrap());
+            assert!(ended["result"]["tab"].is_null());
+            host.dispatch(UiAction::Invoke {
+                command: layer_ui::CommandId::UndoWorkspace,
+            })
+            .unwrap();
+            assert_eq!(host.session.state().workspace.layout, before);
+            assert_eq!(host.session.engine().document().revision, revision);
+        }
     }
     #[test]
     fn windows_help_commands_resolve_and_acknowledge_shared_links() {

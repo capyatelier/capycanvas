@@ -40,8 +40,7 @@ struct Column:std::enable_shared_from_this<Column>{
             }
         }});
         frame.Children().Append(scroll);
-        grip.Background(clear());Border mark;mark.Width(16);mark.Height(2);mark.Background(data->brush(L"settings_secondary"));mark.Opacity(.4);
-        mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);grip.Child(mark);
+        grip.Background(clear());grip.Child(panelGrip(data->theme()));
         auto item=O({{L"kind",S(L"column")},{L"column",N(id)}});
         gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}));
         AutomationProperties::SetAutomationId(grip,L"column-grip-"+to_hstring(id));

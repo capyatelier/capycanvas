@@ -28,7 +28,7 @@ Windows::UI::Color blend(Windows::UI::Color bg,Windows::UI::Color ink,float amou
 void style(Button const& item,std::shared_ptr<WorkspaceData> const& data) {
     auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
     auto text=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
-    item.Background(fill(bg));item.Height(36);item.Padding({17,5,17,5});
+    item.Background(fill(bg));item.Height(36);item.Padding({6,0,6,0});
     item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(blend(bg,text,.08f)));
     item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(blend(bg,text,.16f)));
 }
@@ -45,7 +45,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     bool fullscreenActive=false;
     std::vector<std::pair<Button,hstring>> commands;
     hstring theme,palette;
-    float leftInset=0,rightInset=0;
+    float leftInset=0,rightInset=0,titleWidth=0;
     bool hidden=false,keepZen=true,built=false,resolvingLink=false;
     std::set<uint32_t> handledRequests;
     Microsoft::UI::Dispatching::DispatcherQueueTimer requestTimer{nullptr};
@@ -95,6 +95,9 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         root.Height(48);root.VerticalAlignment(VerticalAlignment::Top);
         AutomationProperties::SetName(root,L"Application header");
         root.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->reflow();});
+        // Rebuilt siblings and margin changes can move controls without a new
+        // SizeChanged event. Publish hit regions from completed native arrange.
+        root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&self->changed)self->changed();});
         requestTimer=root.DispatcherQueue().CreateTimer();requestTimer.Interval(std::chrono::milliseconds(200));
         requestTimer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requests();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requests();});
@@ -131,9 +134,11 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         end.Children().Append(screen);end.Children().Append(settings);
         title=label(data,L"");title.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
         title.VerticalAlignment(VerticalAlignment::Center);title.IsTextSelectionEnabled(true);
+        title.TextAlignment(TextAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);
         document=Border();document.Child(title);document.Background(data->brush(L"bg"));
-        document.Padding({8,4,8,4});document.CornerRadius({6,6,6,6});document.Height(36);
-        document.HorizontalAlignment(HorizontalAlignment::Center);document.VerticalAlignment(VerticalAlignment::Top);document.Margin({0,6,0,0});
+        document.Padding({6,0,6,0});document.CornerRadius({6,6,6,6});document.Height(36);
+        document.HorizontalAlignment(HorizontalAlignment::Stretch);document.VerticalAlignment(VerticalAlignment::Top);
+        AutomationProperties::SetAutomationId(document,L"document-title");
         root.Children().Append(document);root.Children().Append(start);root.Children().Append(end);root.Children().Append(zen);
         built=true;
     }
@@ -148,11 +153,12 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         start.Visibility(hidden?Visibility::Collapsed:Visibility::Visible);
         end.Visibility(hidden?Visibility::Collapsed:Visibility::Visible);
         zen.Visibility(!hidden||keepZen?Visibility::Visible:Visibility::Collapsed);
-        title.Measure({std::numeric_limits<float>::infinity(),36});
-        double width=root.ActualWidth(),half=(title.DesiredSize().Width+16)/2;
-        bool fits=width>640&&width/2-half>leftInset+start.ActualWidth()+12&&
-            width/2+half<width-rightInset-end.ActualWidth()-12;
-        document.Visibility(!hidden&&fits?Visibility::Visible:Visibility::Collapsed);
+        // The document occupies the space between the menu and end controls,
+        // like the shared desktop header. Caption controls reserve their inset.
+        double width=root.ActualWidth(),left=leftInset+start.ActualWidth()+12,
+            right=rightInset+end.ActualWidth()+12;
+        document.Margin({left,6,right,0});
+        document.Visibility(!hidden&&width>850&&width-left-right>24?Visibility::Visible:Visibility::Collapsed);
         if(changed)changed();
     }
     void apply(J const& snapshot) {
@@ -165,7 +171,11 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         auto tabs=array(data->state,L"tabs");
         if(tabs.Size()){
             auto tab=tabs.GetObjectAt(0);
-            title.Text(str(tab,L"title")+L" · "+to_hstring(int(num(tab,L"width")))+L" × "+to_hstring(int(num(tab,L"height"))));
+            auto text=str(tab,L"title")+L" · "+to_hstring(int(num(tab,L"width")))+L" × "+to_hstring(int(num(tab,L"height")));
+            if(title.Text()!=text){
+                title.Text(text);title.Measure({std::numeric_limits<float>::infinity(),36});
+                titleWidth=title.DesiredSize().Width;
+            }
         }
         for(auto const& [item,id]:commands) {
             auto state=find(array(data->state,L"commands"),L"id",id);
@@ -183,7 +193,14 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         for(FrameworkElement item:std::array<FrameworkElement,4>{start,end,document,zen}){
             if(item.Visibility()!=Visibility::Visible||item.ActualWidth()<=0)continue;
             auto position=item.TransformToVisual(root).TransformPoint({0,0});
-            controls.emplace_back(position.X,position.X+float(item.ActualWidth()));
+            float controlWidth=float(item.ActualWidth());
+            if(item==document){
+                // Keep unused title space draggable; only the selectable
+                // document text needs client hit testing.
+                float textWidth=std::min(controlWidth,titleWidth+12.f);
+                position.X+=(controlWidth-textWidth)/2;controlWidth=textWidth;
+            }
+            controls.emplace_back(position.X,position.X+controlWidth);
         }
         // Zen toolbars are genuine client controls inside the titlebar. Exclude
         // them from native move regions as well as avoiding caption buttons.

@@ -81,6 +81,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     data->dispatch(O({{L"type",S(L"activate_tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                 });
                 attach(pick);
+                pick.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"text"));
                 pick.Content(icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16)));
                 ToolTipService::SetToolTip(pick,box_value(str(tile,L"tooltip")));place(pick,rects.GetObjectAt(i));tiles.Children().Append(pick);
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
@@ -109,7 +110,9 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 bindings.emplace_back([data=data,pick,panelId,id]{
                     auto currentPanel=find(array(data->model,L"panels"),L"id",panelId);
                     auto current=findId(array(currentPanel,L"tiles"),id);
-                    pick.IsEnabled(flag(current,L"enabled"));pick.Background(flag(current,L"selected")?selected():clear());
+                    bool enabled=flag(current,L"enabled");
+                    pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
+                    pick.Background(flag(current,L"selected")?selected():clear());
                     ToolTipService::SetToolTip(pick,box_value(str(current,L"tooltip")));
                 });
             }
@@ -117,8 +120,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             if(grip.Size()&&gestures){
                 auto handle=button(data,L"Move "+str(panel,L"title"),[]{});
                 place(handle,grip);tileGrip=handle;
-                Border mark;mark.Width(16);mark.Height(2);mark.Background(data->brush(L"settings_secondary"));mark.Opacity(.4);
-                mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);handle.Content(mark);
+                tileGripMark=panelGrip(data->theme(),num(grip,L"width")>num(grip,L"height"));handle.Content(tileGripMark);
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});
                 gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",item}}),
                     O({{L"kind",S(L"ribbon")},{L"panel",S(str(panel,L"id"))}}),true);
@@ -193,7 +195,7 @@ void PanelBody::Layout(J const& geometry){
     }
     if(tileGrip){
         auto grip=object(layout,L"grip");tileGrip.Visibility(grip.Size()?Visibility::Visible:Visibility::Collapsed);
-        if(grip.Size())place(tileGrip,grip);
+        if(grip.Size()){place(tileGrip,grip);orientGrip(tileGripMark,num(grip,L"width")>num(grip,L"height"));}
     }
 }
 double PanelBody::ContentHeight()const{

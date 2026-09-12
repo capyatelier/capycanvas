@@ -60,6 +60,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     struct Group {
         Border frame,border,configurationFrame;
         Canvas content;
+        Grid layout{nullptr},header{nullptr};
+        StackPanel tabLabels{nullptr};
+        ScrollViewer tabScroll{nullptr};
         Microsoft::UI::Xaml::Shapes::Path background;
         Border footer{nullptr};
         std::wstring key;
@@ -101,12 +104,21 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         group.body.reset();group.footer=nullptr;group.tabs.clear();
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
         group.border.Background(data->brush(L"panel"));group.border.CornerRadius(CornerRadius{8,8,8,8});
-        Grid frame;
-        RowDefinition tabRow;tabRow.Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
-        frame.RowDefinitions().Append(tabRow);
-        RowDefinition bodyRow;bodyRow.Height({1,GridUnitType::Star});frame.RowDefinitions().Append(bodyRow);
-        if(flag(geometry,L"tabs_visible")){
-            StackPanel tabs;tabs.Orientation(Orientation::Horizontal);tabs.Background(data->brush(L"tabbar"));
+        if(!group.layout){
+            group.layout=Grid();
+            group.layout.RowDefinitions().Append(RowDefinition());
+            RowDefinition bodyRow;bodyRow.Height({1,GridUnitType::Star});group.layout.RowDefinitions().Append(bodyRow);
+            group.border.Child(group.layout);
+            group.tabLabels=StackPanel();group.tabLabels.Orientation(Orientation::Horizontal);
+            group.tabLabels.Background(data->brush(L"tabbar"));
+        }
+        auto frame=group.layout;
+        frame.RowDefinitions().GetAt(0).Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
+        // Keep the header ScrollViewer and its manipulation content alive while
+        // a panel changes group; only the body and tab buttons are replaced.
+        while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
+        {
+            auto tabs=group.tabLabels;tabs.Children().Clear();
             uint32_t index=0;
             for(auto value:array(geometry,L"panels")){
                 auto id=value.GetString();auto model=find(array(data->model,L"panels"),L"id",id);
@@ -117,18 +129,31 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto tabStyle=object(model,L"tab");
                 if(flag(tabStyle,L"show_icon"))content.Children().Append(icon(str(model,L"icon"),data->theme()));
                 if(flag(tabStyle,L"show_name"))content.Children().Append(label(data,str(model,L"title"),true));
-                tab.Content(content);if(id==str(geometry,L"active"))tab.Background(data->brush(L"panel"));
+                tab.Content(content);bool active=id==str(geometry,L"active");
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(id)}});
                 gestures->Source(tab,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                     O({{L"group",N(num(geometry,L"id"))},{L"index",N(index++)},{L"panel",S(id)}}));
                 AutomationProperties::SetAutomationId(tab,L"panel-tab-"+id);
-                group.tabs.emplace(std::wstring(id),tab);tabs.Children().Append(tab);
+                group.tabs.emplace(std::wstring(id),tab);tabs.Children().Append(panelTabShell(data,tab,active));
             }
-            ScrollViewer tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
-            tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);
-            tabScroll.Background(data->brush(L"tabbar"));
-            gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
-            frame.Children().Append(tabScroll);
+            if(!group.tabScroll){
+                group.tabScroll=ScrollViewer();auto tabScroll=group.tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
+                tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);
+                tabScroll.Background(data->brush(L"tabbar"));
+                gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
+                group.header=Grid();auto header=group.header;header.Background(data->brush(L"tabbar"));
+                ColumnDefinition labels;labels.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(labels);
+                ColumnDefinition trailing;trailing.Width({28,GridUnitType::Pixel});header.ColumnDefinitions().Append(trailing);
+                header.Children().Append(tabScroll);
+                Border handle;handle.Background(clear());handle.Width(20);handle.Height(36);
+                handle.HorizontalAlignment(HorizontalAlignment::Left);handle.Child(panelGrip(data->theme()));
+                gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
+                AutomationProperties::SetAutomationId(handle,L"group-grip-"+to_hstring(uint32_t(num(geometry,L"id"))));
+                AutomationProperties::SetName(handle,L"Move panel group");
+                AutomationProperties::SetHelpText(handle,L"Drag to move every panel in this group.");
+                Grid::SetColumn(handle,1);header.Children().Append(handle);frame.Children().Append(header);
+            }
+            group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
         }
         group.body=std::make_unique<PanelBody>(data,panel,geometry,
             [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
@@ -138,14 +163,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(grip.Size()){
             Canvas overlay;Grid::SetRow(overlay,1);
             Border handle;group.footer=handle;handle.Background(clear());place(handle,grip);
-            Border mark;mark.Width(16);mark.Height(2);mark.Background(data->brush(L"settings_secondary"));mark.Opacity(.4);
-            mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);handle.Child(mark);
+            handle.Child(panelGrip(data->theme(),true));
             auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});
             gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,true);
             AutomationProperties::SetName(handle,L"Move "+str(panel,L"title"));
             overlay.Children().Append(handle);frame.Children().Append(overlay);
         }
-        group.border.Child(frame);
+
     }
     void updatePopup(){
         auto control=str(object(data->state,L"customization"),L"control");

@@ -27,7 +27,8 @@ void LayersView::init(){
     header.Padding({6,4,6,4});header.Spacing(2);values.ColumnSpacing(6);
     for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});values.ColumnDefinitions().Append(column);}
     blend.MinWidth(0);blend.MinHeight(26);blend.Height(26);blend.Padding({6,0,0,0});
-    blend.FontSize(data->textSize());blend.Background(data->brush(L"input"));
+    blend.FontSize(data->textSize());blend.FontWeight(Windows::UI::Text::FontWeights::Bold());
+    blend.Background(data->brush(L"input"));blend.BorderThickness({0,0,0,0});blend.CornerRadius({6,6,6,6});
     blend.HorizontalAlignment(HorizontalAlignment::Stretch);
     AutomationProperties::SetName(blend,L"Layer blend mode");AutomationProperties::SetAutomationId(blend,L"layer-blend");
     for(auto value:array(data->catalog,L"layer_blends"))blend.Items().Append(box_value(value.GetString()));
@@ -151,7 +152,7 @@ void LayersView::refresh(){
             [weak,generation,activeId](double value){if(auto self=weak.lock();self&&epochOf(self->data)==generation
                 &&num(self->editing(),L"id",-1)==activeId&&flag(object(self->view(),L"controls"),L"opacity"))
                 self->data->dispatchDocument(O({{L"type",S(L"set_layer_opacity")},{L"opacity",N(value)}}),generation);
-            },opacityBindings,nullptr,true,L"layer-opacity"));
+            },opacityBindings,nullptr,true,L"layer-opacity",true));
     }
     opacityGate.IsEnabled(flag(capabilities,L"opacity"));for(auto const& bind:opacityBindings)bind();
     for(auto const& bind:controls)bind(active,capabilities);

@@ -1195,3 +1195,55 @@ device/DPI lifecycle, runtime filter packages, packaging, workspace storage
 integration and final presentation/input-latency gates remain. The intermittent
 shader-worker final-join delay is still open. No new presentation benchmark
 was run, and no private captures, profiles, logs or binaries are published.
+
+## Native editor styling and attached tab dragging
+
+The desktop header now uses shared menu spacing and centers the document in the
+remaining space before the Windows caption controls. Drag regions are computed
+after native arrange, including when theme changes replace the header controls.
+Caching natural title width avoids changing text measurement from hit-region
+queries. Native checks cover menu/settings client hits and unused draggable
+space in both themes, alongside the existing Zen caption exclusions.
+
+Panel grips use the shared SVG, orientation and inset. Active tabs have joined
+six-DIP shoulders; drawer tabs respect shared icon/name visibility. Disabled
+command and numeric-step icons use the shared dimming. Layer opacity keeps its
+slider beside the numeric entry, with editing-target and lock guards. Property
+choices use the GTK/Web horizontal label/control row. Tool Set retains the
+GTK/Android full-width brush preview; that arrangement currently differs from
+the Web reference. Local captures verify both themes and record the native
+viewport's one-physical-pixel client origin offset.
+
+Attached tab previews use Core's frozen slots and insertion thresholds. Native
+Composition animations move neighboring copies without moving their original
+hit rectangles. Windows transfers the contact from the source Button after
+drag slop and claims the source scrolling content for that gesture. Retaining
+the tab ScrollViewer and its content across panel-body replacement prevents
+capture loss during tear-off. Down and the shared BeginTabDrag action are
+dispatched together; the shared workspace_drag_preview query supplies both
+tab motion and drop hints.
+
+The OS-touch fixture checks two grab positions, fixed hit rectangles, release
+insertion, attached/detached cancellation, continued floating movement after
+an 800 ms hold, workspace Undo and clean exit. A separate contact timer maintains
+injected hold frames while UI Automation or capture blocks the observation
+thread. This remains synthetic input, not physical digitizer or latency
+acceptance. Temporary native input diagnostics were removed.
+
+Main through 08a0c15 is integrated. The final shared Windows tree passes 328
+unit tests (260 UI, 20 host, 48 Windows; three explicit GPU tests ignored),
+strict Windows Clippy and the native build. Editor, tab-drag, Layers, drawers,
+effects and configuration-expansion fixtures pass, including their process-exit
+gates. The latter fixtures now use the full editor preset: they distinguish
+permanent panels from drawers, select Properties only when needed, and constrain
+the window to establish the required GPU-over-opaque-panel pixel comparison.
+The final upstream Apple/GTK-only update does not change the validated shared
+Rust or Windows sources.
+
+This is an editor styling/interaction milestone. Windows adoption of shared
+incremental workspace publication, workspace store/manager integration, complete
+gesture/scroll/overlap parity, multiwindow support, runtime filter packages,
+DPI/device lifecycle, packaging and physical input remain. The intermittent
+shader-worker shutdown delay and strict GPU filter-reference mismatch are still
+open. Final painting presentation and input-latency acceptance remain deferred.
+Private captures, profiles, traces, logs and binaries remain ignored/local.

@@ -110,10 +110,13 @@ function Capture([string]$Name){
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
     $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
     $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    $origin=[CapyEditorKeys+Point]::new()
+    if(![CapyEditorKeys]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
     $bitmap=[Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
     try{
         [IO.File]::WriteAllText((Join-Path $run ($Name+'-metrics.json')),(@{
             viewport=@(($canvas.Width/$scale),($canvas.Height/$scale));scale=$scale;
+            viewport_origin_physical=@(($canvas.Left-$origin.x),($canvas.Top-$origin.y));
             client_capture=@($bitmap.Width,$bitmap.Height);camera=(Control 'canvas-camera').Current.Name
         }|ConvertTo-Json))
     }finally{$bitmap.Dispose()}
@@ -150,6 +153,7 @@ function Check-Editor {
             $first=$group.panels[0];$tab=Control "panel-tab-$first"
             $measure=$model.panel_measurements|Where-Object panel -eq $first
             Check-Rect $tab @{x=0;y=0;width=$measure.tab_width;height=36} $group.bounds.x $group.bounds.y
+            Check-Rect (Control "group-grip-$($group.id)") @{x=($group.bounds.width-28);y=0;width=20;height=36} $group.bounds.x $group.bounds.y
         }
         if($group.tiles){
             for($i=0;$i -lt $panel.tiles.Count;$i++){
@@ -186,6 +190,23 @@ function Check-Zen {
         }
     }
 }
+function Check-Header {
+    $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $menu=(Control 'application-menu-help').Current.BoundingRectangle
+    $settings=(Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
+    $points=@(
+        @{x=$menu.Left+$menu.Width/2;y=$menu.Top+$menu.Height/2;expected=1;name='Help menu'},
+        @{x=$settings.Left+$settings.Width/2;y=$settings.Top+$settings.Height/2;expected=1;name='Preferences'},
+        @{x=$menu.Right+4*$scale;y=$menu.Top+$menu.Height/2;expected=2;name='unused header space'}
+    )
+    foreach($entry in $points){
+        $x=[int]$entry.x;$y=[int]$entry.y
+        $point=[IntPtr](([int64]($y -band 65535) -shl 16) -bor ($x -band 65535))
+        if([CapyEditorKeys]::SendMessage($review.MainWindowHandle,0x84,[IntPtr]::Zero,$point).ToInt64() -ne $entry.expected){
+            throw "Incorrect native titlebar hit region for $($entry.name)"
+        }
+    }
+}
 function Preferences {
     Invoke 'Preferences' -Name
     Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
@@ -215,7 +236,16 @@ try{
     }
     if(Find 'Drawing tool' -Name){throw 'Temporary tool chooser survived the full toolbar'}
     Check-Editor
+    Check-Header
     Invoke 'application-menu-view';Invoke 'fit_canvas'
+    Wait-Until {
+        foreach($layer in (Model).state.layers){
+            $thumbnail=Find "layer-$($layer.id)-thumbnail"
+            if(!$thumbnail -or $thumbnail.Current.ItemStatus -ne 'Ready'){return $false}
+        }
+        $true
+    } 'Initial layer thumbnails did not reach the native controls' 20
+    (Control 'Drawing canvas' -Name).SetFocus()
     Start-Sleep -Milliseconds 350
     Capture 'editor-dark'
     [IO.File]::WriteAllText((Join-Path $run 'editor-model.json'),($model|ConvertTo-Json -Depth 100))
@@ -258,6 +288,7 @@ try{
     Close-Preferences $dialog
     Start-Sleep -Milliseconds 400
     Check-Editor
+    Check-Header
     Capture 'editor-light'
     Set-Zen
     Wait-Until {(Model).partial_zen} 'Light Zen did not activate'
@@ -273,7 +304,7 @@ try{
     Set-Zen
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{full_editor='passed';core_rectangles='passed';native_measurements='passed';tools='passed';partial_zen='passed';zen_activation='passed';zen_drawer='passed';retained_resize='passed';restored_workspace='passed';themes='passed';total_zen='passed';zero_exit='passed';scope='native projection; complete visual and physical input acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{full_editor='passed';titlebar_hit_regions='passed';core_rectangles='passed';native_measurements='passed';tools='passed';partial_zen='passed';zen_activation='passed';zen_drawer='passed';retained_resize='passed';restored_workspace='passed';themes='passed';total_zen='passed';zero_exit='passed';scope='native projection; complete visual and physical input acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

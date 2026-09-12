@@ -1,6 +1,7 @@
 #pragma once
 #include "UiControls.h"
 #include <array>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 namespace CapyUi {
 using Windows::Foundation::Point;
@@ -52,6 +53,35 @@ inline PathGeometry roundedRectangle(float width,float height,std::array<float,4
     line({width-tr,0});arc({width,tr},tr);line({width,height-br});arc({width-br,height},br);
     line({bl,height});arc({0,height-bl},bl);line({0,tl});arc({tl,0},tl);
     PathGeometry geometry;geometry.Figures().Append(figure);return geometry;
+}
+// The 6-DIP shoulders join the active tab to its panel. Coordinates include
+// both overhangs so a Path never has to arrange a negative geometry origin.
+inline PathGeometry panelTabShape(float width,float height){
+    constexpr float r=6;
+    PathFigure figure;figure.StartPoint({2*r,0});figure.IsClosed(true);figure.IsFilled(true);
+    auto line=[&](float x,float y){LineSegment s;s.Point({x,y});figure.Segments().Append(s);};
+    auto curve=[&](float x1,float y1,float x2,float y2){
+        QuadraticBezierSegment s;s.Point1({x1,y1});s.Point2({x2,y2});figure.Segments().Append(s);
+    };
+    line(width,0);curve(width+r,0,width+r,r);
+    line(width+r,height-r);curve(width+r,height,width+2*r,height);
+    line(0,height);curve(r,height,r,height-r);
+    line(r,r);curve(r,0,2*r,0);
+    PathGeometry geometry;geometry.Figures().Append(figure);return geometry;
+}
+inline Grid panelTabShell(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& content,bool active){
+    Grid shell;shell.Tag(box_value(active?L"active-panel-tab-shell":L"panel-tab-shell"));
+    Canvas background;shell.Children().Append(background);
+    if(active){
+        Microsoft::UI::Xaml::Shapes::Path shape;shape.Fill(data->brush(L"panel"));shape.IsHitTestVisible(false);
+        shape.Stretch(Stretch::Fill);Canvas::SetLeft(shape,-6);background.Children().Append(shape);
+        content.SizeChanged([weak=make_weak(shape)](auto&&,SizeChangedEventArgs const& event){
+            auto size=event.NewSize();if(auto shape=weak.get();shape&&size.Width>0&&size.Height>0){
+                shape.Width(size.Width+12);shape.Height(size.Height);shape.Data(panelTabShape(size.Width,size.Height));
+            }
+        });
+    }
+    shell.Children().Append(content);return shell;
 }
 // Same joined outline as the shared-layout Android expansion. The two
 // native child frames clip their own content; this path paints the join.

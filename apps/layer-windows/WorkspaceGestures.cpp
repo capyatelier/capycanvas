@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "WorkspaceGestures.h"
 #include "WorkspaceQuery.h"
+#include "WorkspaceTabDrag.h"
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
 #include <chrono>
@@ -19,6 +20,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     Border hint;
     MenuFlyout menu{nullptr};
     std::vector<weak_ref<FrameworkElement>> tabs;
+    std::unique_ptr<WorkspaceTabDrag> tabSlide;
+    J tabCapture;
+    std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrollModes;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     std::optional<uint32_t> pointer;
     J action;
@@ -72,11 +76,28 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto next=J::Parse(action.Stringify());
         next.Insert(L"phase",S(phase));next.Insert(L"position",point(position));next.Insert(L"viewport",viewport());
         if(str(action,L"type")==L"drag_workspace")next.Insert(L"tabs",tabHits());
+        if(phase==L"down"&&tabCapture.Size())next=O({{L"windows_tab_drag",tabCapture},{L"action",next}});
         data->dispatch(next);
     }
+    void restoreScrolling(){
+        for(auto const& [weak,mode]:scrollModes)if(auto element=weak.get())element.ManipulationMode(mode);
+        scrollModes.clear();
+    }
+    void claimScrolling(Windows::Foundation::IInspectable const& original){
+        auto parent=original.try_as<DependencyObject>();
+        while(parent&&parent!=root){
+            if(auto scroll=parent.try_as<ScrollViewer>())if(auto content=scroll.Content().try_as<UIElement>()){
+                auto mode=content.ManipulationMode();
+                scrollModes.emplace_back(make_weak(content),mode);
+                content.ManipulationMode(mode&~ManipulationModes::System);
+            }
+            parent=VisualTreeHelper::GetParent(parent);
+        }
+    }
     void clear(){
+        restoreScrolling();
         ++generation;action=J{};pointer.reset();dragging=false;finishing=false;dirty=false;
-        hint.Visibility(Visibility::Collapsed);timer.Stop();
+        hint.Visibility(Visibility::Collapsed);timer.Stop();tabSlide->Clear();tabCapture=J{};
         releasing=true;root.ReleasePointerCaptures();releasing=false;
         chrome(O({{L"kind",S(L"refresh")}}));
     }
@@ -87,15 +108,17 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void dropQuery(){
         if(!dragging||busy||!dirty||!object(action,L"item").Size())return;
-        auto request=O({{L"type",S(L"drop")},{L"item",object(action,L"item")},{L"position",point(position)},
+        auto request=O({{L"type",S(L"workspace_drag_preview")},{L"item",object(action,L"item")},{L"position",point(position)},
             {L"tabs",tabHits()},{L"expansion",data->chrome.GetNamedValue(L"expanded_panel",JsonValue::CreateNullValue())}});
         auto serial=generation,at=motion;bool final=finishing;busy=true;
         if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),serial,at,final](J reply){
             if(auto self=weak.lock()){
                 self->busy=false;
                 if(serial!=self->generation)return;
+                auto preview=object(reply,L"result");
+                self->tabSlide->Update(object(preview,L"tab"));self->tabSlide->Refresh(self->tabs);
                 if(at!=self->motion){self->dropQuery();return;}
-                auto result=object(reply,L"result");
+                auto result=object(preview,L"drop");
                 if(final){
                     auto next=object(result,L"action");
                     if(next.Size())self->data->dispatch(next);
@@ -110,8 +133,25 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void begin(PointerRoutedEventArgs const& e){
         // Capture remains with this Canvas while source tabs are rebuilt/moved.
-        if(!root.CapturePointer(e.Pointer())){clear();return;}
-        dragging=true;++generation;position=origin;timer.Start();
+        auto owns=[&](UIElement const& element){
+            if(auto captures=element.PointerCaptures())for(auto captured:captures)
+                if(captured.PointerId()==e.Pointer().PointerId())return true;
+            return false;
+        };
+        // WinUI does not transfer an existing Button capture automatically.
+        // Release this contact from its source only after crossing drag slop.
+        if(!owns(root)){
+            auto node=e.OriginalSource().try_as<DependencyObject>();
+            while(node&&node!=root){
+                if(auto source=node.try_as<UIElement>();source&&owns(source)){
+                    releasing=true;source.ReleasePointerCapture(e.Pointer());releasing=false;break;
+                }
+                node=VisualTreeHelper::GetParent(node);
+            }
+        }
+        bool captured=owns(root)||root.CapturePointer(e.Pointer());
+        if(!captured){clear();return;}
+        dragging=true;++generation;position=origin;timer.Start();tabCapture=tabSlide->Begin();
         chrome(O({{L"kind",S(L"refresh")}}));send(L"down");
     }
     void down(PointerRoutedEventArgs const& e){
@@ -124,7 +164,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         chrome(O({{L"kind",S(L"contact")},{L"position",point(p.Position())},{L"canvas",B(false)}}));
         if(!tag.Size()||flag(data->model,L"partial_zen"))return;
         action=object(tag,L"workspace_action");if(!action.Size())return;
-        origin=position=p.Position();pointer=p.PointerId();
+        // A ScrollViewer can claim touch panning before our drag threshold.
+        // These marked tab/grip/tile contacts belong to workspace dragging;
+        // leave ordinary panel content and scrollbars to native scrolling.
+        claimScrolling(e.OriginalSource());
+        origin=position=p.Position();pointer=p.PointerId();tabSlide->Grab(tab,tabs);
         slop=p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch?12:6;
         auto kind=str(action,L"type");
         if(kind!=L"drag_workspace"&&kind!=L"tile_drag"){begin(e);e.Handled(true);}
@@ -140,7 +184,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void up(PointerRoutedEventArgs const& e){
         if(!pointer||*pointer!=e.Pointer().PointerId())return;
-        if(!dragging){pointer.reset();action=J{};return;}
+        if(!dragging){pointer.reset();action=J{};tabSlide->Clear();restoreScrolling();return;}
         position=e.GetCurrentPoint(root).Position();++motion;
         if(str(action,L"type")==L"tile_drag"){
             finishing=true;dirty=true;dropQuery();
@@ -157,7 +201,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 if(auto self=weak.lock()){
                     if(serial!=self->generation||self->dragging||self->data->externalPopup)return;
                     auto model=object(reply,L"result");if(!array(model,L"sections").Size())return;
-                    self->pointer.reset();self->action=J{};
+                    self->pointer.reset();self->action=J{};self->tabSlide->Clear();self->restoreScrolling();
                     self->menu=MenuFlyout();TrackPopup(self->menu,self->data);
                     NativeMenuItems(self->menu.Items(),array(model,L"sections"),self->data,
                         [data=self->data](J action){data->dispatch(action);});
@@ -189,9 +233,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void refresh(){
         uint32_t index;if(!root.Children().IndexOf(hint,index))root.Children().Append(hint);
-        hint.Background(selected());hint.BorderBrush(data->brush(L"text"));hint.BorderThickness({1});
+        hint.Background(selected());hint.BorderBrush(data->brush(L"text"));hint.BorderThickness({1,1,1,1});
+        tabSlide->Refresh(tabs);
     }
     void init(){
+        tabSlide=std::make_unique<WorkspaceTabDrag>(data,root);
         hint.IsHitTestVisible(false);hint.Visibility(Visibility::Collapsed);Canvas::SetZIndex(hint,10000);
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(16));
         timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->dropQuery();});
@@ -203,7 +249,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId())self->cancel();
         })),true);
         root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
-            if(auto self=weak.lock();self&&!self->releasing&&self->dragging&&e.OriginalSource().try_as<UIElement>()==self->root)self->cancel();
+            if(auto self=weak.lock();self&&!self->releasing&&self->dragging&&e.OriginalSource().try_as<UIElement>()==self->root){
+                self->cancel();
+            }
         })),true);
         // ContextRequested covers mouse, pen/touch hold and keyboard requests.
         // Native text editors handle their own event before it reaches us.
