@@ -601,6 +601,94 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun toolbarDividerDropsCreateSeparateToolGroups() {
+        val layout = fixture.getJSONObject("layout")
+        val first = layout.getInt("next_tile_id")
+        val ids = (first until first + 5).toList()
+        layout.put("next_tile_id", first + 5)
+        val controls = listOf(obj("kind" to "command", "command" to "brush"), obj("kind" to "command", "command" to "eraser"),
+            obj("kind" to "divider"), obj("kind" to "command", "command" to "lasso"), obj("kind" to "command", "command" to "hand"))
+        layout.array("panels").objects().first { it.getString("id") == "toolbar" }.apply {
+            put("tile_style", "small")
+            getJSONObject("content").put("tiles", JSONArray(ids.mapIndexed { index, id -> obj("id" to id, "control" to controls[index]) }))
+        }
+        for (edge in listOf("top", "left")) {
+            layout.put("bands", JSONArray(listOf(obj("id" to 40, "edge" to edge, "extent" to 36,
+                "root" to obj("kind" to "tabs", "id" to 41, "panels" to JSONArray(listOf("toolbar")), "active" to "toolbar", "tab_style" to "icon")))))
+            for (pointer in pointerTools) for (mode in listOf("-5", "5", "8", "cancel")) {
+                tool = pointer; restore()
+                val before = workspace()
+                val divider = bounds("tile-toolbar-${ids[2]}").center
+                val offset = (mode.toFloatOrNull() ?: 5f) * density
+                val destination = divider + if (edge == "top") Offset(offset, 0f) else Offset(0f, offset)
+                event(MotionEvent.ACTION_DOWN, bounds("tile-toolbar-${ids[0]}").center); SystemClock.sleep(700)
+                event(MotionEvent.ACTION_MOVE, destination)
+                waitFor("$edge/$pointer/$mode toolbar preview") { exists("workspace-drop-hint") && popupCount() == 0 }
+                settle()
+                if (mode != "8") {
+                    val line = bounds("workspace-drop-hint").center
+                    assertEquals("Divider preview x", divider.x, line.x, 1f)
+                    assertEquals("Divider preview y", divider.y, line.y, 1f)
+                }
+                event(if (mode == "cancel") MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP)
+                waitFor("toolbar drop finishes") { !workspaceDragging() && !exists("workspace-drop-hint") }; settle()
+                if (mode == "cancel") { assertEquals(before, workspace()); continue }
+                val after = workspace()
+                val tiles = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects()
+                    .first { it.getString("id") == "toolbar" }.getJSONObject("content").array("tiles").objects()
+                assertEquals(if (mode == "8") listOf(ids[1], ids[2], ids[0], ids[3], ids[4])
+                    else listOf(ids[1], ids[2], ids[0], first + 5, ids[3], ids[4]), tiles.map { it.getInt("id") })
+                assertEquals(if (mode == "8") 1 else 2, tiles.count { it.getJSONObject("control").getString("kind") == "divider" })
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
+                action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(after, workspace())
+                if (mode != "8") {
+                    val last = bounds("tile-toolbar-${ids[4]}")
+                    val end = if (edge == "top") Offset(last.right - 3f * density, last.center.y)
+                        else Offset(last.center.x, last.bottom - 3f * density)
+                    event(MotionEvent.ACTION_DOWN, bounds("tile-toolbar-${ids[0]}").center); SystemClock.sleep(700)
+                    event(MotionEvent.ACTION_MOVE, end)
+                    waitFor("empty-group move preview") { exists("workspace-drop-hint") }
+                    event(MotionEvent.ACTION_UP)
+                    waitFor("empty-group move finishes") { !workspaceDragging() && !exists("workspace-drop-hint") }; settle()
+                    val collapsed = workspace()
+                    val remaining = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects()
+                        .first { it.getString("id") == "toolbar" }.getJSONObject("content").array("tiles").objects()
+                    assertEquals("Empty group retains its first divider", listOf(ids[1], ids[2], ids[3], ids[4], ids[0]), remaining.map { it.getInt("id") })
+                    assertFalse("Redundant divider view is removed", exists("tile-toolbar-${first + 5}"))
+                    action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals("One undo restores the group and divider IDs", after, workspace())
+                    assertTrue(exists("tile-toolbar-${first + 5}"))
+                    action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(collapsed, workspace())
+                }
+            }
+        }
+    }
+
+    @Test fun mouseTilesShowPointerThenGrabThenGrabbing() {
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+        val tiles = fixture.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }
+            .getJSONObject("content").array("tiles").objects()
+        val normal = tiles.first { it.getJSONObject("control").getString("kind") != "divider" }.getInt("id")
+        val divider = tiles.first { it.getJSONObject("control").getString("kind") == "divider" }.getInt("id")
+        for (tag in listOf("tile-toolbar-$normal", "tile-toolbar-$divider", "column-icon-sizes")) {
+            val point = bounds(tag).center
+            val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE })
+            val coords = arrayOf(MotionEvent.PointerCoords().apply { x = point.x; y = point.y })
+            val hover = MotionEvent.obtain(0, SystemClock.uptimeMillis(), MotionEvent.ACTION_HOVER_MOVE, 1, properties, coords,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+            instrumentation.runOnMainSync { owner.view.dispatchGenericMotionEvent(hover) }; hover.recycle(); settle()
+            assertEquals("$tag starts with normal pointer", PointerIcon.getSystemIcon(owner.view.context, PointerIcon.TYPE_ARROW), owner.view.pointerIcon)
+            val before = workspace()
+            event(MotionEvent.ACTION_DOWN, point); SystemClock.sleep(700)
+            waitFor("$tag armed cursor") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRAB) }
+            assertEquals(0, popupCount())
+            event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
+            waitFor("$tag dragging cursor") { workspaceDragging() }
+            event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(before, workspace())
+            assertEquals("Canceled pickup clears the hand", PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_NULL), surface.pointerIcon)
+        }
+    }
+
     @Test fun emptyHeadersCollapseButTabsDoNot() {
         fixture.getJSONObject("layout").array("bands").objects().forEach { it.getJSONObject("root").put("tab_style", "icon") }
         for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (id in listOf(41, 43)) {
@@ -1010,6 +1098,7 @@ class AndroidInteractionTest {
             }
             SystemClock.sleep(700)
             assertEquals("$pointer/$mode retires menu",0,popupCount()); assertFalse(workspaceDragging())
+            assertEquals("$pointer/$mode retires pickup cursor", PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_NULL), surface.pointerIcon)
             event(MotionEvent.ACTION_CANCEL)
             if(!mode.endsWith("removed")) {
                 instrumentation.runOnMainSync { blurWindow!!.dismiss() }

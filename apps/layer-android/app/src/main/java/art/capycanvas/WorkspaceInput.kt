@@ -81,6 +81,9 @@ internal class DockInteraction(val host: CanvasHost) {
         private set
     var dragCursor by mutableStateOf<Int?>(null)
         private set
+    fun pickupCursor(armed: Boolean) {
+        if (!dragging) dragCursor = if (armed) AndroidPointerIcon.TYPE_GRAB else null
+    }
     var expansion by mutableStateOf<JSONObject?>(null)
     var configurationHeight by mutableFloatStateOf(0f)
     var contextMenu by mutableStateOf<JSONObject?>(null)
@@ -254,12 +257,20 @@ internal class DockInteraction(val host: CanvasHost) {
             if (key != null) dock.anchors.remove(key)
             if (dock.contactSource == token && !dock.dragging) {
                 dock.retiredContext = key
+                dock.pickupCursor(false)
                 dock.closeContext()
             }
         }
     }
-    SideEffect { dock.regions[token]?.let { dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor, holdToDrag = holdToDrag) } }
-    return workspacePointerIcon(if (dock.enabled) cursor else null).onGloballyPositioned {
+    SideEffect { dock.regions[token]?.let {
+        if (dock.contactSource == token && it.action.toString() != action.toString()) dock.pickupCursor(false)
+        dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor, holdToDrag = holdToDrag)
+    } }
+    // Held tiles use the normal mouse pointer until pickup is armed. Keep
+    // Android's existing default pen hover; grips retain their immediate hand.
+    val feedback = if (holdToDrag) pointerHoverIcon(PointerIcon(AndroidPointerIcon.TYPE_ARROW))
+        else workspacePointerIcon(if (dock.enabled) cursor else null)
+    return feedback.onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-dock.origin)
         dock.regions[token] = DockInteraction.Region(token, action, bounds, z, priority, anchor, cursor, holdToDrag)
         if (key != null) dock.anchors[key] = bounds
@@ -328,6 +339,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 fun sourceExists() = dock.regions[source.token]?.action?.toString() == source.action.toString()
                 fun retire() {
                     retired = true
+                    dock.pickupCursor(false)
                     dock.retiredContext = source.context?.let(dock::anchorKey)
                     dock.closeContext()
                 }
@@ -339,6 +351,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                         if (event == null) {
                             if (!sourceExists() || dock.popupOpen || !dock.enabled) { retire(); continue }
                             held = true
+                            if (source.holdToDrag && down.type == PointerType.Mouse) dock.pickupCursor(true)
                             source.context?.let(dock::holdContext)
                             continue
                         }
@@ -381,6 +394,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 } finally {
                     if (started && !released) dock.finish(true)
                     if (!released) dock.closeContext()
+                    dock.pickupCursor(false)
                     dock.contactHeld = false
                     dock.contactSource = null
                     dock.retiredContext = null
