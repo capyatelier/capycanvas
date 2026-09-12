@@ -18,6 +18,8 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
@@ -31,6 +33,9 @@ import org.json.JSONArray
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /** Real native widgets, JNI and Vulkan in the tablet emulator. No fake renderer. */
 class AndroidHostTest {
@@ -73,6 +78,135 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun completedDropFeedbackSurvivesNewerMotion() {
+        val dock = DockInteraction(host)
+        val source = group("brushes").getJSONObject("bounds")
+        val destination = group("layers")
+        val target = destination.getJSONObject("bounds")
+        val size = viewport()
+        val before = state().getJSONObject("workspace").toString()
+        val ownerReached = CountDownLatch(1)
+        val releaseOwner = CountDownLatch(1)
+        try {
+            compose.runOnIdle {
+                dock.viewport = size
+                dock.start(obj("type" to "drag_workspace", "item" to obj("kind" to "panel", "panel" to "brushes")),
+                    androidx.compose.ui.geometry.Offset(source.number("x") + 10, source.number("y") + 10), PointerIcon.TYPE_GRAB)
+                dock.move(androidx.compose.ui.geometry.Offset(target.number("x") + 30, target.number("y") + 10))
+                // Delay main-thread delivery until a newer move exists, then
+                // hold its native result. This reproduces the response ordering
+                // deterministically without relying on a slow tablet/GPU.
+                CoroutineScope(Dispatchers.Main.immediate).launch {
+                    host.withNative { ownerReached.countDown(); releaseOwner.await(10, TimeUnit.SECONDS) }
+                }
+                assertTrue(ownerReached.await(5, TimeUnit.SECONDS))
+                dock.move(androidx.compose.ui.geometry.Offset(size.getDouble(0).toFloat() / 2, size.getDouble(1).toFloat() / 2))
+            }
+            compose.waitUntil(2_000) { dock.hint != null }
+            assertEquals(destination.getInt("id"), dock.hint!!.getJSONObject("target").getInt("group"))
+            releaseOwner.countDown()
+            action(obj("type" to "close_settings"))
+            assertNull("The newest result clears feedback over empty canvas", dock.hint)
+        } finally {
+            releaseOwner.countDown()
+            compose.runOnUiThread { dock.finish(cancel = true) }
+            action(obj("type" to "close_settings"))
+        }
+        assertNull(dock.hint)
+        assertEquals(before, state().getJSONObject("workspace").toString())
+    }
+
+    @Test fun dropIndicatorsTrackContinuousMouseAndTouchMotion() {
+        val fixture = JSONObject(defaultWorkspace)
+        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
+                obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties")))))
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("next_id", maxOf(44, getInt("next_id")))
+        }
+        fixture.put("zen_mode", false)
+        val root = compose.onNodeWithTag("workspace")
+        val owner = root.fetchSemanticsNode().root as ViewRootForTest
+        val origin = root.fetchSemanticsNode().positionInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+        fun findHint(node: SemanticsNode): androidx.compose.ui.geometry.Rect? =
+            if (node.config.getOrNull(SemanticsProperties.TestTag) == "workspace-drop-hint") node.boundsInRoot
+            else node.children.firstNotNullOfOrNull(::findHint)
+        for (mouse in listOf(true, false)) for (drawer in listOf(false, true)) for (attached in listOf(false, true)) {
+            action(obj("type" to "restore_workspace", "workspace" to fixture))
+            if (drawer) {
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                compose.onNodeWithTag("column-icon-brushes").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-grip-41").fetchSemanticsNodes().isNotEmpty() }
+                SystemClock.sleep(300); compose.waitForIdle()
+            }
+            val before = state().getJSONObject("workspace").toString()
+            val tabPrefix = if (drawer) "drawer-tab" else "tab"
+            val source = bounds(if (attached) "$tabPrefix-tool_settings" else "tab-layers").center
+            val targets = listOf("sizes", if (attached) "brushes" else "tool_settings").map { bounds("$tabPrefix-$it") }
+            val away = root.fetchSemanticsNode().boundsInRoot.center
+            val downAt = SystemClock.uptimeMillis()
+            fun event(action: Int, point: androidx.compose.ui.geometry.Offset): androidx.compose.ui.geometry.Rect? {
+                var hint: androidx.compose.ui.geometry.Rect? = null
+                instrumentation.runOnMainSync {
+                    val properties = arrayOf(MotionEvent.PointerProperties().apply {
+                        id = 0; toolType = if (mouse) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
+                    })
+                    val coords = arrayOf(MotionEvent.PointerCoords().apply { x = point.x; y = point.y; pressure = 1f })
+                    val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords,
+                        0, if (mouse && action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL) MotionEvent.BUTTON_PRIMARY else 0,
+                        1f, 1f, 0, 0, if (mouse) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_TOUCHSCREEN, 0)
+                    owner.view.dispatchTouchEvent(motion); motion.recycle()
+                    hint = findHint(owner.semanticsOwner.unmergedRootSemanticsNode)
+                }
+                return hint
+            }
+            event(MotionEvent.ACTION_DOWN, source)
+            try {
+                event(MotionEvent.ACTION_MOVE, if (attached) targets.first().center else away)
+                // Keep emitting real native moves while observing the laid-out
+                // marker. Waiting for Compose idle between moves hides starvation.
+                for ((index, target) in targets.withIndex()) {
+                    val began = SystemClock.uptimeMillis()
+                    var firstVisible: Long? = null
+                    var samples = 0
+                    var lastHint: androidx.compose.ui.geometry.Rect? = null
+                    do {
+                        val point = androidx.compose.ui.geometry.Offset(target.left + (3 + samples % 4) * density, target.center.y)
+                        val hint = event(MotionEvent.ACTION_MOVE, point)
+                        lastHint = hint
+                        if (hint != null && kotlin.math.abs(hint.center.x - target.left) <= 2 * density && firstVisible == null)
+                            firstVisible = SystemClock.uptimeMillis() - began
+                        samples++
+                        compose.mainClock.advanceTimeByFrame()
+                        SystemClock.sleep(8)
+                    } while (SystemClock.uptimeMillis() - began < 600)
+                    android.util.Log.i("CapyDropTest", "mouse=$mouse drawer=$drawer attached=$attached slot=$index first_visible_ms=$firstVisible samples=$samples hint=$lastHint target=$target")
+                    assertNotNull("Tab insertion marker must appear during continuous motion ($mouse/$drawer/$attached/$index)", firstVisible)
+                    assertTrue("Tab insertion marker took ${firstVisible}ms ($mouse/$drawer/$attached/$index)", firstVisible!! < 250)
+                }
+                compose.waitForIdle()
+                val hint = bounds("workspace-drop-hint")
+                assertEquals(3 * density, hint.width, 1f)
+                assertEquals(targets.last().height, hint.height, 1f)
+                val pixels = root.captureToImage().toPixelMap()
+                val color = pixels[(hint.center.x - origin.x).toInt(), (hint.center.y - origin.y).toInt()]
+                assertEquals("Visible blue marker", 0x35 / 255f, color.red, .02f)
+                assertEquals(0x84 / 255f, color.green, .02f)
+                assertEquals(0xe4 / 255f, color.blue, .02f)
+            } finally {
+                event(MotionEvent.ACTION_CANCEL, away)
+            }
+            action(obj("type" to "close_settings")) // Drain the native owner, including cancellation.
+            assertEquals(before, state().getJSONObject("workspace").toString())
+            compose.onNodeWithTag("workspace-drop-hint").assertDoesNotExist()
+        }
+    }
+
     @Test fun workspaceUsesNativeMouseAndPenCursors() {
         val fixture = JSONObject(defaultWorkspace)
         fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,

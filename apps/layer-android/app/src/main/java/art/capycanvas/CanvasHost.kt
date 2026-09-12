@@ -19,6 +19,7 @@ import org.json.JSONObject
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
 internal data class CameraReadout(val zoomPercent: Int, val rotationDegrees: Int)
@@ -156,6 +157,25 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         refreshChrome()
         publish(true)
         wake()
+    }
+    private val latestWorkspaceUpdate = AtomicReference<Any?>()
+    internal fun workspaceGesture(actions: List<JSONObject>, preview: JSONObject? = null, reply: (Any?) -> Unit = {}) {
+        val update = Any()
+        latestWorkspaceUpdate.set(update)
+        post {
+            // Measurements, movement and its preview share one owner task. Keep
+            // every movement (crossing the tear-off threshold is significant),
+            // but skip obsolete previews/snapshots when input has queued ahead.
+            actions.forEach { Native.dispatch(handle, it.toString()) }
+            if (preview != null && latestWorkspaceUpdate.get() !== update) return@post
+            refreshChrome()
+            if (preview != null) {
+                val value = org.json.JSONTokener(Native.query(handle, preview.toString())).nextValue()
+                main.post { reply(if (value == JSONObject.NULL) null else value) }
+            }
+            publish(true)
+            wake()
+        }
     }
     fun invoke(command: String) = dispatch(obj("type" to "invoke", "command" to command))
     fun importLayer(name: String, width: Int, height: Int, rgba: ByteArray) = post {

@@ -139,16 +139,24 @@ internal class DockInteraction(val host: CanvasHost) {
     }
     fun hit(point: Offset): Region? = if (!enabled || popupOpen || contextMenu != null) null else regions.values
         .filter { it.bounds.contains(point) }.maxWithOrNull(compareBy<Region> { it.z }.thenBy { it.priority })
-    private fun send(phase: String) {
+    private fun send(phase: String, preview: Boolean = false) {
         val action = active ?: return
         if (action.getString("type") == "tile_drag") return
         // Opening another tab can invalidate Rust's transient measurement even
         // when the displayed rectangle is unchanged.
-        if (action.getString("type") == "drag_workspace") publishColumnDrawers()
-        host.dispatch(JSONObject(action.toString()).put("phase", phase).put("viewport", viewport)
+        val actions = mutableListOf<JSONObject>()
+        if (action.getString("type") == "drag_workspace") actions.add(obj("type" to "measure_column_drawers",
+            "measurements" to JSONArray(columnDrawers.values.toList())))
+        actions.add(JSONObject(action.toString()).put("phase", phase).put("viewport", viewport)
             .put("position", JSONArray(listOf(position.x, position.y))).apply {
                 if (action.getString("type") == "drag_workspace") put("tabs", JSONArray(tabs.values.toList()))
             })
+        val request = generation
+        host.workspaceGesture(actions, if (preview && action.optJSONObject("item") != null) query() else null) {
+            // A newer pointer position must not starve completed feedback.
+            // Only ending/replacing the gesture invalidates its replies.
+            if (request == generation) hint = it as? JSONObject
+        }
     }
     private fun query() = obj("type" to "drop", "item" to active?.optJSONObject("item"),
         "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabs.values.toList()), "expansion" to expansion)
@@ -158,12 +166,12 @@ internal class DockInteraction(val host: CanvasHost) {
         refresh(); send("down")
     }
     fun move(point: Offset) {
-        position = point; send("move")
-        if (active?.optString("type") == "tile_drag") host.chrome(obj("kind" to "motion",
-            "position" to JSONArray(listOf(point.x, point.y))), facts())
-        if (active?.optJSONObject("item") == null) return
-        val request = ++generation
-        host.query(query()) { if (request == generation) hint = it as? JSONObject }
+        position = point; send("move", preview = true)
+        if (active?.optString("type") == "tile_drag") {
+            host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(point.x, point.y))), facts())
+            val request = generation
+            host.query(query()) { if (request == generation) hint = it as? JSONObject }
+        }
     }
     fun finish(cancel: Boolean) {
         if (!dragging) return
