@@ -99,7 +99,7 @@ void CanvasWindow::Open() {
     panel.CompositionScaleChanged([weak=weak_from_this()](auto&&,auto&&) { if(auto self=weak.lock()) self->Resize(); });
     window.Activated([weak=weak_from_this()](auto&&, WindowActivatedEventArgs const& e) {
         if(e.WindowActivationState()==WindowActivationState::Deactivated)
-            if(auto self=weak.lock()){self->heldKeys.clear();self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);}
+            if(auto self=weak.lock()){if(self->workspace)self->workspace->CancelGesture();self->heldKeys.clear();self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);}
     });
     window.AppWindow().Closing([weak=weak_from_this()](auto&&,AppWindowClosingEventArgs const& e) {
         if(auto self=weak.lock()) {
@@ -172,14 +172,17 @@ void CanvasWindow::Start() {
     [weak=weak_from_this()](std::string json){if(auto self=weak.lock()){
         self->canvasFocus.Focus(FocusState::Programmatic);
         self->Send(std::move(json),CanvasCommandKind::Document);
-    }});
+    }},[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
     header=std::make_unique<HeaderView>(send,model,
         [weak=weak_from_this()](bool open){if(auto self=weak.lock())self->Popup(open);},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->Resize();},
-        [weak=weak_from_this()]{if(auto self=weak.lock())self->Fullscreen();});
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->Fullscreen();},
+        [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
+            if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
+        });
     root.Children().Append(header->Root());
     settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
@@ -188,6 +191,9 @@ void CanvasWindow::Start() {
     documents=std::make_unique<DocumentView>(
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);},
         model,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
+        [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
+    workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,root.XamlRoot(),
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
     if(auto snapshot=capy_snapshot(host)){
         std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
@@ -344,6 +350,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(closing||closed)return;
     using VirtualKey=Windows::System::VirtualKey;
     auto key=e.Key();
+    if(pressed&&key==VirtualKey::Escape&&workspace&&workspace->CancelGesture()){e.Handled(true);return;}
     std::wstring name;
     switch(key) {
     case VirtualKey::Shift:name=L"shift";break;
@@ -539,7 +546,8 @@ void CanvasWindow::Run() {
             {std::lock_guard lock(mutex);if(!closing&&work.Empty())preview=previewWork.Take();}
             if(preview){
                 auto request=preview->kind==CanvasQueryKind::Filters?capy_filter_previews:
-                    preview->kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:capy_layer_menu;
+                    preview->kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:
+                    preview->kind==CanvasQueryKind::LayerMenu?capy_layer_menu:capy_workspace_query;
                 PreviewPacket packet(request(host,preview->json.c_str()),capy_preview_free);
                 if(!packet)Fail(capy_error());
                 preview->reply(std::move(packet));
@@ -591,10 +599,12 @@ void CanvasWindow::RequestClose() {
     {std::lock_guard lock(mutex);if(closing||closed)return;}
     if(!host||!renderer.joinable()||rendererDone.load()){Stop();return;}
     if(documents&&documents->IsOpen())return;
+    if(workspace)workspace->CancelGesture();
     // Commit the focused workspace draft before shared close policy checks dirty state.
     canvasFocus.Focus(FocusState::Programmatic);
     if(settings)settings->CommitEdits();
     Send(R"({"type":"close_settings"})");
+    if(workspaceDialogs)workspaceDialogs->CancelAll();
     CapyLifecycle("close_requested");
     Send(R"({"operation":"close"})",CanvasCommandKind::Document);
 }
@@ -605,6 +615,7 @@ void CanvasWindow::Stop() {
     CapyLifecycle("close_authorized");
     if(settings)settings->Hide();
     if(documents)documents->Hide();
+    if(workspaceDialogs)workspaceDialogs->Hide();
     wake.notify_all();space.notify_all();
     if(inputController) {
         inputDispatcher.TryEnqueue([weak=weak_from_this()]{
@@ -620,7 +631,7 @@ void CanvasWindow::Stop() {
 }
 void CanvasWindow::Finish() {
     if(closed||finishing||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
-    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen()))return;
+    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen()))return;
     finishing=true;
     CapyLifecycle("join_renderer");
     if(renderer.joinable()) renderer.join();
@@ -632,7 +643,7 @@ void CanvasWindow::Finish() {
     CapyLifecycle("host_destroyed");
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
-    settings.reset();documents.reset();header.reset();workspace.reset();
+    settings.reset();documents.reset();workspaceDialogs.reset();header.reset();workspace.reset();
     root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
     window.Content(nullptr);
     canvasFocus=nullptr;panel=nullptr;status=nullptr;toolbar=nullptr;root=nullptr;
@@ -676,11 +687,12 @@ void CanvasWindow::ApplyDialogs() {
         dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->Finish();});
         return;
     }
-    if(applyingDialogs||!settings||!documents||!lastModel.Size())return;
+    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!lastModel.Size())return;
     applyingDialogs=true;
     struct Reset{bool& flag;~Reset(){flag=false;}}reset{applyingDialogs};
-    if(!documents->IsOpen())settings->Apply(lastModel);
-    documents->Apply(lastModel,settings->IsOpen());
+    if(!documents->IsOpen()&&!workspaceDialogs->IsOpen())settings->Apply(lastModel);
+    workspaceDialogs->Apply(lastModel,documents->IsOpen()||settings->IsOpen());
+    documents->Apply(lastModel,settings->IsOpen()||workspaceDialogs->IsOpen());
     UpdatePopup();
 }
 void CanvasWindow::Popup(bool open) {
@@ -688,17 +700,19 @@ void CanvasWindow::Popup(bool open) {
 }
 void CanvasWindow::UpdatePopup() {
     if(closing||closed)return;
-    bool blocked=(settings&&settings->IsOpen())||(documents&&documents->IsOpen());
+    bool blocked=(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen());
     canvasFocus.IsEnabled(!blocked);
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
     bool open=headerPopupOpen||workspacePopupOpen||blocked;
+    auto facts=workspace?workspace->ChromeFacts(open):CapyUi::O({{L"held",CapyUi::B(false)},{L"dragging",CapyUi::B(false)}});
     if(menuOpen.exchange(open)==open)return;
     using namespace CapyUi;
     A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));
+    facts.Insert(L"popup_open",B(open));
     Send(to_string(O({{L"type",S(L"chrome")},{L"event",O({{L"kind",S(L"refresh")}})},
-        {L"facts",O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(open)}})},
+        {L"facts",facts},
         {L"viewport",viewport}}).Stringify()),CanvasCommandKind::Input);
 }
 void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {

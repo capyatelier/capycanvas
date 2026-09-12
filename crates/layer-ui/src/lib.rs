@@ -478,6 +478,7 @@ impl CommandId {
                         | Platform::Mac
                         | Platform::Android
                         | Platform::Web
+                        | Platform::Windows
                 )
             }
             // Windows currently replaces documents in its single native window.

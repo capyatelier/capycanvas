@@ -444,5 +444,86 @@ theme changes and document replacement. It does not measure presentation or
 physical input latency.
 
 Image-as-layer import is covered by the native document fixture above. Runtime
-filter package import remains pending. Full editor columns, drawers, panel expansion and docking also remain pending, so
-the full Windows editor preset is still gated.
+filter package import remains pending. The complete workspace projection and
+physical docking acceptance remain in progress, so the full Windows editor
+preset is still gated.
+
+## Workspace projection in progress
+
+The Windows header projects all eight shared application menus. Menu labels,
+sections, checkmarks, enabled states, shortcuts and actions come from the shared
+snapshot. Help links resolve the shared link identity on the canvas owner and
+use the asynchronous Windows launcher; completion or failure acknowledges the
+shared request. The UI retries a full optional query queue without busy polling.
+
+Native panel bodies are separate from tab and dock decoration. Each placement
+owns its controls while sharing the window's thumbnail and filter-preview
+caches. All five toolbar tile styles follow the shared rectangles and icon/label metadata;
+divider tiles use their compact separator geometry. Diagnostics uses the shared
+rows and chart order and requests CPU-only telemetry every 200 ms while visible.
+
+The workspace owns native gesture capture, allowing the source tab or toolbar
+to be reparented during tear-off. Native tabs supply drop-hit geometry; shared
+actions own movement, divider/floating resize, docking and workspace history.
+Drop hints use one outstanding asynchronous query, retain the latest position,
+and resolve tile drops at release. Escape, capture loss, deactivation and close
+cancel active gestures. Native chrome facts survive subsequent canvas events.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-workspace-layout.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+This isolated fixture checks menu identity/order, selection commands, Help's
+About page, live Diagnostics rows, retained metrics, resize, visibility and
+workspace Undo. It does not activate the external browser. Physical docking
+and tablet gestures still need acceptance.
+
+Content drawers and collapsed columns now have native projections. The shared
+owner supplies animated bounds, connecting shapes, column widths, wrapping tile
+geometry and collapse/expand history. WinUI reports natural content heights and
+clipped tile origins. Independent panel bodies retain native controls across
+drawer updates; Navigator uses the existing GPU overview path through a clear
+opening in the drawer background. Native scrolling handles column overflow.
+Keyboard context requests use the same shared menus as pointer requests.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-drawers.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+The fixture uses isolated settings and local captures. It covers repeat toggles,
+keyboard context menus, expand/undo/redo, fixed-width tab selection, Navigator
+preview/zoom and close. Its keyboard driver sends context-menu keys only while
+the owned review has foreground focus. Shared unit
+coverage includes Windows drawer toggles, column history, reversible resize,
+native height queries and closing from retained geometry after model removal.
+Startup chrome facts are held locally until WinUI has a nonzero viewport.
+
+Column drawers now report their presented bounds through MeasureColumnDrawers.
+Their individual tabs and fixed group grip route shared workspace drags; tab
+drop targets are clipped through every native scrolling ancestor. Double-click
+on a canvas-facing column divider requests the shared default-width reset.
+Core tests cover Windows tear-off, cancellation, docking, tab reordering,
+stale geometry and undo/redo. Physical native dragging remains unaccepted.
+
+New Toolbar, Manage Toolbars and toolbar prompts use native WinUI dialogs with
+shared names, search, selection, validation and confirmation text. Tool choices
+are virtualized and native rows survive selection-only updates. Text drafts
+survive delayed owner snapshots, cancellation waits for Core acknowledgement,
+and dialogs share the window's modal slot with Preferences and file operations.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+This isolated fixture covers catalog virtualization, retained selection, rapid
+name edits, validation, creation, rename, duplicate, insertion, manager selection,
+delete/cancel confirmation, workspace undo/redo, picker cancellation and closing
+with a picker open. Toolbar grips support keyboard context requests.
+
+Main through 16c5886 is merged, including preservation of tab preferences
+through drags and the other ports' drawer and layout work. Panel configuration expansion,
+full editor defaults and partial Zen remain unfinished. Drawer origin corner
+clipping, overlapping GPU previews, scroll/drag cancellation and physical
+gestures require acceptance. The intermittent final shader-worker join still
+exceeds the five-second process-exit gate in some reviews. Presentation
+benchmarking remains deferred.

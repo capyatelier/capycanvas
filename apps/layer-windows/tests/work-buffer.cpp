@@ -77,5 +77,13 @@ int main() {
     assert(queries.Push({CanvasQueryKind::Thumbnails,"pixels",{}}));
     assert(queries.Push({CanvasQueryKind::LayerMenu,"latest",{}}));
     assert(queries.Take()->json=="latest");assert(queries.Take()->json=="pixels");assert(queries.Empty());
-    std::cout<<"Canvas queries: menu priority, FIFO pixels, bounded retained allocation, retry ownership and disposal passed\n";
+    // Workspace geometry must not replace another view's pending callback.
+    // It shares the bounded FIFO with readbacks; context menus retain priority.
+    assert(queries.Push({CanvasQueryKind::Workspace,"drawer",{}}));
+    assert(queries.Push({CanvasQueryKind::Thumbnails,"thumbnail",{}}));
+    assert(queries.Push({CanvasQueryKind::Workspace,"stats",{}}));
+    assert(queries.Push({CanvasQueryKind::LayerMenu,"context",{}}));
+    for(auto expected:{"context","drawer","thumbnail","stats"})assert(queries.Take()->json==expected);
+    assert(queries.Empty());
+    std::cout<<"Canvas queries: menu priority, FIFO geometry/pixels, bounded retained allocation, retry ownership and disposal passed\n";
 }

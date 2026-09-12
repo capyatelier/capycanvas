@@ -22,8 +22,15 @@ $names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 
+$script:latestSnapshot=$null
 function Model {
-    try{$s=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json;if($s.process_id -eq $review.Id -and $s.model.windows_isolated_settings){$s.model}}catch{}
+    # Trace publication can overlap this read. Keep only the last complete,
+    # isolated snapshot from this exact process; new-value waits still time out.
+    try{
+        $s=Get-Content (Join-Path $directory 'ui-state.json') -Raw|ConvertFrom-Json
+        if($s.process_id -eq $review.Id -and $s.model.windows_isolated_settings){$script:latestSnapshot=$s}
+    }catch{}
+    if($script:latestSnapshot.process_id -eq $review.Id){$script:latestSnapshot.model}
 }
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=5){
     $watch=[Diagnostics.Stopwatch]::StartNew()
