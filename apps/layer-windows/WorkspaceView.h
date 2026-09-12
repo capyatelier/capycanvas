@@ -15,6 +15,7 @@ public:
     void Apply(Json const& snapshot);
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
+    void SetTitlebarInsets(float left,float right,float height);
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

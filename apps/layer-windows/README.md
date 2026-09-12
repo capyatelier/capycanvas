@@ -542,11 +542,42 @@ and targeted opacity, Escape, toolbar insertion and theme changes through
 Preferences. Its app-only pixel check verifies a GPU overview over an opaque
 lower panel and restoration after closing configuration.
 
-Main through 2fbcc23 is merged, including streamed native snapshots and the
-other ports' collapsed-column and drop-target fixes. Full editor defaults,
-native panel measurements, partial Zen, runtime filter package import and
-packaging remain unfinished. Drawer origin corner clipping, all overlap/scroll/
-drag combinations, physical gestures and full Chrome visual parity still
-require acceptance. The intermittent final shader-worker join still exceeds
-the five-second process-exit gate in some reviews. Presentation benchmarking
-remains deferred.
+## Full editor and Zen checkpoint
+
+Windows initializes the same complete editor preset as Android and Web:
+Tools, Tool Set, Tool/Brush size, Color, Navigator/Diagnostics,
+Properties/Filters, Layers and Commands. The temporary tool chooser is removed.
+Native tab widths and natural content heights are reported after layout, with
+coalescing and acknowledgement checks. Layers measurements use the virtualized
+scroll extent; reporting does not realize every row.
+
+Partial Zen projects Core's toolbar sections with stable tile identities.
+Native titlebar left/right insets and caption height are transient Core
+measurements. They reserve caption-button space in the same geometry used for
+toolbar hit testing and drawer anchors, survive workspace undo/reset/switching,
+and never enter saved layout history. Windows excludes Zen controls from native
+window-drag regions and only republishes those regions when they change.
+The GPU canvas still extends continuously underneath the custom titlebar.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-editor.ps1 -Executable <native-exe>
+~~~
+
+The isolated fixture checks Core rectangles, settled panel measurements, all
+drawing tools, retained fields/scrolling, partial/total Zen, drawer activation,
+resize retention, restored workspace geometry, both themes and clean exit.
+It also checks native `WM_NCHITTEST` results for top Zen controls. Its reference
+capture uses a measured 986 by 658 DIP viewport and Fit canvas, with actual
+display scale and uncropped client-image dimensions recorded locally. This
+supports comparison with `tools/visual/chrome-capture.mjs`.
+
+Main through f6c58a7 is integrated, including durable workspace history,
+GTK workspace storage and the other ports' drag updates. Windows integration
+with the new workspace store remains separate work. Runtime filter package
+import, packaging, physical gestures and full visual parity remain unfinished.
+Chrome comparisons still show differences in Tool Set button arrangement,
+header spacing, grips, disabled icon styling and some property/layer controls.
+Drawer clipping and all overlap/scroll/drag combinations require further
+acceptance. The intermittent final shader-worker join remains open even though
+these editor and Layers reviews exit within the five-second gate.
+Presentation benchmarking remains deferred.

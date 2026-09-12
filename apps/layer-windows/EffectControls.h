@@ -48,4 +48,4 @@ FrameworkElement GradientField(std::shared_ptr<Property> const& property,Binding
 }
 winrt::Microsoft::UI::Xaml::FrameworkElement PropertiesPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings);
 
-winrt::Microsoft::UI::Xaml::FrameworkElement FiltersPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings);
+winrt::Microsoft::UI::Xaml::FrameworkElement FiltersPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings,std::function<double()>* contentHeight=nullptr);

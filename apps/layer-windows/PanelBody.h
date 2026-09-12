@@ -12,6 +12,7 @@ public:
     winrt::Microsoft::UI::Xaml::FrameworkElement Root()const{return root;}
     void Apply(bool visible);
     void Layout(CapyUi::J const& geometry);
+    double ContentHeight()const;
     std::unique_ptr<NavigatorView> navigator;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::FrameworkElement> tileElements;
     std::map<std::wstring,winrt::Microsoft::UI::Xaml::FrameworkElement> anchors;
@@ -19,6 +20,7 @@ private:
     std::shared_ptr<CapyUi::WorkspaceData> data;
     winrt::Microsoft::UI::Xaml::FrameworkElement root{nullptr};
     CapyUi::Bindings bindings;
+    std::function<double()> contentHeight;
     std::vector<uint32_t> tileOrder;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Border> dividers;
     winrt::Microsoft::UI::Xaml::FrameworkElement tileGrip{nullptr};

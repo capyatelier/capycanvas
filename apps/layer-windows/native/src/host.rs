@@ -63,6 +63,7 @@ impl CapyHost {
             return Err("Invalid Windows canvas surface".into());
         }
         let mut native = NativeHost::new(layer_ui::Platform::Windows)?;
+        crate::workspace::initialize(&mut native)?;
         native.session.set_document_replacement(true);
         native.startup = Default::default();
         native.resize(width, height, scale)?;

@@ -3,6 +3,7 @@
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
+#include "ZenToolbars.h"
 #include "WorkspaceGeometry.h"
 #include "OverviewOcclusion.h"
 #include "WorkspaceDrawers.h"
@@ -44,6 +45,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceDrawers> drawers;
     std::unique_ptr<CollapsedColumns> collapsed;
     std::unique_ptr<WorkspaceExpansion> expansion;
+    std::unique_ptr<ZenToolbars> zen;
+    struct Measurement {double tab=36,content=320;};
+    std::map<std::wstring,Measurement> measurements;
+    hstring lastMeasurements;
+    bool measurementQueued=false;
+    std::array<float,3> titlebar{};
+    hstring lastTitlebar;
     bool presenting=false;
     OverviewOcclusion overviewOcclusion;
     std::map<std::wstring,Border> handles;
@@ -58,6 +66,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         J geometry,presented;
         hstring backgroundKey;
         std::unique_ptr<PanelBody> body;
+        std::map<std::wstring,Button> tabs;
         std::unique_ptr<PanelConfiguration> configuration;
         bool hidden=false;
         int order=0;
@@ -82,13 +91,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(camera,L"canvas-camera");
     }
     void init(){
+        zen=std::make_unique<ZenToolbars>(data,root,gestures);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
-        group.body.reset();group.footer=nullptr;
+        group.body.reset();group.footer=nullptr;group.tabs.clear();
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
         group.border.Background(data->brush(L"panel"));group.border.CornerRadius(CornerRadius{8,8,8,8});
         Grid frame;
@@ -102,7 +112,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto id=value.GetString();auto model=find(array(data->model,L"panels"),L"id",id);
                 auto tab=button(data,str(model,L"title"),[data=data,id,groupId=num(geometry,L"id")]{
                     data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(groupId)},{L"panel",S(id)}}));
-                });tab.Height(36);tab.Padding(Thickness{8,4,8,4});tab.CornerRadius(CornerRadius{6,6,0,0});
+                });tab.Height(36);tab.MinWidth(36);tab.Padding(Thickness{8,4,8,4});tab.CornerRadius(CornerRadius{6,6,0,0});
                 StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);
                 auto tabStyle=object(model,L"tab");
                 if(flag(tabStyle,L"show_icon"))content.Children().Append(icon(str(model,L"icon"),data->theme()));
@@ -112,7 +122,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 gestures->Source(tab,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                     O({{L"group",N(num(geometry,L"id"))},{L"index",N(index++)},{L"panel",S(id)}}));
                 AutomationProperties::SetAutomationId(tab,L"panel-tab-"+id);
-                tabs.Children().Append(tab);
+                group.tabs.emplace(std::wstring(id),tab);tabs.Children().Append(tab);
             }
             ScrollViewer tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
             tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);
@@ -154,6 +164,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto found=group.body->anchors.find(next);
                 if(found!=group.body->anchors.end()){anchor=found->second;break;}
             }
+            if(!anchor&&zen)anchor=zen->Anchor(next);
             if(!anchor&&drawers)anchor=drawers->Anchor(next);
             if(!anchor)return;
             StackPanel content;content.Width(280);content.Spacing(12);
@@ -185,7 +196,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(camera);
+            expansion->Reset();zen->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(camera);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
@@ -246,10 +257,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         updateConfiguration();
         expansion->Apply(configurationHeight());present();
-        collapsed->Apply();drawers->Apply();gestures->Refresh();
+        zen->Apply();collapsed->Apply();drawers->Apply();gestures->Refresh();
         camera.Foreground(data->brush(L"text"));place(camera,object(layout,L"status"));
         camera.TextAlignment(TextAlignment::Right);updateCamera(object(data->state,L"camera"));
-        updatePopup();publishOverviews();
+        updatePopup();publishOverviews();reportTitlebar();
     }
 
     double configurationHeight()const{
@@ -280,8 +291,54 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
         }
     }
+    void reportTitlebar(){
+        if(!root.IsLoaded())return;
+        auto accepted=array(data->model,L"titlebar_insets");A value;bool same=accepted.Size()==3;
+        for(uint32_t i=0;i<3;++i){value.Append(N(titlebar[i]));same=same&&accepted.GetNumberAt(i)==titlebar[i];}
+        if(same){lastTitlebar=L"";return;}
+        auto json=value.Stringify();if(json==lastTitlebar)return;lastTitlebar=json;
+        data->dispatch(O({{L"type",S(L"measure_titlebar")},{L"insets",value}}));
+    }
+    void measurePanels(){
+        if(data->updating||!root.IsLoaded()||root.ActualWidth()<=0)return;
+        auto accepted=array(data->model,L"panel_measurements");std::vector<std::wstring> live;
+        for(auto value:array(data->model,L"panels")){
+            auto id=str(value.GetObject(),L"id");std::wstring key(id);live.push_back(key);
+            if(!measurements.contains(key)){
+                auto previous=find(accepted,L"panel",id);
+                measurements.emplace(key,Measurement{num(previous,L"tab_width",36),num(previous,L"content_height",320)});
+            }
+        }
+        for(auto it=measurements.begin();it!=measurements.end();)
+            if(std::find(live.begin(),live.end(),it->first)==live.end())it=measurements.erase(it);else ++it;
+        auto stable=[](double value){return std::round(std::clamp(value,0.,999999.)*64.)/64.;};
+        for(auto const& [id,group]:groups){
+            if(group.hidden||group.presented.Size()||!group.frame.IsLoaded())continue;
+            for(auto const& [panel,tab]:group.tabs)if(tab.IsLoaded()&&tab.DesiredSize().Width>0)
+                measurements[panel].tab=stable(tab.DesiredSize().Width);
+            double height=group.body->ContentHeight();
+            if(std::isfinite(height)&&height>=0)measurements[std::wstring(str(group.geometry,L"active"))].content=stable(height);
+        }
+        A report;bool same=accepted.Size()==measurements.size();
+        for(auto const& [panel,size]:measurements){
+            auto previous=find(accepted,L"panel",hstring(panel));
+            same=same&&previous.Size()&&num(previous,L"tab_width")==size.tab&&num(previous,L"content_height")==size.content;
+            report.Append(O({{L"panel",S(hstring(panel))},{L"tab_width",N(size.tab)},{L"content_height",N(size.content)}}));
+        }
+        if(same){lastMeasurements=L"";return;}
+        auto json=report.Stringify();if(json==lastMeasurements)return;lastMeasurements=json;
+        data->dispatch(O({{L"type",S(L"measure_panels")},{L"measurements",report}}));
+    }
     void measured(){
         if(presenting||data->updating||!root.IsLoaded())return;
+        // Coalesce layout notifications after native arrange. Measuring the
+        // scroll extents never realizes the entire virtualized Layers list.
+        if(!measurementQueued){
+            measurementQueued=true;
+            if(!root.DispatcherQueue().TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock()){
+                self->measurementQueued=false;self->reportTitlebar();self->measurePanels();
+            }}))measurementQueued=false;
+        }
         expansion->Apply(configurationHeight());backgrounds();publishOverviews();
         if(!popup&&!str(object(data->state,L"customization"),L"control").empty())updatePopup();
     }
@@ -396,3 +453,7 @@ Canvas WorkspaceView::Root()const{return impl->root;}
 void WorkspaceView::Apply(Json const& snapshot){impl->apply(snapshot);}
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
 bool WorkspaceView::CancelGesture(){return impl->gestures->Cancel();}
+void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
+    std::array<float,3> value{left,right,height};
+    if(value!=impl->titlebar){impl->titlebar=value;impl->lastTitlebar=L"";impl->reportTitlebar();}
+}

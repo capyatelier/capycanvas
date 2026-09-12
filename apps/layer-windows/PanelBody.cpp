@@ -53,9 +53,9 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             navigator=std::make_unique<NavigatorView>(data,std::move(layoutChanged));
             auto view=navigator->Root();root=view;
         }else if(str(panel,L"id")==L"adjustments"&&shows(panel,L"adjustments")){
-            auto view=FiltersPanel(data,bindings);root=view;
+            auto view=FiltersPanel(data,bindings,&contentHeight);root=view;
         }else if(str(panel,L"id")==L"layers"){
-            auto view=LayersPanel(data,bindings);root=view;
+            auto view=LayersPanel(data,bindings,&contentHeight);root=view;
         }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
@@ -126,7 +126,9 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             }
             root=tiles;
         }else{
-            StackPanel content;content.Spacing(12);double inset=str(panel,L"id")==L"stats"?6:8;
+            StackPanel content;content.Spacing(12);auto panelId=str(panel,L"id");
+            double inset=panelId==L"stats"||panelId==L"properties"?6:8;
+            contentHeight=[content]{return content.ActualHeight();};
             content.Padding(Thickness{inset,inset,inset,inset});
             auto brushValue=[data=data](wchar_t const* key){return num(object(data->state,L"brush"),key);};
             for(auto value:array(panel,L"controls")){
@@ -193,6 +195,13 @@ void PanelBody::Layout(J const& geometry){
         auto grip=object(layout,L"grip");tileGrip.Visibility(grip.Size()?Visibility::Visible:Visibility::Collapsed);
         if(grip.Size())place(tileGrip,grip);
     }
+}
+double PanelBody::ContentHeight()const{
+    if(!root.IsLoaded()||root.Visibility()!=Visibility::Visible||root.ActualWidth()<=0)return -1;
+    // A Navigator has a natural 220-DIP preview and 52-DIP controls. Its
+    // arranged preview shrinks to fit the dock; that is not its natural size.
+    if(navigator)return 272;
+    return contentHeight?contentHeight():-1;
 }
 void PanelBody::Apply(bool visible){
     if(navigator)navigator->Apply(visible);

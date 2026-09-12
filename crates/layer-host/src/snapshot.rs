@@ -169,6 +169,7 @@ impl NativeHost {
         map.serialize_entry("toolbar_prompt", &self.session.toolbar_prompt())?;
         map.serialize_entry("toolbar_manager", &self.session.toolbar_manager())?;
         map.serialize_entry("panel_measurements", &state.workspace.layout.measurements)?;
+        map.serialize_entry("titlebar_insets", &state.workspace.layout.titlebar_insets)?;
         map.serialize_entry("chrome_hidden", &self.chrome_hidden)?;
         let gpu_ready = self.session.engine().backend().0.is_some();
         map.serialize_entry("gpu_ready", &gpu_ready)?;

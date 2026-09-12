@@ -1141,3 +1141,57 @@ measurement, partial Zen, full Chrome parity, runtime filter package import,
 packaging, physical gestures, device/DPI lifecycle and final presentation/input
 latency gates remain. The earlier intermittent final shader-worker shutdown
 delay is still open. Captures, profiles, logs and binaries stay ignored/local.
+
+## Full editor, measurements and native titlebar-aware Zen
+
+The Windows host now initializes the full platform workspace before optional
+restoration, following the Android host's startup sequence. Enabling the preset
+alone was insufficient because NativeHost starts with generic defaults.
+Tools and Commands expose the complete shared command set; Tool Set no longer
+contains the temporary chooser. Native tab widths and scroll-content extents
+feed Core's floating-panel and tab sizing. Reports are coalesced after arrange,
+retain inactive measurements and avoid realizing the full Layers list.
+
+Partial Zen retains native toolbar controls while Core supplies section
+splitting, placement, tile sizes, clipping and drawer anchors. Screenshot
+review caught an overlap with Windows caption buttons. A transient shared
+titlebar measurement now reserves the actual native insets and caption height.
+Window-drag regions exclude the resulting Zen controls; unchanged regions
+are cached so painting updates do not repeatedly publish non-client geometry.
+The titlebar facts are validated, absent from durable history, and retained
+through workspace undo, reset, adoption and drag cancellation. This continues
+to use the existing GPU canvas and presentation surface.
+
+The integration includes main through f6c58a7. The shared history work required
+explicitly stripping titlebar facts from durable revisions while retaining
+them in the current window. The new workspace storage/manager infrastructure
+is available on main; this milestone does not wire the Windows host to that
+store. GTK/Web attached-tab drag changes and Android drag pacing are included.
+
+The final shared tree passes 323 unit tests (259 UI, 18 host, 46 Windows;
+three explicit GPU tests ignored) and strict Windows Clippy. Core/bridge
+coverage checks startup versus saved layout authority, titlebar validation,
+serialization and history, and matching Zen tile/anchor/hit geometry outside
+caption controls. Native editor coverage includes settled measurements,
+all tools and their changing schemas, numeric expressions, retained controls
+and scrolling, editing-target guards, partial/total Zen, color drawers,
+resize, restored layout, both themes and the five-second process-exit gate.
+Top Zen tiles return client hit results through `WM_NCHITTEST`.
+The Layers regression also passes thumbnails/undo, virtualization/recycling,
+masks, independent selection, group operations, theme and document replacement,
+and focused-draft handling before close.
+
+The local Chrome reference build runs with hardware WebGPU and no page errors.
+The native reference fixture measures and adjusts to the same 986 by 658 DIP
+viewport, records display scale/client capture size, and invokes Fit canvas.
+At 1.5 scale the native XAML viewport is 1479 by 987 pixels; its uncropped client
+capture has one additional physical row, recorded rather than silently removed.
+Visual review confirms the shared outer geometry and identifies remaining
+differences in Tool Set button arrangement, header spacing, grips, disabled
+icons and property/layer controls. This is not full pixel parity acceptance.
+
+Physical pen history/pressure/tilt/eraser, all workspace gestures and clips,
+device/DPI lifecycle, runtime filter packages, packaging, workspace storage
+integration and final presentation/input-latency gates remain. The intermittent
+shader-worker final-join delay is still open. No new presentation benchmark
+was run, and no private captures, profiles, logs or binaries are published.

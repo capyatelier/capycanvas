@@ -136,12 +136,24 @@ void CanvasWindow::Resize() {
     // Physical-pixel drag regions leave the app controls and system caption buttons interactive.
     auto titlebar=window.AppWindow().TitleBar();
     bool caption=window.AppWindow().Presenter().Kind()==AppWindowPresenterKind::Overlapped;
+    if(workspace)workspace->SetTitlebarInsets(caption?float(titlebar.LeftInset())/scale:0,
+        caption?float(titlebar.RightInset())/scale:0,caption?float(titlebar.Height())/scale:0);
+    std::vector<Windows::Graphics::RectInt32> regions;
     if(header){
         header->SetFullscreen(!caption);
         header->SetInsets(caption?float(titlebar.LeftInset())/scale:0,caption?float(titlebar.RightInset())/scale:0);
-        if(caption)titlebar.SetDragRectangles(header->DragRegions(scale,next.width));
-    } else if(caption)titlebar.SetDragRectangles({Windows::Graphics::RectInt32{
-        titlebar.LeftInset(),0,std::max(0,int32_t(next.width)-titlebar.LeftInset()-titlebar.RightInset()),int32_t(48*scale)}});
+        if(caption)regions=header->DragRegions(scale,next.width);
+    } else if(caption)regions.push_back(Windows::Graphics::RectInt32{
+        titlebar.LeftInset(),0,std::max(0,int32_t(next.width)-titlebar.LeftInset()-titlebar.RightInset()),int32_t(48*scale)});
+    if(caption){
+        bool same=captionRegionsValid&&regions.size()==captionRegions.size()&&
+            std::equal(regions.begin(),regions.end(),captionRegions.begin(),[](auto a,auto b){
+                return a.X==b.X&&a.Y==b.Y&&a.Width==b.Width&&a.Height==b.Height;
+            });
+        // Painting snapshots can refresh header state without moving controls.
+        // Only changed hit geometry needs a non-client window update.
+        if(!same){titlebar.SetDragRectangles(regions);captionRegions=std::move(regions);captionRegionsValid=true;}
+    }else captionRegionsValid=false;
     {
         std::lock_guard lock(mutex);
         bool changed=next.width!=desired.width||next.height!=desired.height||next.scale!=desired.scale;

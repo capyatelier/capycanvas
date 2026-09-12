@@ -215,6 +215,15 @@ bool LayersView::dragCurrent()const{
 }
 void LayersView::clearDrag(){dragged.reset();dragSpeed=0;if(dragTimer)dragTimer.Stop();for(auto const& [element,row]:rows)row->highlight(0);}
 }
-FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
-    auto view=std::make_shared<LayersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
+FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight){
+    auto view=std::make_shared<LayersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});
+    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
+        if(auto view=weak.lock()){
+            auto height=[](FrameworkElement const& item){return item.Visibility()==Visibility::Visible?item.ActualHeight():0.;};
+            return height(view->header)+height(view->footerFrame)+
+                (view->list.Visibility()==Visibility::Visible?view->list.ExtentHeight():0.);
+        }
+        return -1.;
+    };
+    return view->root;
 }

@@ -197,6 +197,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .clone();
         workspace.layout.measurements.clear();
         workspace.layout.column_scroll.clear();
+        workspace.layout.titlebar_insets = [0.0; 3];
         workspace.zen_mode = self.state.workspace.zen_mode;
         workspace
     }
@@ -1332,6 +1333,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::MeasurePanels { .. }
+                    | UiAction::MeasureTitlebar { .. }
                     | UiAction::WindowFullscreen { .. }
             )
         {
@@ -1466,6 +1468,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_action(action)?;
                 self.refresh_document();
                 (DOCUMENT | BRUSH, true)
+            }
+            UiAction::MeasureTitlebar { insets } => {
+                if !insets
+                    .into_iter()
+                    .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                {
+                    return Err("Invalid titlebar measurement".into());
+                }
+                if self.state.workspace.layout.titlebar_insets == insets {
+                    (0, false)
+                } else {
+                    self.state.workspace.layout.titlebar_insets = insets;
+                    (LAYOUT, false)
+                }
             }
             UiAction::MeasurePanels { measurements } => {
                 let mut accepted = Vec::new();
@@ -1669,8 +1685,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 return self.dispatch(action);
             }
-            UiAction::RestoreWorkspace { workspace } => {
+            UiAction::RestoreWorkspace { mut workspace } => {
                 workspace.validate()?;
+                workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                 self.state.workspace = workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.divider_drag = None;
@@ -2499,6 +2516,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         restored
                             .column_scroll
                             .clone_from(&self.state.workspace.layout.column_scroll);
+                        restored.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                         self.state.workspace.layout = restored;
                         drag.phase = ResizeDragPhase::Expand {
                             columns,

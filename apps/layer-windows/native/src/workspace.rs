@@ -5,6 +5,13 @@ use crate::previews::CapyPreview;
 use layer_host::NativeHost;
 use serde_json::{Value, json};
 
+// Match Android's native startup before optional preferences restore a workspace.
+pub(crate) fn initialize(native: &mut NativeHost) -> Result<(), String> {
+    native.dispatch(layer_ui::UiAction::RestoreWorkspace {
+        workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Windows),
+    })
+}
+
 fn request(json: &str) -> Result<Value, String> {
     if json.len() > 8192 {
         return Err("Workspace query is too large".into());
@@ -50,6 +57,84 @@ mod tests {
             assert_eq!(count, 0);
             crate::previews::capy_preview_free(owned);
             result
+        }
+    }
+    #[test]
+    fn native_startup_uses_editor_preset_and_saved_workspaces_remain_authoritative() {
+        use layer_ui::{Platform, UiAction, WorkspaceState};
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        initialize(&mut host).unwrap();
+        assert_eq!(
+            host.session.state().workspace,
+            WorkspaceState::for_platform(Platform::Android)
+        );
+        assert!(host.session.state().requests.is_empty());
+        let saved = WorkspaceState::default();
+        host.dispatch(UiAction::RestoreWorkspace {
+            workspace: saved.clone(),
+        })
+        .unwrap();
+        assert_eq!(host.session.state().workspace, saved);
+        assert!(host.session.state().requests.is_empty());
+    }
+    #[test]
+    fn titlebar_measurements_are_transient_validated_and_published() {
+        use layer_ui::{Platform, UiAction};
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        initialize(&mut host).unwrap();
+        let saved = serde_json::to_value(&host.session.state().workspace).unwrap();
+        let revision = host.session.engine().document().revision;
+        host.session.begin_workspace_transition().unwrap();
+        for insets in [[0., 138., 48.], [0., 92., 32.], [0.; 3]] {
+            host.dispatch(UiAction::MeasureTitlebar { insets }).unwrap();
+            assert_eq!(
+                host.take_snapshot().unwrap()["titlebar_insets"],
+                json!(insets)
+            );
+            assert_eq!(
+                serde_json::to_value(&host.session.state().workspace).unwrap(),
+                saved
+            );
+            assert!(host.session.state().requests.is_empty());
+            assert_eq!(host.session.engine().document().revision, revision);
+        }
+        host.session.end_workspace_transition();
+        let captured = host.session.capture_workspace().unwrap();
+        assert_eq!(captured.history.revisions.len(), 1);
+        host.dispatch(UiAction::MeasureTitlebar {
+            insets: [0., 144., 48.],
+        })
+        .unwrap();
+        host.session
+            .restore_workspace_layout(layer_ui::DockLayout::default(), "Reset")
+            .unwrap();
+        assert_eq!(
+            host.session.state().workspace.layout.titlebar_insets,
+            [0., 144., 48.]
+        );
+        host.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::UndoWorkspace,
+        })
+        .unwrap();
+        assert_eq!(
+            host.session.state().workspace.layout.titlebar_insets,
+            [0., 144., 48.]
+        );
+        host.session
+            .adopt_workspace(layer_ui::PreparedWorkspace::new(captured).unwrap())
+            .unwrap();
+        assert_eq!(
+            host.session.state().workspace.layout.titlebar_insets,
+            [0., 144., 48.]
+        );
+        host.dispatch(UiAction::MeasureTitlebar { insets: [0.; 3] })
+            .unwrap();
+        for insets in [[-1., 0., 0.], [0., f32::NAN, 0.], [0., 0., 1_000_000.]] {
+            assert!(host.dispatch(UiAction::MeasureTitlebar { insets }).is_err());
+            assert_eq!(
+                host.session.state().workspace.layout.titlebar_insets,
+                [0.; 3]
+            );
         }
     }
     #[test]

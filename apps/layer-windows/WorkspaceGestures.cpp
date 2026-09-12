@@ -118,7 +118,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto tab=object(tag,L"workspace_tab");
         if(tab.Size())data->chrome.Insert(L"contact_tab",S(str(tab,L"panel")));
         chrome(O({{L"kind",S(L"contact")},{L"position",point(p.Position())},{L"canvas",B(false)}}));
-        if(!tag.Size())return;
+        if(!tag.Size()||flag(data->model,L"partial_zen"))return;
         action=object(tag,L"workspace_action");if(!action.Size())return;
         origin=position=p.Position();pointer=p.PointerId();
         slop=p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch?12:6;
@@ -162,6 +162,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             });
     }
     void doubleClick(DoubleTappedRoutedEventArgs const& e){
+        if(flag(data->model,L"partial_zen"))return;
         auto tag=target(e.OriginalSource());if(!flag(tag,L"workspace_double"))return;
         auto source=object(tag,L"workspace_action");
         if(str(source,L"type")==L"drag_divider"){

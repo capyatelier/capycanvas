@@ -31,7 +31,6 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     std::shared_ptr<WorkspaceData> data;
     StackPanel root,list;
     Grid groups;
-    Button chooser{nullptr};
     std::vector<Button> groupButtons,subtoolButtons;
     hstring groupKey,subtoolKey;
     int columns=0;
@@ -39,24 +38,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     void init(){
         root.Spacing(6);list.Spacing(2);groups.ColumnSpacing(2);groups.RowSpacing(2);
         auto weak=weak_from_this();
-        // Use the shared command catalog until custom toolbars expose every tool.
-        chooser=button(data,L"Drawing tool",[]{});chooser.Height(36);chooser.HorizontalAlignment(HorizontalAlignment::Stretch);
-        MenuFlyout menu;
-        menu.Opening([weak](Windows::Foundation::IInspectable const& sender,auto&&){if(auto self=weak.lock()){
-            auto menu=sender.as<MenuFlyout>();menu.Items().Clear();
-            for(auto value:array(self->data->catalog,L"tool_commands")){
-                auto id=value.GetString();auto command=find(array(self->data->state,L"commands"),L"id",id);
-                if(!command.Size())continue;
-                ToggleMenuFlyoutItem choice;choice.Text(str(command,L"label"));choice.IsChecked(flag(command,L"selected"));
-                choice.IsEnabled(flag(command,L"enabled"));choice.FontSize(self->data->textSize());choice.MinHeight(34);
-                choice.KeyboardAcceleratorTextOverride(str(command,L"shortcut"));
-                AutomationProperties::SetAutomationId(choice,L"choose-tool-"+id);
-                choice.Click([weak,id](auto&&,auto&&){if(auto self=weak.lock())
-                    self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));});
-                menu.Items().Append(choice);
-            }
-        }});
-        chooser.Flyout(menu);root.Children().Append(chooser);root.Children().Append(groups);root.Children().Append(list);
+        root.Children().Append(groups);root.Children().Append(list);
         groups.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
     }
     void arrange(){
@@ -101,13 +83,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
                 AutomationProperties::SetItemStatus(buttons[i],active?L"Selected":L"");
             }
         }
-        for(auto value:array(data->catalog,L"tool_commands")){
-            auto command=find(array(data->state,L"commands"),L"id",value.GetString());
-            if(flag(command,L"selected")){
-                auto name=str(command,L"label");chooser.Content(box_value(name+L"  ▾"));ToolTipService::SetToolTip(chooser,box_value(str(command,L"tooltip")));
-                AutomationProperties::SetItemStatus(chooser,name);break;
-            }
-        }
+
     }
 };
 struct SettingsView : std::enable_shared_from_this<SettingsView> {

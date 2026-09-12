@@ -834,6 +834,10 @@ pub enum UiAction {
     Layer {
         action: LayerAction,
     },
+    /// Native caption controls reserve left/right widths and a height in DIPs.
+    MeasureTitlebar {
+        insets: [f32; 3],
+    },
     MeasurePanels {
         measurements: Vec<PanelMeasurement>,
     },

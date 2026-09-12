@@ -77,6 +77,8 @@ private:
     bool transportFailed=false;
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
+    std::vector<winrt::Windows::Graphics::RectInt32> captionRegions;
+    bool captionRegionsValid=false;
     bool closing=false, closed=false, finishing=false, resize=false, paused=false, servicesReady=false;
     std::atomic<bool> rendererDone{false};
     uint64_t sequence=0;

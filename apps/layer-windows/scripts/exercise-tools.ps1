@@ -37,8 +37,13 @@ function Draft([string]$Id,[string]$Text){
     Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Text} 'Draft was not retained'
 }
 function Select-Tool([string]$Id){
-    Invoke-Control 'Drawing tool'
-    (Control ('choose-tool-'+$Id) ([System.Windows.Automation.ControlType]::MenuItem) -Id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    $target=$null
+    foreach($panel in (Model).panels){
+        $tile=$panel.tiles|Where-Object {$_.control.kind -eq 'command' -and $_.control.command -eq $Id}|Select-Object -First 1
+        if($tile){$target="tile-$($panel.id)-$($tile.id)";break}
+    }
+    if(!$target){throw "Command has no native toolbar tile: $Id"}
+    Invoke-Id $target
     Wait-Until {
         if($Id -eq 'scale_rotate'){return (Model).state.layer_tools.tool -eq 'transform'}
         @((Model).state.commands|Where-Object {$_.id -eq $Id -and $_.selected}).Count -eq 1
@@ -69,8 +74,13 @@ function Check-Projection {
         }
     }
 }
-Invoke-Control ((Model).workspace_menu.title)
-(Control 'Tool panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+if(!@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count){
+    Invoke-Control ((Model).workspace_menu.title)
+    (Control 'Tool panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count -gt 0} 'Tool panel did not open'
+}
+if(!@((Model).layout.groups|Where-Object active -eq 'tool_settings').Count){Invoke-Id 'panel-tab-tool_settings'}
+Wait-Until {@((Model).layout.groups|Where-Object active -eq 'tool_settings').Count -eq 1} 'Tool panel did not activate'
 $null=Field 'flow'
 Select-Tool 'pen'
 $entry=Field 'flow';$original=$entry.GetRuntimeId() -join ':'
@@ -80,15 +90,22 @@ Focus (Field 'opacity')
 Wait-Until {[Math]::Abs((Value 'flow')-.42) -lt .0001} 'Flow expression was not committed through the shared core'
 if(((Field 'flow').GetRuntimeId() -join ':') -ne $original){throw 'A value update replaced the tool field'}
 if(((Control 'tool-subtool-0' -Id).GetRuntimeId() -join ':') -ne $subtool){throw 'A value update replaced the subtool button'}
-# Accessibility invocation leaves focus in the old field until the tool changes.
-# The detached field must never apply its draft to the newly selected brush.
+# Native focus can leave the field before an accessibility invocation runs.
+# That may commit to the old brush; the detached draft must never overwrite
+# the newly selected brush, including when focus moves again afterwards.
+Invoke-Id 'tool-group-1'
+Wait-Until {(Model).state.tool_set.groups[1].selected} 'Marker group did not activate'
+$markerFlow=Value 'flow'
+Invoke-Id 'tool-group-0'
+Wait-Until {(Model).state.tool_set.groups[0].selected} 'Pen group did not restore'
 Draft 'flow' '77'
 Invoke-Id 'tool-group-1'
 Wait-Until {(Model).state.tool_set.groups[1].selected} 'Marker group did not activate'
 Check-Projection
+Focus (Field 'opacity')
+Wait-Until {[Math]::Abs((Value 'flow')-$markerFlow) -lt .0001} 'Detached draft overwrote the new brush'
 Invoke-Id 'tool-group-0'
 Wait-Until {(Model).state.tool_set.groups[0].selected} 'Pen group did not restore'
-Wait-Until {[Math]::Abs((Value 'flow')-.42) -lt .0001} 'Changing tool committed an unfinished old draft'
 if(((Field 'flow').GetRuntimeId() -join ':') -eq $original){throw 'Changing tools retained an old draft context'}
 # Target changes must discard drafts even when the numeric schema is identical.
 Draft 'flow' '88'

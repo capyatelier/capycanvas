@@ -150,11 +150,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         // This is the only fallible mutation; CanvasEngine validates before setting.
         self.engine.set_brush(brush.clone()).map_err(error)?;
         let working = capture.working;
+        let titlebar_insets = self.state.workspace.layout.titlebar_insets;
         self.state.workspace = WorkspaceState {
             version: 1,
             layout: capture.history.layout().clone(),
             zen_mode: working.zen_mode,
         };
+        self.state.workspace.layout.titlebar_insets = titlebar_insets;
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
         self.tools = working.tools;
         self.state.colors = working.colors;
@@ -201,6 +203,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         layout.validate()?;
         let before = self.state.workspace.clone();
         self.state.workspace.layout = durable_layout(&layout);
+        self.state.workspace.layout.titlebar_insets = before.layout.titlebar_insets;
         self.workspace_history
             .record_named(before, &self.state.workspace, description);
         self.state.customization = CustomizationState::default();

@@ -6,7 +6,7 @@
 #include <optional>
 
 winrt::Microsoft::UI::Xaml::FrameworkElement LayersPanel(
-    std::shared_ptr<CapyUi::WorkspaceData> const&,CapyUi::Bindings&);
+    std::shared_ptr<CapyUi::WorkspaceData> const&,CapyUi::Bindings&,std::function<double()>* contentHeight=nullptr);
 namespace CapyLayers {
 using namespace CapyUi;
 inline J layerAction(J const& operation){return O({{L"type",S(L"layer")},{L"action",operation}});}

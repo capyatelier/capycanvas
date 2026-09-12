@@ -185,6 +185,13 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             auto position=item.TransformToVisual(root).TransformPoint({0,0});
             controls.emplace_back(position.X,position.X+float(item.ActualWidth()));
         }
+        // Zen toolbars are genuine client controls inside the titlebar. Exclude
+        // them from native move regions as well as avoiding caption buttons.
+        if(flag(data->model,L"partial_zen"))for(auto value:array(object(data->model,L"zen_toolbars"),L"sections")){
+            auto bounds=object(value.GetObject(),L"bounds");
+            if(num(bounds,L"y")<48&&num(bounds,L"y")+num(bounds,L"height")>0&&num(bounds,L"width")>0)
+                controls.emplace_back(float(num(bounds,L"x")),float(num(bounds,L"x")+num(bounds,L"width")));
+        }
         std::sort(controls.begin(),controls.end());
         float next=leftInset,limit=float(width)/scale-rightInset;
         std::vector<Windows::Graphics::RectInt32> result;

@@ -172,16 +172,25 @@ impl DockLayout {
         // interval between them. The Zen button always owns the top-left corner.
         for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             let vertical = matches!(edge, Edge::Left | Edge::Right);
-            let (start, end) =
-                match edge {
-                    Edge::Top => (zen_end, viewport[0] - gap),
-                    Edge::Bottom => (gap, viewport[0] - gap),
-                    Edge::Left | Edge::Right => (
-                        (if top > 0.0 { top + gap * 2.0 } else { gap })
-                            .max(if edge == Edge::Left { zen_end } else { gap }),
-                        viewport[1] - gap - if bottom > 0.0 { bottom + gap } else { 0.0 },
-                    ),
-                };
+            let (start, end) = match edge {
+                Edge::Top => (
+                    zen_end + self.titlebar_insets[0],
+                    viewport[0] - gap - self.titlebar_insets[1],
+                ),
+                Edge::Bottom => (gap, viewport[0] - gap),
+                Edge::Left | Edge::Right => (
+                    (if top > 0.0 { top + gap * 2.0 } else { gap })
+                        .max(if edge == Edge::Left { zen_end } else { gap })
+                        .max(
+                            if self.titlebar_insets[usize::from(edge == Edge::Right)] > 0.0 {
+                                self.titlebar_insets[2] + gap
+                            } else {
+                                gap
+                            },
+                        ),
+                    viewport[1] - gap - if bottom > 0.0 { bottom + gap } else { 0.0 },
+                ),
+            };
             let mut sections: Vec<_> = result
                 .sections
                 .iter_mut()
@@ -305,6 +314,70 @@ mod tests {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
     }
 
+    #[test]
+    fn caption_insets_keep_zen_controls_and_hit_regions_outside_native_buttons() {
+        let mut layout = DockLayout::editor_default();
+        let saved = serde_json::to_string(&layout).unwrap();
+        for viewport in [[1600., 1000.], [900., 640.], [400., 300.]] {
+            let original = layout.zen_toolbars(viewport);
+            layout.titlebar_insets = [72., 138., 48.];
+            let projected = layout.zen_toolbars(viewport);
+            let captions = [
+                Bounds {
+                    x: 0.,
+                    y: 0.,
+                    width: 72.,
+                    height: 48.,
+                },
+                Bounds {
+                    x: viewport[0] - 138.,
+                    y: 0.,
+                    width: 138.,
+                    height: 48.,
+                },
+            ];
+            for section in &projected.sections {
+                assert!(
+                    captions
+                        .iter()
+                        .all(|caption| !overlaps(section.bounds, *caption))
+                );
+                for &(id, _) in &section.tiles {
+                    let Some(bounds) = section.tile_bounds(id) else {
+                        continue;
+                    };
+                    let anchor = TileAnchor {
+                        panel: section.panel,
+                        tile: id,
+                    };
+                    assert_eq!(projected.anchor(anchor).unwrap().0, bounds);
+                    assert_eq!(
+                        projected
+                            .tile_at([bounds.x + bounds.width / 2., bounds.y + bounds.height / 2.]),
+                        Some(anchor)
+                    );
+                }
+            }
+            assert_eq!(
+                original
+                    .sections
+                    .iter()
+                    .map(|s| (s.panel, s.tiles.iter().map(|t| t.0).collect::<Vec<_>>()))
+                    .collect::<Vec<_>>(),
+                projected
+                    .sections
+                    .iter()
+                    .map(|s| (s.panel, s.tiles.iter().map(|t| t.0).collect::<Vec<_>>()))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(serde_json::to_string(&layout).unwrap(), saved);
+            layout.titlebar_insets = [0.; 3];
+        }
+        let mut right = empty();
+        add(&mut right, Edge::Right, &[ToolbarControl::Color]);
+        right.titlebar_insets = [0., 138., 48.];
+        assert!(right.zen_toolbars(VIEW).sections[0].bounds.y >= 48.);
+    }
     #[test]
     fn sections_keep_ids_and_size_and_align_or_center_on_each_edge() {
         for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {

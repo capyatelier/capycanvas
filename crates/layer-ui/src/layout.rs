@@ -473,8 +473,10 @@ impl Panel {
 
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
-            && platform == crate::Platform::Windows
+        if matches!(
+            self,
+            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
+        ) && platform == crate::Platform::Windows
         {
             return true;
         }
@@ -751,6 +753,9 @@ pub struct DockLayout {
     pub fit_tab_groups: Vec<u32>,
     #[serde(skip)]
     pub measurements: Vec<PanelMeasurement>,
+    /// Transient native caption bounds: left width, right width, height.
+    #[serde(skip)]
+    pub titlebar_insets: [f32; 3],
     #[serde(default = "initial_tile_id")]
     next_tile_id: u32,
     next_id: u32,
@@ -1074,6 +1079,7 @@ impl DockLayout {
                 | crate::Platform::Web
                 | crate::Platform::Ios
                 | crate::Platform::Mac
+                | crate::Platform::Windows
         ) {
             Self::editor_default()
         } else {
@@ -1385,6 +1391,7 @@ impl Default for DockLayout {
             column_scroll: Vec::new(),
             fit_tab_groups: Vec::new(),
             measurements: Vec::new(),
+            titlebar_insets: [0.0; 3],
             next_tile_id: initial_tile_id(),
             bands: vec![
                 DockBand {
@@ -3868,6 +3875,18 @@ mod tests {
 
     #[test]
     fn editor_default_has_complete_tools_and_independent_command_ribbon() {
+        // Windows uses the same initial/reset topology and toolbar controls.
+        for platform in [
+            crate::Platform::Windows,
+            crate::Platform::Android,
+            crate::Platform::Web,
+        ] {
+            assert_eq!(
+                DockLayout::for_platform(platform),
+                DockLayout::editor_default()
+            );
+            assert!(Panel::Commands.available_on(platform));
+        }
         use crate::CommandId::*;
         let layout = DockLayout::editor_default();
         layout.validate().unwrap();

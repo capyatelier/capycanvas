@@ -116,6 +116,11 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     }
 };
 }
-FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
-    auto view=std::make_shared<FiltersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
+FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight){
+    auto view=std::make_shared<FiltersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});
+    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
+        if(auto view=weak.lock())return 18.+view->header.ActualHeight()+view->list.ExtentHeight();
+        return -1.;
+    };
+    return view->root;
 }
