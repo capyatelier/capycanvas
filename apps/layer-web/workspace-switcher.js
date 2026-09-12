@@ -155,6 +155,8 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
   });
   function render(view) {
     const previousFirst = root.firstElementChild?.dataset.workspaceId;
+    // A background preference refresh leaves workspace switching available.
+    const switchUnavailable = !view.ready || view.busy || !!view.page || !!view.form;
     const ids = new Set(view.switcher_display.map(row => row.id));
     for (const [id, node] of buttons) if (!ids.has(id)) { node.remove(); buttons.delete(id); }
     for (const [index, item] of view.switcher_display.entries()) {
@@ -162,7 +164,7 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
       if (!node) { node = button("", () => send({type:"switch",id:item.id})); node.append(element("span")); node.dataset.workspaceId = item.id; buttons.set(item.id,node); }
       if (root.children[index] !== node) root.insertBefore(node, root.children[index] ?? null);
       node.firstElementChild.textContent = item.title; node.title = `Switch to ${item.title} workspace`;
-      node.setAttribute("aria-pressed", String(item.id === view.id)); node.disabled = unavailable() || !!view.page || !!view.form;
+      node.setAttribute("aria-pressed", String(item.id === view.id)); node.disabled = switchUnavailable;
     }
     root.hidden = !ids.size;
     if (view.id !== previousFirst && view.switcher_display[0]?.id === view.id) root.scrollLeft = 0;

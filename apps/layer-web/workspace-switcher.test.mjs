@@ -1,6 +1,51 @@
 import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
 
+export async function checkWorkspaceFocus({evaluate, settle}) {
+  await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+5000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v.ready&&!v.busy&&!v.switcher_busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup did not finish'));else setTimeout(check,20);}check();})`);
+  const originalTheme = await evaluate("layerApp.state().theme");
+  for (const theme of ["dark", "light"]) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);
+    await settle();
+    const result = await evaluate(`(async () => {
+      const root=document.querySelector('.workspace-switcher');
+      const snapshot=()=>[...root.children].map(node=>({id:node.dataset.workspaceId,disabled:node.disabled,opacity:getComputedStyle(node).opacity,color:getComputedStyle(node).color,active:node.getAttribute('aria-pressed')}));
+      const before=snapshot(), nodes=[...root.children], samples=[];
+      for(let attempt=0;attempt<3;attempt++) {
+        window.dispatchEvent(new Event('blur'));
+        window.dispatchEvent(new Event('focus'));
+        const deadline=performance.now()+5000;
+        do {
+          samples.push(snapshot());
+          if(performance.now()>deadline)throw Error('Focus refresh did not finish');
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        } while(JSON.parse(layerApp.app.workspace_view()).switcher_busy);
+        samples.push(snapshot());
+      }
+      return {before,samples,sameNodes:nodes.every((node,index)=>root.children[index]===node)};
+    })()`);
+    assert.ok(result.before.length && result.before.every(node=>!node.disabled));
+    assert.ok(result.sameNodes,"focusing retains the header buttons");
+    for(const sample of result.samples)assert.deepEqual(sample,result.before,`${theme}: focus refresh must not dim or disable workspace choices`);
+  }
+  await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(originalTheme)}})`); await settle();
+  const switching = await evaluate(`(async () => {
+    const view=()=>JSON.parse(layerApp.app.workspace_view()), original=view().id;
+    const next=[...document.querySelectorAll('.workspace-switcher button')].find(node=>node.dataset.workspaceId!==original);
+    const wait=async id=>{const deadline=performance.now()+5000;while(view().id!==id||view().busy||view().switcher_busy){if(performance.now()>deadline)throw Error('Switch did not finish');await new Promise(resolve=>setTimeout(resolve,20));}};
+    window.dispatchEvent(new Event('focus'));
+    const refreshing=view().switcher_busy;
+    next.click();
+    const busy=view().busy, disabled=[...document.querySelectorAll('.workspace-switcher button')].every(node=>node.disabled);
+    await wait(next.dataset.workspaceId);
+    [...document.querySelectorAll('.workspace-switcher button')].find(node=>node.dataset.workspaceId===original).click();
+    await wait(original);
+    return {refreshing,busy,disabled};
+  })()`);
+  assert.deepEqual(switching,{refreshing:true,busy:true,disabled:true},"switches work during a preference refresh and disable choices during the actual transition");
+  console.log("PASS: Web workspace choices retain brightness, enabled state and selection through repeated focus refreshes in both themes");
+}
+
 export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const view = () => evaluate("JSON.parse(layerApp.app.workspace_view())");
@@ -49,6 +94,7 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
   const artifacts=process.env.LAYER_TEST_ARTIFACTS||"/tmp/capy-workspace-evidence/web-switcher"; await mkdir(artifacts,{recursive:true});
   const shot=async name=>{const image=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${artifacts}/${name}.png`,Buffer.from(image.data,"base64"));};
   await idle();
+  await checkWorkspaceFocus({evaluate,settle});
   const initial=await view(), [p,i,f]=initial.defaults.map(row=>row.id), original=await durable(), originalLayout=await layout();
   await evaluate("window.workspacePointerTypes=[];document.addEventListener('pointerdown',e=>workspacePointerTypes.push(e.pointerType));window.workspaceEvents=[];for(const type of ['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture'])document.addEventListener(type,e=>{workspaceEvents.push({type,device:e.pointerType,target:e.target.className?.baseVal??e.target.className,x:e.clientX,y:e.clientY});if(workspaceEvents.length>80)workspaceEvents.shift();},true);");
   try {
