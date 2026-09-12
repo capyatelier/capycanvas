@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkspaceCommand {
     Manage,
+    ManageTemplates,
     New,
     SaveAsTemplate,
     ResetLayout,
@@ -79,6 +80,11 @@ impl ManagedWorkspace {
                 vec![
                     command("Layout History…", WorkspaceCommand::LayoutHistory, idle),
                     command("Manage Workspaces…", WorkspaceCommand::Manage, true),
+                    command(
+                        "Manage workspace templates…",
+                        WorkspaceCommand::ManageTemplates,
+                        true,
+                    ),
                 ],
             ],
         )

@@ -75,7 +75,7 @@ impl NativeWorkspaces {
         retry.set_visible(false);
         root.append(&label);
         root.append(&retry);
-        let recovery = gtk::Button::with_label("Storage and Backups…");
+        let recovery = gtk::Button::with_label("Save as New Workspace…");
         recovery.set_visible(false);
         root.append(&recovery);
         root.set_visible(manager.is_some());
@@ -140,9 +140,19 @@ impl NativeWorkspaces {
             #[weak]
             w,
             move |_| {
-                w.workspaces
-                    .ui
-                    .run(&w, layer_workspace::ManagerAction::Storage);
+                w.workspaces.ui.run(
+                    &w,
+                    if w.workspaces.interrupted_count.get() > 0
+                        && w.workspaces
+                            .manager
+                            .as_ref()
+                            .is_some_and(|m| m.error().is_none())
+                    {
+                        layer_workspace::ManagerAction::RecoverInterrupted
+                    } else {
+                        layer_workspace::ManagerAction::SaveAsNew
+                    },
+                );
             }
         ));
         self.retry.connect_clicked(glib::clone!(
@@ -513,6 +523,7 @@ impl NativeWorkspaces {
             return;
         };
         if let Some(error) = manager.error() {
+            self.recovery.set_label("Save as New Workspace…");
             self.root.set_visible(true);
             self.label.set_text(&format!(
                 "{} — {}",
@@ -525,6 +536,7 @@ impl NativeWorkspaces {
             self.retry.set_visible(true);
             self.recovery.set_visible(true);
         } else if self.interrupted_count.get() > 0 && !self.busy.get() {
+            self.recovery.set_label("Recover Changes…");
             self.root.set_visible(true);
             self.retry.set_visible(false);
             self.recovery.set_visible(true);
@@ -532,7 +544,7 @@ impl NativeWorkspaces {
             self.label.set_text(
                 &self.interruption_error.borrow().clone().unwrap_or_else(|| {
                     format!(
-                        "{} interrupted changes are available in Storage and Backups.",
+                        "{} unsaved changes can be recovered.",
                         self.interrupted_count.get()
                     )
                 }),
@@ -569,7 +581,7 @@ impl NativeWorkspaces {
             Err(error) => {
                 self.interrupted_count.set(1);
                 *self.interruption_error.borrow_mut() = Some(format!(
-                    "Interrupted changes need recovery: {error}. Export All Stored Data preserves the stored records."
+                    "Some unsaved changes couldn’t be recovered: {error}."
                 ));
             }
         }

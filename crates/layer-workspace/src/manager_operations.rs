@@ -17,7 +17,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .chain(previous.iter())
             .find(|v| v.id == version)
             .cloned()
-            .ok_or_else(|| StoreError::invalid("This Workspace Template version is no longer available."))?;
+            .ok_or_else(|| {
+                StoreError::invalid("This Workspace Template version is no longer available.")
+            })?;
         *current = selected;
         self.create_and_bind(
             self.workspace_from_template(&template, name, now)?,
@@ -160,7 +162,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn duplicate_reusable(&self, id: &str, name: &str, now: u64) -> Result<String> {
         let mut entity = self.load(id).await?.entity;
         if entity.metadata.kind == ItemKind::Workspace {
-            return Err(StoreError::invalid("Choose a Workspace Template or saved toolbar."));
+            return Err(StoreError::invalid(
+                "Choose a Workspace Template or saved toolbar.",
+            ));
         }
         entity.id = new_id();
         entity.metadata.builtin = false;
@@ -230,6 +234,58 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.update_reusable(id, selected.content.clone(), now)
             .await
     }
+    /// Apply a saved layout to the active workspace without changing its identity,
+    /// starting layout, or latest working values. The replacement is undoable.
+    pub async fn apply_template(&self, template_id: &str, now: u64) -> Result<StoredEntity> {
+        self.flush().await?;
+        let source = self.load(template_id).await?.entity;
+        if source.metadata.deleted_at_ms.is_some() {
+            return Err(StoreError::invalid("This Workspace Template was deleted."));
+        }
+        let ItemContent::Reusable { current, .. } = source.content else {
+            return Err(StoreError::invalid("Choose a Workspace Template."));
+        };
+        let ReusableContent::Layout { layout } = current.content else {
+            return Err(StoreError::invalid("Choose a Workspace Template."));
+        };
+        let id = self
+            .active_id()
+            .ok_or_else(|| StoreError::invalid("Open a workspace first."))?;
+        let stored = self.claim(&id).await?;
+        self.publish_layout(
+            &stored,
+            &layout,
+            &format!("Applied {} Workspace Template", source.metadata.name),
+            now,
+        )
+        .await
+    }
+    async fn publish_layout(
+        &self,
+        stored: &StoredEntity,
+        layout: &DockLayout,
+        description: &str,
+        now: u64,
+    ) -> Result<StoredEntity> {
+        let mut content = stored.entity.content.clone();
+        let ItemContent::Workspace { history, .. } = &mut content else {
+            return Err(StoreError::invalid("Choose a workspace."));
+        };
+        history.append(layout, description);
+        for revision in history
+            .revisions
+            .values_mut()
+            .filter(|r| r.timestamp_ms == 0)
+        {
+            revision.timestamp_ms = now;
+        }
+        self.publish(CommitBatch::prepare(
+            self.owner.clone(),
+            vec![update(stored, None, Some(content), None)?],
+        )?)
+        .await?;
+        self.load(&stored.entity.id).await
+    }
     pub async fn change_layout(
         &self,
         id: &str,
@@ -239,10 +295,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let stored = self.claim(id).await?;
         let result: Result<StoredEntity> = async {
-            let mut content = stored.entity.content.clone();
             let ItemContent::Workspace {
                 history, baseline, ..
-            } = &mut content
+            } = &stored.entity.content
             else {
                 return Err(StoreError::invalid("Choose a workspace."));
             };
@@ -258,27 +313,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             } else {
                 baseline.clone()
             };
-            history.append(
+            self.publish_layout(
+                &stored,
                 &layout,
                 if revision.is_some() {
                     "Restored earlier layout"
                 } else {
                     "Reset to starting layout"
                 },
-            );
-            for r in history
-                .revisions
-                .values_mut()
-                .filter(|r| r.timestamp_ms == 0)
-            {
-                r.timestamp_ms = now;
-            }
-            self.publish(CommitBatch::prepare(
-                self.owner.clone(),
-                vec![update(&stored, None, Some(content), None)?],
-            )?)
-            .await?;
-            self.load(id).await
+                now,
+            )
+            .await
         }
         .await;
         if self.active_id().as_deref() != Some(id) {

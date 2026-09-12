@@ -291,3 +291,56 @@ approval before adapting other hosts remains outstanding.
 Integrated the subsequent GTK/Web layer-hold milestone `ce3751b` before
 publication. The combined release build passes, and the native pointer-menu
 check passes again in 5.69s (`/tmp/capy-workspace-menus.Qa6ihE`).
+
+## Second GTK review corrections
+
+Moved Quick Access Toolbars into Workspaces and added its own Manage workspace
+templates menu entry. Removed the history preview instructions and used the
+requested autosave explanation verbatim within the workspace introduction.
+
+Workspace Templates now uses the same compact list as Workspaces: Save Current
+Layout, Use Layout, and Rename/Delete for saved entries. Use Layout applies to
+the current workspace, preserving identity, metadata, starting layout, and live
+values; it commits one undoable layout edit. Reapplying the same layout adds no
+history event. Failed publication keeps the existing layout and retries the
+original operation once.
+
+Removed Recently Deleted, backup/import/export, storage administration, template
+version screens, and their GTK actions. The ordinary managers have no header
+More menu. A failed save still offers Retry or Save as New Workspace; failed
+close offers Keep Open or Discard Unsaved Changes. Existing persistence/package
+formats and internal retention remain compatible; this UI change does not purge
+previously stored records.
+
+Validation with concurrent main through `76ec59a`:
+
+- 264 shared UI tests and 32 native store/coordinator tests pass. New coverage
+  verifies current-workspace application, one-step undo/redo, unchanged source
+  templates, no extra workspace, no-op application, deleted-source rejection,
+  failed-write preservation, and receipt-backed retry.
+- Four isolated GTK acceptance tests pass: template manager's actual Use Layout
+  button plus history preview/cancel/restore and lease renewal (15.44s), restart
+  and independent windows (3.87s), ownership takeover (1.81s), and failed-close
+  recovery without backup controls (1.15s).
+- Native pointer tests open the nested Quick Access Toolbars menu, both managers,
+  File, and a panel context menu (8.05s).
+- Release build and diff checks pass. Fresh screenshots were inspected and are
+  linked in the updated review guide. Logs: `/tmp/capy-workspace-review.6RVOEg`,
+  `/tmp/capy-workspace-menus.5nNc3c`, `/tmp/workspace-review-shared-tests.log`, and
+  `/tmp/workspace-review-release-build.log`.
+
+Ready for another user review. Other-host workspace-manager work still awaits
+GTK approval.
+
+Integrated concurrent main through `2bea478`. All 264 shared UI and 32 native
+store/coordinator tests and the release build pass on the combined tree
+(`/tmp/workspace-review-integrated-tests.log` and
+`/tmp/workspace-review-integrated-build.log`).
+
+An intermittent native automation crash had a core stack in GTK's Wayland
+input-method callback while the test rapidly closed a focused name field. The
+test now focuses the confirmation button and lets focus-out run before emitting
+its click, matching normal interaction more closely. The complete native
+manager/templates/history/lease-renewal scenario then passed three consecutive
+runs (15.84s, 15.53s, 15.39s; `/tmp/capy-workspace-review.4sfY3w`). This changes
+test interaction only; no production input-method workaround was introduced.

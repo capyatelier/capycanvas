@@ -113,7 +113,6 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
     };
     let dialog = adw::AlertDialog::builder()
         .heading("Layout History")
-        .body("Select a version to preview it on your workspace.")
         .build();
     dialog.set_widget_name("workspace-layout-history");
     dialog.add_responses(&[("cancel", "Cancel"), ("restore", "Restore This Version")]);
