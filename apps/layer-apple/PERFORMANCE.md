@@ -16,6 +16,67 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Short GPU execution captures
+
+`tools/performance/metal_trace.py` reads the actual GPU execution intervals and
+CPU encoder identities exported by Instruments. It requires an explicit target
+PID: even a process-targeted Metal System Trace can contain other processes' GPU
+activity. The report filters those rows, uses the union of overlapping Active
+GPU intervals, and keeps CPU-to-GPU start latency separate. Per-encoder and
+per-command-buffer distributions are diagnostic; application drawing-frame IDs,
+presentation cadence and calibrated profiler overhead remain separate work.
+
+Keep recordings short while diagnosing GPU work. A five-second recording with
+a one-second rolling window of the headless Apple transform regression produced
+a 25 MiB trace and a 427 KiB GPU XML export. The test passed on both Apple
+presets. Its export contains 321 intervals from the test and 85 from other
+processes. The target's Active interval union is 5.329 ms across the retained
+capture; summing overlapping stages would instead report 5.935 ms. These totals
+are not a per-frame hardware-performance result.
+
+The export includes 22 clear-page intervals and 19 blit intervals. All 196 CPU
+encoder records have matching GPU execution; six additional GPU intervals lack
+CPU metadata within the retained window. The report preserves that mismatch.
+There are no missing/zero/negative durations in this target's exported Active
+rows. This does not prove the trace contains every GPU operation in the full run.
+The native iPad capture and correlation with recorded drawing-frame boundaries
+remain unvalidated; the current physical test session was preserved.
+
+A separate, unpublished pass-timestamp prototype exposed a limitation on local
+Metal: a clear-only render pass wrote a start timestamp and a zero end timestamp.
+The strict complete-coverage check fails. An earlier compute sample was also
+invalid during slot reuse, although a later 100-frame probe passed. Those
+failures are retained locally. The prototype was not added to the Apple runtime;
+the published GPU queue-span recorder is unchanged. Apple's
+[counter-sampling guide](https://developer.apple.com/documentation/metal/sampling-gpu-data-into-counter-sample-buffers)
+describes the stage-boundary sampling used by this API.
+
+To inspect an already-running, isolated benchmark process:
+
+```sh
+mkdir -p artifacts/performance/metal
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun xctrace record --template 'Metal System Trace' --time-limit 5s --window 1s \
+  --attach OWNED_PID --output artifacts/performance/metal/profile.trace
+xcrun xctrace export --input artifacts/performance/metal/profile.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]' \
+  --output artifacts/performance/metal/gpu.xml
+xcrun xctrace export --input artifacts/performance/metal/profile.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-application-encoders-list"]' \
+  --output artifacts/performance/metal/encoders.xml
+python3 tools/performance/metal_trace.py artifacts/performance/metal/gpu.xml \
+  artifacts/performance/metal/encoders.xml --pid OWNED_PID \
+  --output artifacts/performance/metal/summary.json
+python3 -m unittest discover -s tools/performance -p 'test_*trace.py'
+```
+
+For device recording, add `--device DEVICE_ID` to the record command and use
+the device process's PID. Obtain both XML tables from the same trace run.
+The checks cover XML references, process filtering, overlapping/nested stages,
+missing durations, ambiguous identities and window-edge coverage. Traces and
+exports can contain process and machine details; keep them in ignored local
+artifacts. Complete sustained 90 Hz Mac / 120 Hz iPad validation remains open.
+
 ## Incremental workspace publication
 
 Both Apple editors now consume the shared `workspace_update` contract. A full

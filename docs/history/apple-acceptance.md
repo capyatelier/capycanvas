@@ -76,6 +76,31 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Targeted GPU execution analysis — 2026-09-12
+
+A short Instruments workflow now exports and analyzes actual GPU execution
+intervals for one explicitly selected process. The analyzer resolves XML value
+references, filters other processes, unions overlapping Active stages, separates
+submission latency and retains missing durations and unmatched encoder identities.
+Five new analyzer checks and all twelve existing frame-trace checks pass.
+
+The headless Apple transform/Undo regression passes for both presets under the
+profiler. Its 25 MiB capture supplies 321 target-process GPU intervals, including
+clear-page and blit work. All 196 retained CPU encoder records have GPU matches;
+six extra GPU intervals lack CPU metadata in the retained window. Complete
+capture coverage and application-frame timing are not inferred from this result.
+Reproduction, measurements and limitations are in
+[Apple performance](../../apps/layer-apple/PERFORMANCE.md#short-gpu-execution-captures).
+
+An alternative runtime pass-counter prototype remains unpublished: local Metal
+returned a zero end counter for a clear-only drawing pass, failing its strict
+coverage check. The normal Apple renderer/recorder and signed builds remain at
+the preceding milestone. This checkpoint adds shared analysis tooling, without
+a new native feature or physical iPad result. Current Mac 90 Hz / iPad 120 Hz
+performance, complete visual/input/lifecycle gates and the full goal remain
+open. Raw traces, device details and the prototype stay private and local.
+Save/Load Layout remains excluded.
+
 ## Shared tool-action button presentation — 2026-09-12
 
 All six Tool Settings actions now use one shared Apple button component.
