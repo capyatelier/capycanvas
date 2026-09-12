@@ -76,3 +76,62 @@ Linux tests select offscreen Vulkan; other hosts retain their native GPU backend
 The editor check includes actual Navigator pointer hits and a rendered-pixel
 check that zoomed paper appears through empty header space. These checks do not
 establish complete editor parity or hardware performance.
+
+## Debug headless Chrome
+
+With the development server running in another terminal and Node.js 22 or newer:
+
+```bash
+LAYER_TEST_VERBOSE=1 LAYER_TEST_ARTIFACTS=artifacts/web-debug \
+  node apps/layer-web/test.mjs --headless --column-drops
+```
+
+Select one scenario per run; other useful selectors are `--drawer-style`,
+`--drag-pickup`, `--workspace-manager` and `--workspace-switcher`. See the dispatch
+in [`test.mjs`](../../apps/layer-web/test.mjs) for the full list. It launches Chrome
+with a temporary profile, uses Chrome DevTools Protocol (CDP) over
+`--remote-debugging-pipe`, and removes the profile afterward. It does not expose a
+TCP debugging port or rebuild the app. Verbose mode prints browser diagnostics;
+scenario-specific screenshots go to `LAYER_TEST_ARTIFACTS` when supported.
+
+Reuse the runner's `call`, `evaluate` and `settle` helpers for CDP input,
+`Runtime.evaluate` and `Page.captureScreenshot`. Useful page expressions are
+`layerApp.state()`, `JSON.parse(layerApp.app.workspace_view())` and
+`layerApp.startupTimes`; check `#gpu-notice` if startup never completes. Preserve
+hardware WebGPU when diagnosing failures. For Linux window/focus checks that need
+headed Chrome, [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh)
+can run it inside an isolated Mutter compositor; see that script's prerequisites.
+
+## Test and debug Web on Android
+
+Use the device selection and USB debugging setup in the [Android guide](android.md).
+Keep the development server running, save user work, and use a dedicated test
+origin: this harness attaches to the device's existing Chrome profile and some
+scenarios modify documents or browser storage. The example uses the default
+development port; keep the URL and forwarding ports consistent if changing it.
+
+```bash
+adb -s "$CAPY_ANDROID_SERIAL" reverse tcp:4173 tcp:4173
+adb -s "$CAPY_ANDROID_SERIAL" forward tcp:9228 localabstract:chrome_devtools_remote
+adb -s "$CAPY_ANDROID_SERIAL" shell am start -a android.intent.action.VIEW -d http://127.0.0.1:4173/ -p com.android.chrome
+curl --max-time 5 http://127.0.0.1:9228/json/list
+LAYER_DEVICE_CDP=http://127.0.0.1:9228 \
+  LAYER_WEB_URL=http://127.0.0.1:4173/ LAYER_TEST_ARTIFACTS=artifacts/web-android \
+  node apps/layer-web/device.test.mjs --drawer-style
+```
+
+[`device.test.mjs`](../../apps/layer-web/device.test.mjs) finds the tab by its exact
+URL, including the trailing slash, connects to its CDP WebSocket and reloads it.
+It supports a subset of desktop scenarios; check its dispatch before choosing a
+flag. Android Chrome remains visible on the device; automation uses CDP rather
+than Chrome's desktop `--headless` mode. Use `chrome://inspect/#devices` in desktop
+Chrome for interactive inspection, or reuse the device runner's CDP helpers and
+the forwarded `/json/list` endpoint. Device GPU/startup results are reported by
+the harness; desktop headless results do not establish Android performance.
+
+Remove only the forwarding rules added for this session when finished:
+
+```bash
+adb -s "$CAPY_ANDROID_SERIAL" forward --remove tcp:9228
+adb -s "$CAPY_ANDROID_SERIAL" reverse --remove tcp:4173
+```
