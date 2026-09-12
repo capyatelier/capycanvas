@@ -9,6 +9,8 @@ mod column_drop;
 mod layer_hold;
 #[path = "workspace_drawer_style_tests.rs"]
 mod workspace_drawer_style;
+#[path = "tooltip_tests.rs"]
+mod tooltip;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]

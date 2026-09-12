@@ -58,7 +58,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "pkg/layer_web.js", "app.js"];
+  const modules = ["workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -84,6 +84,7 @@ export function fingerprintAssets(directory) {
   publish("numeric.js");
   publish("layers.js");
   publish("effects.js");
+  publish("tooltips.js");
   publish("pkg/layer_web.js", replaceRequired(read(join(directory, "pkg/layer_web.js")),
     "'layer_web_bg.wasm'", JSON.stringify(basename(names["pkg/layer_web_bg.wasm"]))));
   let worker = read(join(directory, "workspace-worker.js"));
@@ -157,7 +158,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["app.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "style.css"])
+    for (const path of ["app.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "tooltips.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));

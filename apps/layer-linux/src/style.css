@@ -1,6 +1,9 @@
 /* Only editor windows have a Wayland canvas underlay. Native dialogs retain
    their opaque themed surfaces so text stays readable above other windows. */
 window.background.capy-workspace { background: transparent; }
+/* Pen fallback for GTK's mouse-position tooltip query; match native Adwaita. */
+popover.pen-tooltip { padding:0; margin:0; }
+popover.pen-tooltip > contents { padding:6px 10px; border-radius:9px; background:rgba(0,0,6,.8); border:1px solid rgba(255,255,255,.1); color:white; box-shadow:none; }
 window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }

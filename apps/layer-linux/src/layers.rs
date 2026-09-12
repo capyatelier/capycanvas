@@ -459,33 +459,27 @@ impl LayerPanel {
                     (&link, 3),
                     (&mask, 4),
                 ] {
-                    b.connect_query_tooltip(glib::clone!(
-                        #[weak]
-                        item,
-                        #[strong]
-                        owner,
-                        #[upgrade_or]
-                        false,
-                        move |button, _, _, _, tooltip| {
-                            let Some(row) = row_state(&item) else {
-                                return false;
-                            };
-                            let Some(w) = owner.borrow().upgrade() else {
-                                return false;
-                            };
-                            let gpu = w.gpu.borrow();
-                            let Some(g) = gpu.as_ref() else {
-                                return false;
-                            };
-                            let state = g.session.state();
-                            tooltip.set_text(Some(&state.settings.action_tooltip(
-                                &button.tooltip_text().unwrap_or_default(),
-                                &row_button_action(&row, kind),
-                                state.platform,
-                            )));
-                            true
-                        }
-                    ));
+                    if let Some(w) = owner.borrow().upgrade() {
+                        w.tooltips.bind(b, glib::clone!(
+                            #[weak]
+                            item,
+                            #[strong]
+                            owner,
+                            #[upgrade_or]
+                            None,
+                            move |button| {
+                                let row = row_state(&item)?;
+                                let w = owner.borrow().upgrade()?;
+                                let gpu = w.gpu.borrow();
+                                let state = gpu.as_ref()?.session.state();
+                                Some(state.settings.action_tooltip(
+                                    &button.tooltip_text().unwrap_or_default(),
+                                    &row_button_action(&row, kind),
+                                    state.platform,
+                                ))
+                            }
+                        ));
+                    }
                     b.connect_clicked(glib::clone!(
                         #[weak]
                         item,

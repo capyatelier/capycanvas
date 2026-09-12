@@ -1,4 +1,5 @@
 import {checkDragPickup} from "./drag-pickup.test.mjs";
+import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
@@ -199,6 +200,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--column-drops")) {
     await checkColumnDrops({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--tooltips")) {
+    await checkTooltips({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--drag-pickup")) {
     await checkDragPickup({call,evaluate,settle});

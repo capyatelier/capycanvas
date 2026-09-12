@@ -777,6 +777,7 @@ pub struct Workspace {
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
     pub input: Rc<crate::input::Input>,
+    pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
     surface: DockSurface,
     palette_css: gtk::CssProvider,
     palette: Cell<Option<ThemePalette>>,
@@ -995,6 +996,7 @@ impl Workspace {
             ticking: Cell::new(false),
             frame_deadline: Cell::new(0),
             input: Rc::default(),
+            tooltips: Rc::default(),
         });
         this.apply_palette(Settings::default().palette(
             if adw::StyleManager::default().is_dark() {
@@ -1013,6 +1015,7 @@ impl Workspace {
         this.preferences.bind(&this);
         this.workspaces.bind(&this);
         this.install_chrome();
+        this.tooltips.install(&this.window);
         crate::input::install(&this);
         this.install_gpu();
         this.install_document_close();
@@ -1168,31 +1171,26 @@ impl Workspace {
         action: impl Fn(&layer_ui::UiState) -> Option<UiAction> + 'static,
     ) {
         let button = button.as_ref();
-        button.set_has_tooltip(true);
-        button.connect_query_tooltip(glib::clone!(
+        self.tooltips.bind(button, glib::clone!(
             #[weak(rename_to = this)]
             self,
             #[upgrade_or]
-            false,
-            move |button, _, _, _, tooltip| {
+            None,
+            move |widget| {
+                let button = widget.downcast_ref::<gtk::Button>()?;
                 let label = button
                     .tooltip_text()
                     .or_else(|| button.label())
                     .unwrap_or_default();
                 let gpu = this.gpu.borrow();
-                let Some(g) = gpu.as_ref() else {
-                    return false;
-                };
+                let g = gpu.as_ref()?;
                 let state = g.session.state();
-                let Some(action) = action(state) else {
-                    return false;
-                };
-                tooltip.set_text(Some(&state.settings.action_tooltip(
+                let action = action(state)?;
+                Some(state.settings.action_tooltip(
                     &label,
                     &action,
                     state.platform,
-                )));
-                true
+                ))
             }
         ));
     }

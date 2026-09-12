@@ -11,6 +11,7 @@ import { createSystemStatus } from "./system-status.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
+import { installTooltips } from "./tooltips.js";
 
 // The static packager fills this map with fingerprinted resource filenames.
 const assetPaths = {};
@@ -44,6 +45,7 @@ let gpuStarting = false;
 let gpuReady = false;
 let compilerScheduled = false, compilerFailed = false;
 const startupTimes = { canvas: null, document: null, brush: null, complete: null };
+installTooltips();
 let startupNotice;
 let firstCanvasRendered = false;
 let servicingRequests = false;
@@ -1030,7 +1032,7 @@ function chromeInput(event) {
       held: chromeHeld,
       dragging: dragItem !== null,
       popup_open:
-        !!document.querySelector("details[open], :popover-open, dialog[open]") ||
+        !!document.querySelector("details[open], :popover-open:not(.hover-tooltip), dialog[open]") ||
         !!document.activeElement?.matches("select"),
     },
   });

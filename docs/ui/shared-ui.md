@@ -440,6 +440,16 @@ dark background, a subtle border and compact rounded padding. It centers 4dp
 below its tile, flips above when needed and slides horizontally to stay visible.
 No shortcut lookup runs on the stroke-input path.
 
+GTK keeps native mouse tooltips and picks the pen's hovered widget for its
+Adwaita-styled fallback; GTK 4.22's native timeout queries the seat mouse instead.
+Web uses one inert tooltip for mouse/pen hover, with the same compact styling,
+editor text size and 4px below-center placement (flip/slide at screen edges).
+Both wait 500ms, dismiss on contact/exit/cancellation, and preserve shared shortcut
+text. Tooltip controllers never consume touch holds or request model refreshes.
+Run `tools/performance/workspace-motion.sh gtk --tooltips` (or `web`), which uses
+an isolated display. Web tests inject mouse/pen/contact; GTK tests use real mouse input plus
+the pen pick/timeout path. Physical GTK tablet hover still needs a hardware check.
+
 Applied settings emit a durable `HostRequest::SaveSettings`; GTK writes atomically
 on GIO's I/O pool and web uses localStorage. Completion/error returns through
 `CompleteRequest`. `RestoreSettings` validates without emitting another save.

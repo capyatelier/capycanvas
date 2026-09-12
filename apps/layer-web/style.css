@@ -1,6 +1,8 @@
 /* Compact libadwaita color roles, native DOM controls over a full-window canvas. */
 :root { font: var(--ui-text-size, 1rem) "Adwaita Sans", system-ui, sans-serif; color-scheme: dark; --bg: #333333; --panel: #414141; --tabbar: #2e2e2e; --input: #333333; --text: #fafafb; --accent: #3584e4; --selected: color-mix(in srgb, var(--accent) 22%, transparent); --button: #ffffff0d; --thumb: #d3d3d3; --settings: #333333; --sidebar: #2e2e32; }
 body { --popover: var(--panel); }
+/* Match Adwaita's native tooltip: readable text, quiet dark surface, no arrow. */
+.hover-tooltip { position:fixed; inset:auto; width:max-content; margin:0; padding:6px 10px; border:1px solid rgb(255 255 255 / 10%); border-radius:9px; background:rgb(0 0 6 / 80%); color:white; box-shadow:none; font:inherit; font-weight:400; line-height:normal; white-space:pre-wrap; overflow-wrap:anywhere; pointer-events:none; user-select:none; }
 .workspace-manager { width:460px; height:fit-content; background:var(--settings); }
 .workspace-manager::backdrop, .workspace-form::backdrop { background:#0003; }
 .workspace-manager .workspace-intro { margin:12px 20px; line-height:1.5; }
