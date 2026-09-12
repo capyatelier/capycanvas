@@ -158,6 +158,14 @@ final class EditorLaunchTests: XCTestCase {
         captureDefaultEditor(in: app)
     }
 
+    @MainActor func testBlendChoices() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch()
+        checkBlendChoices(in: app)
+    }
+
     @MainActor func testEditorControlLayout() {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()

@@ -1,6 +1,32 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func checkBlendChoices(in app: XCUIApplication) {
+        captureDefaultEditor(in: app)
+        let property = app.buttons["property-blend"], compact = app.buttons["layer-blend"]
+        func expect(_ value: String) {
+            for control in [property, compact] {
+                expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: control)
+            }
+            waitForExpectations(timeout: 5)
+        }
+        func command(_ name: String) {
+            let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", name)).firstMatch
+            XCTAssertTrue(button.isEnabled)
+            workspaceActivate(button)
+        }
+        expect("Normal")
+        workspaceActivate(property)
+        let multiply = app.buttons["property-blend-option-1"]
+        XCTAssertTrue(multiply.waitForExistence(timeout: 5)); workspaceActivate(multiply)
+        expect("Multiply"); command("Undo"); expect("Normal")
+        workspaceActivate(compact)
+        let screen = app.buttons["layer-blend-option-2"]
+        XCTAssertTrue(screen.waitForExistence(timeout: 5)); workspaceActivate(screen)
+        expect("Screen"); command("Undo"); expect("Normal"); command("Redo"); expect("Screen")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func captureDefaultEditor(in app: XCUIApplication, scenario: String = "initial") {
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))

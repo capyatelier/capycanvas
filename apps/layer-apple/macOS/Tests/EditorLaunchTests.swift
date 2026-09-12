@@ -163,6 +163,14 @@ final class EditorLaunchTests: XCTestCase {
         captureDefaultEditor(in: app)
     }
 
+    @MainActor func testBlendChoices() {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch()
+        checkBlendChoices(in: app)
+    }
+
     @MainActor func testEditorControlLayout() {
         let app = editorCaptureApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

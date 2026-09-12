@@ -6,7 +6,6 @@ struct LayerPanel: View {
     let panel: JSON
     @State private var menu = JSON()
     @State private var importing = false
-    @State private var choosingBlend = false
     @State private var bounds: [UInt64: CGRect] = [:]
     @State private var drag: LayerDrag?
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
@@ -63,34 +62,10 @@ struct LayerPanel: View {
     private var header: some View {
         VStack(spacing: 2) {
             HStack(spacing: 6) {
-                Button { choosingBlend = true } label: {
-                    HStack(spacing: 2) {
-                        Text(current["blend_label"].string).fontWeight(.bold).lineLimit(1)
-                        Spacer(minLength: 0)
-                        SharedIcon(name: "chevron-down", size: 12)
-                    }.padding(.horizontal, 6).frame(height: 24).background(palette["input"], in: RoundedRectangle(cornerRadius: 4))
-                }.buttonStyle(.plain)
-                    .disabled(!view["controls"]["blend"].bool).accessibilityLabel("Layer blend mode")
-                    .accessibilityValue(current["blend_label"].string)
-                    .frame(maxWidth: .infinity)
-                    .popover(isPresented: $choosingBlend) {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(store.catalog["layer_blends"].array.indices, id: \.self) { index in
-                                    Button {
-                                        choosingBlend = false
-                                        store.layer(["op": "blend", "id": current["id"].raw, "value": index])
-                                    } label: {
-                                        HStack {
-                                            Image(systemName: "checkmark").opacity(current["blend"].uint == UInt64(index) ? 1 : 0)
-                                            Text(store.catalog["layer_blends"][index].string)
-                                            Spacer(minLength: 0)
-                                        }.padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
-                                    }.buttonStyle(.plain)
-                                }
-                            }.padding(6)
-                        }.frame(width: 230, height: 400)
-                    }
+                EditorChoice(label: "Layer blend mode", options: store.catalog["layer_blends"].array.map(\.string),
+                    selected: Int(current["blend"].uint), identifier: "layer-blend", background: palette["input"], compact: true) {
+                    store.layer(["op": "blend", "id": current["id"].raw, "value": $0])
+                }.disabled(!view["controls"]["blend"].bool).frame(maxWidth: .infinity)
                 LayerOpacityField(store: store).disabled(!view["controls"]["opacity"].bool).frame(maxWidth: .infinity)
             }
             HStack(spacing: 2) {

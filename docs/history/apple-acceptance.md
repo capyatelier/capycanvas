@@ -76,6 +76,37 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared property and layer dropdowns — 2026-09-12
+
+Both Apple targets now use one dropdown component for property choices, Curves
+channels and layer blending. The shared layout matches measured browser select
+padding, flex shrink, disclosure position/shape, text baseline/clipping and
+disabled opacity. The compact layer popup now uses the same shared check icon,
+option routing and content-sized popover. Existing Rust edit actions are retained.
+
+Direct native/Chrome comparisons cover both Apple presets, two themes, three
+widths, short/long selections and enabled/disabled states: 48 images and 144
+controls. All control bounds are within one logical point, maximum 0.126.
+Complete comparisons retain 6,325,760 pixels: 196,638 differ exactly, with
+per-case fractions 1.706–5.014%, weighted mean channel error 0.439592 and maximum
+191. The preceding implementation differed at 1,526,184 pixels with mean error
+5.104690. Exact parity still fails; font rasterization and narrow-label
+truncation differences are retained. These default-font AppKit component
+captures do not establish every font size, popup or physical UIKit/Mac result.
+
+The focused iPad Simulator workflow passes property/compact popup selection,
+synchronized values and in-app Undo/Redo. Its full initial editor capture
+compared with the unchanged Chrome reference differs at 302,519 of 5,680,128
+pixels (5.325919%), with mean channel error 1.086183 and maximum 255. The Mac
+UI test target compiles but was not executed. Both signed Release apps build
+and verify. The owned simulator is deleted, and existing artist sessions are
+preserved. Reproduction is in the
+[dropdown comparison guide](../../tools/visual/README.md#property-and-layer-choices).
+
+The remaining feature/visual/lifecycle matrix, physical rendering and sustained
+Mac 90 Hz / iPad 120 Hz performance gates remain open. Save/Load Layout remains
+excluded.
+
 ## Shared vector icon paints and settled captures — 2026-09-12
 
 Both Apple targets now preserve fixed colors in the canonical SVGs while tinting

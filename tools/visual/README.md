@@ -96,6 +96,53 @@ or tolerance waivers. These invisible AppKit captures and delegate checks cover
 shared Apple components; physical UIKit widgets, pointer delivery, full-editor
 pixels and sustained performance require separate evidence.
 
+## Property and layer choices
+
+Both Apple targets share the same dropdown component for property choices,
+the full-width Curves channel selector and compact layer blending. It measures
+all option labels, shrinks property rows with the browser's flex policy, and
+matches the select's padding, disclosure, disabled opacity and text clipping.
+The native popover dispatches the existing shared editor actions.
+
+The direct fixture uses actual Rust blend names and both Apple presets, two
+themes, three widths, short/long selections and enabled/disabled states: 48
+images containing three complete controls each. These are invisible AppKit
+captures. Chrome uses standard HTML selects with the production property/layer
+CSS; it does not test browser popup routing or duplicate the editor model.
+
+```sh
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_CHOICE_CAPTURES="$PWD/artifacts/apple-choices" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/choice-controls.swift
+node tools/visual/chrome-capture.mjs 226 140 2 artifacts/apple-choices light choices \
+  artifacts/apple-choices/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-choices/web-0-light-226-0-enabled.png \
+  artifacts/apple-choices/native-0-light-226-0-enabled.png \
+  --output artifacts/apple-choices/diff-0-light-226-0-enabled
+```
+
+Repeat full-image comparison for every manifest name. `choice-geometry.json`
+summarizes all three measured control rectangles per case; each
+`geometry-NAME.json` also retains bounds, font metrics and every geometry error.
+Native text/arrow allocations are retained in the manifest for diagnosis.
+Measurement readers are disabled in ordinary editors.
+
+All 144 control rectangles are within one logical point, with maximum error
+0.126. Complete comparisons retain 6,325,760 pixels: 196,638 differ exactly,
+per-case fractions are 1.706–5.014%, weighted mean channel error is 0.439592
+and maximum is 191. The preceding implementation differed at 1,526,184 pixels
+with mean error 5.104690. Text rasterization and truncated-label differences
+remain unmasked; this default-font fixture does not establish all font-size,
+popup or physical-device parity.
+
+`EditorLaunchTests/testBlendChoices` on both Apple targets tests the actual
+property and compact popovers, synchronized blend values, Undo and Redo using
+in-app controls. The iPad Simulator test passes; the Mac test target compiles
+but has not run at this checkpoint. The attached complete initial editor
+comparison differs at 302,519 of 5,680,128 pixels (5.325919%), so full-editor
+pixel acceptance remains open.
+
 ## Shared icon paints
 
 Apple generates ordered vector paints from the canonical browser SVGs. Fixed
