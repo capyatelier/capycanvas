@@ -500,6 +500,7 @@ mod tests {
                 panel: layer_ui::Panel::Brushes,
                 tab_width: 80.,
                 content_height: 500.,
+                scroll: None,
             }],
         })
         .unwrap();
