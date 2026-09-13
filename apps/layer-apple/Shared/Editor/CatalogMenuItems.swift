@@ -16,7 +16,7 @@ struct ApplicationMenus: View {
                     let menu = store.snapshot["application_menus"][index]
                     ApplicationMenuButton(store: store, id: menu["id"].string) {
                         Text(menu["label"].string).fontWeight(.bold).fixedSize()
-                            .frame(width: HeaderTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
+                            .frame(width: EditorTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
                             .padding(.horizontal, 6).frame(height: 36)
                             .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
                     }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)

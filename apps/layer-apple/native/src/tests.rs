@@ -28,17 +28,128 @@ fn hls_raster_ffi_validates_buffer_and_matches_shared_pixels() {
             (u32::MAX, 0., usize::MAX),
         ] {
             assert_eq!(
-                capy_apple_hls_field(side, hue, bytes.as_mut_ptr(), count),
+                capy_apple_color_field(side, hue, 2, false, bytes.as_mut_ptr(), count),
                 0
             );
             assert_eq!(bytes, [23; 16]);
         }
-        assert_eq!(capy_apple_hls_field(2, 60., std::ptr::null_mut(), 16), 0);
-        assert_eq!(capy_apple_hls_field(2, 60., bytes.as_mut_ptr(), 16), 1);
+        assert_eq!(
+            capy_apple_color_field(2, 60., 2, false, std::ptr::null_mut(), 16),
+            0
+        );
+        assert_eq!(
+            capy_apple_color_field(2, 60., 2, false, bytes.as_mut_ptr(), 16),
+            1
+        );
     }
     let mut reference = [0; 16];
     assert!(layer_ui::render_hls_field(2, 60., &mut reference));
     assert_eq!(bytes, reference);
+    for shape in 0..3 {
+        let mut bytes = vec![0; 64 * 64 * 4];
+        assert_eq!(
+            unsafe { capy_apple_color_field(64, 0., shape, true, bytes.as_mut_ptr(), bytes.len()) },
+            1
+        );
+        let mut expected = vec![0; bytes.len()];
+        assert!(layer_ui::render_hue_guide(
+            64,
+            color_shape(shape).unwrap(),
+            &mut expected
+        ));
+        assert_eq!(bytes, expected);
+        assert_eq!(
+            unsafe { capy_apple_color_field(64, 0., 3, true, bytes.as_mut_ptr(), bytes.len()) },
+            0
+        );
+        assert_eq!(bytes, expected);
+    }
+}
+
+#[test]
+fn compact_color_resources_and_circle_picking_use_shared_shapes() {
+    assert!(capy_apple_color_resources(127., 0).is_null());
+    assert!(capy_apple_color_resources(f32::NAN, 0).is_null());
+    assert!(capy_apple_color_resources(226., 3).is_null());
+    // A circular field includes its horizontal rim, outside the HSV square.
+    assert_eq!(capy_apple_color_hit(80., 50., 100., 0), 2);
+    assert_eq!(capy_apple_color_hit(80., 50., 100., 1), 0);
+    for (shape_id, shape) in [
+        layer_ui::ColorShape::Circle,
+        layer_ui::ColorShape::Square,
+        layer_ui::ColorShape::Triangle,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let pointer = capy_apple_color_resources(226., shape_id as u32);
+        assert!(!pointer.is_null());
+        let resources: Value =
+            unsafe { serde_json::from_slice(CStr::from_ptr(pointer).to_bytes()).unwrap() };
+        unsafe { capy_apple_string_free(pointer) };
+        let layout = layer_ui::ColorPanelLayout::new(226.).unwrap();
+        assert_eq!(resources["layout"], serde_json::to_value(layout).unwrap());
+        for platform in [0, 1] {
+            let app = App::new(platform);
+            app.action(json!({"type":"color","action":{"op":"shape","shape":shape}}));
+            let view = app.request(3, Value::Null).unwrap()["color_panel"].clone();
+            assert_eq!(view["shape"], serde_json::to_value(shape).unwrap());
+            let mut state = layer_ui::ColorState::default();
+            state.apply(layer_ui::ColorAction::Shape { shape }).unwrap();
+            let stops = resources["hue_stops"].as_array().unwrap();
+            assert_eq!(stops.len(), state.wheel_hue_stops().len());
+            for (actual, expected) in stops.iter().zip(state.wheel_hue_stops()) {
+                assert!((actual["offset"].as_f64().unwrap() - expected.offset as f64).abs() < 1e-6);
+                for channel in 0..3 {
+                    assert!(
+                        (actual["color"][channel].as_f64().unwrap()
+                            - expected.color[channel] as f64)
+                            .abs()
+                            < 1e-6
+                    );
+                }
+            }
+            app.action(json!({"type":"color","action":{"op":"pick_wheel","part":"field","point":[0.65,0.45],"size":1}}));
+            state
+                .apply(layer_ui::ColorAction::PickWheel {
+                    part: layer_ui::ColorWheelPart::Field,
+                    point: [0.65, 0.45],
+                    size: 1.,
+                })
+                .unwrap();
+            for (actual, expected) in app.state()["brush"]["color"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(state.rgba())
+            {
+                assert!((actual.as_f64().unwrap() - expected as f64).abs() < 1e-6);
+            }
+            let before = app.state()["brush"]["color"].clone();
+            app.action(json!({"type":"color","action":{"op":"toggle_readout"}}));
+            assert_eq!(app.state()["brush"]["color"], before);
+            assert_eq!(
+                app.request(3, Value::Null).unwrap()["color_panel"]["readout_label"],
+                "RGB"
+            );
+        }
+    }
+    let mut bytes = vec![0; 128 * 128 * 4];
+    assert_eq!(
+        unsafe { capy_apple_color_field(128, 264., 0, false, bytes.as_mut_ptr(), bytes.len()) },
+        1
+    );
+    let mut expected = vec![0; bytes.len()];
+    assert!(layer_ui::render_okhsv_disc(128, 264., &mut expected));
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        unsafe { capy_apple_color_field(128, 264., 3, false, bytes.as_mut_ptr(), bytes.len()) },
+        0
+    );
+    assert_eq!(
+        bytes, expected,
+        "Invalid shapes cannot alter the supplied buffer"
+    );
 }
 
 #[test]
@@ -1545,14 +1656,14 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
             [1. / 3., 2. / 3., 0.5, 1.],
         );
     }
-    for space in [0, 1] {
+    for space in [0, 1, 2] {
         assert_eq!(capy_apple_color_hit(95., 50., 100., space), 1);
         assert_eq!(capy_apple_color_hit(50., 50., 100., space), 2);
         assert_eq!(capy_apple_color_hit(0., 0., 100., space), 0);
         assert_eq!(capy_apple_color_hit(f32::NAN, 50., 100., space), 0);
     }
     assert_eq!(capy_apple_color_hit(50., 50., 0., 0), 0);
-    assert_eq!(capy_apple_color_hit(50., 50., 100., 2), 0);
+    assert_eq!(capy_apple_color_hit(50., 50., 100., 3), 0);
 }
 
 #[test]

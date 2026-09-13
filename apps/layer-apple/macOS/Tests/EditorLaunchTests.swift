@@ -156,7 +156,7 @@ final class EditorLaunchTests: XCTestCase {
         app.launch()
         checkColorControls(in: app) { mode, wheel, state in
             let window = app.windows.firstMatch
-            attachColorFixture(name: "mac-color-" + mode, space: mode, state: state,
+            attachColorFixture(name: "mac-color-" + mode, state: state,
                 screenshot: window.screenshot(), viewport: window.frame, wheel: wheel)
         }
     }
