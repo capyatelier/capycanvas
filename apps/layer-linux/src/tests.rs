@@ -9400,26 +9400,34 @@ fn native_preferences_and_shortcuts() {
                 page
             );
             if page == SettingsPage::Input {
-                let prediction: adw::SpinRow = find_named(
+                let prediction: crate::number_control::NumberControl = find_named(
                     w.preferences.dialog.upcast_ref(),
                     "setting-prediction-horizon",
                 )
                 .unwrap()
                 .downcast()
                 .unwrap();
-                assert_eq!(prediction.text(), "8 ms");
-                prediction.set_text("32");
-                prediction.update();
+                assert_eq!(prediction.value(), 16.0);
+                edit_number(&prediction, "32");
                 assert_eq!(state(&w).settings.prediction_ms, 32.0);
-                prediction.set_text("");
+                let display: gtk::Button = find_css(prediction.upcast_ref(), "number-value")
+                    .unwrap()
+                    .downcast()
+                    .unwrap();
+                click(&display);
+                let entry: gtk::Entry = find_css(prediction.upcast_ref(), "number-entry")
+                    .unwrap()
+                    .downcast()
+                    .unwrap();
+                entry.set_text("");
                 assert_eq!(
                     state(&w).settings.prediction_ms,
                     32.0,
-                    "empty spin draft does not reset"
+                    "empty numeric draft does not reset"
                 );
-                prediction.update();
-                assert_eq!(state(&w).settings.prediction_ms, 8.0);
-                assert_eq!(prediction.text(), "8 ms");
+                entry.emit_activate();
+                assert_eq!(state(&w).settings.prediction_ms, 16.0);
+                assert_eq!(prediction.value(), 16.0);
                 let field =
                     find_named(w.preferences.dialog.upcast_ref(), "setting-pressure").unwrap();
                 let title = find_css(&field, "number-title").unwrap();

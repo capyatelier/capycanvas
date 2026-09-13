@@ -146,12 +146,15 @@ monotonic timebase. `now` alone advances time-driven paint; `presentation`
 selects the speculative endpoint. The older timed entry point uses the
 configured horizon.
 
+The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
+existing saved values are preserved.
+
 The native-prediction switch appears directly below **Enable stroke prediction** on
 every host. Android reports framework `MotionPredictor` availability for the
 connected stylus; Web checks for `getPredictedEvents`; iPadOS uses UIKit predicted
 touches. Linux, Windows and macOS currently show a disabled switch. Capability
 is transient and never overwrites the saved choice. When supported native
-prediction is selected, the **Prediction time** slider and its reset action are
+prediction is selected, the **Prediction amount** slider and its reset action are
 disabled. Native timing comes from its sample timestamps and presentation time.
 Endpoint tracking is always full strength for both native and shared prediction;
 the retired `tip_lock` preference still loads but no longer affects rendering.
@@ -162,8 +165,8 @@ losing support, restores the saved prediction time.
 ## Lead stability and impending lift
 
 Each active stroke owns a small preview-only history. The predicted distance from
-the latest real position is filtered using elapsed presentation time, with 24 ms
-extension and 10 ms retreat time constants, and extension limited to 1 physical
+the latest real position is filtered using elapsed presentation time, with 32 ms
+extension and 14 ms retreat time constants, and extension limited to 0.8 physical
 pixels per millisecond. Stops, strong deceleration, sharp turns and lift handling
 bypass that filter so it cannot retain a dangerous old lead. Native and shared
 predictions share the same limits, including bounds on intermediate native points.

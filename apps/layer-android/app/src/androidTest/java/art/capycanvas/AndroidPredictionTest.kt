@@ -167,6 +167,11 @@ class AndroidPredictionTest {
         compose.onNodeWithTag(tag).assertIsNotEnabled().assertIsOn()
         assertTrue("Losing support preserves the user's choice", settings().getBoolean("platform_prediction"))
         assertEquals("Manual prediction time survives native mode", 32.0, settings().getDouble("prediction_ms"), 0.0)
+        compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
+        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("")
+        compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
+        waitFor { settings().getDouble("prediction_ms") == 16.0 }
+        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("16 ms")
     }
 
     @Test fun fallingPressureStrokeRendersAndSurvivesUndoRedo() {

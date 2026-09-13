@@ -110,13 +110,13 @@ Wait-Until {(Read-Model).state.settings.zen_icon -eq $originalIcon} 'Icon restor
 
 Invoke-Control 'Search preferences'
 Edit-Text 'Search preferences' 'prediction'
-Wait-Until {Find-Control 'Prediction time' ([System.Windows.Automation.ControlType]::Button)} 'Shared search results missing'
-Invoke-Control 'Prediction time'
-Wait-Until {Find-Control 'Prediction time slider' ([System.Windows.Automation.ControlType]::Slider)} 'Search result did not reveal the prediction slider'
+Wait-Until {Find-Control 'Prediction amount' ([System.Windows.Automation.ControlType]::Button)} 'Shared search results missing'
+Invoke-Control 'Prediction amount'
+Wait-Until {Find-Control 'Prediction amount slider' ([System.Windows.Automation.ControlType]::Slider)} 'Search result did not reveal the prediction slider'
 $feedback=(Read-Model).state.settings.feedback
 Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -ne $feedback} 'Preview toggle did not reach shared settings'
-Wait-Until {(Control 'Prediction time slider' ([System.Windows.Automation.ControlType]::Slider)).Current.IsEnabled -eq !$feedback} 'Prediction slider has the wrong enabled state'
+Wait-Until {(Control 'Prediction amount slider' ([System.Windows.Automation.ControlType]::Slider)).Current.IsEnabled -eq !$feedback} 'Prediction slider has the wrong enabled state'
 Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -eq $feedback} 'Preview restoration failed'
 Close-Preferences

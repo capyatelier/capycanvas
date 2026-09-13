@@ -295,7 +295,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), nativeAvailable);
   if (nativeAvailable) await click('#setting-platform-prediction');
-  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '8 ms', 'units appear beside numeric values');
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '16 ms', 'units appear beside numeric values');
   await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='4*2 ms'");
   await key('Enter');
@@ -306,7 +306,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value=''");
   assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 32);
   await key('Enter');
-  assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 8);
+  assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 16);
   await click('#setting-feedback');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon').disabled"), true);
   await click('#setting-feedback');

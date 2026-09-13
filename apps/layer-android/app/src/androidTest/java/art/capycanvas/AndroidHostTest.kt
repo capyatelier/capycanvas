@@ -1923,7 +1923,7 @@ class AndroidHostTest {
         number.performTextReplacement("")
         assertEquals(32f, state().getJSONObject("settings").number("prediction_ms"))
         number.performImeAction()
-        waitState { it.getJSONObject("settings").number("prediction_ms") == 8f }
+        waitState { it.getJSONObject("settings").number("prediction_ms") == 16f }
         compose.onNodeWithTag("settings-done").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         assertNull(host.actionError)
@@ -2343,7 +2343,7 @@ class AndroidHostTest {
             capture("17-settings-portrait")
             compose.onNodeWithText("Pen & Input").performClick()
             compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-            compose.onNodeWithText("Prediction time").assertExists()
+            compose.onNodeWithText("Prediction amount").assertExists()
             capture("29-settings-portrait-detail")
             if (compose.activity.resources.configuration.screenWidthDp < 840) {
                 compose.onNodeWithContentDescription("Back").performClick()

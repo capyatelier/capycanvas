@@ -13674,7 +13674,7 @@ mod tests {
                     PreferenceValue::Text(value.into()),
                 );
                 assert!(s.preferences().unwrap().error.is_some());
-                assert_eq!(s.state.settings.prediction_ms, 8.0);
+                assert_eq!(s.state.settings.prediction_ms, 16.0);
                 assert!(
                     s.state.requests.is_empty(),
                     "invalid edits never reach storage"
@@ -14120,7 +14120,7 @@ mod tests {
                 let row = &rows[index + 2];
                 assert_eq!(row.id, id);
                 let PreferenceKind::Number { control, value } = &row.kind else {
-                    panic!("Prediction time must be numeric");
+                    panic!("Prediction amount must be numeric");
                 };
                 assert_eq!(control.kind, NumericKind::Slider);
                 assert_eq!(control.unit, "ms");

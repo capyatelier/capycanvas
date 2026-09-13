@@ -68,6 +68,9 @@ export async function checkPrediction({call, evaluate, settle}) {
       assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), enabled);
       assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 12, 'native mode preserves manual time');
     }
+    await action({type:'preferences', action:{type:'reset', id:'prediction_horizon'}});
+    assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 16, 'reset uses the new default');
+    assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '16 ms');
   } finally {
     await evaluate(`(() => {
       layerApp.app.pen=predictionTest.pen;
