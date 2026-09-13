@@ -191,7 +191,7 @@ impl Header {
             #[weak]
             w,
             move |_, _, x, y| {
-                if let Some((zone, before)) = w.header.drop_at([x as f32, y as f32]) {
+                if w.header.drop_at([x as f32, y as f32]).is_some() {
                     let selected = w
                         .header
                         .geometry
@@ -209,7 +209,7 @@ impl Header {
                     } else {
                         w.header.root.grab_focus();
                     }
-                    w.header.editor.select(&w, zone, before, selected);
+                    w.header.editor.select(&w, selected);
                 }
             }
         ));
@@ -223,7 +223,7 @@ impl Header {
             #[weak]
             w,
             move |gesture, _, x, y| {
-                if let Some((zone, before)) = w.header.drop_at([x as f32, y as f32])
+                if w.header.drop_at([x as f32, y as f32]).is_some()
                     && !w
                         .header
                         .geometry
@@ -234,7 +234,7 @@ impl Header {
                     && w.header.root.pick(x, y, gtk::PickFlags::DEFAULT).as_ref()
                         == Some(w.header.root.upcast_ref())
                 {
-                    w.header.editor.select(&w, zone, before, None);
+                    w.header.editor.select(&w, None);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     w.show_context(
                         w.header.root.upcast_ref(),
@@ -529,14 +529,13 @@ impl Header {
         self.editing.get()
     }
     pub fn select_context_item(&self, w: &Workspace, id: u32) {
-        let zone = self
+        let exists = self
             .model
             .borrow()
             .as_ref()
-            .and_then(|m| m.location(id))
-            .map(|(z, _)| z);
-        if let Some(zone) = zone {
-            self.editor.select(w, zone, Some(id), Some(id));
+            .is_some_and(|m| m.entry(id).is_ok());
+        if exists {
+            self.editor.select(w, Some(id));
         }
     }
     fn build_item(
@@ -549,7 +548,6 @@ impl Header {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.set_widget_name(&format!("header-item-{}", entry.id));
         root.add_css_class("header-item");
-        root.add_css_class("drag-hold");
         root.set_focusable(editing);
         root.update_property(&[gtk::accessible::Property::Label(&entry.item.label())]);
         let mut button = None;
@@ -726,20 +724,17 @@ impl Header {
         content.set_can_target(!editing);
         content.set_can_focus(!editing);
         if editing {
-            let grip = crate::icons::button("layer-grip-symbolic");
-            grip.add_css_class("flat");
+            let grip = crate::icons::image("layer-grip-symbolic");
             grip.add_css_class("header-grip");
             grip.set_valign(gtk::Align::Center);
-            grip.set_focusable(false);
             grip.set_size_request(20, 28);
             grip.set_widget_name(&format!("header-grip-{}", entry.id));
             grip.set_tooltip_text(Some("Drag to move this item"));
-            w.register_drag(&grip, DragTarget::Header(HeaderDragSource::Item(entry.id)));
             root.append(&grip);
+            w.register_drag(&root, DragTarget::Header(HeaderDragSource::Item(entry.id)));
         }
         root.append(&content);
         self.root.add(&root);
-        w.register_drag(&root, DragTarget::Header(HeaderDragSource::Item(entry.id)));
         w.install_context(&root, ContextTarget::Header { id: Some(entry.id) });
         let id = entry.id;
         root.connect_has_focus_notify(glib::clone!(
@@ -747,16 +742,7 @@ impl Header {
             w,
             move |root| {
                 if root.has_focus() && w.header.editing.get() {
-                    let zone = w
-                        .header
-                        .model
-                        .borrow()
-                        .as_ref()
-                        .and_then(|m| m.location(id))
-                        .map(|(z, _)| z);
-                    if let Some(zone) = zone {
-                        w.header.editor.select(&w, zone, Some(id), Some(id));
-                    }
+                    w.header.select_context_item(&w, id);
                 }
             }
         ));
@@ -1052,31 +1038,6 @@ impl Header {
                 );
             }
         }
-        if self.drag.borrow().is_none()
-            && let Some((zone, before)) = self.drop.get().or(Some(self.editor.insertion.get()))
-        {
-            let bounds = geometry.zones[zone.index()];
-            let x = before
-                .and_then(|id| {
-                    geometry
-                        .items
-                        .iter()
-                        .find(|m| m.id == id)
-                        .map(|m| m.bounds.x)
-                })
-                .unwrap_or_else(|| {
-                    geometry
-                        .items
-                        .iter()
-                        .filter(|m| bounds.contains(m.bounds.x + 1., m.bounds.y + 1.))
-                        .map(|m| m.bounds.x + m.bounds.width)
-                        .fold(bounds.x, f32::max)
-                });
-            snapshot.append_color(
-                &gdk::RGBA::new(0.3, 0.65, 1., 1.),
-                &gtk::graphene::Rect::new(x - 1., bounds.y, 2., bounds.height),
-            );
-        }
     }
     fn overflow_popup(&self, w: &Rc<Workspace>, zone: usize) -> gtk::Popover {
         let popover = gtk::Popover::new();
@@ -1105,9 +1066,7 @@ impl Header {
                     move |_| {
                         if w.header.editing.get() {
                             popover.popdown();
-                            w.header
-                                .editor
-                                .select(&w, HeaderZone::ALL[zone], Some(id), Some(id));
+                            w.header.editor.select(&w, Some(id));
                             w.header.root.grab_focus();
                         } else {
                             popover.popdown();

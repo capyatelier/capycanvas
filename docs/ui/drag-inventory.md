@@ -36,8 +36,9 @@ GTK workspace pickup now has one captured path. Native hold timing arms tile
 reordering; source classification leaves G5–G9 immediate.
 
 The GTK [window-bar builder](window-bar.md) adds individual header-item bodies
-only while editing: hold then drag for every device. Its explicit grips use
-immediate pickup with movement slop. Shared Rust uses frozen tab-group slot
+only while editing: the full item drags immediately with movement slop for every
+device, as explicitly requested for this placement-only editor on 2026-09-13.
+Grips are decorative, not separate hit targets. Shared Rust uses frozen tab-group slot
 thresholds and validates the final atomic move/removal. Neighbors animate;
 crossing half a tile outside detaches the item with its original grab offset.
 Re-entry docks it again; an outside release removes it. Escape, focus loss,
@@ -45,15 +46,15 @@ resize or an invalidated source cancels. Context actions offer
 move/order/remove without dragging. Native mouse/touch checks cover hold-release,
 same-contact dragging, cancellation and context menus at 1× and 2×;
 physical stylus acceptance remains a hardware check, not inferred from touch.
-The compact component palette also supports dragging new individual items:
-explicit grips are immediate for every device; component button bodies require
-hold then drag for mouse, touch and pen. Add Tools is itself a palette source:
-clicking or dropping it opens the toolbar's separate shared picker at the
+The compact component bank has one inert, immediately draggable chip per item;
+its padding, icon and label all belong to the same source. There is no click/tap
+activation or persistent insertion cursor. Add Tools is itself a bank source:
+dropping it opens the toolbar's separate shared picker at the
 destination. Dropping a new palette source outside discards it. The inline editor
 uses one preview baseline with Done/Cancel, not per-move undo entries. Done is
 one ordinary workspace-history transaction. Native catalog tests cover both
 mouse and touch at 1×/2×, invalidated sources, blur/Escape/outside cancellation,
-click-to-add alternatives and previews excluded from saved captures.
+inert click/hold behavior and previews excluded from saved captures.
 
 ### Other GTK pointer drags and non-draggable collections
 

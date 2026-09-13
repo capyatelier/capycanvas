@@ -24,21 +24,22 @@ designer or opening shortcut.
   Workspaces, Document Title, Clock, Battery and Space.
   Already-present singleton components are omitted. Removing one returns it
   to the palette; tools disappear and can be added again using Add Tools.
-- Drag a component into the bar, or click it to insert at the marked position.
-  Click in the bar to choose a position; focusing an item also chooses a
-  position before it. There are no separate Left/Center/Right insertion buttons.
+- Drag a component from anywhere on its chip into the bar; there is no
+  click/tap-to-add action or persistent insertion cursor. The live drag preview
+  determines its position. There are no Left/Center/Right insertion buttons.
   An empty center reserves up to one third of the usable width (capped at
   320 logical pixels) while editing, with visible gaps separating the regions.
   It stays centered and never covers side items or native window controls.
 - **Add Tools…** is a palette component, not a separate top-row action.
-  Clicking it or dropping it in the bar opens the same searchable, multi-select
+  Dropping it in the bar opens the same searchable, multi-select
   picker used by toolbars. No Tools placeholder is saved. Filtering preserves
   selection; confirming inserts tools in selection order. Picker Cancel/Escape
   returns to the editor without adding anything.
-- Grips drag immediately after native movement slop; item and palette button
-  bodies require hold then drag for every device. Touch/pen holds can open the
-  existing context menu and continue into a drag; mouse holds only arm pickup.
-  See the [application convention](drag-and-reorder.md).
+- Whole items and bank chips drag immediately after native movement slop, with
+  mouse, touch and pen. Grips are visual hints, not separate buttons or hit
+  targets. Touch/pen holds on existing bar items can still open the
+  existing context menu and continue into a drag; mouse holds never open menus.
+  See the editor exception in the [application convention](drag-and-reorder.md).
 - While held in the bar, the item tracks horizontally and its neighbors slide
   to make room. Reorder thresholds use the same frozen-geometry algorithm as
   tab groups, so animated neighbors do not cause oscillation. Moving more than
@@ -86,7 +87,8 @@ across hosts without replacing each workspace's distinct tools/panels.
 
 Removing all navigation items exposes a recovery menu; native close is always
 outside customization. Outside editing, unused caption space and informational
-items move the desktop window; while editing they choose insertion positions.
+items move the desktop window; while editing, item bodies move the item and
+empty space clears the keyboard selection without setting an insertion point.
 Actual controls own their clicks, holds and context menus.
 An outside contact on the bar or a toolbar dismisses a tool drawer without
 consuming the target's normal click or drag. Another eligible tool can switch
@@ -112,6 +114,7 @@ Run native input in a private compositor, never on the user's desktop:
 
 ```bash
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_picker_journey
+bash tools/performance/workspace-motion.sh gtk --native-test=native_header_drag_only_bank_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_catalog_preview_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_managed_input --native-storage
 LAYER_MOTION_VIEWPORT=640x600 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_overflow_input
@@ -119,10 +122,11 @@ LAYER_MOTION_VIEWPORT=3200x2000 LAYER_MOTION_SCALE=2 bash tools/performance/work
 bash tools/performance/workspace-motion.sh web --tool-picker
 ```
 
-The GTK picker journey checks native insertion selection, multi-selection across
+The GTK picker journey checks dropped tool-picker destinations, multi-selection across
 queries, empty results, nested Cancel/Escape, exact insertion order, singleton
-availability, removal, keyboard insertion and parent cancellation. The catalog
-case checks mouse/touch early-drag rejection, held bodies, immediate grips and
+availability, removal, exact drop positions and parent cancellation. The bank
+case checks inert clicks/holds, slop and immediate pickup from padding, grips,
+icons and labels. The catalog case checks mouse/touch immediate bodies/grips and
 cancellation on outside drop, Escape, blur and source replacement. Managed input
 checks Done, workspace switching, restart and unsaved-preview cancellation.
 The narrow case includes hidden-item selection and modal Escape with an empty

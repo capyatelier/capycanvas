@@ -421,3 +421,38 @@ PNGs of both layouts and the reopened edit; a blank-looking image-tool preview
 was not present in the actual PNG pixels. Run directories are under
 `/tmp/capy-workspace-motion.<ID>`. No normal user workspace was touched; no
 other-platform GUI or physical-device acceptance is inferred from these checks.
+
+## Drag-only title-bar customization — 2026-09-13
+
+Per the explicit editor-specific request, existing title-bar items and bank
+components now drag immediately after native movement slop from their whole
+surface. This does not alter ordinary toolbar hold behavior or native window
+movement outside customization. Updated the application drag convention and
+AGENTS note to retain that distinction for future changes.
+
+Bank chips are inert boxes with decorative icons/grips, not buttons. They have
+no click/tap/keyboard activation, and their padding, icon and label all resolve
+to the same captured source. Add Tools opens its shared picker only after a
+valid drop. Removed click-to-add callbacks, palette hold recognizers, saved
+insertion-position state and the vertical blue insertion cursor. Existing-item
+keyboard selection, moves/removal and context menus remain; initial editor
+focus moves to the selected size control. Shared drag preview/drop/history
+policy is unchanged, including neighbor motion, detach/re-entry, removal and
+Done/Cancel. No storage format or workspace contents were reset.
+
+Validation: 447 shared tests pass and the GTK release executable builds.
+Private-compositor mouse/touch runs passed for inert bank clicks/holds and
+sub-slop motion, immediate pickup at four chip hit locations (`Np57xY`), catalog
+drag/cancellation (`hxPaZK`), item holds/context menus (`lAKWD3`), drop-only Tools
+(`h29otv`), picker search/filter/Cancel and exact drop positions (`37qKhn`), all
+components/footer/empty-bar recovery (`GgW1GI`), keyboard (`Nyd1Tx`), and
+save/switch/reopen (`4YZNVc`). Minimum 640×480 editor: `NwIiED`; 640×600 overflow,
+overflow dragging and empty-center targets: `526U65`, `VMvWeN`, `ye2kHf`.
+At true 2× scale, whole-bank pickup passes (`NcCErT`), as do body-origin live
+slide, grab offsets, detach/re-entry/removal and cancellation (`DKWkOH`). Both
+themes/all three sizes and grip alignment pass (`O7idnp`), as do caption and
+source-replacement cancellation (`ztXIba`) and normal window controls/fullscreen
+(`rZpphR`): 17 isolated native runs in total. Inspected original-resolution wide
+and minimum-size editor captures. Artifacts are under
+`/tmp/capy-workspace-motion.<ID>`; no physical stylus or other-host GUI acceptance
+is inferred, and no normal user windows/storage were modified.

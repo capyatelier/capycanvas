@@ -104,9 +104,7 @@ impl Header {
                 .iter()
                 .find(|i| i.entry.id == id)
                 .map(|i| i.root.clone().upcast()),
-            _ => widget
-                .parent()
-                .filter(|p| p.has_css_class("header-component")),
+            _ => Some(widget.clone()).filter(|p| p.has_css_class("header-component")),
         };
         let Some(held) = source_widget
             .as_ref()
@@ -303,19 +301,11 @@ impl Header {
         });
         self.cancel_drag(w);
         if let Some((source, action)) = result {
-            let slot = match action {
-                HeaderAction::Move { zone, before, .. }
-                | HeaderAction::Add { zone, before, .. }
-                | HeaderAction::InsertTools { zone, before } => Some((zone, before)),
-                _ => None,
-            };
             let selected = match source {
                 HeaderDragSource::Item(id) => Some(id),
                 _ => None,
             };
-            if let Some((zone, before)) = slot {
-                self.editor.select(w, zone, before, selected);
-            }
+            self.editor.select(w, selected);
             w.dispatch(action.action());
             if let Some(id) = selected {
                 if let Some(item) = self

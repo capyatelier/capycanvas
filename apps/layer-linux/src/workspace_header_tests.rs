@@ -213,11 +213,40 @@ impl Driver {
         }
         assert!(state(&self.w).customization.header_editing);
     }
-    fn slot(&mut self, zone: HeaderZone) {
+    fn drop_component(&mut self, name: &str, zone: HeaderZone) {
         let geometry = self.w.header.geometry_for_test();
         let b = geometry.zones[zone.index()];
         let point = [b.x + b.width - 2., b.y + b.height / 2.];
-        self.perform(serde_json::json!([{"point":point},{"down":true},{"down":false}]));
+        self.drop_component_at(name, point, false);
+    }
+    fn drop_component_at(&mut self, name: &str, point: [f32; 2], touch: bool) {
+        let start = self.point(&self.named(&format!("header-add-{name}")));
+        self.perform(if touch {
+            serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":point}])
+        } else {
+            serde_json::json!([{"point":start},{"down":true},{"point":point}])
+        });
+        assert!(self.w.dragging.get(), "immediate whole-body pickup: {name}");
+        assert!(
+            self.w.header.drag_for_test().unwrap().action.is_some(),
+            "valid drop: {name}"
+        );
+        self.perform(if touch {
+            serde_json::json!([{"touch":"up"}])
+        } else {
+            serde_json::json!([{"down":false}])
+        });
+    }
+    fn drop_component_before(&mut self, name: &str, before: u32, touch: bool) {
+        let bounds = self
+            .named(&format!("header-item-{before}"))
+            .compute_bounds(&self.w.surface)
+            .unwrap();
+        self.drop_component_at(
+            name,
+            [bounds.x() + 2., bounds.y() + bounds.height() / 2.],
+            touch,
+        );
     }
     fn finish(self) {
         std::fs::write(self.dir.join("finished"), "done").unwrap();
@@ -286,8 +315,7 @@ fn native_header_managed_input() {
         "keyboard position survives removal"
     );
     d.click_name("header-canvas-info");
-    d.slot(HeaderZone::Right);
-    d.click_name("header-add-tools");
+    d.drop_component("tools", HeaderZone::Right);
     d.named("tool-search")
         .downcast::<gtk::SearchEntry>()
         .unwrap()
@@ -488,6 +516,121 @@ fn native_default_workspace_recovery_input() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_header_drag_only_bank_input"]
+fn native_header_drag_only_bank_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderDragOnly");
+    let original = state(&d.w).workspace;
+    d.edit();
+    fn inert(widget: &gtk::Widget) {
+        assert!(!widget.is::<gtk::Button>() && !widget.is::<gtk::MenuButton>());
+        assert!(
+            !widget.is_focusable(),
+            "bank components are not activation controls"
+        );
+        let mut child = widget.first_child();
+        while let Some(w) = child {
+            child = w.next_sibling();
+            inert(&w);
+        }
+    }
+    // Neither a tap, a hold nor sub-slop motion adds anything or opens Tools.
+    for name in [
+        "tools",
+        "clock",
+        "battery",
+        "document-title",
+        "menu-labels",
+        "space",
+    ] {
+        let chip = d.named(&format!("header-component-{name}"));
+        inert(&chip);
+        let p = d.point(&chip);
+        for touch in [false, true] {
+            d.perform(if touch {
+                serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":[p[0]+1.,p[1]]},{"touch":"up"}])
+            } else {
+                serde_json::json!([{"point":p},{"down":true},{"point":[p[0]+1.,p[1]]},{"down":false}])
+            });
+            assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
+            assert!(d.w.window.visible_dialog().is_none());
+            assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
+        }
+    }
+    for touch in [false, true] {
+        let p = d.point(&d.named("header-component-tools"));
+        let mut events = if touch {
+            vec![serde_json::json!({"touch":"down","point":p})]
+        } else {
+            vec![
+                serde_json::json!({"point":p}),
+                serde_json::json!({"down":true}),
+            ]
+        };
+        events.extend((0..12).map(|_| serde_json::json!({})));
+        events.push(if touch {
+            serde_json::json!({"touch":"up"})
+        } else {
+            serde_json::json!({"down":false})
+        });
+        d.perform(serde_json::Value::Array(events));
+        assert!(d.w.window.visible_dialog().is_none());
+        assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
+    }
+    // Every visible part belongs to the same source, not just its old grip.
+    for touch in [false, true] {
+        for hit in 0..4 {
+            let chip = d.named("header-component-clock");
+            let b = chip.compute_bounds(&d.w.surface).unwrap();
+            let body = d.named("header-add-clock");
+            let p = match hit {
+                0 => [b.x() + 2., b.y() + b.height() / 2.],
+                1 => d.point(&body.first_child().unwrap()),
+                2 => d.point(&body.last_child().unwrap()),
+                _ => [b.x() + b.width() - 2., b.y() + b.height() - 2.],
+            };
+            let (source, target) = d.w.drag_source_at(p).unwrap();
+            assert_eq!(source, chip);
+            assert!(matches!(
+                target,
+                DragTarget::Header(HeaderDragSource::Component(HeaderItem::Clock))
+            ));
+            let to = [d.w.surface.width() as f32 / 2., 25.];
+            d.perform(if touch {
+                serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":to}])
+            } else {
+                serde_json::json!([{"point":p},{"down":true},{"point":to}])
+            });
+            assert!(d.w.dragging.get(), "touch={touch}, hit={hit}");
+            assert!(!d.w.workspace_drag.borrow().as_ref().unwrap().wait_for_hold);
+            assert_eq!(
+                state(&d.w).workspace.layout.header,
+                original.layout.header,
+                "motion stays a preview"
+            );
+            d.perform(if touch {
+                serde_json::json!([{"touch":"up"}])
+            } else {
+                serde_json::json!([{"down":false}])
+            });
+            let model = state(&d.w).workspace.layout.header;
+            let clock = model
+                .entries()
+                .find(|e| e.item == HeaderItem::Clock)
+                .unwrap()
+                .id;
+            assert_eq!(model.location(clock).unwrap().0, HeaderZone::Center);
+            assert!(!chip.is_mapped());
+            d.click_name("header-edit-cancel");
+            assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
+            d.edit();
+        }
+    }
+    crate::capture(&d.w, d.dir.join("drag-only-bank.png").to_str().unwrap());
+    d.click_name("header-edit-cancel");
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_header_catalog_preview_input"]
 fn native_header_catalog_preview_input() {
     let mut d = Driver::new("art.capycanvas.HeaderCatalog");
@@ -544,16 +687,14 @@ fn native_header_catalog_preview_input() {
         let layout = state(&d.w).workspace.layout.header;
         assert_eq!(
             layout.entries().count(),
-            original.entries().count() + usize::from(grip || held),
+            original.entries().count() + 1,
             "touch={touch} grip={grip} held={held}"
         );
-        if grip || held {
-            let entry = layout
-                .entries()
-                .find(|e| e.item == HeaderItem::Clock)
-                .unwrap();
-            assert_eq!(layout.location(entry.id).unwrap().0, HeaderZone::Center);
-        }
+        let entry = layout
+            .entries()
+            .find(|e| e.item == HeaderItem::Clock)
+            .unwrap();
+        assert_eq!(layout.location(entry.id).unwrap().0, HeaderZone::Center);
         assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
         assert_eq!(
             d.w.gpu
@@ -605,8 +746,7 @@ fn native_header_catalog_preview_input() {
         assert!(state(&d.w).customization.header_editing);
     }
     // The ordinary tool picker adds into this preview, not directly to storage.
-    d.slot(HeaderZone::Right);
-    d.click_name("header-add-tools");
+    d.drop_component("tools", HeaderZone::Right);
     d.named("tool-search")
         .downcast::<gtk::SearchEntry>()
         .unwrap()
@@ -671,7 +811,7 @@ fn native_header_picker_journey() {
             serde_json::json!([{"point":point},{"down":true},{"down":false}])
         });
         assert!(item.has_css_class("editing-selection"));
-        d.click_name("header-add-tools");
+        d.drop_component_before("tools", before, touch);
         assert_shared_icons(d.w.window.visible_dialog().unwrap().upcast_ref());
         assert!(d.w.window.visible_dialog().is_some());
         assert!(!d.named("toolbar-name").is_mapped());
@@ -714,7 +854,7 @@ fn native_header_picker_journey() {
         );
         assert!(state(&d.w).customization.picker.is_none());
         assert_eq!(state(&d.w).workspace.layout.header, original);
-        d.click_name("header-add-tools");
+        d.drop_component_before("tools", before, touch);
         assert_eq!(
             d.named("tool-search")
                 .downcast::<gtk::SearchEntry>()
@@ -750,8 +890,7 @@ fn native_header_picker_journey() {
         );
         assert_eq!(added.zones[2][2].id, before);
         assert!(state(&d.w).customization.header_editing);
-        d.slot(HeaderZone::Center);
-        d.click_name("header-add-clock");
+        d.drop_component("clock", HeaderZone::Center);
         let clock = state(&d.w)
             .workspace
             .layout
@@ -774,11 +913,11 @@ fn native_header_picker_journey() {
         d.click_name(&format!("header-item-{clock}"));
         d.key(0xff08); // Backspace removes the clicked item.
         assert!(d.named("header-add-clock").is_mapped());
-        // Keyboard users choose an exact slot using a focused item and Enter.
+        // Focus/Enter does not choose an insertion slot; the actual drop does.
         let target = d.named(&format!("header-item-{before}"));
         target.grab_focus();
         d.key(0xff0d);
-        d.click_name("header-add-space");
+        d.drop_component_before("space", before, touch);
         let current = state(&d.w).workspace.layout.header;
         let (_, index) = current.location(before).unwrap();
         assert_eq!(current.zones[2][index - 1].item, HeaderItem::Space);
@@ -880,7 +1019,7 @@ fn native_header_spacing_visual() {
                 (grip.y() + grip.height() / 2. - item.height() as f32 / 2.).abs() < 1.,
                 "grip alignment"
             );
-            d.click_name("header-add-space");
+            d.drop_component("space", HeaderZone::Left);
             let model = state(&d.w).workspace.layout.header;
             let space = model
                 .entries()
@@ -1168,7 +1307,7 @@ fn native_header_cancel_caption_input() {
             .application_menu(ApplicationMenu::Window);
     assert!(!format!("{menu_model:?}").contains("Show Menu Bar"));
     d.click_label("Customize Title Bar…");
-    d.click_name("header-add-menu-labels");
+    d.drop_component("menu-labels", HeaderZone::Left);
     d.click_name("header-edit-done");
     assert!(
         state(&d.w)
@@ -1403,18 +1542,12 @@ fn native_header_hold_context_input() {
                 d.perform(serde_json::Value::Array(events));
                 assert_eq!(
                     state(&d.w).workspace.layout.header.location(id).unwrap().0,
-                    if held || grip {
-                        HeaderZone::Center
-                    } else {
-                        HeaderZone::Left
-                    },
+                    HeaderZone::Center,
                     "touch={touch} grip={grip} held={held}"
                 );
-                if held || grip {
-                    d.w.dispatch(HeaderAction::Cancel.action());
-                    pump(160);
-                    assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
-                }
+                d.w.dispatch(HeaderAction::Cancel.action());
+                pump(160);
+                assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
                 assert!(
                     !d.w.popovers
                         .borrow()
@@ -1474,9 +1607,9 @@ fn native_header_editor_controls_input() {
         assert_eq!(d.w.area.height(), d.w.surface.height());
     }
     for name in ["clock", "menu-labels"] {
-        d.click_name(&format!("header-add-{name}"));
+        d.drop_component(name, HeaderZone::Left);
     }
-    d.click_name("header-add-tools");
+    d.drop_component("tools", HeaderZone::Left);
     d.named("tool-search")
         .downcast::<gtk::SearchEntry>()
         .unwrap()
@@ -1541,16 +1674,15 @@ fn native_header_editor_controls_input() {
         .enumerate()
     {
         let zone = HeaderZone::ALL[i % 3];
-        d.slot(zone);
-        let name = format!(
-            "header-add-{}",
-            item.label().to_lowercase().replace(' ', "-")
-        );
-        d.click_name(&name);
+        let name = item.label().to_lowercase().replace(' ', "-");
+        d.drop_component(&name, zone);
         let model = state(&d.w).workspace.layout.header;
         let id = model.entries().find(|e| e.item == item).unwrap().id;
         assert_eq!(model.location(id).unwrap().0, zone);
-        assert_eq!(d.named(&name).is_mapped(), !item.singleton());
+        assert_eq!(
+            d.named(&format!("header-add-{name}")).is_mapped(),
+            !item.singleton()
+        );
     }
     crate::capture(
         &d.w,
@@ -1570,7 +1702,7 @@ fn native_header_editor_keyboard_input() {
         gtk::prelude::GtkWindowExt::focus(&d.w.window)
             .unwrap()
             .widget_name(),
-        "header-add-tools"
+        "header-size-1"
     );
     for absent in [
         "header-help",
@@ -1825,7 +1957,7 @@ fn native_header_overflow_input() {
             let zone = model.location(entry.id).unwrap().0;
             d.click_name(&format!("header-overflow-{}", zone.index()));
             d.click_name(&format!("header-overflow-item-{}", entry.id));
-            d.click_name("header-add-tools");
+            d.drop_component("tools", HeaderZone::Center);
             assert!(d.w.window.visible_dialog().is_some());
             crate::capture(
                 &d.w,
@@ -2021,7 +2153,7 @@ fn native_header_slide_remove_input() {
             let neighbor = original.zones[0][if tool { 3 } else { 2 }].id;
             let widget = d.named(&format!("header-item-{id}"));
             let rect = widget.compute_bounds(&d.w.surface).unwrap();
-            let start = d.point(&d.named(&format!("header-grip-{id}")));
+            let start = [rect.x() + rect.width() - 8., rect.y() + rect.height() / 2.];
             let offset = [start[0] - rect.x(), start[1] - rect.y()];
             let initial = d.w.header.geometry_for_test();
             let move_to = |d: &mut Driver, point: [f32; 2]| {
@@ -2119,7 +2251,7 @@ fn native_header_tools_drop_input() {
     let original = state(&d.w).workspace.layout.header;
     for touch in [false, true] {
         d.edit();
-        let start = d.point(&d.named("header-add-grip-tools"));
+        let start = d.point(&d.named("header-add-tools"));
         let target = [d.w.surface.width() as f32 / 2., 25.];
         d.perform(if touch {
             serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":target}])

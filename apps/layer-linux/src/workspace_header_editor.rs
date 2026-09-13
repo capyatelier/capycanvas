@@ -7,7 +7,6 @@ pub(super) struct Editor {
     sizes: [gtk::ToggleButton; 3],
     canvas_info: gtk::CheckButton,
     components: Vec<(HeaderDragSource, gtk::Box)>,
-    pub insertion: Cell<(HeaderZone, Option<u32>)>,
     selected: Cell<Option<u32>>,
     shown: Cell<bool>,
     pub height: Cell<f32>,
@@ -46,7 +45,6 @@ impl Editor {
                 )
                 .map(|source| (source, gtk::Box::new(gtk::Orientation::Horizontal, 0)))
                 .collect(),
-            insertion: Cell::new((HeaderZone::Left, None)),
             selected: Cell::new(None),
             shown: Cell::new(false),
             height: Cell::new(0.),
@@ -79,62 +77,22 @@ impl Editor {
             };
             chip.set_widget_name(&format!("header-component-{name}"));
             chip.add_css_class("header-component");
-            let grip = crate::icons::button("layer-grip-symbolic");
+            chip.set_tooltip_text(Some(&format!("Drag {label} into the title bar")));
+            chip.update_property(&[gtk::accessible::Property::Label(label)]);
+            w.register_drag(chip, DragTarget::Header(source));
+            // One inert drag surface, including its padding, icon and label.
+            // No button/activation behavior or separate handle hit target.
+            let grip = crate::icons::image("layer-grip-symbolic");
             grip.add_css_class("header-component-grip");
-            grip.add_css_class("flat");
             grip.set_valign(gtk::Align::Center);
-            grip.set_focusable(false);
             grip.set_widget_name(&format!("header-add-grip-{name}"));
-            grip.set_tooltip_text(Some(&format!("Drag {label} into the title bar")));
-            w.register_drag(&grip, DragTarget::Header(source));
             chip.append(&grip);
-            let button = gtk::Button::new();
-            button.add_css_class("flat");
-            button.add_css_class("drag-hold");
-            button.set_widget_name(&format!("header-add-{name}"));
-            button.set_tooltip_text(Some(&format!(
-                "Add {label} at the marked position, or hold then drag"
-            )));
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            content.set_widget_name(&format!("header-add-{name}"));
+            content.add_css_class("header-component-body");
             content.append(&crate::icons::image(icon));
             content.append(&gtk::Label::new(Some(label)));
-            button.set_child(Some(&content));
-            button.connect_clicked(glib::clone!(
-                #[weak]
-                w,
-                move |_| {
-                    let (zone, before) = w.header.editor.insertion.get();
-                    let action = match source {
-                        HeaderDragSource::Tools => HeaderAction::InsertTools { zone, before },
-                        HeaderDragSource::Component(item) => {
-                            HeaderAction::Add { zone, before, item }
-                        }
-                        _ => unreachable!(),
-                    };
-                    w.dispatch(action.action());
-                }
-            ));
-            w.register_drag(&button, DragTarget::Header(source));
-            let hold = gtk::GestureLongPress::new();
-            hold.set_touch_only(false);
-            hold.set_propagation_phase(gtk::PropagationPhase::Capture);
-            hold.connect_pressed(glib::clone!(
-                #[weak]
-                w,
-                move |gesture, _, _| {
-                    if let Some(drag) = w.workspace_drag.borrow_mut().as_mut()
-                        && drag.wait_for_hold
-                        && !drag.started
-                        && gesture.widget().as_ref() == Some(&drag.source)
-                    {
-                        drag.held = true;
-                        w.set_drag_cursor(drag, "grab");
-                        gesture.set_state(gtk::EventSequenceState::Claimed);
-                    }
-                }
-            ));
-            button.add_controller(hold);
-            chip.append(&button);
+            chip.append(&content);
             self.content.append(chip);
         }
         // Keep settings and confirmation together at the trailing edge. The
@@ -193,18 +151,8 @@ impl Editor {
         options.append(&footer);
         self.content.append(&options);
     }
-    pub fn select(
-        &self,
-        w: &Workspace,
-        zone: HeaderZone,
-        before: Option<u32>,
-        selected: Option<u32>,
-    ) {
-        self.insertion.set((zone, before));
+    pub fn select(&self, w: &Workspace, selected: Option<u32>) {
         self.selected.set(selected);
-        if let Some(model) = w.header.model.borrow().as_ref() {
-            self.refresh(model, true);
-        }
         w.header.refresh_selection();
         w.header.root.queue_draw();
     }
@@ -212,7 +160,7 @@ impl Editor {
         self.selected.get()
     }
     pub fn focus(&self) {
-        if let Some(button) = self.components[0].1.last_child() {
+        if let Some(button) = self.sizes.iter().find(|b| b.is_active()) {
             button.grab_focus();
         }
     }
@@ -232,22 +180,12 @@ impl Editor {
     }
     pub fn refresh(&self, model: &HeaderLayout, editing: bool) {
         if self.shown.replace(editing) != editing {
-            self.insertion.set((HeaderZone::Left, None));
             self.selected.set(None);
         }
         self.root.set_visible(editing);
         for (i, button) in self.sizes.iter().enumerate() {
             button.set_active(model.size as usize == i);
         }
-        let (mut zone, mut before) = self.insertion.get();
-        if let Some(id) = before {
-            if let Some((current, _)) = model.location(id) {
-                zone = current;
-            } else {
-                before = None;
-            }
-        }
-        self.insertion.set((zone, before));
         if self
             .selected
             .get()

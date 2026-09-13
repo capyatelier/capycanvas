@@ -26,7 +26,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .header-editor-content { padding: 8px 12px; }
 .header-editor button { min-height: 24px; padding: 4px 8px; border-radius: 6px; }
 .header-editor .header-component { border-radius: 6px; background: alpha(var(--window-fg-color), .06); }
-.header-editor .header-component button { font-weight: 400; padding: 4px 6px; }
+.header-editor .header-component-body { min-height: 24px; padding: 4px 6px; }
 .header-editor .header-component-grip { min-width: 16px; min-height: 24px; padding: 0 2px; }
 .window-bar .header-item.editing-selection { outline: 1px solid alpha(var(--window-fg-color), .45); outline-offset: -1px; border-radius: 6px; }
 .header-editor .linked > button { border-radius: 0; }
