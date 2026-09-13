@@ -112,6 +112,7 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
     }
     Column(modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (search == null) SharedIcon(categories.firstOrNull { it.optString("id") == picker.optString("category") }?.getString("icon") ?: "adjustments", null)
             Box(Modifier.weight(1f)) {
                 if (search != null) CoreTextField(search, { send(obj("op" to "search", "query" to it)) },
                     Modifier.fillMaxWidth().focusRequester(focus).testTag("filter-search"), height = 34.dp, maxLength = 120,
@@ -133,7 +134,12 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
                 val id = choice.getString("id")
                 if(category != choice.getString("category")) {
                     category = choice.getString("category")
-                    item("category-$category") { Text(choice.getString("category_label"), Modifier.padding(8.dp), color = colors.secondary, fontWeight = FontWeight.Bold) }
+                    item("category-$category") {
+                        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SharedIcon(choice.getString("category_icon"), null, tint = colors.secondary)
+                            Text(choice.getString("category_label"), color = colors.secondary, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
                 item(id) {
                     HoverTip(choice.getString("tooltip"), Modifier.fillMaxWidth()) {
@@ -143,6 +149,7 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
                             if(image != null) Image(image, null, Modifier.fillMaxWidth().height(40.dp).testTag("filter-preview-$id"), contentScale = ContentScale.FillBounds)
                             else Spacer(Modifier.fillMaxWidth().height(40.dp))
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                                SharedIcon(choice.getString("icon"), null, Modifier.padding(end = 6.dp).size(16.dp).testTag("filter-icon-$id"))
                                 if(choice.getBoolean("animated")) SharedIcon("animation", choice.getString("tooltip"), Modifier.padding(end = 4.dp).size(12.dp).alpha(.55f))
                                 Text(choice.getString("label"), maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.text)
                             }

@@ -118,6 +118,7 @@ pub struct BrushChoice {
     pub id: u32,
     pub label: &'static str,
     pub category: &'static str,
+    pub icon: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +227,7 @@ pub struct PanelChoice {
 #[derive(Clone, Debug, Serialize)]
 pub struct BrushCategory {
     pub label: &'static str,
+    pub icon: &'static str,
     pub brushes: Vec<BrushChoice>,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -264,10 +266,43 @@ pub fn ui_catalog() -> UiCatalog {
             "open-document",
             "save-document",
             "export-document",
+            "save-as",
+            "close-document",
+            "clear",
+            "transform",
+            "close",
+            "select-all",
+            "deselect",
+            "invert-selection",
+            "fill-selection",
+            "lasso-fill",
+            "add-layer",
+            "toolbar",
+            "new-toolbar",
+            "reset-layout",
+            "new-window",
+            "website",
+            "source-code",
             "adjustments",
             "properties",
             "stats",
             "brush",
+            "paint",
+            "watercolor",
+            "oil-paint",
+            "marker",
+            "pastel",
+            "spray",
+            "gradient-transparent",
+            "gradient-radial",
+            "gradient-radial-transparent",
+            "rectangle-fill",
+            "rectangle-both",
+            "ellipse-fill",
+            "ellipse-both",
+            "reset",
+            "chevron-double-left",
+            "chevron-double-right",
             "pen",
             "pencil",
             "airbrush",
@@ -511,8 +546,10 @@ impl CommandId {
         Some(match self {
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
-            Self::SaveDocument | Self::SaveDocumentAs => "save-document",
+            Self::SaveDocument => "save-document",
+            Self::SaveDocumentAs => "save-as",
             Self::ExportDocument => "export-document",
+            Self::CloseDocument => "close-document",
             Self::Pen => "pen",
             Self::Pencil => "pencil",
             Self::Brush => "brush",
@@ -523,9 +560,10 @@ impl CommandId {
             Self::Liquify => "liquify",
             Self::Lasso => "lasso",
             Self::Move => "move",
-            Self::ScaleRotate => "fit",
+            Self::ScaleRotate => "transform",
             Self::ApplyTransform => "check",
-            Self::CancelTransform => "undo",
+            Self::CancelTransform => "close",
+            Self::TransformAspect => "link",
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
@@ -537,9 +575,13 @@ impl CommandId {
             Self::Fill => "fill",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
-            Self::ClearLayer => "eraser",
-            Self::FillSelection => "fill",
-            Self::SelectAll | Self::Deselect | Self::InvertSelection => "lasso",
+            Self::ClearLayer => "clear",
+            Self::FillSelection => "fill-selection",
+            Self::SelectAll => "select-all",
+            Self::Deselect => "deselect",
+            Self::InvertSelection => "invert-selection",
+            Self::NewToolbar => "new-toolbar",
+            Self::ManageToolbars => "toolbar",
             Self::FitCanvas => "fit",
             Self::ZoomIn => "plus",
             Self::ZoomOut => "minus",
@@ -550,11 +592,17 @@ impl CommandId {
             Self::ZenMode => ZenIcon::LookingUp.icon(),
             Self::Fullscreen => "fullscreen-enter",
             Self::Settings => "settings",
-            Self::AddLayer => "plus",
-            Self::DeleteLayer => "minus",
+            Self::ToggleTheme => "appearance",
+            Self::AddLayer => "add-layer",
+            Self::DeleteLayer => "delete",
             Self::RaiseLayer => "up",
             Self::LowerLayer => "down",
-            _ => return None,
+            Self::ResetLayout => "reset-layout",
+            Self::NewWindow => "new-window",
+            Self::KeyboardShortcuts => "keyboard",
+            Self::About => "info",
+            Self::Website => "website",
+            Self::SourceCode => "source-code",
         })
     }
     pub const ALL: [Self; 62] = [
@@ -1064,5 +1112,68 @@ pub fn srgb_to_linear(value: f32) -> f32 {
         value / 12.92
     } else {
         ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_filters_have_specific_icons_and_catalog_assets_ship() {
+        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
+        let catalog = ui_catalog();
+        for icon in &catalog.icons {
+            assert!(bank.join(format!("layer-{icon}-symbolic.svg")).is_file(), "{icon}: missing asset");
+        }
+        let mut meanings = std::collections::BTreeSet::new();
+        for filter in layer_core::bundled_effect_catalog().filters() {
+            assert_ne!(filter.icon.as_ref(), "adjustments", "{} must not use the picker icon", filter.program.label);
+            assert!(meanings.insert(filter.icon.as_ref()), "Different filters need recognizable identities");
+        }
+    }
+
+    #[test]
+    fn every_command_has_a_packaged_icon_and_distinct_editing_semantics() {
+        let catalog = ui_catalog();
+        let bank =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
+        for command in CommandId::ALL {
+            let icon = command
+                .icon()
+                .expect("toolbar commands need meaningful icons");
+            assert!(
+                catalog.icons.contains(&icon),
+                "{command:?}: {icon} missing from catalog"
+            );
+            assert!(
+                bank.join(format!("layer-{icon}-symbolic.svg")).is_file(),
+                "{command:?}: missing SVG"
+            );
+        }
+        // These actions previously shared misleading glyphs in both hosts.
+        for commands in [
+            &[
+                CommandId::ClearLayer,
+                CommandId::Eraser,
+                CommandId::DeleteLayer,
+            ][..],
+            &[
+                CommandId::Lasso,
+                CommandId::SelectAll,
+                CommandId::Deselect,
+                CommandId::InvertSelection,
+            ],
+            &[CommandId::FitCanvas, CommandId::ScaleRotate],
+            &[CommandId::Fill, CommandId::FillSelection],
+            &[CommandId::Undo, CommandId::CancelTransform],
+        ] {
+            let icons: std::collections::BTreeSet<_> = commands.iter().map(|c| c.icon()).collect();
+            assert_eq!(
+                icons.len(),
+                commands.len(),
+                "different operations need distinct symbols"
+            );
+        }
     }
 }

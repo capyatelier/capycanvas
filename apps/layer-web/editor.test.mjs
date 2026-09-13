@@ -16,7 +16,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   if(await evaluate("layerApp.state().workspace.zen_mode"))await invoke("zen_mode");
   console.log("editor startup",await evaluate('layerApp.startupTimes'));
   await wait('layerApp.startupTimes.complete!==null');
-  assert.equal(await evaluate('document.querySelectorAll(".header-menu").length'),8);
+  assert.equal(await evaluate('document.querySelectorAll(".header-menu-labels .header-menu").length'),8);
   assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   assert.ok((await canvasPixels()).white>10000);
   for(let i=0;i<4;i++)await invoke("zoom_in");
@@ -61,7 +61,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('!!document.querySelector(".navigator-surface")'),"Navigator uses a native GPU surface");
   await evaluate('window.editorWorkspace=layerApp.app.workspace_persistence(); window.editorSettings=layerApp.state().settings; layerApp.dispatch({type:"restore_settings",settings:{...editorSettings,total_zen:false}})');
   await invoke("zen_mode");
-  await evaluate('window.dispatchEvent(new PointerEvent("pointermove",{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:"mouse",bubbles:true}))');
+  await evaluate('document.documentElement.dispatchEvent(new PointerEvent("pointermove",{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:"mouse",bubbles:true}))');
   await settle();
   assert.ok(await evaluate('document.querySelector("#workspace").classList.contains("zen-hidden")'));
   assert.ok(await evaluate('[...document.querySelectorAll(".zen-toolbar")].some(n=>n.getClientRects().length)'),"Partial Zen retains edge toolbars");
@@ -110,7 +110,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await evaluate('(()=>{const effect=layerApp.state().adjustments.find(a=>a.id.includes("domain_warp"));if(!effect)throw Error("Domain Warp missing");layerApp.dispatch(effect.action);})()');
   await settle();
   await invoke("save_document_as");
-  await wait('!layerApp.state().document_file.busy');
+  await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
   assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
   assert.ok(await evaluate('[...editorFiles.entries()].some(([name,bytes])=>name.endsWith(".capy")&&bytes.length>100)'));
   await invoke("export_document");
@@ -146,8 +146,16 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await wait('!layerApp.state().document_file.close_ready && layerApp.state().document_file.location==null && !layerApp.state().document_file.modified');
   await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:editorWorkspace}); layerApp.dispatch({type:"restore_settings",settings:editorSettings}); [window.showSaveFilePicker,window.showOpenFilePicker]=editorSavedPickers;');
   await settle();
-  await evaluate('window.dispatchEvent(new Event("pagehide"))');
-  assert.ok(await evaluate('!!JSON.parse(localStorage.getItem("layer.workspace.v1")).layout.panels.find(p=>p.id==="commands")'));
+  // Workspace persistence now uses the shared database controller; the old
+  // localStorage key is only a migration input. Verify the Commands panel
+  // remains available after a completed save/reload. The profile is isolated.
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
+  await call("Page.reload", {ignoreCache: true});
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  await wait('window.layerApp?.startupTimes.complete != null');
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy');
+  assert.ok(await evaluate('!!layerApp.app.workspace_persistence().layout.panels.find(p=>p.id==="commands")'));
+  assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
   await mkdir(directory,{recursive:true});
   const image=await call("Page.captureScreenshot",{format:"png"});

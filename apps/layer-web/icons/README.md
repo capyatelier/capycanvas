@@ -12,6 +12,10 @@ The GTK, Android and PWA build scripts derive app/launcher icons from Looking up
 Web loads these files directly. GTK embeds the same files in its resource bank;
 there are no generated copies or toolkit-specific icon drawings to maintain.
 `layer-ui` supplies command/icon identities to both hosts.
+Android also reads this bank directly and paints the vectors at the requested
+device size, preserving fixed swatch fills. The complete action mapping,
+reference research and design decisions are in the
+[Android and web icon audit](../../../docs/ui/icon-audit.md).
 Web-only browser-window controls load the original two-arrow fullscreen icons
 from this bank directly; no fullscreen button is added to GTK.
 Collapsed-sidebar expand buttons use `chevron-double-right` on the left and

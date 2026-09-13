@@ -34,7 +34,9 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
               const image = element("img", "brush-preview"); image.src = asset(`brush-previews/${item.preview}-${state().theme}.png`); image.alt = ""; image.draggable = false;
               node.append(image); node.dataset.brush = item.preview;
             } else node.append(icon(item.icon));
-            node.append(element("span", "", item.label)); list.append(node); rows.push({node,kind,index:rows.filter(r=>r.kind===kind).length});
+            const label = element("span", "tool-choice-label", item.label);
+            if (item.preview != null) label.prepend(icon(item.icon));
+            node.append(label); list.append(node); rows.push({node,kind,index:rows.filter(r=>r.kind===kind).length});
           }
         }
       }
@@ -60,7 +62,9 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
       for (const [spec,node] of actions) {
-        const c=s.commands.find(c=>c.id===spec.command); node.textContent=c.label; node.disabled=!c.enabled; node.title=c.tooltip;
+        const c=s.commands.find(c=>c.id===spec.command);
+        if(!node.firstChild) node.append(icon(c.icon),element("span","",c.label));
+        node.disabled=!c.enabled; node.title=c.tooltip;
         if(spec.checkable) node.setAttribute("aria-pressed",String(c.selected));
       }
     };

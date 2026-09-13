@@ -84,15 +84,30 @@ pub enum FilterPickerAction {
 pub struct FilterCategoryChoice {
     pub id: Option<Arc<str>>,
     pub label: Arc<str>,
+    pub icon: &'static str,
+}
+fn category_icon(id: &str) -> &'static str {
+    match id {
+        "tone" => "levels",
+        "color" => "hue_saturation",
+        "detail" => "sharpen",
+        "blur" => "blur",
+        "artistic" => "paint",
+        "distort" => "domain-warp",
+        "texture" => "grain",
+        _ => "adjustments",
+    }
 }
 pub(super) fn categories(catalog: &layer_core::EffectCatalog) -> Vec<FilterCategoryChoice> {
     std::iter::once(FilterCategoryChoice {
         id: None,
         label: "All filters".into(),
+        icon: "adjustments",
     })
     .chain(catalog.categories().iter().map(|c| FilterCategoryChoice {
         id: Some(c.id.clone()),
         label: c.label.clone(),
+        icon: category_icon(&c.id),
     }))
     .collect()
 }
@@ -163,6 +178,7 @@ pub struct AdjustmentChoice {
     pub action: UiAction,
     pub category: Arc<str>,
     pub category_label: Arc<str>,
+    pub category_icon: &'static str,
     /// Capability, independent of whether a particular layer has frozen time.
     pub animated: bool,
     pub tooltip: String,
@@ -202,6 +218,7 @@ pub(super) fn catalog(
                 },
             },
             category: id.category.clone(),
+            category_icon: category_icon(&id.category),
             category_label: catalog
                 .categories()
                 .iter()
