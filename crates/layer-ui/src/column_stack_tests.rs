@@ -29,7 +29,7 @@ fn three_member_target() -> UiSession<Recorder> {
 
 #[test]
 fn member_trailing_edges_append_groups_without_taking_grips() {
-    for (platform, index) in [Platform::Gtk, Platform::Web].into_iter().flat_map(|p| (0..3).map(move |i| (p, i))) {
+    for (platform, index) in [Platform::Gtk, Platform::Web, Platform::Windows].into_iter().flat_map(|p| (0..3).map(move |i| (p, i))) {
         for item in [
             DockItem::Panel {
                 panel: Panel::Properties,
@@ -512,7 +512,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
 
 #[test]
 fn paint_defaults_open_right_stack_on_load_and_reset() {
-    for platform in [Platform::Gtk, Platform::Web] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Windows] {
         check_paint_default_stack(platform);
     }
 }
@@ -1344,7 +1344,7 @@ fn adopting_drawers_off_closes_existing_drawer_presentations() {
 
 #[test]
 fn same_order_drop_from_member_into_previous_column_is_not_cancelled() {
-    for platform in [Platform::Gtk, Platform::Web] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Windows] {
         let mut s = three_member_target();
         s.set_platform(platform);
         let before = crate::durable_layout(&s.state.workspace.layout);

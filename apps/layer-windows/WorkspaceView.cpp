@@ -310,7 +310,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }else ++it;
         }
         if(!flag(snapshot,L"chrome_hidden"))for(auto value:array(layout,L"dividers")){
-            auto divider=value.GetObject();auto key=L"divider-"+std::to_wstring(uint32_t(num(divider,L"id")));
+            auto divider=value.GetObject();if(flag(divider,L"fixed"))continue;auto key=L"divider-"+std::to_wstring(uint32_t(num(divider,L"id")));
             resizeHandle(key,object(divider,L"bounds"),O({{L"type",S(L"drag_divider")},{L"id",N(num(divider,L"id"))}}),10,
                 flag(divider,L"band")&&str(divider,L"axis")==L"horizontal");
             handleIds.push_back(key);
@@ -389,7 +389,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(auto item=node.try_as<FrameworkElement>()){
                 if(item.Visibility()!=Visibility::Visible)return;
                 auto id=AutomationProperties::GetAutomationId(item);
-                if(std::wstring_view(id).starts_with(L"layer-")&&item.IsLoaded()&&item.ActualWidth()>0&&item.ActualHeight()>0){
+                auto key=std::wstring_view(id);
+                if((key.starts_with(L"layer-")||key.starts_with(L"column-")||key.starts_with(L"collapsed-column-"))
+                    &&item.IsLoaded()&&item.ActualWidth()>0&&item.ActualHeight()>0){
                     auto transform=item.TransformToVisual(root);auto size=item.RenderSize();
                     auto bounds=transform.TransformBounds({0,0,size.Width,size.Height});
                     auto contentBounds=transform.TransformBounds({0,0,float(item.ActualWidth()),float(item.ActualHeight())});

@@ -68,7 +68,7 @@ fn pins_order_and_current_fallback_preserve_preview_cancel_and_persist() {
     input(&mut f, Input::Cancel);
     assert_eq!(f.native.session.capture_workspace().unwrap(), before);
     assert_eq!(
-        f.native.session.state().workspace.layout,
+        layer_ui::durable_layout(&f.native.session.state().workspace.layout),
         *before.history.layout()
     );
     assert_eq!(stored_order(&f), saved);
