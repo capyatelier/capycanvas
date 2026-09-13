@@ -478,6 +478,10 @@ pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const
             WorkspaceAction::Manager { dialog, command } => {
                 service.manager_input(&mut host.native, dialog, command)
             }
+            WorkspaceAction::RefreshSwitcher => {
+                service.refresh_switcher();
+                Ok(())
+            }
             WorkspaceAction::Retry => {
                 service.retry(&mut host.native, now_ms());
                 Ok(())

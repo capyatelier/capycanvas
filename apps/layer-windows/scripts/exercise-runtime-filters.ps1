@@ -124,7 +124,7 @@ function Reload([switch]$Failure) {
     }
 }
 try {
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $package=Join-Path $run 'package'
     [IO.Directory]::CreateDirectory($package)|Out-Null
     foreach($name in @('manifest.json','tent.wgsl','prepare.wgsl')){
@@ -210,5 +210,8 @@ try {
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $names){
+        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }

@@ -244,7 +244,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.navigator_preview.is_current(revision)
     }
     pub fn set_platform(&mut self, platform: Platform) {
+        if self.state.platform != platform {
+            self.platform_prediction_available = None;
+        }
         self.state.platform = platform;
+        self.refresh_feedback_config();
         self.state.palette = self.state.settings.palette(self.state.theme, platform);
         self.refresh_commands();
         self.refresh_shortcuts();
@@ -259,8 +263,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
     fn platform_prediction_available(&self) -> bool {
-        self.platform_prediction_available
-            .unwrap_or(self.state.platform != Platform::Android)
+        match self.state.platform {
+            Platform::Ios => self.platform_prediction_available.unwrap_or(true),
+            Platform::Android | Platform::Web => {
+                self.platform_prediction_available.unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+    fn refresh_feedback_config(&mut self) {
+        self.engine
+            .set_instant_feedback(
+                self.state
+                    .settings
+                    .feedback_config_for(self.platform_prediction_available()),
+            )
+            .expect("stored feedback settings are valid");
     }
     /// Transient host capability, independent of the user's saved preference.
     pub fn set_platform_prediction_available(&mut self, available: bool) -> UiChange {
@@ -268,6 +286,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return self.changed(0, false);
         }
         self.platform_prediction_available = Some(available);
+        self.refresh_feedback_config();
         self.changed(regions::SETTINGS, false)
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
@@ -2677,9 +2696,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                     )
                 {
-                    self.state.preferences.error = Some(
-                        "Native pen prediction isn't available on this device.".into(),
-                    );
+                    self.state.preferences.error =
+                        Some("Native pen prediction isn't available on this device.".into());
+                } else if self.platform_prediction_available()
+                    && self.state.settings.platform_prediction
+                    && matches!(
+                        action,
+                        PreferenceAction::Edit {
+                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock,
+                            ..
+                        } | PreferenceAction::Reset {
+                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock
+                        }
+                    )
+                {
+                    self.state.preferences.error =
+                        Some("Turn off native pen prediction to change this setting.".into());
                 } else {
                     self.state
                         .preferences
@@ -2878,6 +2910,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        // Future points belong only to the engine's replaceable brush tail.
+        // They must not pick colors or enter selection/shape gesture paths.
+        if event.flags.contains(layer_engine::SampleFlags::PREDICTED)
+            && self.layer_interaction.tool != LayerCanvasTool::Paint
+        {
+            return Ok(());
+        }
         if self.workspace_transition || (self.workspace_read_only && event.phase == PenPhase::Down)
         {
             return Ok(());
@@ -3635,7 +3674,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn apply_settings(&mut self, settings: Settings) -> Result<(), String> {
         self.engine
-            .set_instant_feedback(settings.feedback_config())
+            .set_instant_feedback(
+                settings.feedback_config_for(self.platform_prediction_available()),
+            )
             .map_err(error)?;
         self.engine.set_pressure_curve(PressureCurve {
             gamma: settings.pressure_gamma,
@@ -13927,7 +13968,9 @@ mod tests {
         assert!(
             !rows(&s)
                 .iter()
-                .any(|r| r.id == PreferenceId::PlatformPrediction)
+                .find(|r| r.id == PreferenceId::PlatformPrediction)
+                .unwrap()
+                .enabled
         );
         edit_preference(&mut s, PreferenceId::Pressure, PreferenceValue::Number(1.7));
         invoke(&mut s, CommandId::KeyboardShortcuts);
@@ -13996,6 +14039,118 @@ mod tests {
         );
     }
     #[test]
+    fn predicted_samples_never_enter_nonpainting_gestures() {
+        for tool in [
+            LayerCanvasTool::Move,
+            LayerCanvasTool::Select,
+            LayerCanvasTool::LassoFill,
+        ] {
+            let mut s = session();
+            s.layer_interaction.tool = tool;
+            s.input_pending = false;
+            let mut predicted = event(&s, 1, PenPhase::Move, 0.5);
+            predicted.flags = SampleFlags::PREDICTED;
+            s.pen(predicted).unwrap();
+            assert!(!s.input_pending);
+            assert!(s.layer_interaction.path.is_empty());
+            assert!(!s.eyedropper.busy());
+        }
+    }
+
+    #[test]
+    fn native_prediction_order_dependencies_and_runtime_follow_capability_on_every_host() {
+        for (platform, title, supported) in [
+            (Platform::Generic, "Use native pen prediction", false),
+            (Platform::Gtk, "Use Linux pen prediction", false),
+            (Platform::Windows, "Use Windows pen prediction", false),
+            (Platform::Mac, "Use macOS pen prediction", false),
+            (Platform::Ios, "Use iPadOS pen prediction", true),
+            (Platform::Android, "Use Android pen prediction", true),
+            (Platform::Web, "Use browser pen prediction", true),
+        ] {
+            let mut s = session();
+            s.set_platform(platform);
+            let settings = Settings {
+                prediction_ms: 23.0,
+                tip_lock: 0.3,
+                ..Settings::default()
+            };
+            s.dispatch(UiAction::RestoreSettings {
+                settings: settings.clone(),
+            })
+            .unwrap();
+            invoke(&mut s, CommandId::Settings);
+            s.set_platform_prediction_available(true);
+            let rows = s
+                .preferences()
+                .unwrap()
+                .pages
+                .into_iter()
+                .find(|p| p.id == SettingsPage::Input)
+                .unwrap()
+                .groups
+                .into_iter()
+                .flat_map(|g| g.rows)
+                .collect::<Vec<_>>();
+            let index = rows
+                .iter()
+                .position(|r| r.id == PreferenceId::Feedback)
+                .unwrap();
+            assert_eq!(rows[index + 1].id, PreferenceId::PlatformPrediction);
+            assert_eq!(rows[index + 1].title, title);
+            assert_eq!(rows[index + 1].enabled, supported);
+            for id in [PreferenceId::PredictionHorizon, PreferenceId::TipLock] {
+                let row = rows.iter().find(|r| r.id == id).unwrap();
+                assert_eq!(row.enabled, !supported);
+                assert_eq!(row.reset.as_ref().unwrap().enabled, !supported);
+                if supported {
+                    for action in [
+                        PreferenceAction::Edit {
+                            id,
+                            value: PreferenceValue::Number(0.0),
+                        },
+                        PreferenceAction::Reset { id },
+                    ] {
+                        preference(&mut s, action);
+                        assert!(s.preferences().unwrap().error.is_some());
+                        assert_eq!(s.state.settings, settings);
+                    }
+                }
+            }
+            let config = s
+                .state
+                .settings
+                .feedback_config_for(s.platform_prediction_available());
+            assert_eq!(config.use_platform_prediction, supported);
+            assert_eq!(
+                config.prediction_horizon_micros,
+                if supported { 8_000 } else { 23_000 }
+            );
+            assert_eq!(config.tip_lock, if supported { 1.0 } else { 0.3 });
+            if supported {
+                edit_preference(
+                    &mut s,
+                    PreferenceId::PlatformPrediction,
+                    PreferenceValue::Bool(false),
+                );
+                let config = s
+                    .state
+                    .settings
+                    .feedback_config_for(s.platform_prediction_available());
+                assert!(!config.use_platform_prediction);
+                assert_eq!(config.prediction_horizon_micros, 23_000);
+                assert_eq!(config.tip_lock, 0.3);
+                edit_preference(
+                    &mut s,
+                    PreferenceId::PredictionHorizon,
+                    PreferenceValue::Number(12.0),
+                );
+                assert_eq!(s.state.settings.prediction_ms, 12.0);
+            }
+        }
+    }
+
+    #[test]
     fn native_prediction_capability_disables_controls_without_changing_saved_choice() {
         let mut s = session();
         s.set_platform(Platform::Android);
@@ -14018,7 +14173,7 @@ mod tests {
         s.state.requests.clear();
         s.set_platform_prediction_available(true);
         assert!(row(&s).enabled);
-        assert_eq!(row(&s).title, "Native pen prediction");
+        assert_eq!(row(&s).title, "Use Android pen prediction");
         assert!(
             s.state.requests.is_empty(),
             "Capability is not a saved setting"

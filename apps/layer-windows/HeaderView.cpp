@@ -45,8 +45,10 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<HeaderStatus> systemStatus;
     bool reflowing=false,menusCollapsed=false;
     double menuNaturalWidth=0,measuredMenuFont=-1,measuredMenuGap=-1;
-    Border document,switcher;
+    Border document;
+    ScrollViewer switcher;
     StackPanel switches;
+    hstring switchActive;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
     TextBlock title;
     Button zen,settings,screen;
@@ -167,8 +169,11 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         screen.Content(icon(fullscreenActive?L"fullscreen-exit":L"fullscreen-enter",data->theme()));
         auto screenLabel=fullscreenActive?L"Exit full screen":L"Full screen";
         AutomationProperties::SetName(screen,screenLabel);ToolTipService::SetToolTip(screen,box_value(screenLabel));
-        switcher=Border();switches=StackPanel();switcher.UseLayoutRounding(false);switches.UseLayoutRounding(false);switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
-        switcher.Child(switches);switcher.Height(34);switcher.Padding({4,4,4,4});switcher.CornerRadius({18,18,18,18});
+        switcher=ScrollViewer();switches=StackPanel();switcher.UseLayoutRounding(false);switches.UseLayoutRounding(false);switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
+        switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
+        switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Content(switches);
+        switcher.Height(34);switcher.Padding({4,4,4,4});switcher.CornerRadius({18,18,18,18});
         auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
         switcher.Background(fill(blend(bg,{255,0,0,0},.20f)));switcher.BorderThickness({0});
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");
@@ -194,7 +199,9 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     }
     void applyWorkspaces() {
         auto storage=object(data->model,L"windows_workspace");
-        auto values=array(storage,L"defaults");auto active=str(storage,L"id");
+        auto values=array(storage,L"switcher_display");auto active=str(storage,L"id");
+        auto previousFirst=workspaces.empty()?hstring{}:workspaces.front().second;
+        std::vector<std::pair<Primitives::ToggleButton,hstring>> next;
         auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
         auto chosen=fill(blend(bg,{255,53,132,228},.28f)),hover=fill(blend(bg,{255,53,132,228},.36f));
         for(auto value:values){
@@ -231,11 +238,23 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
                 measure.UseLayoutRounding(false);measure.Measure({std::numeric_limits<float>::infinity(),36});
                 item.Tag(box_value(double(measure.DesiredSize().Width)));
             }
+            next.emplace_back(item,id);
             content.Foreground(data->brush(L"text"));item.IsChecked(id==active);item.IsEnabled(flag(storage,L"can_switch"));
             item.Background(id==active?chosen:clear());
             item.Foreground(data->brush(L"text"));
             AutomationProperties::SetName(item,name);ToolTipService::SetToolTip(item,box_value(L"Switch to "+name+L" workspace"));
         }
+        auto children=switches.Children();
+        for(uint32_t i=0;i<next.size();++i){
+            auto item=next[i].first;
+            if(i<children.Size()&&children.GetAt(i)==item)continue;
+            uint32_t from=0;if(children.IndexOf(item,from))children.RemoveAt(from);
+            children.InsertAt(i,item);
+        }
+        while(children.Size()>next.size())children.RemoveAtEnd();
+        workspaces=std::move(next);
+        if(!workspaces.empty()&&workspaces.front().second==active&&(active!=switchActive||previousFirst!=active))switcher.ChangeView(0.,nullptr,nullptr,true);
+        switchActive=active;
         switcher.Visibility(values.Size()?Visibility::Visible:Visibility::Collapsed);
     }
     void reflow() {
@@ -275,7 +294,8 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         }
         endWidth+=gap*std::max(0,endCount-1);
         double inner=std::max(0.,width-leftInset-rightInset-12);
-        bool showSwitches=!workspaces.empty()&&inner>=72+gap+switchWidth+endWidth+2*gap;
+        switchWidth=std::max(0.,std::min({switchWidth,420.,width*.4,inner-72-endWidth-3*gap}));
+        bool showSwitches=!workspaces.empty()&&switchWidth>=48;
         if(!showSwitches)switchWidth=0;
         switcher.Width(switchWidth);switcher.Visibility(!hidden&&showSwitches?Visibility::Visible:Visibility::Collapsed);
         bool titleVisible=width>850;

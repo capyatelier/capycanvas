@@ -23,7 +23,7 @@ foreach ($name in $names) {
 $results = @()
 $probe = $null
 try {
-    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
+    foreach ($name in $names) { Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue }
     $env:CAPY_TRACE_UI = '1'
     $env:CAPY_TRACE_SHADER_JOBS = '1'
     $env:CAPY_TEST_DISPLAY = '1'
@@ -94,5 +94,8 @@ try {
         }
         $probe.Dispose()
     }
-    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+    foreach ($name in $names) {
+        if ($null -eq $previous[$name]) { Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+    }
 }

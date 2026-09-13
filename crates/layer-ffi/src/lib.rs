@@ -1097,7 +1097,9 @@ mod tests {
         settings.reserved = 1;
         assert_eq!(decode_feedback(settings), Err(LayerStatus::InvalidArgument));
         settings = LayerInstantFeedbackSettings::default();
-        settings.prediction_horizon_micros = 50_001;
+        settings.prediction_horizon_micros = 64_000;
+        assert!(decode_feedback(settings).is_ok());
+        settings.prediction_horizon_micros = 64_001;
         assert_eq!(decode_feedback(settings), Err(LayerStatus::InvalidArgument));
     }
 

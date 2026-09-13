@@ -216,7 +216,7 @@ function Close-Preferences($Dialog){
     Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Preferences did not release canvas'
 }
 try{
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
@@ -309,5 +309,8 @@ try{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $names){
+        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }

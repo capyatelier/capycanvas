@@ -3,6 +3,8 @@ use crate::workspace_service::ManagerInput as Input;
 use layer_ui::WorkspaceCommand as Command;
 use serde_json::Value;
 
+#[path = "workspace_switcher_tests.rs"]
+mod switcher_tests;
 #[path = "toolbar_library_tests.rs"]
 mod toolbar_library_tests;
 

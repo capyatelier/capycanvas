@@ -81,7 +81,10 @@ function Open-Preferences {
     Wait-Until {$null -ne (Preferences)} 'Preferences did not open'
 }
 function Close-Preferences {
-    Invoke 'Close' -Name -Within (Preferences)
+    # Wait for automation to expose the dialog after a theme update before
+    # passing its scope to the child-control query.
+    $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+    Invoke 'Close' -Name -Within $dialog
     Wait-Until {$null -eq (Preferences) -and !(Model).state.settings_open} 'Preferences did not close'
 }
 function Close-Window($Window){
@@ -89,7 +92,7 @@ function Close-Window($Window){
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$Window.hwnd)} 'Window close exceeded five seconds'
 }
 try {
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
@@ -111,6 +114,27 @@ try {
     Invoke 'Manage Workspaces…' -Name
     Wait-Until {$null -ne (Find 'workspace-manager') -and !(Model).windows_workspace_manager.loading} 'Workspace manager did not open'
     $owned=(Model $first).windows_workspace.id
+    Wait-Until {!(Model).windows_workspace.switcher_busy} 'Switcher refresh did not settle'
+    $firstRevision=(Model $first).windows_workspace.switcher_revision
+    Invoke ('workspace-manager-options-'+$owned)
+    (Control 'workspace-manager-show').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {
+        (Model $first).windows_workspace.switcher.id -notcontains $owned -and
+        (Model $second).windows_workspace.switcher.id -notcontains $owned -and
+        !(Model $first).windows_workspace.switcher_busy -and !(Model $second).windows_workspace.switcher_busy
+    } 'Pin preferences did not refresh in the inactive window'
+    if((Model $first).windows_workspace.id -ne $owned -or (Model $first).windows_workspace.switcher_display[0].id -ne $owned){throw 'Remote unpin changed ownership or lost the current-workspace fallback'}
+    if((Model $first).windows_workspace.switcher_revision -ne $firstRevision){throw 'External refresh rebroadcast the preference edit'}
+    $moveId=@((Model).windows_workspace.order)[-1]
+    $before=@((Model).windows_workspace.order) -join '|'
+    Invoke ('workspace-manager-options-'+$moveId)
+    Invoke 'workspace-manager-move-up'
+    Wait-Until {
+        $source=@((Model $second).windows_workspace.order) -join '|'
+        $target=@((Model $first).windows_workspace.order) -join '|'
+        $source -ne $before -and $target -eq $source
+    } 'Workspace order did not propagate to the inactive window'
+    if((Model).windows_workspace_manager.selected -ne $secondWorkspace){throw 'Remote preferences changed the manager preview'}
     (Control ('workspace-manager-row-'+$owned)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).windows_workspace_manager.selected -eq $owned -and (Model).windows_workspace_manager.apply_label -eq 'Switch to Window'} 'Owned workspace did not offer its native window'
     Invoke 'Switch to Window' -Name -Within (Control 'workspace-manager')
@@ -167,9 +191,12 @@ try {
     if(!$review.WaitForExit(5000)){throw 'Final window process exit exceeded five seconds'}
     if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $names){
+        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }

@@ -42,7 +42,7 @@ selection and explicit confirmation instead:
 
 - **Workspaces:** compact selectable list, top-right square + for New Workspace,
   per-row Rename/Delete options, Cancel and Switch to Workspace below the list.
-  Included workspaces can be renamed and edited but cannot be deleted.
+  Included workspaces have fixed names and can be edited, but cannot be renamed or deleted.
   **Show in top bar** in each row's menu controls its switcher entry. Every row
   has a narrow left grip; shown rows also have a pin indicator. All rows can be
   reordered. The top bar follows the same order, skipping unchecked entries. Reordering and pinning preserve the active selection/preview and
