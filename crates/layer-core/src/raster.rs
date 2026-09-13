@@ -1,12 +1,10 @@
 //! Immutable sparse raster revisions shared by editing, history and file workers.
 //! Pending GPU capture is explicit; only workers may wait for host backing.
 use crate::color::PixelDescriptor;
-use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -107,12 +105,12 @@ impl TileBlob {
         if bytes.len() != expected {
             return Err("Invalid raster tile byte count".into());
         }
-        let mut stream = ZlibEncoder::new(Vec::new(), Compression::fast());
-        stream.write_all(bytes).map_err(|e| e.to_string())?;
         Ok(Self {
             digest: Self::digest(descriptor, bytes),
             descriptor,
-            compressed: stream.finish().map_err(|e| e.to_string())?.into(),
+            compressed: zstd::bulk::compress(bytes, -20)
+                .map_err(|e| e.to_string())?
+                .into(),
         })
     }
     fn digest(descriptor: PixelDescriptor, bytes: &[u8]) -> [u8; 32] {
@@ -134,17 +132,13 @@ impl TileBlob {
             .descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
-        let mut bytes = Vec::with_capacity(size);
-        let mut decoder = ZlibDecoder::new(self.compressed.as_ref());
-        decoder
-            .by_ref()
-            .take(size as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() != size
-            || decoder.total_in() != self.compressed.len() as u64
-            || Self::digest(self.descriptor, &bytes) != self.digest
-        {
+        let frame_size = zstd::zstd_safe::find_frame_compressed_size(&self.compressed)
+            .map_err(|_| "Invalid compressed raster frame")?;
+        if frame_size != self.compressed.len() {
+            return Err("Trailing compressed raster data".into());
+        }
+        let bytes = zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
+        if bytes.len() != size || Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
         }
         Ok(bytes)
@@ -224,6 +218,17 @@ impl RasterData {
             .sum()
     }
     pub fn validate(&self, extent: [u32; 2], mask: bool) -> Result<(), String> {
+        self.validate_index(extent, mask)?;
+        for (key, tile) in &self.tiles {
+            if tile.wait_backing()?.descriptor != key.plane.descriptor() {
+                return Err("Raster plane has the wrong pixel representation".into());
+            }
+        }
+        Ok(())
+    }
+    /// Validate topology without awaiting unrelated tile captures. Restoration
+    /// checks each replacement's representation when it decodes that tile.
+    pub fn validate_index(&self, extent: [u32; 2], mask: bool) -> Result<(), String> {
         if let Some(w) = self.watercolor {
             if mask
                 || ![w.wet_edge, w.burnt_edge, w.edge_width]
@@ -236,15 +241,12 @@ impl RasterData {
                 return Err("Invalid raster watercolor state".into());
             }
         }
-        for (key, tile) in &self.tiles {
+        for key in self.tiles.keys() {
             if key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)
                 || key.coordinate[1] >= extent[1].div_ceil(TILE_SIZE)
                 || mask != (key.plane == RasterPlane::Mask)
             {
                 return Err("Invalid raster tile coordinates or plane".into());
-            }
-            if tile.wait_backing()?.descriptor != key.plane.descriptor() {
-                return Err("Raster plane has the wrong pixel representation".into());
             }
         }
         Ok(())

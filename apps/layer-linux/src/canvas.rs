@@ -15,6 +15,18 @@ pub struct GpuCanvas {
     pub needs_present: bool,
 }
 impl GpuCanvas {
+    pub fn reattach(&mut self, area: &gtk::Picture) -> Result<(), String> {
+        let parent = area
+            .native()
+            .and_then(|native| native.surface())
+            .ok_or("GTK surface unavailable")?;
+        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into())?;
+        drop(self.session.replace_renderer(renderer)?);
+        self._parent = parent;
+        self.session.renderer_mut().finish_startup_cache()?;
+        self.needs_present = true;
+        Ok(())
+    }
     pub fn update_cursor(&mut self) -> bool {
         self.session.update_canvas_cursor(&mut self.cursor, false);
         self.session.append_layer_overlay(&mut self.cursor.segments);

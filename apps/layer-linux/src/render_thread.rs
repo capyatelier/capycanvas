@@ -539,17 +539,23 @@ impl RenderWorker {
             && (!self.first_frame_sent || self.startup.canvas_ready)
             && self.in_flight.load(Ordering::Acquire) < 2)
     }
-}
-impl Drop for RenderWorker {
-    fn drop(&mut self) {
-        let _ = self.send(Command::Stop);
-        // Lifecycle boundary only: Vulkan/child must die before GTK's parent.
+    pub(super) fn stop(&mut self) {
         if let Some(thread) = self.thread.take() {
+            let _ = self.send(Command::Stop);
+            // Wayland children must die before GTK releases their parent.
             let _ = thread.join();
         }
     }
 }
+impl Drop for RenderWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 impl CanvasRenderer for RenderWorker {
+    fn can_submit(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire) < 2
+    }
     fn set_transform_preview(
         &mut self,
         preview: Option<&layer_render::TransformPreview>,

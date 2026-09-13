@@ -198,6 +198,9 @@ struct BenchResult {
     p99_micros: u64,
     max_micros: u64,
     submit_p95_micros: u64,
+    submit_p50_micros: u64,
+    submit_p99_micros: u64,
+    commit_submit_p99_micros: u64,
     over_budget: usize,
     commit_over_budget: usize,
     dabs: u64,
@@ -1806,6 +1809,17 @@ fn summarize(
         p99_micros: quantile(0.99),
         max_micros: move_times.last().copied().unwrap_or(0),
         submit_p95_micros: quantile_sorted(&submit_times, 0.95),
+        submit_p50_micros: quantile_sorted(&submit_times, 0.5),
+        submit_p99_micros: quantile_sorted(&submit_times, 0.99),
+        commit_submit_p99_micros: {
+            let mut times: Vec<_> = measurements
+                .iter()
+                .filter(|m| m.commit)
+                .map(|m| m.submit_micros)
+                .collect();
+            times.sort_unstable();
+            quantile_sorted(&times, 0.99)
+        },
         over_budget: move_times
             .iter()
             .filter(|micros| **micros > FRAME_BUDGET_MICROS)
@@ -1949,6 +1963,17 @@ fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Erro
             result.material_pages,
             result.preview_pages,
             result.storage_bytes as f64 / (1024.0 * 1024.0),
+        ));
+    }
+    report.push_str("\nCPU input submission and frame creation exclude GPU/capture-capacity waits; deferred input is drained before recording completion. Warm-up undo must submit its actual restoration frame before measurement. Background tile backing remains asynchronous.\n\n| scenario | CPU p50 ms | CPU p95 ms | CPU p99 ms | pen-up CPU p99 ms |\n|---|---:|---:|---:|---:|\n");
+    for result in results {
+        report.push_str(&format!(
+            "| {} | {:.3} | {:.3} | {:.3} | {:.3} |\n",
+            result.name,
+            result.submit_p50_micros as f64 / 1000.,
+            result.submit_p95_micros as f64 / 1000.,
+            result.submit_p99_micros as f64 / 1000.,
+            result.commit_submit_p99_micros as f64 / 1000.
         ));
     }
     report.push_str(

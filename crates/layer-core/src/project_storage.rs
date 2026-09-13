@@ -9,6 +9,12 @@ use std::io::{Read, Write};
 const MAGIC: &[u8; 12] = b"CAPYRASTER\x01\0";
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TileCodec {
+    Zstd,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TileRecord {
     key: TileKey,
@@ -42,6 +48,7 @@ struct SourceRecord {
 struct Manifest<D = Document> {
     document: D,
     tile_size: u32,
+    tile_codec: TileCodec,
     rasters: Vec<RasterRecord>,
     blobs: Vec<BlobRecord>,
     sources: Vec<SourceRecord>,
@@ -126,6 +133,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     let manifest = Manifest {
         document: &project.document,
         tile_size: TILE_SIZE,
+        tile_codec: TileCodec::Zstd,
         rasters,
         blobs: records,
         sources,

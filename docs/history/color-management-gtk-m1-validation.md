@@ -204,3 +204,54 @@ before starting drawing measurements. Capture damage for terminal brush edges
 has also been narrowed to the contact's coverage pages. Compression/backpressure,
 separate undo costs, native pacing and background save contention remain under
 investigation. These changes require fresh complete measurements before acceptance.
+
+## Capture scheduling and codec measurements
+
+The CPU is an AMD Ryzen Threadripper PRO 9995WX (96 cores). A release microbenchmark
+ran 300 independent encode/hash and decode/verify operations on 256² RGBA tiles:
+constant, gradient, gradient with low-amplitude deterministic noise, and full-range
+xorshift noise. Each decoded result was compared exactly. Representative p95
+encode/hash and decode/verify milliseconds for the textured tile:
+
+| codec | compressed bytes | encode/hash p95 ms | decode/verify p95 ms |
+|---|---:|---:|---:|
+| miniz zlib level 1 | 175019 | 2.490 | 1.619 |
+| zlib-rs level 1 | 190045 | 1.679 | 1.133 |
+| Zstandard level 1 | 184677 | 0.935 | 0.400 |
+| Zstandard fast -3 | 206640 | 0.733 | 0.297 |
+| Zstandard fast -20 | 252689 | 0.256 | 0.180 |
+
+The chosen native codec is Zstandard fast -20, explicitly named in the manifest.
+It trades compressed size for bounded capture latency; precision is unchanged.
+Constant tiles remain tiny (72 bytes). Full-range noise occupies 262159 bytes,
+within the bounded tile envelope. History budgets charge actual compressed bytes.
+The zlib dependency and decoder were removed from the raster implementation.
+
+A second bottleneck was repeated compressor access to mapped GPU staging memory.
+Copying each mapped chunk once into cached CPU memory, returning the unmapped
+staging allocation promptly, and compressing at most four chunks concurrently
+reduced the traced 45–56 MiB palette-knife backing jobs to roughly 36–44 ms. CPU
+scratch is bounded to four 16 MiB chunks; the staging pool retains at most 64 MiB.
+No per-frame full-document capture was introduced: these are large contact-end
+captures, whose affected tiles cover much of the benchmark canvas.
+
+The three-repeat targeted palette-knife run then measured move p50/p95/p99
+1.151/2.417/2.926 ms, pen-up p99 3.384 ms and CPU move p95 1.399 ms, with zero
+missed 8.33 ms frames out of 438. Warm-up undo took approximately 44 ms and is
+reported as restoration work, outside drawing timing. The full suite must still
+be repeated after this optimization; a single targeted result is not acceptance.
+
+The latest shared checks pass 45 core, 44 engine and 322 UI tests. Added coverage
+checks metadata/source validation, prediction/contact budgets, late-correction
+expiry, renderer replacement preserving history and save identity, failed recovery
+publication retaining the previous file, and close during an in-flight autosave.
+GTK's file/surface lifecycle test passes: actual unrealize/re-realize retains
+identical exported pixels, location, dirty state and undo/redo.
+
+After the bounded compression change, all 123 physical-GPU library tests pass
+(18 separately ignored), including explicit device destruction with an abandoned
+capture and restoration of the previous backed checkpoint on a new device. Both
+GPU project integration tests pass. GTK's native autosave/file/surface lifecycle
+passes, and both recovery failure/cancellation unit tests pass. The native check
+also verifies that autosave leaves dirty set and that a successful explicit save
+removes its recovery copy. Final repeated performance qualification remains open.

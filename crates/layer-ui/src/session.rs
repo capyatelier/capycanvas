@@ -4990,6 +4990,31 @@ mod tests {
     }
 
     #[test]
+    fn renderer_replacement_retains_saved_checkpoint_and_history_but_discards_live_contact() {
+        let mut s = session();
+        invoke(&mut s, CommandId::AddLayer);
+        let checkpoint = s.engine.checkpoint();
+        let layer = s.engine.document().active_layer;
+        let root = s.engine.document().layers.last().unwrap().raster.clone();
+        s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        assert!(s.engine.has_active_stroke());
+        s.replace_renderer(Recorder::default()).unwrap();
+        assert!(!s.engine.has_active_stroke());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().active_layer, layer);
+        assert_eq!(s.engine.document().layers.last().unwrap().raster, root);
+        assert!(s.state.document_file.modified);
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert_eq!(s.renderer_mut().dabs, 0);
+        invoke(&mut s, CommandId::Undo);
+        assert!(!s.state.document_file.modified);
+        invoke(&mut s, CommandId::Redo);
+        assert!(s.state.document_file.modified);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+
+    #[test]
     fn save_during_contact_uses_the_committed_boundary_and_keeps_live_ink_dirty() {
         let mut s = session();
         s.set_platform(Platform::Gtk);

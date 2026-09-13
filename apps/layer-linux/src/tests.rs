@@ -435,6 +435,29 @@ fn native_document_files() {
     w.wake();
     ready(&w);
     assert!(state(&w).document_file.modified);
+    // Autosave publishes a separate durable copy without acknowledging Save.
+    let recovery_dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
+    w.recovery.capture(&w);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let recovery_path = loop {
+        pump(20);
+        if let Ok(entries) = std::fs::read_dir(&recovery_dir)
+            && let Some(path) = entries
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|e| e == "capy"))
+        {
+            break path;
+        }
+        assert!(Instant::now() < deadline, "autosave did not publish");
+    };
+    let recovery = layer_core::Project::read(
+        std::fs::File::open(&recovery_path).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(recovery.assets.len(), 1);
+    assert!(state(&w).document_file.modified);
     w.dispatch(UiAction::Invoke {
         command: CommandId::SaveDocument,
     });
@@ -448,6 +471,15 @@ fn native_document_files() {
         "{:?}",
         state(&w).host_error
     );
+    w.recovery.capture(&w);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while recovery_path.exists() {
+        pump(20);
+        assert!(
+            Instant::now() < deadline,
+            "saved recovery copy was not removed"
+        );
+    }
     let project =
         layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
     assert_eq!(project.assets.len(), 1);
@@ -455,6 +487,53 @@ fn native_document_files() {
         .block_on(crate::files::export_pixels(&w, 900))
         .unwrap();
     assert_eq!([before.width, before.height], [384, 256]);
+    // A native surface/device replacement retains saved identity, exact raster
+    // and undo roots. Hiding/unrealizing the picture exercises the GTK signals.
+    let checkpoint = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .checkpoint();
+    w.area.set_visible(false);
+    pump(30);
+    w.area.unrealize();
+    assert!(
+        w.gpu.borrow().is_some(),
+        "surface teardown retains the session"
+    );
+    w.area.set_visible(true);
+    ready(&w);
+    let restored = glib::MainContext::default()
+        .block_on(crate::files::export_pixels(&w, 901))
+        .unwrap();
+    assert_eq!(restored.bytes, before.bytes);
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .checkpoint(),
+        checkpoint
+    );
+    assert_eq!(state(&w).document_file.location, Some(location.clone()));
+    assert!(!state(&w).document_file.modified);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    w.wake();
+    ready(&w);
+    assert!(state(&w).document_file.modified);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    w.wake();
+    ready(&w);
+    assert!(!state(&w).document_file.modified);
     // GDK_DEBUG=no-portals selects GTK's chooser fallback in this isolated
     // display; production keeps GtkFileDialog's normal portal selection.
     let chooser = || {

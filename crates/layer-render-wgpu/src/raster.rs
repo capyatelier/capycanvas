@@ -12,6 +12,47 @@ use std::sync::{
 const CAPTURE_CHUNK: u64 = 16 * 1024 * 1024;
 use layer_core::raster::MAX_CAPTURE_BYTES;
 
+// Reuse unmapped staging allocations; allocation/zeroing at pen-up can cost
+// several milliseconds even when the queue copy itself is cheap.
+#[derive(Default)]
+pub(super) struct BufferPool {
+    buffers: std::sync::Mutex<Vec<wgpu::Buffer>>,
+    bytes: AtomicU64,
+    working: AtomicU64,
+}
+impl BufferPool {
+    fn take(&self, device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+        let mut buffers = self.buffers.lock().unwrap();
+        if let Some(index) = buffers.iter().position(|b| b.size() == size) {
+            self.bytes.fetch_sub(size, Ordering::Relaxed);
+            return buffers.swap_remove(index);
+        }
+        drop(buffers);
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bounded raster capture chunk"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+    fn put(&self, buffer: wgpu::Buffer) {
+        let mut buffers = self.buffers.lock().unwrap();
+        if self.bytes.load(Ordering::Relaxed) + buffer.size() <= 64 * 1024 * 1024 {
+            self.bytes.fetch_add(buffer.size(), Ordering::Relaxed);
+            buffers.push(buffer);
+        }
+    }
+}
+fn capture_allocation(bytes: u64) -> u64 {
+    let tail = bytes % CAPTURE_CHUNK;
+    bytes / CAPTURE_CHUNK * CAPTURE_CHUNK
+        + if tail == 0 {
+            0
+        } else {
+            tail.next_power_of_two()
+        }
+}
+
 struct Target {
     source: Option<AssetId>,
     revision: RasterRevision,
@@ -28,6 +69,7 @@ struct CaptureWorker {
     pending: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
     staging: Arc<AtomicU64>,
+    error: Arc<std::sync::Mutex<Option<String>>>,
 }
 impl CaptureWorker {
     fn new() -> Result<Self, GpuRasterError> {
@@ -36,6 +78,8 @@ impl CaptureWorker {
         let count = pending.clone();
         let staging = Arc::new(AtomicU64::new(0));
         let bytes = staging.clone();
+        let error = Arc::new(std::sync::Mutex::new(None));
+        let failure = error.clone();
         let thread = std::thread::Builder::new()
             .name("capy-raster-backing".into())
             .spawn(move || {
@@ -43,11 +87,16 @@ impl CaptureWorker {
                     let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
                     // Dropped tickets publish failures even if a driver callback or
                     // compression panics; never leave backpressure permanently set.
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         for capture in captures {
-                            let _ = capture.finish();
+                            capture.finish()?;
                         }
-                    }));
+                        Ok::<_, String>(())
+                    }))
+                    .unwrap_or_else(|_| Err("Raster backing worker panicked".into()));
+                    if let Err(message) = result {
+                        *failure.lock().unwrap() = Some(message);
+                    }
                     bytes.fetch_sub(size, Ordering::Release);
                     count.fetch_sub(1, Ordering::Release);
                 }
@@ -57,6 +106,7 @@ impl CaptureWorker {
             sender: Some(sender),
             pending,
             staging,
+            error,
             thread: Some(thread),
         })
     }
@@ -101,11 +151,12 @@ pub struct RasterCapture {
     device: wgpu::Device,
     submission: wgpu::SubmissionIndex,
     chunks: Vec<Chunk>,
+    pool: Arc<BufferPool>,
     pub staging_bytes: u64,
 }
 impl RasterCapture {
     /// File/recovery worker only. Each decoded temporary is at most one tile.
-    pub fn finish(self) -> Result<(), String> {
+    pub fn finish(mut self) -> Result<(), String> {
         let result: Result<(), String> = (|| {
             self.device
                 .poll(wgpu::PollType::Wait {
@@ -113,7 +164,7 @@ impl RasterCapture {
                     timeout: Some(READBACK_TIMEOUT),
                 })
                 .map_err(|e| e.to_string())?;
-            for chunk in &self.chunks {
+            fn finish_chunk(chunk: &Chunk, pool: &BufferPool) -> Result<(), String> {
                 chunk
                     .ready
                     .recv_timeout(READBACK_TIMEOUT)
@@ -123,16 +174,59 @@ impl RasterCapture {
                     .slice(..)
                     .get_mapped_range()
                     .map_err(|e| e.to_string())?;
-                for entry in &chunk.entries {
-                    let begin = entry.offset as usize;
-                    let blob = TileBlob::encode(
-                        entry.key.plane.descriptor(),
-                        &mapped[begin..begin + entry.size as usize],
-                    );
-                    entry.tile.publish(blob)?;
+                // Mapped readback memory is expensive for a compressor's repeated
+                // accesses. Copy once into cached memory, then return the GPU
+                // allocation immediately. At most four 16 MiB chunks exist here.
+                struct Scratch<'a> {
+                    bytes: Vec<u8>,
+                    pool: &'a BufferPool,
                 }
+                impl Drop for Scratch<'_> {
+                    fn drop(&mut self) {
+                        self.pool
+                            .working
+                            .fetch_sub(self.bytes.len() as u64, Ordering::Relaxed);
+                    }
+                }
+                let bytes = Scratch {
+                    bytes: mapped.to_vec(),
+                    pool,
+                };
+                pool.working
+                    .fetch_add(bytes.bytes.len() as u64, Ordering::Relaxed);
                 drop(mapped);
                 chunk.buffer.unmap();
+                pool.put(chunk.buffer.clone());
+                for entry in &chunk.entries {
+                    let begin = entry.offset as usize;
+                    entry.tile.publish(TileBlob::encode(
+                        entry.key.plane.descriptor(),
+                        &bytes.bytes[begin..begin + entry.size as usize],
+                    ))?;
+                }
+                Ok(())
+            }
+            if self.chunks.len() == 1 {
+                finish_chunk(&self.chunks[0], &self.pool)?;
+            } else {
+                let group_size = self.chunks.len().div_ceil(4);
+                std::thread::scope(|scope| {
+                    let mut jobs = Vec::new();
+                    for group in self.chunks.chunks_mut(group_size) {
+                        let pool = &self.pool;
+                        jobs.push(scope.spawn(move || {
+                            for chunk in group {
+                                finish_chunk(chunk, pool)?;
+                            }
+                            Ok::<_, String>(())
+                        }));
+                    }
+                    for job in jobs {
+                        job.join()
+                            .map_err(|_| "Raster compression worker panicked")??;
+                    }
+                    Ok::<_, String>(())
+                })?;
             }
             Ok(())
         })();
@@ -172,6 +266,13 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         let mut runtime = self.raster.take().unwrap_or_default();
         let result = (|| {
+            if let Some(error) = runtime
+                .worker
+                .as_ref()
+                .and_then(|w| w.error.lock().unwrap().clone())
+            {
+                return Err(GpuRasterError::Effect(error));
+            }
             runtime.targets.retain(|id, _| {
                 packet
                     .layers
@@ -307,14 +408,16 @@ impl WgpuRasterizer {
                         continue;
                     };
                     let (textures, _) = self.raster_textures(id);
+                    let mut target_bytes = 0;
                     for key in textures.keys() {
                         if !current.data.tiles.contains_key(key)
                             || current.changed.contains(&key.coordinate)
                         {
-                            staging +=
+                            target_bytes +=
                                 key.plane.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64;
                         }
                     }
+                    staging += capture_allocation(target_bytes);
                 }
             }
             if staging > MAX_CAPTURE_BYTES {
@@ -365,10 +468,13 @@ impl WgpuRasterizer {
     }
 
     pub(super) fn raster_staging_bytes(&self) -> u64 {
-        self.raster
-            .as_ref()
-            .and_then(|r| r.worker.as_ref())
-            .map_or(0, |w| w.staging.load(Ordering::Acquire))
+        self.raster_buffers.bytes.load(Ordering::Relaxed)
+            + self.raster_buffers.working.load(Ordering::Relaxed)
+            + self
+                .raster
+                .as_ref()
+                .and_then(|r| r.worker.as_ref())
+                .map_or(0, |w| w.staging.load(Ordering::Acquire))
     }
 
     fn raster_textures(
@@ -481,12 +587,9 @@ impl WgpuRasterizer {
                 size += copies[index].3;
                 index += 1;
             }
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("bounded raster capture chunk"),
-                size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let buffer = self
+                .raster_buffers
+                .take(&self.device, size.next_power_of_two());
             let mut entries = Vec::new();
             let mut offset = 0;
             for (key, texture, tile, count) in &copies[start..index] {
@@ -537,7 +640,8 @@ impl WgpuRasterizer {
             device: (*self.device).clone(),
             submission,
             chunks,
-            staging_bytes: total,
+            staging_bytes: capture_allocation(total),
+            pool: self.raster_buffers.clone(),
         };
         revision.publish(Ok(data)).map_err(GpuRasterError::Effect)?;
         Ok(Some(capture))
@@ -553,7 +657,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         let index = self.paint_layers.iter().position(|l| l.id == target);
         let mask = index.is_none();
-        data.validate(self.document_extent, mask)
+        data.validate_index(self.document_extent, mask)
             .map_err(GpuRasterError::Effect)?;
         // Decode every replacement before mutating live storage; corruption or
         // failed capture cannot leave half a revision installed.
@@ -566,10 +670,13 @@ impl WgpuRasterizer {
             {
                 continue;
             }
-            let bytes = tile
-                .wait_backing()
-                .and_then(|b| b.decode())
-                .map_err(GpuRasterError::Effect)?;
+            let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
+            if blob.descriptor != key.plane.descriptor() {
+                return Err(GpuRasterError::Effect(
+                    "Raster plane has the wrong pixel representation".into(),
+                ));
+            }
+            let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
             replacements.push((*key, bytes));
         }
         if let Some(index) = index {

@@ -210,6 +210,25 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         &mut self.backend
     }
 
+    /// Rebind a host surface/device while preserving document and undo roots.
+    /// Uncommitted contact samples are disposable; committed tile captures remain
+    /// owned by their original worker until its shutdown completes.
+    pub fn replace_backend(&mut self, backend: B) -> B {
+        if self.has_active_stroke() {
+            self.cancel_active();
+        }
+        while self.input.pop().is_some() {}
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.completed_at = None;
+        self.rebuild_completed = false;
+        self.estimates.clear();
+        self.restore_rasters.clear();
+        self.rebuild_all = true;
+        self.composite_all = true;
+        std::mem::replace(&mut self.backend, backend)
+    }
+
     pub fn metrics(&self) -> EngineMetrics {
         self.metrics
     }
@@ -356,8 +375,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    /// Append an ordered raster operation without replaying unchanged strokes.
-    /// Undo/device recovery still replay the same durable operation definition.
+    /// Append a command for the next raster submission. Its resulting immutable
+    /// pixels become the edit's undo/save state; the command is then discarded.
     pub fn append_layer_operation(
         &mut self,
         id: LayerId,
@@ -2524,6 +2543,66 @@ mod tests {
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             background_rgba_linear: [1.0; 4],
         }
+    }
+
+    #[test]
+    fn live_contact_budget_cancels_without_committing_partial_pixels() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("bounded", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        input.push(event(1, PenPhase::Down, 8.)).unwrap();
+        engine.render_frame().unwrap();
+        let checkpoint = engine.checkpoint();
+        for sequence in 2..=MAX_CONTACT_POINTS as u64 {
+            engine.builder.push(
+                event(sequence, PenPhase::Move, 8.),
+                ViewTransform::IDENTITY,
+                PressureCurve::default(),
+            );
+        }
+        assert!(engine.render_frame().is_err());
+        assert!(!engine.has_active_stroke());
+        assert_eq!(engine.checkpoint(), checkpoint);
+        assert!(!engine.can_undo());
+        engine.render_frame().unwrap();
+        assert!(engine.document().layers[0].raster.is_empty());
+    }
+
+    #[test]
+    fn completed_contact_estimates_expire_without_retaining_historical_input() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("expiry", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        let mut down = event(1, PenPhase::Down, 8.);
+        down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+        input.push(down).unwrap();
+        input.push(event(2, PenPhase::Up, 12.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.completed_stroke.is_some());
+        let root = engine.document().layers[0].raster.identity();
+        engine.completed_at = Some(
+            web_time::Instant::now() - CORRECTION_WINDOW - std::time::Duration::from_millis(1),
+        );
+        down.flags = SampleFlags(SampleFlags::CORRECTION.0);
+        down.pressure = 0.1;
+        input.push(down).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.completed_stroke.is_none());
+        assert!(engine.completed_before.is_none());
+        assert!(engine.estimates.is_empty());
+        assert_eq!(engine.document().layers[0].raster.identity(), root);
     }
 
     #[test]

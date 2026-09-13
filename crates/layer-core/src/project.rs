@@ -386,3 +386,50 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_snapshot_prunes_only_unreferenced_assets_and_validates_shape() {
+        let mut document = Document::new("sources", 256, 256);
+        let source = AssetId::from("imported");
+        document.layers[0].asset = Some(source.clone());
+        let image = ProjectAsset {
+            extent: [2, 1],
+            format: ProjectAssetFormat::Rgba8Srgb,
+            bytes: vec![17; 8].into(),
+        };
+        let project = Project::snapshot_with(&document, |_| Some(image.clone())).unwrap();
+        assert_eq!(project.assets.len(), 1);
+        assert!(Arc::ptr_eq(&project.assets[&source].bytes, &image.bytes));
+        let mut extra = project.clone();
+        extra.assets.insert(AssetId::from("unused"), image.clone());
+        assert!(extra.validate(ProjectLimits::default()).is_err());
+        assert_eq!(extra.pruned().unwrap().assets.len(), 1);
+        assert!(Project::snapshot_with(&document, |_| None).is_err());
+        let mut malformed = image.clone();
+        malformed.extent = [3, 1];
+        assert!(Project::snapshot_with(&document, |_| Some(malformed.clone())).is_err());
+        malformed = image;
+        malformed.format = ProjectAssetFormat::R8Unorm;
+        assert!(Project::snapshot_with(&document, |_| Some(malformed.clone())).is_err());
+    }
+
+    #[test]
+    fn malformed_metadata_is_rejected_before_raster_adoption() {
+        let document = Document::new("metadata", 256, 256);
+        for mutate in [
+            |d: &mut Document| d.width = 0,
+            |d: &mut Document| d.active_layer = LayerId(999),
+            |d: &mut Document| d.next_layer_id = 1,
+            |d: &mut Document| d.layers[0].opacity = f32::NAN,
+            |d: &mut Document| d.layers[0].properties.parent = Some(d.layers[0].id),
+        ] {
+            let mut invalid = document.clone();
+            mutate(&mut invalid);
+            assert!(validate_document(&invalid, ProjectLimits::default()).is_err());
+        }
+    }
+}

@@ -57,10 +57,22 @@ impl Default for Recovery {
 impl Recovery {
     pub fn discard(&self) {
         self.discarded.store(true, Ordering::Release);
-        let _ = std::fs::remove_file(&self.path);
-        if let Some(origin) = self.origin.take() {
-            let _ = std::fs::remove_file(origin);
-        }
+        let paths = std::iter::once(self.path.clone())
+            .chain(self.origin.take())
+            .collect();
+        gio::spawn_blocking(move || remove_copies(paths));
+    }
+    fn clean(self: &Rc<Self>) {
+        let paths = std::iter::once(self.path.clone())
+            .chain(self.origin.take())
+            .collect();
+        self.pending.set(true);
+        let recovery = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            let _ = gio::spawn_blocking(move || remove_copies(paths)).await;
+            recovery.checkpoint.set(None);
+            recovery.pending.set(false);
+        });
     }
     pub fn capture(self: &Rc<Self>, w: &Rc<Workspace>) {
         if self.pending.get() || self.discarded.load(Ordering::Acquire) {
@@ -73,11 +85,7 @@ impl Recovery {
             };
             let state = &gpu.session.state().document_file;
             if !state.modified {
-                let _ = std::fs::remove_file(&self.path);
-                if let Some(origin) = self.origin.take() {
-                    let _ = std::fs::remove_file(origin);
-                }
-                self.checkpoint.set(None);
+                self.clean();
                 return;
             }
             let checkpoint = (state.epoch, gpu.session.engine().checkpoint());
@@ -95,16 +103,7 @@ impl Recovery {
         let discarded = self.discarded.clone();
         glib::MainContext::default().spawn_local(async move {
             let (checkpoint, project) = snapshot;
-            let result = gio::spawn_blocking(move || {
-                std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-                let result = atomic_write(&path, |out| project.pruned()?.write(out));
-                // A close can finish while the worker is writing its snapshot.
-                if discarded.load(Ordering::Acquire) {
-                    let _ = std::fs::remove_file(&path);
-                }
-                result
-            })
-            .await;
+            let result = gio::spawn_blocking(move || publish(&path, project, &discarded)).await;
             recovery.pending.set(false);
             match result {
                 Ok(Ok(())) => recovery.checkpoint.set(Some(checkpoint)),
@@ -117,6 +116,25 @@ impl Recovery {
             }
         });
     }
+}
+
+fn remove_copies(paths: Vec<PathBuf>) {
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn publish(path: &std::path::Path, project: Project, discarded: &AtomicBool) -> Result<(), String> {
+    if discarded.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    let result = atomic_write(path, |out| project.pruned()?.write(out));
+    // Close can finish while the worker awaits tile backing or writes a file.
+    if discarded.load(Ordering::Acquire) {
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }
 
 pub(crate) fn install(w: &Rc<Workspace>) {
@@ -173,9 +191,100 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
                         _ => { let error = adw::AlertDialog::builder().heading("Cannot read recovery copy").body("The copy was kept on disk. Other open drawings are unchanged.").build(); error.add_response("ok", "OK"); error.present(Some(&w.window)); }
                     }
                 }
-                "discard" => { let _ = std::fs::remove_file(path); }
+                "discard" => { let _ = gio::spawn_blocking(move || std::fs::remove_file(path)).await; }
                 _ => (),
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layer_core::{
+        Document,
+        raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey},
+    };
+
+    #[test]
+    fn failed_backing_preserves_the_previous_durable_recovery_copy() {
+        let path =
+            std::env::temp_dir().join(format!("capy-recovery-failure-{}.capy", std::process::id()));
+        let mut project = Project {
+            document: Document::new("recovery", 256, 256),
+            assets: Default::default(),
+        };
+        let discarded = AtomicBool::new(false);
+        publish(&path, project.clone(), &discarded).unwrap();
+        let previous = std::fs::read(&path).unwrap();
+        let tile = RasterTile::default();
+        tile.publish(Err("Device lost before host capture".into()))
+            .unwrap();
+        project.document.layers[0].raster = RasterRevision::backed(RasterData {
+            tiles: [(
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [0, 0],
+                },
+                tile,
+            )]
+            .into(),
+            ..Default::default()
+        });
+        assert!(
+            publish(&path, project, &discarded)
+                .unwrap_err()
+                .contains("Device lost")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), previous);
+        Project::read(
+            std::fs::File::open(&path).unwrap(),
+            ProjectLimits::default(),
+        )
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn close_discards_an_inflight_recovery_after_tile_publication() {
+        let dir = std::env::temp_dir().join(format!("capy-recovery-close-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drawing.capy");
+        let tile = RasterTile::default();
+        let mut project = Project {
+            document: Document::new("recovery", 256, 256),
+            assets: Default::default(),
+        };
+        project.document.layers[0].raster = RasterRevision::backed(RasterData {
+            tiles: [(
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [0, 0],
+                },
+                tile.clone(),
+            )]
+            .into(),
+            ..Default::default()
+        });
+        let discarded = Arc::new(AtomicBool::new(false));
+        let cancelled = discarded.clone();
+        let output = path.clone();
+        let worker = std::thread::spawn(move || publish(&output, project, &cancelled));
+        // Atomic writer has entered the file operation and is awaiting this tile.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::fs::read_dir(&dir).unwrap().next().is_none() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        discarded.store(true, Ordering::Release);
+        tile.publish(TileBlob::encode(
+            RasterPlane::Color.descriptor(),
+            &vec![0; 256 * 256 * 4],
+        ))
+        .unwrap();
+        worker.join().unwrap().unwrap();
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir(dir).unwrap();
+    }
 }

@@ -374,4 +374,25 @@ mod tests {
         assert!(builder.predicted_points().is_empty());
         assert_eq!(builder.finish().unwrap().len(), 2);
     }
+
+    #[test]
+    fn predictions_retain_only_the_latest_bounded_tail() {
+        let mut builder = StrokeBuilder::with_capacity(8);
+        builder.begin(
+            event(1, false),
+            ViewTransform::IDENTITY,
+            PressureCurve::default(),
+        );
+        for sequence in 2..102 {
+            builder.push(
+                event(sequence, true),
+                ViewTransform::IDENTITY,
+                PressureCurve::default(),
+            );
+        }
+        assert_eq!(builder.predicted_points().len(), 32);
+        assert_eq!(builder.predicted_points()[0].position.x, 70.);
+        assert_eq!(builder.real_points().len(), 1);
+        assert_eq!(builder.finish().unwrap().len(), 1);
+    }
 }

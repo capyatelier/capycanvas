@@ -35,7 +35,7 @@ The header is the twelve bytes `CAPYRASTER\x01\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and source assets. Payload offsets are relative to the payload start.
-Each tile is an independent lossless zlib stream; its content digest covers its
+The manifest explicitly declares `tile_codec: "zstd"`. Each tile is an independent lossless Zstandard frame (fast level -20); its content digest covers its
 explicit pixel descriptor and exact decoded bytes. Sources use indexed packed
 bytes with their own digest. There are no paths to extract.
 
@@ -64,7 +64,9 @@ These are distinct boundaries:
 
 GTK transfers immutable roots to its GPU owner. Readback mapping/compression runs
 on a separate worker, with at most two capture frames and 256 MiB staging per
-frame, divided into 16 MiB buffers. Capacity pressure leaves input queued. History
+frame, divided into 16 MiB buffers. A 64 MiB pool reuses unmapped buffers.
+Compression copies at most four chunks into cached CPU memory (64 MiB scratch)
+and runs at most four compression jobs per capture. Capacity pressure leaves input queued. History
 retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
 excluding current document ownership. No precision is reduced to fit a budget.
 

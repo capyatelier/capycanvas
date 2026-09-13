@@ -1918,6 +1918,14 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
+                let reattached = this.gpu.borrow_mut().as_mut().map(|gpu| gpu.reattach(area));
+                if let Some(result) = reattached {
+                    if let Err(error) = result {
+                        this.gpu_error(&error);
+                    }
+                    this.wake();
+                    return;
+                }
                 match GpuCanvas::with_project(area, this.initial_project.borrow_mut().take()) {
                     Ok(mut gpu) => {
                         if this.recovery.recovered.get() {
@@ -1948,7 +1956,9 @@ impl Workspace {
             self,
             move |area| {
                 area.set_paintable(None::<&gdk::Texture>);
-                this.gpu.borrow_mut().take();
+                if let Some(gpu) = this.gpu.borrow_mut().as_mut() {
+                    gpu.session.renderer_mut().stop();
+                }
             }
         ));
     }

@@ -178,3 +178,45 @@ fn opaque_srgb_import_preserves_all_shadow_and_full_ramp_codes() {
     submit(&mut r, &[layer], &[], &[], true);
     assert_eq!(r.readback_srgb_rgba8().unwrap(), pixels);
 }
+
+#[test]
+fn device_loss_preserves_backed_checkpoint_and_rejects_unpublished_capture() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layers = [Layer::paint(LayerId(1), "checkpoint")];
+    submit(
+        &mut r,
+        &layers,
+        &[dab([0.03, 0.15, 0.4, 0.25])],
+        &[batch(1)],
+        true,
+    );
+    let expected = r.readback_srgb_rgba8().unwrap();
+    let (checkpoint, ticket) = capture(&r, LayerId(1), &RasterData::default(), true);
+    ticket.unwrap().finish().unwrap();
+    let data = checkpoint.wait_data().unwrap();
+    submit(
+        &mut r,
+        &layers,
+        &[dab([0.6, 0.2, 0.03, 0.5])],
+        &[batch(1)],
+        false,
+    );
+    let (lost, ticket) = capture(&r, LayerId(1), &data, true);
+    r.device.destroy();
+    drop(ticket);
+    assert!(!lost.host_backed());
+    assert!(
+        lost.wait_data()
+            .unwrap()
+            .tiles
+            .values()
+            .any(|t| matches!(t.try_backing(), Some(Err(_))))
+    );
+    assert!(checkpoint.host_backed());
+    drop(r);
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut layers = layers;
+    layers[0].raster = checkpoint;
+    submit(&mut r, &layers, &[], &[], true);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), expected);
+}
