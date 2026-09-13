@@ -632,7 +632,7 @@ impl Settings {
             ),
             row(
                 Feedback,
-                "Live stroke preview",
+                "Enable stroke prediction",
                 "Reduce the gap between your pen and the stroke.",
                 PreferenceKind::Switch {
                     active: self.feedback,
@@ -641,13 +641,13 @@ impl Settings {
             row(
                 PlatformPrediction,
                 match platform {
-                    Platform::Android => "Use Android pen prediction",
-                    Platform::Ios => "Use iPadOS pen prediction",
-                    Platform::Web => "Use browser pen prediction",
-                    Platform::Windows => "Use Windows pen prediction",
-                    Platform::Mac => "Use macOS pen prediction",
-                    Platform::Gtk => "Use Linux pen prediction",
-                    Platform::Generic => "Use native pen prediction",
+                    Platform::Android => "Use Android stroke prediction",
+                    Platform::Ios => "Use iPadOS stroke prediction",
+                    Platform::Web => "Use browser stroke prediction",
+                    Platform::Windows => "Use Windows stroke prediction",
+                    Platform::Mac => "Use macOS stroke prediction",
+                    Platform::Gtk => "Use Linux stroke prediction",
+                    Platform::Generic => "Use native stroke prediction",
                 },
                 "Use your system's estimate of the next pen position.",
                 PreferenceKind::Switch {
@@ -936,7 +936,7 @@ impl Settings {
     ) -> Result<(), String> {
         let field = self.field(id, platform)?;
         if !field.enabled {
-            return Err("Enable live stroke preview to change this setting.".into());
+            return Err("Enable stroke prediction to change this setting.".into());
         }
         let value = match (&field.kind, value) {
             (PreferenceKind::Number { .. }, PreferenceValue::Text(text))
@@ -1048,7 +1048,7 @@ impl PreferencesState {
                 && settings.platform_prediction
             {
                 row.enabled = false;
-                row.description = "Automatic while native pen prediction is on.".into();
+                row.description = "Automatic while native stroke prediction is on.".into();
             }
             if !row.enabled
                 && let Some(reset) = &mut row.reset

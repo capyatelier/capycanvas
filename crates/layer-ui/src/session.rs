@@ -2662,7 +2662,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 {
                     self.state.preferences.error =
-                        Some("Native pen prediction isn't available on this device.".into());
+                        Some("Native stroke prediction isn't available on this device.".into());
                 } else if self.platform_prediction_available()
                     && self.state.settings.platform_prediction
                     && matches!(
@@ -2676,7 +2676,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 {
                     self.state.preferences.error =
-                        Some("Turn off native pen prediction to change this setting.".into());
+                        Some("Turn off native stroke prediction to change this setting.".into());
                 } else {
                     self.state
                         .preferences
@@ -14025,13 +14025,13 @@ mod tests {
     #[test]
     fn native_prediction_order_dependencies_and_runtime_follow_capability_on_every_host() {
         for (platform, title, supported) in [
-            (Platform::Generic, "Use native pen prediction", false),
-            (Platform::Gtk, "Use Linux pen prediction", false),
-            (Platform::Windows, "Use Windows pen prediction", false),
-            (Platform::Mac, "Use macOS pen prediction", false),
-            (Platform::Ios, "Use iPadOS pen prediction", true),
-            (Platform::Android, "Use Android pen prediction", true),
-            (Platform::Web, "Use browser pen prediction", true),
+            (Platform::Generic, "Use native stroke prediction", false),
+            (Platform::Gtk, "Use Linux stroke prediction", false),
+            (Platform::Windows, "Use Windows stroke prediction", false),
+            (Platform::Mac, "Use macOS stroke prediction", false),
+            (Platform::Ios, "Use iPadOS stroke prediction", true),
+            (Platform::Android, "Use Android stroke prediction", true),
+            (Platform::Web, "Use browser stroke prediction", true),
         ] {
             let mut s = session();
             s.set_platform(platform);
@@ -14138,7 +14138,7 @@ mod tests {
         s.state.requests.clear();
         s.set_platform_prediction_available(true);
         assert!(row(&s).enabled);
-        assert_eq!(row(&s).title, "Use Android pen prediction");
+        assert_eq!(row(&s).title, "Use Android stroke prediction");
         assert!(
             s.state.requests.is_empty(),
             "Capability is not a saved setting"

@@ -119,7 +119,7 @@ class AndroidPredictionTest {
     @Test fun nativePredictionCanBeComparedAndUnavailableControlIsDisabled() {
         val ids = rows().map { it.getString("id") }
         assertEquals("platform_prediction", ids[ids.indexOf("feedback") + 1])
-        assertEquals("Use Android pen prediction", row().getString("title"))
+        assertEquals("Use Android stroke prediction", row().getString("title"))
         manualControls(!actualSupport || !settings().getBoolean("platform_prediction"))
         compose.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
         shot("device-support")
