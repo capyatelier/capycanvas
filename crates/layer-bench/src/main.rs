@@ -182,6 +182,7 @@ struct StrokeSpec {
 
 #[derive(Clone, Copy)]
 struct FrameMeasurement {
+    backing_reserved_bytes: u64,
     submit_micros: u64,
     completed_micros: u64,
     commit: bool,
@@ -190,6 +191,7 @@ struct FrameMeasurement {
 }
 
 struct BenchResult {
+    backing_reserved_bytes: u64,
     name: &'static str,
     repeats: usize,
     frames: usize,
@@ -1609,6 +1611,7 @@ fn run_strokes(
             }
             if let Some(output) = measurements.as_deref_mut() {
                 output.push(FrameMeasurement {
+                    backing_reserved_bytes: canvas.metrics()?.raster_backing_reserved_bytes,
                     submit_micros,
                     completed_micros: started.elapsed().as_micros().min(u64::MAX as u128) as u64,
                     commit,
@@ -1759,6 +1762,7 @@ fn run_strokes_feedback(
             if let Some(output) = measurements.as_deref_mut() {
                 let metrics = canvas.metrics()?;
                 output.push(FrameMeasurement {
+                    backing_reserved_bytes: metrics.raster_backing_reserved_bytes,
                     submit_micros,
                     completed_micros,
                     commit,
@@ -1801,6 +1805,11 @@ fn summarize(
         move_times.get(index).copied().unwrap_or(0)
     };
     BenchResult {
+        backing_reserved_bytes: measurements
+            .iter()
+            .map(|m| m.backing_reserved_bytes)
+            .max()
+            .unwrap_or(0),
         name: kind.name(),
         repeats,
         frames: measurements.len(),
@@ -1965,15 +1974,16 @@ fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Erro
             result.storage_bytes as f64 / (1024.0 * 1024.0),
         ));
     }
-    report.push_str("\nCPU input submission and frame creation exclude GPU/capture-capacity waits; deferred input is drained before recording completion. Warm-up undo must submit its actual restoration frame before measurement. Background tile backing remains asynchronous.\n\n| scenario | CPU p50 ms | CPU p95 ms | CPU p99 ms | pen-up CPU p99 ms |\n|---|---:|---:|---:|---:|\n");
+    report.push_str("\nCPU input submission and frame creation exclude GPU/capture-capacity waits; deferred input is drained before recording completion. Warm-up undo must submit its actual restoration frame before measurement. Background tile backing remains asynchronous.\n\n| scenario | CPU p50 ms | CPU p95 ms | CPU p99 ms | pen-up CPU p99 ms | capture allocated/reserved peak MiB |\n|---|---:|---:|---:|---:|---:|\n");
     for result in results {
         report.push_str(&format!(
-            "| {} | {:.3} | {:.3} | {:.3} | {:.3} |\n",
+            "| {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} |\n",
             result.name,
             result.submit_p50_micros as f64 / 1000.,
             result.submit_p95_micros as f64 / 1000.,
             result.submit_p99_micros as f64 / 1000.,
-            result.commit_submit_p99_micros as f64 / 1000.
+            result.commit_submit_p99_micros as f64 / 1000.,
+            result.backing_reserved_bytes as f64 / 1048576.
         ));
     }
     report.push_str(

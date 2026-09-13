@@ -37,6 +37,19 @@ impl BufferPool {
     }
     fn put(&self, buffer: wgpu::Buffer) {
         let mut buffers = self.buffers.lock().unwrap();
+        while self.bytes.load(Ordering::Relaxed) + buffer.size() > 64 * 1024 * 1024 {
+            let Some(index) = buffers
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.size() < buffer.size())
+                .min_by_key(|(_, b)| b.size())
+                .map(|(i, _)| i)
+            else {
+                break;
+            };
+            let old = buffers.swap_remove(index);
+            self.bytes.fetch_sub(old.size(), Ordering::Relaxed);
+        }
         if self.bytes.load(Ordering::Relaxed) + buffer.size() <= 64 * 1024 * 1024 {
             self.bytes.fetch_add(buffer.size(), Ordering::Relaxed);
             buffers.push(buffer);
@@ -72,8 +85,8 @@ struct CaptureWorker {
     error: Arc<std::sync::Mutex<Option<String>>>,
 }
 impl CaptureWorker {
-    fn new() -> Result<Self, GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(2);
+    fn new(device: wgpu::Device, pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
+        let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(16);
         let pending = Arc::new(AtomicUsize::new(0));
         let count = pending.clone();
         let staging = Arc::new(AtomicU64::new(0));
@@ -83,17 +96,40 @@ impl CaptureWorker {
         let thread = std::thread::Builder::new()
             .name("capy-raster-backing".into())
             .spawn(move || {
+                // Establish the bounded spare pool on its worker. A burst of
+                // small commits must not allocate pinned memory at every pen-up.
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    for _ in 0..4 {
+                        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("raster staging spare"),
+                            size: CAPTURE_CHUNK,
+                            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                            mapped_at_creation: false,
+                        });
+                        pool.put(buffer);
+                    }
+                }))
+                .is_err()
+                {
+                    *failure.lock().unwrap() =
+                        Some("Could not prepare raster staging buffers".into());
+                }
                 while let Ok(captures) = receiver.recv() {
                     let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
                     // Dropped tickets publish failures even if a driver callback or
                     // compression panics; never leave backpressure permanently set.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        for capture in captures {
-                            capture.finish()?;
-                        }
-                        Ok::<_, String>(())
-                    }))
-                    .unwrap_or_else(|_| Err("Raster backing worker panicked".into()));
+                    let result = if failure.lock().unwrap().is_some() {
+                        drop(captures);
+                        Ok(())
+                    } else {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            for capture in captures {
+                                capture.finish()?;
+                            }
+                            Ok::<_, String>(())
+                        }))
+                        .unwrap_or_else(|_| Err("Raster backing worker panicked".into()))
+                    };
                     if let Err(message) = result {
                         *failure.lock().unwrap() = Some(message);
                     }
@@ -111,7 +147,10 @@ impl CaptureWorker {
         })
     }
     fn ready(&self) -> bool {
-        self.pending.load(Ordering::Acquire) < 2
+        // Reserve room for the largest legal next capture. The total staging
+        // ceiling remains 512 MiB, while small edits can share that allowance.
+        self.pending.load(Ordering::Acquire) < 16
+            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES
     }
     fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
         let size = captures.iter().map(|c| c.staging_bytes).sum();
@@ -155,7 +194,7 @@ pub struct RasterCapture {
     pub staging_bytes: u64,
 }
 impl RasterCapture {
-    /// File/recovery worker only. Each decoded temporary is at most one tile.
+    /// Worker only. Cached readback scratch is bounded to four 16 MiB chunks.
     pub fn finish(mut self) -> Result<(), String> {
         let result: Result<(), String> = (|| {
             self.device
@@ -164,7 +203,7 @@ impl RasterCapture {
                     timeout: Some(READBACK_TIMEOUT),
                 })
                 .map_err(|e| e.to_string())?;
-            fn finish_chunk(chunk: &Chunk, pool: &BufferPool) -> Result<(), String> {
+            fn finish_chunk(chunk: &Chunk, pool: &BufferPool, lanes: usize) -> Result<(), String> {
                 chunk
                     .ready
                     .recv_timeout(READBACK_TIMEOUT)
@@ -197,26 +236,45 @@ impl RasterCapture {
                 drop(mapped);
                 chunk.buffer.unmap();
                 pool.put(chunk.buffer.clone());
-                for entry in &chunk.entries {
-                    let begin = entry.offset as usize;
-                    entry.tile.publish(TileBlob::encode(
-                        entry.key.plane.descriptor(),
-                        &bytes.bytes[begin..begin + entry.size as usize],
-                    ))?;
+                let encode = |entries: &[Entry]| -> Result<(), String> {
+                    for entry in entries {
+                        let begin = entry.offset as usize;
+                        entry.tile.publish(TileBlob::encode(
+                            entry.key.plane.descriptor(),
+                            &bytes.bytes[begin..begin + entry.size as usize],
+                        ))?;
+                    }
+                    Ok(())
+                };
+                if lanes > 1 && chunk.entries.len() >= 8 {
+                    std::thread::scope(|scope| {
+                        let mut jobs = Vec::new();
+                        for entries in chunk.entries.chunks(chunk.entries.len().div_ceil(lanes)) {
+                            jobs.push(scope.spawn(move || encode(entries)));
+                        }
+                        for job in jobs {
+                            job.join()
+                                .map_err(|_| "Raster compression worker panicked")??;
+                        }
+                        Ok::<_, String>(())
+                    })?;
+                } else {
+                    encode(&chunk.entries)?;
                 }
                 Ok(())
             }
             if self.chunks.len() == 1 {
-                finish_chunk(&self.chunks[0], &self.pool)?;
+                finish_chunk(&self.chunks[0], &self.pool, 4)?;
             } else {
                 let group_size = self.chunks.len().div_ceil(4);
+                let lanes = 4 / self.chunks.len().min(4);
                 std::thread::scope(|scope| {
                     let mut jobs = Vec::new();
                     for group in self.chunks.chunks_mut(group_size) {
                         let pool = &self.pool;
                         jobs.push(scope.spawn(move || {
                             for chunk in group {
-                                finish_chunk(chunk, pool)?;
+                                finish_chunk(chunk, pool, lanes)?;
                             }
                             Ok::<_, String>(())
                         }));
@@ -361,11 +419,9 @@ impl WgpuRasterizer {
                     // Transport is included in batch damage. Terminal edge work
                     // touches only this contact's coverage; earlier batches have
                     // already accumulated their changed pages in this target.
-                    let damage = if matches!(batch.kind, DabBatchKind::LayerOperation(_)) {
-                        PixelRect::full(packet.document_extent)
-                    } else {
-                        batch_pixel_rect(batch, packet.document_extent)
-                    };
+                    // Operation damage already includes selection bounds and
+                    // transformed source/destination footprints.
+                    let damage = batch_pixel_rect(batch, packet.document_extent);
                     target.changed.extend(page_coordinates(damage));
                     if batch.stroke_end && batch.style.rendering.edge_after_stroke {
                         if let Some(layer) =
@@ -389,6 +445,11 @@ impl WgpuRasterizer {
     }
 
     pub(super) fn commit_rasters(&mut self, layers: &[Layer]) -> Result<(), GpuRasterError> {
+        if !layers.iter().any(|l| {
+            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
+        }) {
+            return Ok(());
+        }
         let mut runtime = self.raster.take().unwrap_or_default();
         let result = (|| {
             if runtime.worker.as_ref().is_some_and(|w| !w.ready()) {
@@ -426,7 +487,10 @@ impl WgpuRasterizer {
                 ));
             }
             if staging > 0 && runtime.worker.is_none() {
-                runtime.worker = Some(CaptureWorker::new()?);
+                runtime.worker = Some(CaptureWorker::new(
+                    (*self.device).clone(),
+                    self.raster_buffers.clone(),
+                )?);
             }
             let mut captures = Vec::new();
             for layer in layers {

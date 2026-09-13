@@ -180,6 +180,9 @@ typedef struct LayerCanvasMetrics {
   float maximum_tip_gap_surface_px;
   float last_endpoint_correction_surface_px;
   float maximum_endpoint_correction_surface_px;
+  /* Conservative capture staging reservations, reusable spares and CPU scratch;
+   * excludes immutable source/history backing and driver allocations. */
+  uint64_t raster_backing_reserved_bytes;
 } LayerCanvasMetrics;
 
 typedef struct LayerGpuInfo {

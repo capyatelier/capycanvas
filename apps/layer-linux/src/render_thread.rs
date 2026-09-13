@@ -863,7 +863,10 @@ impl Worker {
         paper: bool,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
-        while !self.renderer.raster_ready() {
+        while frame.layers.iter().any(|l| {
+            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
+        }) && !self.renderer.raster_ready()
+        {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if self.child.geometry(frame.geometry) {

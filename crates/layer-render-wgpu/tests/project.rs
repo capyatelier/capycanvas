@@ -421,3 +421,71 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
         );
     }
 }
+
+#[test]
+fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
+    use layer_core::raster::{RasterPlane, TileKey};
+    let mut project = Project {
+        document: Document::new("sparse edit", 768, 256),
+        assets: Default::default(),
+    };
+    let source = AssetId::from("sparse-source");
+    project.document.layers[0].asset = Some(source.clone());
+    project.assets.insert(
+        source,
+        ProjectAsset {
+            extent: [768, 256],
+            format: ProjectAssetFormat::Rgba8Srgb,
+            bytes: [95, 37, 201, 255].repeat(768 * 256).into(),
+        },
+    );
+    let (mut live, _) = engine(&project);
+    let before = live.document().layers[0].raster.wait_data().unwrap();
+    before.validate([768, 256], false).unwrap();
+    let mut coverage = LayerMask::reveal_all(LayerId(99), Point::default());
+    coverage.default_coverage = 0.;
+    coverage.initial = Some(
+        Selection::polygon(vec![
+            Point { x: 20., y: 20. },
+            Point { x: 80., y: 20. },
+            Point { x: 80., y: 80. },
+            Point { x: 20., y: 80. },
+        ])
+        .unwrap(),
+    );
+    live.append_layer_operation(
+        LayerId(1),
+        LayerOperation {
+            coverage,
+            kind: LayerOperationKind::Fill {
+                color: [0.7, 0.1, 0.2, 0.6],
+                alpha_locked: false,
+            },
+        },
+    )
+    .unwrap();
+    live.render_frame().unwrap();
+    let after = live.document().layers[0].raster.wait_data().unwrap();
+    after.validate([768, 256], false).unwrap();
+    for x in 0..3 {
+        let key = TileKey {
+            plane: RasterPlane::Color,
+            coordinate: [x, 0],
+        };
+        assert_eq!(
+            before.tiles[&key].same_capture(&after.tiles[&key]),
+            x != 0,
+            "only the selected tile is captured"
+        );
+    }
+    live.undo().unwrap();
+    live.render_frame().unwrap();
+    let mut pixels = vec![0; 768 * 256 * 4];
+    live.backend_mut()
+        .copy_rgba8_srgb(&mut pixels, 768 * 4)
+        .unwrap();
+    assert_eq!(
+        pixels,
+        project.assets.values().next().unwrap().bytes.as_ref()
+    );
+}

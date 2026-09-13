@@ -551,8 +551,8 @@ pub struct LayerMask {
     pub initial: Option<Selection>,
     pub default_coverage: f32,
     pub inverted: bool,
-    /// Ordered raster edits share the paint-layer operation format. Apply mask
-    /// retains this history; transform selections cannot contain nested edits.
+    /// Commands awaiting submission share the paint-layer operation format.
+    /// Transform selections cannot contain nested commands.
     #[serde(skip)]
     pub pending_operations: Arc<Vec<LayerOperation>>,
     /// Inspection only; never participates in exported color.

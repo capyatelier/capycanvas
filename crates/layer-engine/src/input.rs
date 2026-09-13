@@ -175,6 +175,9 @@ impl<T> InputConsumer<T> {
     pub fn pop(&mut self) -> Option<T> {
         self.inner.pop().ok()
     }
+    pub fn peek(&self) -> Option<&T> {
+        self.inner.peek().ok()
+    }
 }
 
 #[derive(Debug, Default)]

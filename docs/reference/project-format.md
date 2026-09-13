@@ -35,9 +35,10 @@ The header is the twelve bytes `CAPYRASTER\x01\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and source assets. Payload offsets are relative to the payload start.
-The manifest explicitly declares `tile_codec: "zstd"`. Each tile is an independent lossless Zstandard frame (fast level -20); its content digest covers its
-explicit pixel descriptor and exact decoded bytes. Sources use indexed packed
-bytes with their own digest. There are no paths to extract.
+The manifest explicitly declares `tile_codec: "zstd"`. Each tile is an independent
+lossless Zstandard frame (fast level -20); its content digest covers its explicit
+pixel descriptor and exact decoded bytes. Sources use indexed packed bytes with
+their own digest. There are no paths to extract.
 
 Identical tile blobs are deduplicated in a save. Repeated saves reuse immutable
 compressed backing without readback, conversion or recompression. The writer
@@ -63,11 +64,15 @@ These are distinct boundaries:
   host. Capture or autosave never acknowledges a manual save checkpoint.
 
 GTK transfers immutable roots to its GPU owner. Readback mapping/compression runs
-on a separate worker, with at most two capture frames and 256 MiB staging per
-frame, divided into 16 MiB buffers. A 64 MiB pool reuses unmapped buffers.
+on a separate worker, with 256 MiB staging per frame and a 512 MiB pending-staging
+ceiling. At most 16 small capture jobs can share that budget; admission always
+reserves room for the largest next frame. A worker-prepared 64 MiB spare pool
+reuses unmapped buffers of at most 16 MiB.
 Compression copies at most four chunks into cached CPU memory (64 MiB scratch)
-and runs at most four compression jobs per capture. Capacity pressure leaves input queued. History
-retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
+and runs at most four compression jobs per capture, including within smaller
+chunks. Capture pressure defers pen-up/correction/operation boundaries; ordinary
+move frames continue. The separate native frame mailbox stays bounded to two.
+History retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
 excluding current document ownership. No precision is reduced to fit a budget.
 
 Contact reconstruction is limited to the active contact and the most recently

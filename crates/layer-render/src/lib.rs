@@ -328,14 +328,18 @@ impl TransformPreview {
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
-/// work without waiting. Readback is explicit and never occurs implicitly in
-/// live ink. Production implementations rasterize, blend, and compose into GPU
-/// resources; the trait intentionally exposes no host pixel target.
+/// work without waiting. Committed raster boundaries capture affected pages;
+/// ordinary live ink does not need new backing capacity. Implementations compose
+/// into GPU resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
-    /// Backpressure before consuming input. A false result leaves queued input
-    /// untouched while bounded raster backing work completes.
+    /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
+        true
+    }
+    /// Capacity for a new immutable raster boundary. Existing queue-ordered
+    /// copies do not prevent drawing the next contact into mutable GPU pages.
+    fn can_capture_raster(&self) -> bool {
         true
     }
     /// Applied by the next submit. None restores the captured original before

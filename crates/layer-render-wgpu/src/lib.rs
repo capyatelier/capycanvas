@@ -174,6 +174,7 @@ pub struct GpuRasterMetrics {
     pub destination_storage_bytes: u64,
     pub paint_state_storage_bytes: u64,
     pub composite_storage_bytes: u64,
+    pub raster_backing_reserved_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1094,7 +1095,9 @@ impl WgpuRasterizer {
     }
 
     pub fn metrics(&self) -> GpuRasterMetrics {
-        self.metrics.clone()
+        let mut metrics = self.metrics.clone();
+        metrics.raster_backing_reserved_bytes = self.raster_staging_bytes();
+        metrics
     }
 
     pub fn document_extent(&self) -> [u32; 2] {
@@ -3738,7 +3741,7 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
-    fn can_submit(&self) -> bool {
+    fn can_capture_raster(&self) -> bool {
         self.raster_ready()
     }
     fn set_transform_preview(

@@ -529,6 +529,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn wants_continuous_frames(&self) -> bool {
         self.has_pending_input()
             || self.has_active_stroke()
+            || self.has_pending_document_edits()
             || self.editor.document().has_animated_effects()
     }
     pub fn has_pending_input(&self) -> bool {
@@ -750,7 +751,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .iter()
                 .any(|l| l.asset.is_some() && l.raster.try_data().is_none())
         {
-            if !self.backend.can_submit() {
+            if !self.backend.can_submit() || !self.backend.can_capture_raster() {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Raster backing is busy; retry the edit",
                 ));
@@ -793,6 +794,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !self.backend.can_submit() {
             return Ok(());
         }
+        if !self.backend.can_capture_raster()
+            && (self.input.peek().is_some_and(|e| {
+                e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
+            }) || self.document().layers.iter().any(|l| {
+                l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
+            }))
+        {
+            return Ok(());
+        }
         if self
             .completed_at
             .is_some_and(|at| at.elapsed() >= CORRECTION_WINDOW)
@@ -827,7 +837,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         {
             self.process_input()?;
         }
-        if let Some(timestamp_ns) = timestamp_ns {
+        let awaiting_boundary = self
+            .input
+            .peek()
+            .is_some_and(|e| e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION));
+        if let Some(timestamp_ns) = timestamp_ns.filter(|_| !awaiting_boundary) {
             self.append_continuous(timestamp_ns);
         }
         self.advance_finalized_prefix();
@@ -837,7 +851,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.rebuild_all = false;
             rebuilt = true;
         }
-        self.build_predicted_preview(timestamp_ns, presentation_timestamp_ns);
+        if !awaiting_boundary {
+            self.build_predicted_preview(timestamp_ns, presentation_timestamp_ns);
+        }
         self.composite_all |= rebuilt;
 
         let packet = FramePacket {
@@ -962,6 +978,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     fn process_input(&mut self) -> Result<(), EngineError<B::Error>> {
         for _ in 0..INPUT_BATCH {
+            if self.input.peek().is_some_and(|e| {
+                e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
+            }) && !self.backend.can_capture_raster()
+            {
+                break;
+            }
             let Some(event) = self.input.pop() else {
                 break;
             };
@@ -1835,6 +1857,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingRenderer {
+        capture_blocked: bool,
         time_seconds: f32,
         size: [u32; 2],
         persistent_dabs: usize,
@@ -1849,6 +1872,9 @@ mod tests {
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn can_capture_raster(&self) -> bool {
+            !self.capture_blocked
+        }
         fn set_transform_preview(
             &mut self,
             preview: Option<&layer_render::TransformPreview>,
@@ -2543,6 +2569,50 @@ mod tests {
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             background_rgba_linear: [1.0; 4],
         }
+    }
+
+    #[test]
+    fn capture_backpressure_allows_live_moves_and_defers_only_the_commit_boundary() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("backpressure", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        engine.render_frame().unwrap();
+        engine.backend_mut().capture_blocked = true;
+        for (sequence, phase, x) in [
+            (1, PenPhase::Down, 8.),
+            (2, PenPhase::Move, 16.),
+            (3, PenPhase::Up, 24.),
+        ] {
+            input.push(event(sequence, phase, x)).unwrap();
+        }
+        engine.render_frame_for(10_000_000, 18_000_000).unwrap();
+        assert_eq!(engine.metrics().input_events, 2);
+        assert!(engine.backend().persistent_dabs > 0);
+        assert!(engine.has_active_stroke() && engine.has_pending_input());
+        assert_eq!(engine.metrics().committed_strokes, 0);
+        assert!(engine.document().layers[0].raster.is_empty());
+        let frames = engine.metrics().frames;
+        let dabs = engine.backend().persistent_dabs;
+        engine.render_frame_for(200_000_000, 208_000_000).unwrap();
+        assert_eq!(engine.metrics().frames, frames);
+        assert_eq!(
+            engine.backend().persistent_dabs,
+            dabs,
+            "waiting pen-up must not advance continuous ink"
+        );
+        engine.backend_mut().capture_blocked = false;
+        engine.render_frame_for(210_000_000, 218_000_000).unwrap();
+        assert_eq!(engine.metrics().input_events, 3);
+        assert_eq!(engine.metrics().committed_strokes, 1);
+        assert!(!engine.has_active_stroke() && !engine.has_pending_input());
+        assert!(engine.undo().unwrap());
+        assert!(!engine.undo().unwrap());
     }
 
     #[test]
