@@ -96,12 +96,16 @@ internal val HeaderTextPadding = 6.dp
 /** Tab colors never depend on hover/press. A focus-only indication also avoids
  * Android's native ripple layer changing the rasterization of tab joins. */
 @Composable internal fun PanelHeaderFeedback(content: @Composable () -> Unit) {
-    val accent = LocalPalette.current.accent
-    val indication = remember(accent) { PanelHeaderIndication(accent) }
-    CompositionLocalProvider(LocalRippleConfiguration provides null, LocalIndication provides indication, content = content)
+    CompositionLocalProvider(LocalRippleConfiguration provides null,
+        LocalIndication provides rememberChromeFocusIndication(), content = content)
 }
 
-private data class PanelHeaderIndication(val color: Color) : IndicationNodeFactory {
+@Composable internal fun rememberChromeFocusIndication(): IndicationNodeFactory {
+    val accent = LocalPalette.current.accent
+    return remember(accent) { ChromeFocusIndication(accent) }
+}
+
+private data class ChromeFocusIndication(val color: Color) : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): Modifier.Node = object : Modifier.Node(), DrawModifierNode {
         var focused by mutableStateOf(false)
         override fun onAttach() {

@@ -950,24 +950,26 @@ class AndroidInteractionTest {
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme)); restore()
                 customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
-                assertEquals("Leading divider uses toolbar spacing below the expand button", 12 * density,
+                assertEquals("Leading divider has only the lower gap below Expand", 6 * density,
                     bounds("column-icon-brushes").top - bounds("expand-column-46").bottom, 1f)
+                assertEquals("Leading divider touches Expand", bounds("expand-column-46").bottom,
+                    bounds("column-divider-46-0").top, 1f)
                 assertEquals("Collapsed group spacing matches toolbar divider and gaps", 12 * density,
                     bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)
-                fun line(tag: String, horizontal: Boolean, name: String) {
+                fun line(tag: String, horizontal: Boolean, name: String, slotDp: Float = 8f) {
                     waitFor("divider layout $tag") {
                         find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot?.let {
-                            kotlin.math.abs((if (horizontal) it.height else it.width) - 8 * density) < 1f
+                            kotlin.math.abs((if (horizontal) it.height else it.width) - slotDp * density) < 1f
                         } == true
                     }
                     val b = bounds(tag)
-                    assertEquals("Divider slot is 8dp", 8 * density, if (horizontal) b.height else b.width, 1f)
+                    assertEquals("Divider slot is ${slotDp}dp", slotDp * density, if (horizontal) b.height else b.width, 1f)
                     capture("$theme-$name") { sample ->
                         assertNotEquals("Divider line is visible", sample(b.center), sample(b.center +
                             if (horizontal) Offset(0f, 2 * density) else Offset(2 * density, 0f)))
                     }
                 }
-                line("column-divider-46-0", true, "column-divider")
+                line("column-divider-46-0", true, "column-divider", slotDp = 1f)
                 line("column-divider-46-1", true, "column-group-divider")
                 line("tile-toolbar-$nextTile", false, "toolbar-divider-horizontal")
                 moveToolbar(obj("kind" to "edge", "edge" to "right", "outer" to true))
