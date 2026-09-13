@@ -183,7 +183,7 @@ function grip(item) {
   node.title = "Drag to move panel";
   node.setAttribute(
     "aria-label",
-    item.kind === "group" ? "Move all tabs" : "Move " + (customization?.view(item.panel)?.title || panelNames[item.panel] || "toolbar"),
+    item.kind === "column" ? "Move column" : item.kind === "group" ? "Move all tabs" : "Move " + (customization?.view(item.panel)?.title || panelNames[item.panel] || "toolbar"),
   );
   node.append(icon("grip"));
   return draggable(node, item);
@@ -447,7 +447,7 @@ function arrange(nextLayout, layoutOnly = false) {
     }
   const liveDividers = new Set();
   const handles = [
-    ...layout.dividers.map(d => ({ key: `${d.band}:${d.id}`, bounds: d.bounds,
+    ...layout.dividers.filter(d => !d.fixed).map(d => ({ key: `${d.band}:${d.id}`, bounds: d.bounds,
       axis: d.axis, action: { type: "drag_divider", id: d.id } })),
     ...layout.groups.filter(g => g.floating).flatMap(g => g.resize_handles.map(h => ({
       key: `floating:${g.id}:${h.edge}`, bounds: h.bounds, edge: h.edge,
@@ -486,8 +486,8 @@ function arrange(nextLayout, layoutOnly = false) {
     }
   if (!layoutOnly) {
     customization.arrange(layout);
-    workspaceChrome?.arrange(layout);
   }
+  workspaceChrome?.arrange(layout,layoutOnly);
   if (layoutOnly) {
     if (editor.flushPositions() && gpuReady && app.reflow_navigators()) wake();
   } else editor.queuePositions();

@@ -4,6 +4,7 @@ import {checkZen} from "./zen.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
+import {checkColumnStacks} from "./column-stacks.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
@@ -226,6 +227,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--column-stacks")) {
+    await checkColumnStacks({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--column-drops")) {
     await checkColumnDrops({call,evaluate,settle});

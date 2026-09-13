@@ -43,7 +43,7 @@ Painter arrangement until their window-bar projection is implemented.
 Photographer uses Small toolbar tiles. Painter starts with Brush
 selected and no docked content panels. Photographer starts with Operation selected,
 devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
-the illustration Tool Set/Brush size columns and Diagnostics. GTK Paint uses
+the illustration Tool Set/Brush size columns and Diagnostics. GTK/Web Paint uses
 an open collapsed stack on the right, with its original width and split
 proportions. The left column stays expanded normally. Auto-hide and Open
 individual panels both start off. Other hosts retain Paint's expanded columns
