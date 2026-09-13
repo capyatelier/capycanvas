@@ -9,6 +9,8 @@ if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary d
 const ready = Gio.File.new_for_path(`${output}/ready`);
 if (ready.query_exists(null)) throw new Error('Use a fresh output directory');
 const loop = new GLib.MainLoop(null, false);
+const nativeTest = ARGV.find(a => a.startsWith('--native-test='))?.slice('--native-test='.length);
+if (nativeTest && !/^[a-z0-9_]+$/.test(nativeTest)) throw new Error('Use one exact native test name');
 const workspaceDrag = ARGV.includes('--workspace-drag');
 const workspaceClicks = ARGV.includes('--workspace-clicks');
 const workspaceCursor = ARGV.includes('--workspace-cursor');
@@ -33,13 +35,15 @@ const workspaceMotion = columnGroups || ARGV.includes('--workspace-motion') || w
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 // Group panels include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
-if (drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
-const process = launcher.spawnv([
+if ((nativeTest && !ARGV.includes('--native-storage')) || drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
+const launch = [
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
         'cargo', 'test', '--release', '-p', 'layer-linux', workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
-]);
+];
+if (nativeTest) launch[5] = nativeTest;
+const process = launcher.spawnv(launch);
 let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);
@@ -56,7 +60,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     const session = call('/org/gnome/Mutter/RemoteDesktop', dest, 'CreateSession', '()', [])[0];
     const send = (method, signature, values) => call(session, iface, method, signature, values);
     let touchStream;
-    if (workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
+    if (nativeTest || workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
         const id = call(session, 'org.freedesktop.DBus.Properties', 'Get', '(ss)', [iface, 'SessionId'])[0].deep_unpack();
         const cast = 'org.gnome.Mutter.ScreenCast';
         const castCall = (path, name, method, signature, values) => Gio.DBus.session.call_sync(
@@ -69,19 +73,19 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     }
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
-    if (workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
+    if (nativeTest || workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
         // Creating Mutter's virtual touchscreen announces a new seat capability.
         // Let GTK bind wl_touch before the first test contact is delivered.
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (workspaceSwitcher || columnDrops || workspaceTransitions) {
+    if (nativeTest || workspaceSwitcher || columnDrops || workspaceTransitions) {
         // Announce the virtual keyboard before testing activation. Otherwise
         // the first key can arrive before GTK binds the new wl_keyboard.
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, true]);
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, false]);
     }
-    if (workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || tooltips || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
+    if (nativeTest || workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || tooltips || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
         let step = 0, events = null, index = 0, previous = [0, 0];
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceMotion ? 4 : 60, () => {
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
@@ -107,7 +111,9 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 if (event.touch) {
                     if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
                     else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',
-                        '(sudd)', [touchStream, 0, ...event.point]);
+                        // ScreenCast coordinates are physical pixels; pointer
+                        // motion and our test scripts use logical desktop px.
+                        '(sudd)', [touchStream, 0, ...event.point.map(v => v * Number(GLib.getenv('LAYER_MOTION_SCALE') || 1))]);
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.point) {
@@ -179,7 +185,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     });
     return GLib.SOURCE_REMOVE;
 });
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher ? 120000 : 60000, () => {
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, nativeTest || workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher ? 120000 : 60000, () => {
     process.force_exit();
     loop.quit();
     return GLib.SOURCE_REMOVE;

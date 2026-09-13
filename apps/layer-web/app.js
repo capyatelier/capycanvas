@@ -1000,8 +1000,6 @@ function input(event) {
   try {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
-    workspace.classList.toggle("zen-hide-floating", reply.hide_floating_panels);
-    workspace.classList.toggle("zen-keep-button", reply.keep_zen_button);
     canvas.style.cursor = reply.pan_cursor ? "grab" : "";
     if (reply.dismiss_popups) {
       for (const popup of document.querySelectorAll(

@@ -360,6 +360,7 @@ impl ToolbarControl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextTarget {
+    Header { id: Option<u32> },
     Column { column: u32 },
     ZenMode,
     Panel { panel: Panel },
@@ -371,6 +372,12 @@ pub enum ContextTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CustomizationAction {
+    ToggleHeaderDrawer {
+        id: u32,
+    },
+    Header {
+        action: HeaderAction,
+    },
     SetPanelVisible {
         panel: Panel,
         visible: bool,
@@ -558,6 +565,7 @@ impl DockLayout {
     ) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
+            ContextTarget::Header { id } => return self.header.context_menu(id),
             ContextTarget::Column { column } => {
                 if !self.is_collapsed(column) {
                     return Err("The column is not collapsed".into());
@@ -576,10 +584,7 @@ impl DockLayout {
                 (p.menu_name(), sections)
             }
             ContextTarget::Group { group } => {
-                let mut sections = vec![
-                    self.tab_style_items(group)?,
-                    self.hide_tab_items(target)?,
-                ];
+                let mut sections = vec![self.tab_style_items(group)?, self.hide_tab_items(target)?];
                 sections.extend(self.column_sections(Some(group), platform));
                 sections.extend([
                     if let [panel] = self.group_panels(group)?
@@ -978,6 +983,9 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::LowerLayer => "Move the active layer down",
                 CommandId::ResetLayout => "Restore panel docking positions",
                 CommandId::ZenMode => "Hide or show the editor controls",
+                CommandId::CustomizeWorkspaceUi => {
+                    "Arrange the window bar and canvas information inline"
+                }
                 CommandId::Fullscreen => "Enter or leave full screen",
                 CommandId::NewWindow => "Open another drawing window",
                 CommandId::NewDocument => "Create a drawing",
@@ -1051,7 +1059,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         selected: false,
     }
 }
-fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
+pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
     CommandId::ALL
         .into_iter()
         .filter(|id| id.available_on(platform))
@@ -1458,6 +1466,7 @@ impl ToolbarManager {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CustomizationState {
+    pub header_editing: bool,
     pub expanded: Option<Panel>,
     pub drawer: Option<ContentDrawer>,
     pub column_drawers: Vec<ContentDrawer>,
@@ -1490,7 +1499,6 @@ impl CustomizationState {
         action: CustomizationAction,
         platform: Platform,
         viewport: [f32; 2],
-        partial_zen: bool,
     ) -> Result<u32, String> {
         use CustomizationAction::*;
         if let SetPanelVisible {
@@ -1517,6 +1525,62 @@ impl CustomizationState {
             self.drawer = None;
         }
         match action {
+            Header { action } => {
+                use HeaderAction as H;
+                match action {
+                    H::Edit { editing } => {
+                        self.header_editing = editing;
+                        self.drawer = None;
+                        self.picker = None;
+                    }
+                    action => {
+                        match action {
+                            H::SetSize { size } => layout.header.size = size,
+                            H::Add { zone, before, item } => {
+                                if let HeaderItem::Tool { control } = item
+                                    && !tool_catalog(platform).iter().any(|c| c.control == control)
+                                {
+                                    return Err("This tool is not available".into());
+                                }
+                                layout.header.add(zone, before, &[item])?;
+                            }
+                            H::Move { id, zone, before } => {
+                                layout.header.move_item(id, zone, before)?
+                            }
+                            H::Remove { id } => layout.header.remove(id)?,
+                            H::ShowMenuLabels { visible } => {
+                                if visible
+                                    && !layout
+                                        .header
+                                        .entries()
+                                        .any(|e| e.item == HeaderItem::MenuLabels)
+                                {
+                                    let before = layout.header.zones[0].first().map(|e| e.id);
+                                    layout.header.add(
+                                        HeaderZone::Left,
+                                        before,
+                                        &[HeaderItem::MenuLabels],
+                                    )?;
+                                }
+                                layout.header.show_menu_labels = visible;
+                            }
+                            H::CanvasInfo { visible, anchor } => {
+                                layout.canvas_info = CanvasInfoLayout { visible, anchor }
+                            }
+                            H::RestoreDefaults => {
+                                layout.header = HeaderLayout::default();
+                                if self.drawer.as_ref().is_some_and(|d| {
+                                    matches!(d.anchor, DrawerAnchor::Header { .. })
+                                }) {
+                                    self.drawer = None;
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                        changed |= regions::LAYOUT;
+                    }
+                }
+            }
             ManageToolbars => {
                 *self = Self {
                     toolbar_manager: Some(ToolbarManager::default()),
@@ -1654,7 +1718,7 @@ impl CustomizationState {
                 self.drawer = None;
                 changed |= regions::LAYOUT;
             }
-            ToggleToolDrawer { anchor } => {
+            ToggleToolDrawer { .. } | ToggleHeaderDrawer { .. } => {
                 if !matches!(
                     platform,
                     Platform::Gtk
@@ -1667,15 +1731,13 @@ impl CustomizationState {
                 ) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
-                let drawer = ContentDrawer::for_tile(layout, anchor)?;
+                let drawer = match action {
+                    ToggleToolDrawer { anchor } => ContentDrawer::for_tile(layout, anchor)?,
+                    ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
+                    _ => unreachable!(),
+                };
                 if self
-                    .drawer_placement(
-                        &drawer,
-                        layout,
-                        viewport,
-                        &vec![0.0; drawer.columns.len()],
-                        partial_zen,
-                    )
+                    .drawer_placement(&drawer, layout, viewport, &vec![0.0; drawer.columns.len()])
                     .is_none()
                 {
                     return Err("The originating tile is not visible".into());
@@ -1683,7 +1745,7 @@ impl CustomizationState {
                 let close = self
                     .drawer
                     .as_ref()
-                    .is_some_and(|d| d.anchor.tile() == Some(anchor));
+                    .is_some_and(|d| d.anchor == drawer.anchor);
                 self.expanded = None;
                 self.picker = None;
                 self.control = None;
@@ -2069,8 +2131,7 @@ mod tests {
                                 style
                             },
                             platform,
-                            VIEWPORT,
-                            false
+                            VIEWPORT
                         )
                         .is_ok(),
                     supported
@@ -2297,7 +2358,7 @@ mod tests {
         let mut state = CustomizationState::default();
         let edit = |state: &mut CustomizationState, layout: &mut DockLayout, action| {
             state
-                .edit(layout, action, Platform::Gtk, [1200.0, 900.0], false)
+                .edit(layout, action, Platform::Gtk, [1200.0, 900.0])
                 .unwrap()
         };
         let original = layout.clone();
@@ -2446,7 +2507,7 @@ mod tests {
                     panic!("Missing group style action")
                 };
                 state
-                    .edit(&mut layout, action, platform, [1200.0, 900.0], false)
+                    .edit(&mut layout, action, platform, [1200.0, 900.0])
                     .unwrap();
                 let encoded = serde_json::to_string(&layout).unwrap();
                 layout = serde_json::from_str(&encoded).unwrap();
@@ -2488,7 +2549,6 @@ mod tests {
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
-                false,
             )
             .unwrap();
         assert_eq!(layout.group_tab_style(8).unwrap(), TabStyle::Icon);
@@ -2510,7 +2570,6 @@ mod tests {
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
-                false,
             )
             .unwrap();
         assert!(

@@ -1,4 +1,5 @@
 import {checkDragPickup} from "./drag-pickup.test.mjs";
+import {checkZen} from "./zen.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
@@ -197,7 +198,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--header-controls")) {
+  if (process.argv.includes("--zen")) {
+    await checkZen({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--column-drops")) {

@@ -171,30 +171,19 @@ impl NativeHost {
     ) -> Result<S::Ok, S::Error> {
         let layout = self.session.layout(self.logical);
         let state = self.session.state();
-        let zen = if state.partial_zen() {
-            state.workspace.layout.zen_toolbars(self.logical)
-        } else {
-            Default::default()
-        };
-        // Drawers and partial Zen can project panels absent from ordinary docks.
+        // Drawers can show panels absent from ordinary docks.
         let mut panel_ids: Vec<_> = layout
             .groups
             .iter()
             .flat_map(|g| &g.panels)
             .copied()
             .collect();
-        for panel in zen
-            .sections
+        for panel in layout
+            .collapsed
             .iter()
-            .map(|s| s.panel)
-            .chain(
-                layout
-                    .collapsed
-                    .iter()
-                    .flat_map(|c| &c.groups)
-                    .flat_map(|g| &g.icons)
-                    .map(|i| i.panel),
-            )
+            .flat_map(|c| &c.groups)
+            .flat_map(|g| &g.icons)
+            .map(|i| i.panel)
             .chain(
                 state
                     .customization
@@ -235,8 +224,9 @@ impl NativeHost {
             "filter_preview_revision",
             &self.session.filter_preview_revision(),
         )?;
-        map.serialize_entry("partial_zen", &state.partial_zen())?;
-        map.serialize_entry("zen_toolbars", &zen)?;
+        // Compatibility with older clients; Zen has no alternate projection.
+        map.serialize_entry("partial_zen", &false)?;
+        map.serialize_entry("zen_toolbars", &json!({"sections": []}))?;
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("color_panel", &state.colors.view())?;
         map.serialize_entry("document_options", &json!({"extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
@@ -417,19 +407,39 @@ mod tests {
         let mut host = host(Platform::Generic);
         workspace_fixture(&mut host);
         for action in [
-            CustomizationAction::SetColumnCollapsed { group: 41, collapsed: true },
-            CustomizationAction::SetColumnMode { column: 41, mode: ColumnMode::GroupPanel },
-            CustomizationAction::ToggleColumnDrawer { group: 41, panel: Panel::Brushes },
+            CustomizationAction::SetColumnCollapsed {
+                group: 41,
+                collapsed: true,
+            },
+            CustomizationAction::SetColumnMode {
+                column: 41,
+                mode: ColumnMode::GroupPanel,
+            },
+            CustomizationAction::ToggleColumnDrawer {
+                group: 41,
+                panel: Panel::Brushes,
+            },
         ] {
             host.dispatch(UiAction::Customize { action }).unwrap();
         }
         let initial = layout_update(&mut host);
-        let panel = host.session.layout(host.logical).collapsed[0].group_panel.clone().unwrap();
-        let start = [panel.resize.x + panel.resize.width * 0.5, panel.resize.y + 100.];
+        let panel = host.session.layout(host.logical).collapsed[0]
+            .group_panel
+            .clone()
+            .unwrap();
+        let start = [
+            panel.resize.x + panel.resize.width * 0.5,
+            panel.resize.y + 100.,
+        ];
         let resize = |host: &mut NativeHost, phase, position| {
             host.dispatch(UiAction::ResizeColumnPanel {
-                column: 41, after: None, phase, position, viewport: host.logical,
-            }).unwrap();
+                column: 41,
+                after: None,
+                phase,
+                position,
+                viewport: host.logical,
+            })
+            .unwrap();
         };
         resize(&mut host, Down, start);
         let begun = layout_update(&mut host);
@@ -438,13 +448,22 @@ mod tests {
             let packet = layout_update(&mut host);
             let full = host.snapshot();
             assert!(packet.get("state").is_none());
-            assert_eq!(packet["workspace_update"]["content_revision"], begun["workspace_update"]["content_revision"]);
+            assert_eq!(
+                packet["workspace_update"]["content_revision"],
+                begun["workspace_update"]["content_revision"]
+            );
             assert_eq!(packet["layout"], full["layout"]);
-            assert_eq!(packet["workspace_layout"]["column_settings"], full["state"]["workspace"]["layout"]["column_settings"]);
+            assert_eq!(
+                packet["workspace_layout"]["column_settings"],
+                full["state"]["workspace"]["layout"]["column_settings"]
+            );
         }
         resize(&mut host, Cancel, start);
         let cancelled = layout_update(&mut host);
-        assert_eq!(cancelled["state"]["workspace"], initial["state"]["workspace"]);
+        assert_eq!(
+            cancelled["state"]["workspace"],
+            initial["state"]["workspace"]
+        );
         assert_eq!(cancelled["layout"], initial["layout"]);
     }
 

@@ -26,13 +26,13 @@ pub use tools::{
 };
 mod cursor;
 mod customization;
+mod header;
+pub use header::*;
 mod drawers;
-mod zen;
 pub use drawers::{
     ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
     DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor,
 };
-pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
 mod layout;
 mod tab_drag;
@@ -424,6 +424,7 @@ pub enum CommandId {
     RedoWorkspace,
     NewToolbar,
     ManageToolbars,
+    CustomizeWorkspaceUi,
     FitCanvas,
     ZoomIn,
     ZoomOut,
@@ -451,6 +452,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::CustomizeWorkspaceUi => platform == Platform::Gtk,
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac),
             Self::NewDocument
             | Self::OpenDocument
@@ -557,7 +559,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::SaveDocument,
@@ -599,6 +601,7 @@ impl CommandId {
         Self::RedoWorkspace,
         Self::NewToolbar,
         Self::ManageToolbars,
+        Self::CustomizeWorkspaceUi,
         Self::FitCanvas,
         Self::ZoomIn,
         Self::ZoomOut,
@@ -690,6 +693,7 @@ impl CommandId {
             Self::RedoWorkspace => "Redo Layout Change",
             Self::NewToolbar => "New Toolbar…",
             Self::ManageToolbars => "Manage Toolbars…",
+            Self::CustomizeWorkspaceUi => "Customize Workspace UI…",
             Self::FitCanvas => "Fit canvas",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",
@@ -822,6 +826,13 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    ActivateHeaderItem {
+        id: u32,
+    },
+    MeasureHeader {
+        height: f32,
+        items: Vec<HeaderItemBounds>,
+    },
     WorkspaceManager {
         command: WorkspaceCommand,
     },

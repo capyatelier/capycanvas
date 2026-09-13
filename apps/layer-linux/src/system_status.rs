@@ -17,13 +17,15 @@ pub(crate) struct Battery {
 }
 pub(crate) struct SystemStatus {
     pub root: gtk::Box,
-    clock: gtk::Label,
-    battery: gtk::Box,
+    pub(crate) clock: gtk::Label,
+    pub(crate) battery: gtk::Box,
     percent: gtk::Label,
     drawing: gtk::DrawingArea,
     value: Rc<Cell<Option<Battery>>>,
     fullscreen: Cell<bool>,
     show_clock: Cell<layer_ui::ClockVisibility>,
+    components: Cell<Option<[bool; 2]>>,
+    header_size: Cell<Option<layer_ui::HeaderSize>>,
     settings: Option<gio::Settings>,
     proxy: RefCell<Option<gio::DBusProxy>>,
     timer: RefCell<Option<glib::SourceId>>,
@@ -39,6 +41,13 @@ fn twelve_hour(preference: Option<&str>, locale_format: &str) -> bool {
 }
 impl SystemStatus {
     pub fn new() -> Rc<Self> {
+        Self::build(true)
+    }
+    #[cfg(test)]
+    pub(crate) fn simulated_power() -> Rc<Self> {
+        Self::build(false)
+    }
+    fn build(observe_power: bool) -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         root.set_widget_name("system-status");
         root.add_css_class("system-status");
@@ -168,6 +177,8 @@ impl SystemStatus {
             value,
             fullscreen: Cell::new(false),
             show_clock: Cell::new(layer_ui::ClockVisibility::default()),
+            components: Cell::new(None),
+            header_size: Cell::new(None),
             settings,
             proxy: RefCell::new(None),
             timer: RefCell::new(None),
@@ -199,6 +210,10 @@ impl SystemStatus {
                     move |_, _| this.update_clock()
                 ),
             );
+        }
+        // Synthetic battery tests must not race the host's real UPower reply.
+        if !observe_power {
+            return this;
         }
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak]
@@ -250,9 +265,51 @@ impl SystemStatus {
         self.show_clock.set(show_clock);
         self.update_visibility();
     }
+    pub fn set_components(&self, clock: bool, battery: bool) {
+        self.components.set(Some([clock, battery]));
+        self.update_visibility();
+    }
+    pub fn set_header_size(&self, size: layer_ui::HeaderSize) {
+        if self.header_size.replace(Some(size)) != Some(size) {
+            self.apply_header_size();
+        }
+    }
+    fn apply_header_size(&self) {
+        let Some(size) = self.header_size.get() else {
+            return;
+        };
+        let scale = size.icon() as f32 / 20.;
+        self.battery
+            .set_size_request(size.tile() as i32, size.tile() as i32);
+        self.drawing.set_content_width((26. * scale).round() as i32);
+        self.drawing
+            .set_content_height((14. * scale).round() as i32);
+        let battery = self.value.get();
+        let font = if battery.is_some_and(|b| b.percent == 100) {
+            10.
+        } else {
+            11.
+        };
+        let attributes = gtk::pango::AttrList::new();
+        attributes.insert(gtk::pango::AttrSize::new_size_absolute(
+            (font * scale * gtk::pango::SCALE as f32).round() as i32,
+        ));
+        self.percent.set_attributes(Some(&attributes));
+        self.percent.set_margin_end(
+            ((if battery.is_some_and(|b| b.charging) {
+                5.
+            } else {
+                4.
+            }) * scale)
+                .round() as i32,
+        );
+    }
     fn update_visibility(&self) {
-        let clock = self.show_clock.get().visible(self.fullscreen.get());
-        let battery = clock && self.value.get().is_some();
+        let [clock, battery] = self
+            .components
+            .get()
+            .unwrap_or_else(|| [self.show_clock.get().visible(self.fullscreen.get()); 2]);
+        let battery = battery && self.value.get().is_some();
         self.clock.set_visible(clock);
         self.battery.set_visible(battery);
         self.root.set_visible(clock || battery);
@@ -260,8 +317,10 @@ impl SystemStatus {
     fn update_style(&self, style: &adw::StyleManager) {
         if style.is_dark() {
             self.root.remove_css_class("light");
+            self.battery.remove_css_class("light");
         } else {
             self.root.add_css_class("light");
+            self.battery.add_css_class("light");
         }
         self.drawing.queue_draw();
     }
@@ -342,6 +401,7 @@ impl SystemStatus {
         if let Some(b) = value {
             self.percent.set_text(&b.percent.to_string());
             self.percent.set_margin_end(if b.charging { 5 } else { 4 });
+            self.apply_header_size();
             if b.percent == 100 {
                 self.battery.add_css_class("full");
             } else {

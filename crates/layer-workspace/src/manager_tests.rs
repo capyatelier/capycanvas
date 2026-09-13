@@ -314,8 +314,8 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         m.release(&outgoing).await;
         let mut capture = m.current().unwrap().capture().unwrap();
         let mut layout = capture.history.layout().clone();
-        layout.bands[0].extent += 60.;
-        capture.history.append(&layout, "Resize Tools toolbar");
+        layout.header.size = layer_ui::HeaderSize::Large;
+        capture.history.append(&layout, "Resize Window Bar");
         capture
             .working
             .tools
@@ -1539,18 +1539,33 @@ fn illustrator_column_upgrade_only_changes_untouched_builtin_layouts() {
         }
         let mut entity = Entity::workspace(
             "My Illustration",
-            WorkspaceCapture { history, working: layer_ui::WorkspacePreset::Illustrator.working_state() },
-            previous.clone(), None, 1000,
+            WorkspaceCapture {
+                history,
+                working: layer_ui::WorkspacePreset::Illustrator.working_state(),
+            },
+            previous.clone(),
+            None,
+            1000,
         );
         entity.id = DEFAULT_WORKSPACES[1].0.into();
         entity.metadata.builtin = true;
         let updated = migration::updated_illustrator_default(&entity, Platform::Gtk);
-        if customized { assert!(updated.is_none()); }
-        else {
-            let ItemContent::Workspace { history, baseline, .. } = updated.unwrap() else { panic!("workspace") };
+        if customized {
+            assert!(updated.is_none());
+        } else {
+            let ItemContent::Workspace {
+                history, baseline, ..
+            } = updated.unwrap()
+            else {
+                panic!("workspace")
+            };
             assert_eq!(baseline, layout);
             assert_eq!(history.layout(), &layout);
-            entity.content = ItemContent::Workspace { history, baseline, origin: None };
+            entity.content = ItemContent::Workspace {
+                history,
+                baseline,
+                origin: None,
+            };
             assert!(migration::updated_illustrator_default(&entity, Platform::Gtk).is_none());
         }
     }

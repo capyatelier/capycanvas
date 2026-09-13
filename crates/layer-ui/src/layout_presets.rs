@@ -146,6 +146,12 @@ impl WorkspacePreset {
             root: tabs(2, &[Panel::Toolbar]),
         }];
         if self == Self::Painter {
+            if platform == crate::Platform::Gtk {
+                layout.bands.clear();
+                layout.header = crate::HeaderLayout::painter();
+                layout.canvas_info.visible = false;
+                return layout;
+            }
             layout.bands.push(DockBand {
                 id: 3,
                 edge: Edge::Top,
@@ -228,7 +234,8 @@ mod tests {
 
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        // Hosts without the new header projection keep their existing controls.
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Web);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -252,6 +259,16 @@ mod tests {
                     .any(|t| t.control == ToolbarControl::Panel { panel })
             );
         }
+    }
+
+    #[test]
+    fn gtk_painter_has_individual_header_tools_and_no_reserved_status() {
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        assert!(layout.bands.is_empty() && layout.floating.is_empty());
+        assert_eq!(layout.header, crate::HeaderLayout::painter());
+        assert_eq!(layout.header.size, crate::HeaderSize::Medium);
+        assert!(!layout.header.show_menu_labels && !layout.canvas_info.visible);
+        assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
     }
 
     #[test]

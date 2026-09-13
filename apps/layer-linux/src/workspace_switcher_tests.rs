@@ -56,8 +56,11 @@ fn native_workspace_transition_stability() {
     for _ in 0..2 {
         for (id, name) in DEFAULT_WORKSPACES.map(|(id, preset)| (id, preset.name().to_lowercase()))
         {
-            let button =
-                find_named(w.header.upcast_ref(), &format!("workspace-switch-{name}")).unwrap();
+            let button = find_named(
+                w.header.root.upcast_ref(),
+                &format!("workspace-switch-{name}"),
+            )
+            .unwrap();
             click(&w, &dir, &mut step, &button);
             while w.workspaces.busy.get()
                 || w.workspaces
@@ -80,7 +83,7 @@ fn native_workspace_transition_stability() {
     pump(300);
     // Hold the host's pause long enough to deliver real input. Checking the
     // button signal catches native activation even if the model rejects it.
-    let painter = find_named(w.header.upcast_ref(), "workspace-switch-painter")
+    let painter = find_named(w.header.root.upcast_ref(), "workspace-switch-painter")
         .unwrap()
         .downcast::<gtk::ToggleButton>()
         .unwrap();
@@ -500,7 +503,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
     assert!(find_named(w.window.upcast_ref(), &format!("workspace-row-{deleted}")).is_none());
     assert!(
         find_named(
-            w.header.upcast_ref(),
+            w.header.root.upcast_ref(),
             &format!("workspace-switch-{deleted}")
         )
         .is_none()
@@ -1060,8 +1063,11 @@ fn native_workspace_switcher_input() {
             .upcast_ref(),
     );
     let saved_order = manager.workspace_ids();
-    let custom_button =
-        find_named(w.header.upcast_ref(), &format!("workspace-switch-{custom}")).unwrap();
+    let custom_button = find_named(
+        w.header.root.upcast_ref(),
+        &format!("workspace-switch-{custom}"),
+    )
+    .unwrap();
     click(&w, &dir, &mut step, &custom_button);
     let deadline = Instant::now() + Duration::from_secs(10);
     while manager.active_id().as_ref() != Some(&custom) {
@@ -1104,7 +1110,7 @@ fn native_workspace_switcher_input() {
     );
     assert!(
         find_named(
-            reopened.header.upcast_ref(),
+            reopened.header.root.upcast_ref(),
             &format!("workspace-switch-{custom}")
         )
         .is_some()

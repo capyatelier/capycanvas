@@ -78,6 +78,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             item
         };
         let mut model = match menu {
+            M::Primary if self.state.platform == Platform::Gtk => ContextMenu {
+                title: menu.label().into(),
+                sections: vec![
+                    M::ALL
+                        .into_iter()
+                        .map(|id| {
+                            ContextMenuItem::submenu(id.label(), self.application_menu(id).sections)
+                        })
+                        .collect(),
+                ],
+            },
             M::Layer => self
                 .layer_menu(
                     self.engine.document().active_layer.0,

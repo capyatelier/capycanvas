@@ -13,6 +13,8 @@ mod layer_hold;
 mod tooltip;
 #[path = "workspace_drawer_style_tests.rs"]
 mod workspace_drawer_style;
+#[path = "workspace_header_tests.rs"]
+mod workspace_header;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
@@ -5848,7 +5850,10 @@ fn native_zen_icons() {
     let zen = command(&w, CommandId::ZenMode);
     let image = zen.child().and_downcast::<gtk::Image>().unwrap();
     let bounds = zen.compute_bounds(&w.surface).unwrap();
-    assert_eq!(image.pixel_size(), layer_ui::ZEN_ICON_SIZE as i32);
+    assert_eq!(
+        image.pixel_size(),
+        state(&w).workspace.layout.header.size.icon()
+    );
     assert_eq!(w.preferences.dialog.content_height(), 744);
     assert_eq!(
         image.icon_name().as_deref(),
@@ -5893,7 +5898,10 @@ fn native_zen_icons() {
                 image.icon_name().as_deref(),
                 Some(format!("layer-{}-symbolic", symbol.icon()).as_str())
             );
-            assert_eq!(image.pixel_size(), layer_ui::ZEN_ICON_SIZE as i32);
+            assert_eq!(
+                image.pixel_size(),
+                state(&w).workspace.layout.header.size.icon()
+            );
             assert_eq!(zen.compute_bounds(&w.surface).unwrap(), bounds);
             for other in 0..4 {
                 assert_eq!(
@@ -5924,22 +5932,21 @@ fn native_zen_icons() {
         capture_reference(&w, &format!("{dir}/gtk-selector-{name}.png"), 1.0);
         w.dispatch(UiAction::CloseSettings);
         pump(250);
-        // The always-visible button suppresses its active highlight until the
-        // full UI is revealed, without changing the underlying toggle state.
+        // Total Zen hides the button with the header, retaining its selected
+        // state for the edge reveal.
         click(&zen);
         w.chrome_event(layer_ui::ChromeEvent::Motion {
             position: [600.0, 450.0],
         });
         pump(250);
         assert!(zen.has_css_class("selected-tool"));
-        assert!(!zen.has_css_class("zen-hidden"));
-        assert!(zen.has_css_class("zen-button-neutral"));
-        capture_reference(&w, &format!("{dir}/gtk-button-only-{name}.png"), 1.0);
+        assert!(!w.header.root.can_target());
+        capture_reference(&w, &format!("{dir}/gtk-total-zen-{name}.png"), 1.0);
         w.chrome_event(layer_ui::ChromeEvent::Motion {
             position: [600.0, 1.0],
         });
         pump(250);
-        assert!(zen.has_css_class("zen-button-neutral"));
+        assert!(w.header.root.can_target());
         capture_reference(&w, &format!("{dir}/gtk-active-{name}.png"), 1.0);
         click(&zen);
         pump(250);
@@ -6184,261 +6191,42 @@ fn native_settings_typography() {
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_behaviors() {
-    let app = native_test_app("art.capycanvas.ZenSectionsTest");
+    let app = native_test_app("art.capycanvas.ZenTest");
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
     let zen = command(&w, CommandId::ZenMode);
-    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let mut workspace = state(&w).workspace;
-    workspace.zen_mode = false;
-    workspace
-        .layout
-        .move_panel(
-            viewport,
-            Panel::Toolbar,
-            DockTarget::Edge {
-                edge: Edge::Left,
-                outer: true,
-            },
-        )
-        .unwrap();
-    for edge in [Edge::Top, Edge::Bottom, Edge::Right] {
-        let toolbar = workspace
-            .layout
-            .add_toolbar(
-                None,
-                &format!("{edge:?}"),
-                &[
-                    ToolbarControl::Command {
-                        command: CommandId::Pen,
-                    },
-                    ToolbarControl::Color,
-                    ToolbarControl::Divider,
-                    ToolbarControl::Command {
-                        command: CommandId::Eraser,
-                    },
-                    ToolbarControl::Divider,
-                    ToolbarControl::Opacity,
-                ],
-            )
-            .unwrap();
-        workspace
-            .layout
-            .move_panel(viewport, toolbar, DockTarget::Edge { edge, outer: true })
-            .unwrap();
-    }
-    workspace
-        .layout
-        .insert_tools(Panel::Toolbar, Some(2), &[ToolbarControl::Divider])
-        .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
-    w.dispatch(UiAction::RestoreSettings {
-        settings: Settings::default(),
-    });
-    pump(200);
     let saved = state(&w).workspace.layout;
-    for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+    for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        pump(200);
-        capture_reference(&w, &format!("{dir}/zen-normal-{name}.png"), 1.0);
         click(&zen);
-        pump(300);
-        assert!(state(&w).partial_zen());
-        assert!(zen.can_target() && zen.has_css_class("zen-button-neutral"));
+        let reply = w.chrome_event(ChromeEvent::Motion {
+            position: [600.0, 450.0],
+        });
+        assert!(reply.chrome_hidden && !reply.partial_zen && !reply.hide_floating_panels);
+        assert!(!w.header.root.can_target());
         for (slot, widget) in w.surface.imp().children.borrow().iter() {
-            let visible = matches!(
-                slot,
-                Slot::Canvas
-                    | Slot::ZenButton
-                    | Slot::ZenToolbars
-                    | Slot::Drawer(_)
-                    | Slot::DrawerConnection(_)
-            );
-            assert_eq!(!widget.has_css_class("zen-hidden"), visible);
-            assert_eq!(widget.can_target(), visible);
-        }
-        let model = saved.zen_toolbars(viewport);
-        let root = find_named(w.surface.upcast_ref(), "zen-toolbars").unwrap();
-        for section in &model.sections {
-            for (id, _) in &section.tiles {
-                let Some(expected) = section.tile_bounds(*id) else {
-                    continue;
-                };
-                let tile: gtk::Button = find_named(&root, &format!("zen-tile-{id}"))
-                    .unwrap()
-                    .downcast()
-                    .unwrap();
-                let actual = tile.compute_bounds(&w.surface).unwrap();
-                assert!((actual.x() - expected.x).abs() <= 1.0);
-                assert!((actual.y() - expected.y).abs() <= 1.0);
-                assert_eq!(actual.width(), section.style.size()[0]);
-                assert_eq!(actual.height(), section.style.size()[1]);
-                let center = [
-                    expected.x + expected.width * 0.5,
-                    expected.y + expected.height * 0.5,
-                ];
-                let picked = w
-                    .surface
-                    .pick(center[0] as f64, center[1] as f64, gtk::PickFlags::DEFAULT)
-                    .unwrap();
-                if tile.is_sensitive() {
-                    assert!(
-                        picked == tile.clone().upcast::<gtk::Widget>() || picked.is_ancestor(&tile),
-                        "{edge:?} tile {id} picked {}",
-                        picked.widget_name(),
-                        edge = section.edge
-                    );
-                }
+            if !matches!(slot, Slot::Canvas) && !widget.has_css_class("floating-panel") {
+                assert!(widget.has_css_class("zen-hidden") && !widget.can_target());
             }
         }
         assert!(
-            !root.contains(600.0, 450.0),
-            "section gaps must let drawing input through"
+            !w.chrome_event(ChromeEvent::Motion {
+                position: [6.0, 6.0]
+            })
+            .chrome_hidden
         );
-        for position in [
-            [6.0, 6.0],
-            [600.0, 1.0],
-            [1.0, 400.0],
-            [viewport[0] - 1.0, 400.0],
-            [600.0, viewport[1] - 1.0],
-        ] {
-            let reply = w.chrome_event(ChromeEvent::Motion { position });
-            assert!(reply.chrome_hidden && reply.partial_zen);
-            assert!(!w.reveal_chrome_at(position[0], position[1]));
-        }
-        capture_reference(&w, &format!("{dir}/zen-partial-{name}.png"), 1.0);
-        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            let section = model
-                .sections
-                .iter()
-                .find(|s| {
-                    s.edge == edge
-                        && s.tiles.iter().any(|(id, _)| {
-                            saved
-                                .panel(s.panel)
-                                .unwrap()
-                                .tiles()
-                                .iter()
-                                .any(|t| t.id == *id && t.control == ToolbarControl::Color)
-                        })
-                })
-                .unwrap();
-            let id = section
-                .tiles
-                .iter()
-                .find(|(id, _)| {
-                    saved
-                        .panel(section.panel)
-                        .unwrap()
-                        .tiles()
-                        .iter()
-                        .any(|t| t.id == *id && t.control == ToolbarControl::Color)
-                })
-                .unwrap()
-                .0;
-            let tile = find_named(&root, &format!("zen-tile-{id}"))
-                .unwrap()
-                .downcast()
-                .unwrap();
-            click(&tile);
-            pump(250);
-            assert!(state(&w).customization.drawer.is_some());
-            let drawer = find_named(w.surface.upcast_ref(), "tool-drawer").unwrap();
-            assert!(!drawer.has_css_class("zen-hidden") && drawer.can_target());
-            let placement = w.drawer.placement().unwrap();
-            assert_drawer_connected(&w);
-            let anchor = section.tile_bounds(id).unwrap();
-            assert_eq!(
-                [placement.anchor.x, placement.anchor.y],
-                [anchor.x, anchor.y]
-            );
-            let bar = tile.ancestor(TileStrip::static_type()).unwrap();
-            assert!(bar.has_css_class("drawer-source"));
-            let corners = placement.source_corners(section.bounds);
-            for (expected, class) in corners
-                .into_iter()
-                .zip(["join-nw", "join-ne", "join-se", "join-sw"])
-            {
-                assert_eq!(bar.has_css_class(class), expected);
-            }
-            // Inspect the final composited GTK pixels, not just button CSS:
-            // a rounded toolbar clip used to cut off the square tile corners.
-            let texture = crate::snapshot(&w);
-            let stride = texture.width() as usize * 4;
-            let mut bytes = vec![0; stride * texture.height() as usize];
-            texture.download(&mut bytes, stride);
-            let offset = w
-                .surface
-                .compute_point(&w.window, &gtk::graphene::Point::new(0.0, 0.0))
-                .unwrap();
-            let pixel = |x: f32, y: f32| {
-                let i = (y + offset.y()).floor() as usize * stride
-                    + (x + offset.x()).floor() as usize * 4;
-                &bytes[i..i + 3]
-            };
-            let [x, y] = match placement.direction {
-                Edge::Top => [anchor.x + anchor.width * 0.5, anchor.y + 2.],
-                Edge::Bottom => [anchor.x + anchor.width * 0.5, anchor.y + anchor.height - 2.],
-                Edge::Left => [anchor.x + 2., anchor.y + anchor.height * 0.5],
-                Edge::Right => [anchor.x + anchor.width - 2., anchor.y + anchor.height * 0.5],
-            };
-            let expected = pixel(x, y);
-            for (joined, [x, y]) in placement.source_corners(anchor).into_iter().zip([
-                [anchor.x + 1.0, anchor.y + 1.0],
-                [anchor.x + anchor.width - 2.0, anchor.y + 1.0],
-                [
-                    anchor.x + anchor.width - 2.0,
-                    anchor.y + anchor.height - 2.0,
-                ],
-                [anchor.x + 1.0, anchor.y + anchor.height - 2.0],
-            ]) {
-                if joined {
-                    assert!(
-                        pixel(x, y)
-                            .iter()
-                            .zip(expected)
-                            .all(|(a, b)| a.abs_diff(*b) <= 3),
-                        "{edge:?} joined tile corner: {:?} vs {expected:?}",
-                        pixel(x, y)
-                    );
-                }
-            }
-            if section.tiles.len() > 1 {
-                let first = section.tiles[0].1;
-                let [x, y] = if matches!(edge, Edge::Left | Edge::Right) {
-                    [
-                        section.bounds.x + first.width * 0.5,
-                        section.bounds.y + first.height + 1.0,
-                    ]
-                } else {
-                    [
-                        section.bounds.x + first.width + 1.0,
-                        section.bounds.y + first.height * 0.5,
-                    ]
-                };
-                assert!(
-                    pixel(x, y) != expected,
-                    "source toolbar keeps a distinct background from its active tile"
-                );
-            }
-            capture_reference(&w, &format!("{dir}/zen-drawer-{edge:?}-{name}.png"), 1.0);
-            let dismissed = w.chrome_event(ChromeEvent::Contact {
-                position: [600.0, 450.0],
-                canvas: true,
+        assert!(w.header.root.can_target());
+        for pressed in [true, false] {
+            w.interact(UiInput::Key {
+                key: "Tab".into(),
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::default(),
+                editing: false,
+                divider: None,
             });
-            assert!(dismissed.handled && dismissed.chrome_hidden);
-            pump(250);
-            assert!(state(&w).customization.drawer.is_none());
-            assert!(!bar.has_css_class("drawer-source"));
-            for class in ["join-nw", "join-ne", "join-se", "join-sw"] {
-                assert!(!bar.has_css_class(class));
-            }
         }
-        click(&zen);
-        pump(250);
         assert!(!state(&w).workspace.zen_mode);
         assert_eq!(state(&w).workspace.layout, saved);
     }
@@ -6446,44 +6234,10 @@ fn native_zen_behaviors() {
         page: SettingsPage::Appearance,
     });
     pump(250);
-    let row: adw::SwitchRow = find_named(w.preferences.dialog.upcast_ref(), "setting-total-zen")
-        .unwrap()
-        .downcast()
-        .unwrap();
-    row.set_active(true);
-    pump(100);
-    assert!(state(&w).settings.total_zen);
-    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-reveal-mode").is_none());
-    capture_reference(&w, &format!("{dir}/zen-preferences.png"), 1.0);
+    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-total-zen").is_none());
+    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").is_some());
     w.dispatch(UiAction::CloseSettings);
     pump(250);
-    click(&zen);
-    assert!(
-        w.chrome_event(ChromeEvent::Motion {
-            position: [600.0, 450.0]
-        })
-        .chrome_hidden
-    );
-    assert!(!zen.can_target());
-    pump(250);
-    capture_reference(&w, &format!("{dir}/zen-total.png"), 1.0);
-    assert!(
-        !w.chrome_event(ChromeEvent::Motion {
-            position: [6.0, 6.0]
-        })
-        .chrome_hidden
-    );
-    for pressed in [true, false] {
-        w.interact(UiInput::Key {
-            key: "Tab".into(),
-            pressed,
-            repeat: false,
-            modifiers: Modifiers::default(),
-            editing: false,
-            divider: None,
-        });
-    }
-    assert!(!state(&w).workspace.zen_mode);
     let menu = w
         .gpu
         .borrow()
@@ -6492,13 +6246,11 @@ fn native_zen_behaviors() {
         .session
         .context_menu(ContextTarget::ZenMode)
         .unwrap();
-    assert_eq!(menu.sections[0][0].label, "Total zen");
+    assert_eq!(menu.sections.len(), 1);
+    assert_eq!(menu.sections[0][0].label, "Change icon…");
     w.dispatch(menu.sections[0][0].action.clone().unwrap());
-    assert!(!state(&w).settings.total_zen);
-    w.dispatch(menu.sections[1][0].action.clone().unwrap());
-    pump(300);
+    pump(250);
     assert_eq!(state(&w).preferences.reveal, Some(PreferenceId::ZenIcon));
-    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").is_some());
     w.window.close();
     pump(100);
 }
@@ -6510,12 +6262,6 @@ fn native_zen_floating_targets() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::TotalZen,
-            value: layer_ui::PreferenceValue::Bool(true),
-        },
-    });
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Toolbar,
@@ -6681,12 +6427,6 @@ fn native_floating_gestures() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::TotalZen,
-            value: layer_ui::PreferenceValue::Bool(true),
-        },
-    });
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Sizes,
@@ -7525,12 +7265,6 @@ fn native_workspace_management() {
         send(CustomizationAction::SetTabStyle {
             group: floated,
             style: TabStyle::Name,
-        });
-        w.dispatch(UiAction::Preferences {
-            action: PreferenceAction::Edit {
-                id: PreferenceId::TotalZen,
-                value: layer_ui::PreferenceValue::Bool(true),
-            },
         });
         w.dispatch(UiAction::Invoke {
             command: CommandId::ZenMode,
@@ -8541,12 +8275,6 @@ fn native_panel_expansion() {
         tap_tab(Panel::Layers);
         assert!(state(&w).customization.expanded.is_none());
     }
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::TotalZen,
-            value: layer_ui::PreferenceValue::Bool(true),
-        },
-    });
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
     });
@@ -10621,7 +10349,7 @@ fn native_frame_pacing() {
         let startup_wait_ms = startup_wait.elapsed().as_secs_f64() * 1000.;
         let navigator_visible = w.navigator.root.is_mapped()
             && w.navigator.root.opacity() > 0.
-            && !w.header.has_css_class("zen-hidden");
+            && !w.header.root.has_css_class("zen-hidden");
         let clock = w.area.frame_clock().unwrap();
         let paint_start = Rc::new(Cell::new(None::<Instant>));
         let paint_cpu = Rc::new(RefCell::new(Vec::with_capacity(800)));
@@ -10964,7 +10692,7 @@ fn native_window_drag_input() {
                 "exercise CSD shadow offsets"
             );
             let before = saved(&w);
-            let title = find_css(w.header.upcast_ref(), "document-title").unwrap();
+            let title = find_css(w.header.root.upcast_ref(), "document-title").unwrap();
             let b = title.compute_bounds(&w.surface).unwrap();
             let start = [
                 origin[0] + b.x() + b.width() * 0.5,
@@ -12790,10 +12518,10 @@ fn native_workspace_controls_docking_and_ink() {
     });
     pump(100);
     assert!(!w.ticking.get(), "idle canvas must stop requesting frames");
-    let close = find_css(w.header.upcast_ref(), "close").unwrap();
+    let close = find_css(w.header.root.upcast_ref(), "close").unwrap();
     let circle = close.first_child().unwrap().compute_bounds(&close).unwrap();
     assert_eq!((circle.width(), circle.height()), (24.0, 24.0));
-    let hit = close.compute_bounds(&w.header).unwrap();
+    let hit = close.compute_bounds(&w.header.root).unwrap();
     assert!(hit.width() >= 34.0 && hit.height() >= 34.0);
     let circle = close
         .first_child()
@@ -13359,12 +13087,6 @@ fn native_workspace_controls_docking_and_ink() {
     });
     pump(100);
     let camera = state(&w).camera;
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::TotalZen,
-            value: layer_ui::PreferenceValue::Bool(true),
-        },
-    });
     w.chrome_event(ChromeEvent::Motion {
         position: [600.0, 450.0],
     });
@@ -13378,7 +13100,7 @@ fn native_workspace_controls_docking_and_ink() {
     w.update_zen();
     // Capture the settled 180ms fade, not the first frame after hiding chrome.
     pump(200);
-    assert!(w.header.has_css_class("zen-hidden"));
+    assert!(w.header.root.has_css_class("zen-hidden"));
     assert_eq!(state(&w).camera, camera);
     assert!(
         !w.ticking.get(),
@@ -13391,7 +13113,7 @@ fn native_workspace_controls_docking_and_ink() {
     }
     crate::capture(&w, "../../artifacts/ui/gtk-zen.png");
     assert!(w.reveal_chrome_at(24.0, 24.0));
-    assert!(!w.header.has_css_class("zen-hidden"));
+    assert!(!w.header.root.has_css_class("zen-hidden"));
     assert!(command(&w, CommandId::ZenMode).has_css_class("selected-tool"));
     pump(200);
     crate::capture(&w, "../../artifacts/ui/gtk-zen-controls.png");
@@ -13400,13 +13122,13 @@ fn native_workspace_controls_docking_and_ink() {
     });
     click(&command(&w, CommandId::Settings));
     assert!(
-        !w.header.has_css_class("zen-hidden"),
+        !w.header.root.has_css_class("zen-hidden"),
         "settings must pin chrome"
     );
     w.dispatch(UiAction::CloseSettings);
     pump(100);
     click(&command(&w, CommandId::ZenMode));
-    assert!(!w.header.has_css_class("zen-hidden"));
+    assert!(!w.header.root.has_css_class("zen-hidden"));
     assert_eq!(state(&w).camera.translation, camera.translation);
     click(&command(&w, CommandId::ToggleTheme));
     pump(200);
@@ -13625,7 +13347,7 @@ fn native_workspace_menu_input() {
     for (visit, index) in [0, 2, 1, 0, 1].into_iter().enumerate() {
         let (id, preset) = layer_workspace::DEFAULT_WORKSPACES[index];
         let button = find_named(
-            w.header.upcast_ref(),
+            w.header.root.upcast_ref(),
             &format!("workspace-switch-{}", preset.name().to_lowercase()),
         )
         .unwrap();
@@ -13703,7 +13425,7 @@ fn native_workspace_menu_input() {
         }
     }
     for label in ["Window", "File"] {
-        let button = menu(w.header.upcast_ref(), label).unwrap();
+        let button = menu(w.header.root.upcast_ref(), label).unwrap();
         let bounds = button.compute_bounds(&w.window).unwrap();
         let popup = button.popover().unwrap();
         click(
@@ -14076,7 +13798,7 @@ fn native_named_workspace_manager_library_and_history() {
     assert!(manager.switcher_ids().contains(&painting));
     assert!(
         find_named(
-            w.header.upcast_ref(),
+            w.header.root.upcast_ref(),
             &format!("workspace-switch-{painting}")
         )
         .is_some()
@@ -14221,11 +13943,7 @@ fn native_named_workspace_manager_library_and_history() {
         }
     }
     run(A::Switch(painting.clone()), None, None);
-    run(
-        A::Reset(painting.clone()),
-        None,
-        Some("Restore"),
-    );
+    run(A::Reset(painting.clone()), None, Some("Restore"));
     assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
     assert_eq!(state(&w).brush.diameter, 73.);
     w.dispatch(UiAction::Invoke {

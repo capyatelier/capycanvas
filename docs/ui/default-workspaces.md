@@ -11,9 +11,9 @@ puts paint, smudge, eraser, layers, and color together, with size, opacity, and
 undo/redo on the side. Selection and transform remain readily accessible.
 [Clip Studio Paint's Simple Mode](https://help.clip-studio.com/en-us/manual_en/090_tablet/Tablet_interface.htm)
 similarly emphasizes drawing tools, color, layers, brush size/opacity, and undo/redo.
-Our Painter arrangement uses those common essentials, with Fill as a frequently
-used painting operation. Drawers replace persistent panels; file operations
-remain in the existing menu.
+The GTK Painter arrangement uses those common essentials as individual
+[window-bar items](window-bar.md). Drawers replace persistent panels; file
+operations remain in the menu button.
 
 [Affinity Photo's interface reference](https://affinity.help/photo2/English.lproj/pages/Workspace/interface.html)
 separates editing tools from the settings panels in its right Studio.
@@ -31,11 +31,14 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Painter | Brush, Eraser, Blend, Fill; Eyedropper, Color, Brush size drawer, Opacity | Undo, Redo; Lasso selection, Scale/rotate; Tool Set and Layers drawers | None |
+| Painter (GTK window bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color |
 | Illustrator | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
 | Photographer | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
-Painter uses Medium toolbar tiles; Photographer uses Small. Painter starts with Brush
+GTK Painter uses Medium window-bar icons, a transparent canvas overlay, no menu
+labels and no zoom/rotation bubble. Other hosts retain the earlier two-toolbar
+Painter arrangement until their window-bar projection is implemented.
+Photographer uses Small toolbar tiles. Painter starts with Brush
 selected and no docked content panels. Photographer starts with Operation selected,
 devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
 the illustration Tool Set/Brush size columns and Diagnostics. Illustrator retains
@@ -56,7 +59,8 @@ the existing default arrangement and tool selection.
 - All three save tool and layout edits normally. They cannot be renamed or deleted.
   The header initially shows these three, follows workspace identities, and
   displays their current names. Its entries can be changed in Manage Workspaces.
-- The pill sits to the right of the document title and left of the clock. It uses
+- The pill defaults to the right of the document title and left of the clock;
+  GTK Painter centers it, and the window-bar builder can reposition it. It uses
   normal workspace switching, including outgoing saves and ownership checks.
   Selecting a workspace restores its latest settings and arrangement. It never
   reapplies the shipped preset. An unpinned active workspace is temporarily
@@ -76,6 +80,9 @@ the existing default arrangement and tool selection.
 - The first Photographer arrangement used Medium tiles. On switching to an
   untouched copy of that arrangement, update it and its starting layout to Small.
   Keep renamed workspaces and brush edits; leave customized layout histories alone.
+- Untouched GTK Painter workspaces upgrade from the shipped two-toolbar layout
+  to the window bar. Working brush/color values remain intact. Any edited
+  history, custom baseline or independent copy is left alone.
 
 ## Configurable switcher
 

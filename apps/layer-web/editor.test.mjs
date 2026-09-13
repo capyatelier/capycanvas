@@ -64,9 +64,8 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await evaluate('window.dispatchEvent(new PointerEvent("pointermove",{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:"mouse",bubbles:true}))');
   await settle();
   assert.ok(await evaluate('document.querySelector("#workspace").classList.contains("zen-hidden")'));
-  assert.ok(await evaluate('[...document.querySelectorAll(".zen-toolbar")].some(n=>n.getClientRects().length)'),"Partial Zen retains edge toolbars");
-  // Activate the shared tile action through the projected DOM toolbar.
-  assert.ok(await evaluate('document.querySelectorAll(".zen-toolbar .tile-button button").length>3'));
+  assert.equal(await evaluate('document.querySelector(".zen-toolbar")'),null,"Total Zen has no alternate toolbar projection");
+  assert.equal(await evaluate('"total_zen" in layerApp.state().settings'),false,"Legacy partial-Zen setting is discarded");
   await invoke("zen_mode");
   await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));window.editorColumnGroup=group.id;layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:group.id,collapsed:true}});})()`);
   await settle();

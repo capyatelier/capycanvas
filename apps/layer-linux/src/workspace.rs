@@ -19,14 +19,14 @@ mod columns;
 mod customization;
 #[path = "workspace_drawer.rs"]
 mod drawers;
+#[path = "workspace_header.rs"]
+mod header;
 #[path = "workspace_manager.rs"]
 mod manager;
 #[path = "workspace_tab_drag.rs"]
 mod tab_drag;
 #[path = "workspace_update.rs"]
 mod workspace_update;
-#[path = "workspace_zen.rs"]
-mod zen;
 use tab_drag::NativeTabSlide;
 
 mod allocation {
@@ -187,10 +187,6 @@ mod allocation {
                 HEADER_HEIGHT,
                 STATUS_HEIGHT,
             );
-            if let Some(w) = self.owner.borrow().upgrade() {
-                w.zen
-                    .allocate(&self.layout.borrow(), [width as f32, height as f32]);
-            }
             if let Some((id, from, progress)) = self.transition.get()
                 && let Some(group) = resolved.groups.iter_mut().find(|g| g.id == id)
             {
@@ -222,7 +218,7 @@ mod allocation {
                 }
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
-                    Slot::Canvas | Slot::ZenToolbars => Some(Bounds {
+                    Slot::Canvas => Some(Bounds {
                         x: 0.0,
                         y: 0.0,
                         width: width as f32,
@@ -232,13 +228,11 @@ mod allocation {
                         x: 0.0,
                         y: 0.0,
                         width: width as f32,
-                        height: HEADER_HEIGHT,
-                    }),
-                    Slot::ZenButton => Some(Bounds {
-                        x: WORKSPACE_SPACING,
-                        y: WORKSPACE_SPACING,
-                        width: TILE_SIZE,
-                        height: TILE_SIZE,
+                        height: self
+                            .owner
+                            .borrow()
+                            .upgrade()
+                            .map_or(HEADER_HEIGHT, |w| w.header.height()),
                     }),
                     Slot::Status => Some(resolved.status),
                     Slot::Drawer(id) | Slot::DrawerShadow(id) => {
@@ -460,7 +454,6 @@ impl PanelColumns {
 enum Slot {
     Canvas,
     Header,
-    ZenButton,
     Status,
     Group(u32),
     Divider(u32),
@@ -469,7 +462,6 @@ enum Slot {
     DrawerShadow(u32),
     DrawerConnection(u32),
     Column(u32),
-    ZenToolbars,
 }
 glib::wrapper! {
     pub struct DockSurface(ObjectSubclass<allocation::DockSurface>)
@@ -548,12 +540,10 @@ impl DockSurface {
                 slot,
                 Slot::Canvas
                     | Slot::Header
-                    | Slot::ZenButton
                     | Slot::Status
                     | Slot::Drawer(_)
                     | Slot::DrawerShadow(_)
                     | Slot::DrawerConnection(_)
-                    | Slot::ZenToolbars
                     | Slot::Divider(_)
             )
         });
@@ -618,6 +608,7 @@ struct NativeDockItem(DockItem);
 
 #[derive(Clone, Copy)]
 enum DragTarget {
+    Header(u32),
     Dock(DockItem),
     Divider(u32),
     ColumnPanel(u32, Option<Panel>),
@@ -630,8 +621,9 @@ impl DragTarget {
         position: [f32; 2],
         viewport: [f32; 2],
         tabs: Vec<TabHit>,
-    ) -> UiAction {
-        match self {
+    ) -> Option<UiAction> {
+        Some(match self {
+            Self::Header(_) => return None,
             Self::Dock(item) => UiAction::DragWorkspace {
                 item,
                 phase,
@@ -659,7 +651,7 @@ impl DragTarget {
                 position,
                 viewport,
             },
-        }
+        })
     }
 }
 
@@ -791,8 +783,7 @@ pub struct Workspace {
     surface: DockSurface,
     palette_css: gtk::CssProvider,
     palette: Cell<Option<ThemePalette>>,
-    header: adw::HeaderBar,
-    header_status: gtk::Box,
+    header: header::Header,
     system_status: Rc<crate::system_status::SystemStatus>,
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_held: Cell<bool>,
@@ -803,7 +794,6 @@ pub struct Workspace {
     measuring_panels: Cell<bool>,
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
-    zen: zen::Zen,
     panels: Vec<(Panel, gtk::Widget)>,
     groups: RefCell<Vec<GroupView>>,
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
@@ -895,13 +885,8 @@ impl Workspace {
         tab.add_css_class("document-title");
         tab.set_ellipsize(gtk::pango::EllipsizeMode::End);
         tab.set_width_chars(1);
-        let header = adw::HeaderBar::new();
-        header.add_css_class("workspace-header");
-        header.set_title_widget(Some(&tab));
+        let header = header::Header::new();
         let system_status = crate::system_status::SystemStatus::new();
-        let header_status = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        header_status.set_widget_name("header-status");
-        header_status.append(&system_status.root);
         let view_info = gtk::Label::new(Some("100% · 0°"));
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         status_bar.add_css_class("workspace-status");
@@ -911,7 +896,7 @@ impl Workspace {
         view_info.set_valign(gtk::Align::End);
         status_bar.append(&view_info);
         surface.add(Slot::Canvas, &area);
-        surface.add(Slot::Header, &header);
+        surface.add(Slot::Header, &header.root);
         surface.add(Slot::Status, &status_bar);
         let toolbar = TileStrip::new();
         toolbar.add_css_class("toolbar-controls");
@@ -943,7 +928,6 @@ impl Workspace {
         let content = gtk::Overlay::new();
         let workspaces = manager::NativeWorkspaces::new();
         workspaces.root.add_css_class("workspace-notice");
-        header_status.prepend(&workspaces.switcher);
         content.set_child(Some(&surface));
         // Notices must not resize the full-window canvas, change its viewport,
         // or recreate the GPU swapchain while opening/saving a workspace.
@@ -961,7 +945,6 @@ impl Workspace {
             palette_css,
             palette: Cell::new(None),
             header,
-            header_status,
             system_status,
             popovers: RefCell::new(Vec::new()),
             chrome_held: Cell::new(false),
@@ -972,7 +955,6 @@ impl Workspace {
             drop_hint: RefCell::new(None),
             measuring_panels: Cell::new(false),
             toolbar: toolbar.clone(),
-            zen: zen::Zen::default(),
             groups: RefCell::new(Vec::new()),
             panels: vec![
                 (Panel::Toolbar, toolbar.clone().upcast()),
@@ -1247,26 +1229,7 @@ impl Workspace {
                 },
             })
         ));
-        let zen = self.command_button(CommandId::ZenMode);
-        if let Some(image) = zen.child().and_downcast::<gtk::Image>() {
-            image.set_pixel_size(ZEN_ICON_SIZE as i32);
-        }
-        zen.add_css_class("chrome-control");
-        zen.add_css_class("workspace-zen");
-        // Keep one button outside the fading header, at the same 6px inset.
-        // Its spacer preserves the native menu and title allocation in both modes.
-        let zen_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        zen_space.set_size_request(TILE_SIZE as i32, TILE_SIZE as i32);
-        self.header.pack_start(&zen_space);
-        self.surface.add(Slot::ZenButton, &zen);
-        self.install_context(&zen, ContextTarget::ZenMode);
-        for menu in ApplicationMenu::ALL {
-            self.header.pack_start(&self.chrome_menu(menu));
-        }
-        let primary = self.chrome_menu(ApplicationMenu::Primary);
-        primary.set_icon_name("layer-menu-symbolic");
-        self.header.pack_end(&primary);
-        self.header.pack_end(&self.header_status);
+        self.header.bind(self);
         // Observe native title-bar grabs without claiming events from Adw's
         // window handle. WM grabs can consume release; the next unpressed
         // motion also clears the latch, never a leave/cancel during the drag.
@@ -1295,7 +1258,7 @@ impl Workspace {
                 }
                 let was_held = this.chrome_held.get();
                 if event.event_type() == gdk::EventType::ButtonPress
-                    && point.is_some_and(|[_, y]| y < HEADER_HEIGHT)
+                    && point.is_some_and(|[_, y]| y < this.header.height())
                 {
                     this.chrome_held.set(true);
                 } else if event.event_type() == gdk::EventType::ButtonRelease
@@ -1471,9 +1434,13 @@ impl Workspace {
                 if drag.context {
                     self.dismiss_context();
                 }
-                if matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+                if matches!(
+                    drag.target,
+                    DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+                ) {
                     self.dragging.set(false);
                 }
+                self.header.clear_drop();
                 self.clear_tab_slide(&mut drag);
                 self.restore_drag_cursor(&drag);
             }
@@ -1513,12 +1480,7 @@ impl Workspace {
     }
 
     fn present_interaction(&self, reply: InputReply) {
-        self.set_chrome_hidden(
-            reply.chrome_hidden,
-            reply.hide_floating_panels,
-            reply.keep_zen_button,
-            reply.partial_zen,
-        );
+        self.set_chrome_hidden(reply.chrome_hidden);
         let cursor = Some(if reply.pan_cursor { "grab" } else { "none" });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
             self.area.set_cursor_from_name(cursor);
@@ -1565,33 +1527,10 @@ impl Workspace {
         .handled
     }
 
-    fn set_chrome_hidden(
-        &self,
-        hidden: bool,
-        hide_floating_panels: bool,
-        keep_zen_button: bool,
-        partial_zen: bool,
-    ) {
+    fn set_chrome_hidden(&self, hidden: bool) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
             if !matches!(slot, Slot::Canvas) {
-                let hidden = if *slot == Slot::ZenToolbars {
-                    !partial_zen
-                } else if matches!(
-                    slot,
-                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0)
-                ) && partial_zen
-                {
-                    false
-                } else if *slot == Slot::ZenButton {
-                    if hidden && keep_zen_button {
-                        widget.add_css_class("zen-button-neutral");
-                    } else {
-                        widget.remove_css_class("zen-button-neutral");
-                    }
-                    hidden && !keep_zen_button
-                } else {
-                    hidden && (hide_floating_panels || !widget.has_css_class("floating-panel"))
-                };
+                let hidden = hidden && !widget.has_css_class("floating-panel");
                 let can_target = !hidden && !matches!(slot, Slot::DrawerShadow(_));
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target
                 {
@@ -1607,17 +1546,6 @@ impl Workspace {
         }
     }
     fn fullscreen_changed(self: &Rc<Self>, fullscreen: bool) {
-        if fullscreen && self.tab.parent().as_ref() != Some(self.header_status.upcast_ref()) {
-            self.header
-                .set_title_widget(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 0)));
-            self.tab.set_max_width_chars(35);
-            self.header_status.prepend(&self.tab);
-        } else if !fullscreen && self.tab.parent().as_ref() == Some(self.header_status.upcast_ref())
-        {
-            self.header_status.remove(&self.tab);
-            self.tab.set_max_width_chars(-1);
-            self.header.set_title_widget(Some(&self.tab));
-        }
         let show_clock = self
             .gpu
             .borrow()
@@ -1625,8 +1553,6 @@ impl Workspace {
             .map(|g| g.session.state().settings.show_clock)
             .unwrap_or_default();
         self.system_status.set_visibility(fullscreen, show_clock);
-        self.header.set_show_start_title_buttons(!fullscreen);
-        self.header.set_show_end_title_buttons(!fullscreen);
         self.dispatch(UiAction::WindowFullscreen { fullscreen });
     }
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
@@ -1660,6 +1586,7 @@ impl Workspace {
                 | UiAction::MeasureColumnScroll { .. }
                 | UiAction::MeasurePanels { .. }
                 | UiAction::MeasureTitlebar { .. }
+                | UiAction::MeasureHeader { .. }
                 | UiAction::SystemThemeChanged { .. }
                 | UiAction::WindowFullscreen { .. }
         ) && !self.workspaces.accepts_input(self)
@@ -1754,9 +1681,16 @@ impl Workspace {
                     self.status.set_visible(false);
                 }
                 if change.regions != 0 {
-                    self.reset_workspace_publication();
+                    let pending_layout = self.reset_workspace_publication();
                     let moving = publication.as_ref().is_some_and(|u| u.drag.is_some());
-                    self.refresh(change.regions | if moving { regions::LAYOUT } else { 0 });
+                    self.refresh(
+                        change.regions
+                            | if moving || pending_layout {
+                                regions::LAYOUT
+                            } else {
+                                0
+                            },
+                    );
                     self.workspaces.observe(self, change.regions);
                 }
                 if let Some(update) = publication.filter(|_| change.regions != 0) {
@@ -1966,6 +1900,17 @@ impl Workspace {
             return;
         };
         self.refreshing.set(true);
+        self.header.refresh(self, &state);
+        self.view_info
+            .set_visible(state.workspace.layout.canvas_info.visible);
+        let anchor = state.workspace.layout.canvas_info.anchor;
+        self.view_info.set_halign(
+            if matches!(anchor, OverlayAnchor::TopLeft | OverlayAnchor::BottomLeft) {
+                gtk::Align::Start
+            } else {
+                gtk::Align::End
+            },
+        );
         if regions & (regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS)
             != 0
         {
@@ -2069,10 +2014,6 @@ impl Workspace {
             if state.customization.drawer.is_some() {
                 self.surface.raise_drawer(0);
             }
-        }
-        if regions & (regions::LAYOUT | regions::SETTINGS | regions::BRUSH | regions::COMMANDS) != 0
-        {
-            self.zen.refresh(self, &state);
         }
         self.refreshing.set(false);
         if regions & (regions::LAYOUT | regions::SETTINGS) != 0 {
@@ -2590,7 +2531,7 @@ impl Workspace {
     }
 
     fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
-        if matches!(target, DragTarget::Dock(_)) {
+        if matches!(target, DragTarget::Dock(_) | DragTarget::Header(_)) {
             widget.set_cursor_from_name(Some(if widget.has_css_class("drag-hold") {
                 "default"
             } else {
@@ -2618,6 +2559,9 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
+                if matches!(target, DragTarget::Header(_)) && !self.header.editing.get() {
+                    return None;
+                }
                 let target = if let DragTarget::Divider(id) = target
                     && let Some(column) = self.resolved().column_panel_at_divider(id)
                 {
@@ -2645,12 +2589,14 @@ impl Workspace {
         } else {
             Vec::new()
         };
-        self.dispatch(target.action(
+        if let Some(action) = target.action(
             phase,
             position,
             [self.surface.width() as f32, self.surface.height() as f32],
             tabs,
-        ));
+        ) {
+            self.dispatch(action);
+        }
         #[cfg(test)]
         if phase == ContactPhase::Move {
             self.publication
@@ -2798,7 +2744,15 @@ impl Workspace {
             }
             self.clear_tab_slide(&mut drag);
             if drag.started {
-                if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
+                if let DragTarget::Header(id) = drag.target {
+                    self.dragging.set(false);
+                    if phase == ContactPhase::Up
+                        && let Some((zone, before)) = self.header.drop_at(point)
+                    {
+                        self.dispatch(HeaderAction::Move { id, zone, before }.action());
+                    }
+                    self.header.clear_drop();
+                } else if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
                     self.dragging.set(false);
                     if phase == ContactPhase::Up
                         && let Some(hint) = self.drop_at(point[0], point[1], item)
@@ -2832,7 +2786,7 @@ impl Workspace {
                 self.dismiss_context();
                 return false;
             }
-            let recognized = if matches!(drag.target, DragTarget::Dock(_)) {
+            let recognized = if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
                 self.surface.drag_check_threshold(
                     drag.origin[0] as i32,
                     drag.origin[1] as i32,
@@ -2853,15 +2807,21 @@ impl Workspace {
             self.dismiss_context();
             self.reset_drag_recognizers(&drag);
             drag.started = true;
-            if matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+            if matches!(
+                drag.target,
+                DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+            ) {
                 self.dragging.set(true);
             }
             self.start_tab_slide(&mut drag);
-            if matches!(drag.target, DragTarget::Dock(_)) {
+            if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
                 self.set_drag_cursor(&mut drag, "grabbing");
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
-            if !matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+            if !matches!(
+                drag.target,
+                DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+            ) {
                 self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
             }
             if let Some(tab) = &drag.tab
@@ -2872,7 +2832,10 @@ impl Workspace {
         }
         drag.point = point;
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
-        if !matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+        if !matches!(
+            drag.target,
+            DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+        ) {
             self.dispatch_drag(drag.target, ContactPhase::Move, point);
         }
         if let DragTarget::Dock(item) = drag.target {
@@ -2880,6 +2843,10 @@ impl Workspace {
                 *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);
                 self.surface.queue_draw();
             }
+            self.set_drag_cursor(&mut drag, "grabbing");
+        }
+        if matches!(drag.target, DragTarget::Header(_)) {
+            self.header.drag_motion(point);
             self.set_drag_cursor(&mut drag, "grabbing");
         }
         true

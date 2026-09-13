@@ -64,7 +64,7 @@ impl NativeHost {
             dirty: true,
             chrome_hidden: false,
             hide_floating_panels: false,
-            keep_zen_button: true,
+            keep_zen_button: false,
             error: None,
             sequence: 0,
             // Eager hosts are ready on GPU attachment; staged hosts reset this.
@@ -740,7 +740,6 @@ impl NativeHost {
                             &state.workspace.layout,
                             self.logical,
                             &heights,
-                            state.partial_zen(),
                         )
                     })
                 };
@@ -925,45 +924,26 @@ mod tests {
         }
     }
     #[test]
-    fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
+    fn zen_snapshot_has_no_alternative_toolbar_projection() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2880, 1800, 1.75).unwrap();
-        let mut settings = app.session.state().settings.clone();
-        settings.total_zen = false;
-        app.dispatch(UiAction::RestoreSettings { settings })
-            .unwrap();
         let layout = app.session.state().workspace.layout.clone();
-        app.dispatch(UiAction::Invoke {
-            command: layer_ui::CommandId::ZenMode,
-        })
-        .unwrap();
-        let snapshot = app.take_snapshot().unwrap();
-        assert_eq!(snapshot["partial_zen"], true);
-        let sections = snapshot["zen_toolbars"]["sections"].as_array().unwrap();
-        assert!(!sections.is_empty());
-        for section in sections {
-            let panel = snapshot["panels"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|p| p["id"] == section["panel"])
-                .unwrap();
-            for tile in section["tiles"].as_array().unwrap() {
-                assert!(
-                    panel["tiles"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|t| t["id"] == tile[0])
-                );
-            }
+        for active in [true, false] {
+            app.dispatch(UiAction::Invoke {
+                command: layer_ui::CommandId::ZenMode,
+            })
+            .unwrap();
+            let snapshot = app.take_snapshot().unwrap();
+            assert_eq!(app.session.state().workspace.zen_mode, active);
+            assert_eq!(snapshot["partial_zen"], false);
+            assert!(
+                snapshot["zen_toolbars"]["sections"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(app.session.state().workspace.layout, layout);
         }
-        assert_eq!(app.session.state().workspace.layout, layout);
-        app.dispatch(UiAction::Invoke {
-            command: layer_ui::CommandId::ZenMode,
-        })
-        .unwrap();
-        assert_eq!(app.take_snapshot().unwrap()["partial_zen"], false);
     }
     #[test]
     fn android_drawer_queries_follow_collapsed_toolbar_measurements() {
@@ -1251,8 +1231,8 @@ mod tests {
         assert_eq!(app.take_snapshot().unwrap()["chrome_hidden"], true);
         app.hide_floating_panels = true;
         assert_eq!(app.take_snapshot().unwrap()["hide_floating_panels"], true);
-        app.keep_zen_button = false;
-        assert_eq!(app.take_snapshot().unwrap()["keep_zen_button"], false);
+        app.keep_zen_button = true;
+        assert_eq!(app.take_snapshot().unwrap()["keep_zen_button"], true);
         assert!(app.take_snapshot().is_none());
         app.error = Some("test surface error".into());
         assert_eq!(app.take_snapshot().unwrap()["error"], "test surface error");

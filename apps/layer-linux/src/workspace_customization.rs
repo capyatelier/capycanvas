@@ -282,7 +282,7 @@ impl ToolbarManagerUi {
 
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
-    palette: gtk::CssProvider,
+    pub(super) palette: gtk::CssProvider,
     palette_colors: Cell<Option<[[f32; 4]; 2]>>,
     context: gtk::PopoverMenu,
     popup: gtk::Popover,
