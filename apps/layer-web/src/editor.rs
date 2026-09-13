@@ -285,7 +285,7 @@ impl WebApp {
                 &gpu.renderer,
                 &target.texture.create_view(&Default::default()),
                 [width, height],
-            );
+            ).map_err(js)?;
             gpu.renderer.queue().present(target);
         }
         Ok(retry)
