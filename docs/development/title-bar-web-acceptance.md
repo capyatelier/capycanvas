@@ -137,3 +137,18 @@ manual stylus/touch review.
 Evidence: `artifacts/title-bar/review/`, including `tablet/` for device captures.
 The tablet review uses a separate local origin, leaving the earlier workspace
 and document intact.
+
+## Shared raster integration
+
+Concurrent main changes introduced immutable raster capture on native workers.
+The Web integration awaits GPU mapping on the browser event loop and publishes
+the same shared Rust tile backing in bounded groups. It applies capture
+backpressure and reserves the immutable save checkpoint before asynchronously
+waiting for its backing. Shared publication reads never block the Web event loop.
+
+Validation after integration: release Wasm build, native renderer check, 45 core
+tests and 356 UI tests passed. Headed hardware-WebGPU Chrome `--editor` passed
+real drawing, project save/open/new, PNG export, unsaved cancellation and
+workspace restoration. Headed Chrome `--title-bar-feedback` also passed against
+the integrated renderer. Evidence remains under
+`artifacts/title-bar/review/`.

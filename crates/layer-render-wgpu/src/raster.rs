@@ -85,6 +85,18 @@ struct CaptureWorker {
     error: Arc<std::sync::Mutex<Option<String>>>,
 }
 impl CaptureWorker {
+    #[cfg(target_arch = "wasm32")]
+    fn new(_device: wgpu::Device, _pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
+        Ok(Self {
+            sender: None,
+            pending: Arc::new(AtomicUsize::new(0)),
+            thread: None,
+            staging: Arc::new(AtomicU64::new(0)),
+            error: Arc::new(std::sync::Mutex::new(None)),
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn new(device: wgpu::Device, pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
         let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(16);
         let pending = Arc::new(AtomicUsize::new(0));
@@ -149,9 +161,41 @@ impl CaptureWorker {
     fn ready(&self) -> bool {
         // Reserve room for the largest legal next capture. The total staging
         // ceiling remains 512 MiB, while small edits can share that allowance.
-        self.pending.load(Ordering::Acquire) < 16
+        // Each Web task holds at most one 16 MiB scratch chunk across yields.
+        let slots = if cfg!(target_arch = "wasm32") { 4 } else { 16 };
+        self.pending.load(Ordering::Acquire) < slots
             && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES
     }
+    #[cfg(target_arch = "wasm32")]
+    fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
+        let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
+        self.staging.fetch_add(size, Ordering::Release);
+        self.pending.fetch_add(1, Ordering::Release);
+        let (staging, pending, failure) = (
+            self.staging.clone(),
+            self.pending.clone(),
+            self.error.clone(),
+        );
+        // WebGPU objects belong to this event loop. Await map completion and
+        // publish the same immutable tiles without moving JS handles to threads.
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = async {
+                for capture in captures {
+                    capture.finish_async().await?;
+                }
+                Ok::<_, String>(())
+            }
+            .await;
+            if let Err(message) = result {
+                *failure.lock().unwrap() = Some(message);
+            }
+            staging.fetch_sub(size, Ordering::Release);
+            pending.fetch_sub(1, Ordering::Release);
+        });
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
         let size = captures.iter().map(|c| c.staging_bytes).sum();
         self.staging.fetch_add(size, Ordering::Release);
@@ -184,8 +228,12 @@ struct Entry {
 struct Chunk {
     buffer: wgpu::Buffer,
     entries: Vec<Entry>,
+    #[cfg(not(target_arch = "wasm32"))]
     ready: mpsc::Receiver<Result<(), String>>,
+    #[cfg(target_arch = "wasm32")]
+    ready: futures_channel::oneshot::Receiver<Result<(), String>>,
 }
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct RasterCapture {
     device: wgpu::Device,
     submission: wgpu::SubmissionIndex,
@@ -194,7 +242,59 @@ pub struct RasterCapture {
     pub staging_bytes: u64,
 }
 impl RasterCapture {
+    #[cfg(target_arch = "wasm32")]
+    async fn finish_async(mut self) -> Result<(), String> {
+        let result = async {
+            for chunk in &mut self.chunks {
+                (&mut chunk.ready).await.map_err(|e| e.to_string())??;
+                let mapped = chunk
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .map_err(|e| e.to_string())?;
+                let bytes = mapped.to_vec();
+                drop(mapped);
+                chunk.buffer.unmap();
+                self.pool.put(chunk.buffer.clone());
+                // Bound each compression task; input and presentation can run
+                // between small groups instead of waiting for a whole capture.
+                for group in chunk.entries.chunks(4) {
+                    for entry in group {
+                        let begin = entry.offset as usize;
+                        entry.tile.publish(TileBlob::encode(
+                            entry.key.plane.descriptor(),
+                            &bytes[begin..begin + entry.size as usize],
+                        ))?;
+                    }
+                    let task = js_sys::Promise::new(&mut |resolve, reject| {
+                        if let Err(error) = web_sys::window()
+                            .unwrap()
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
+                        {
+                            let _ = reject.call1(&js_sys::global(), &error);
+                        }
+                    });
+                    wasm_bindgen_futures::JsFuture::from(task)
+                        .await
+                        .map_err(|e| format!("{e:?}"))?;
+                }
+            }
+            Ok::<_, String>(())
+        }
+        .await;
+        if let Err(error) = &result {
+            self.fail(error);
+        }
+        result
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn finish(self) -> Result<(), String> {
+        Err("Synchronous raster capture is unavailable on Web".into())
+    }
+
     /// Worker only. Cached readback scratch is bounded to four 16 MiB chunks.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<(), String> {
         let result: Result<(), String> = (|| {
             self.device
@@ -687,7 +787,10 @@ impl WgpuRasterizer {
         let chunks = chunks
             .into_iter()
             .map(|(buffer, entries)| {
+                #[cfg(not(target_arch = "wasm32"))]
                 let (tx, ready) = mpsc::channel();
+                #[cfg(target_arch = "wasm32")]
+                let (tx, ready) = futures_channel::oneshot::channel();
                 buffer
                     .slice(..)
                     .map_async(wgpu::MapMode::Read, move |result| {

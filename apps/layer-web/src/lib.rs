@@ -73,6 +73,9 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn can_capture_raster(&self) -> bool {
+        self.0.as_ref().is_none_or(|gpu| gpu.renderer.raster_ready())
+    }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,
@@ -883,6 +886,7 @@ impl WebApp {
                     dab_batches: &[],
                     reset_layers: true,
                     composite_all: true,
+                    restore_rasters: &[],
                 })
                 .map_err(js)?;
         } else {
