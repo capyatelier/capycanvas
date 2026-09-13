@@ -1,11 +1,11 @@
 //! Browser transport owns prepared candidates and readbacks across event-loop
 //! yields. A working document is replaced only after validation and stale checks.
 use super::*;
-use layer_core::{Project, ProjectLimits};
+use layer_core::ProjectLimits;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind};
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
-async fn yield_browser() -> Result<(), JsValue> {
+pub(super) async fn yield_browser() -> Result<(), JsValue> {
     let timer = js_sys::Reflect::get(&js_sys::global(), &js("setTimeout"))?
         .dyn_into::<js_sys::Function>()?;
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
@@ -23,6 +23,7 @@ pub struct WebProject {
     epoch: u64,
     revision: u64,
     closing: bool,
+    recovered: bool,
 }
 
 #[wasm_bindgen]
@@ -53,17 +54,21 @@ impl WebApp {
     pub fn reset_document_close(&mut self) {
         self.session.reset_document_close();
     }
-    pub fn save_project(&mut self, id: u32, location: JsValue) -> Result<Vec<u8>, JsValue> {
+    pub fn save_project(&mut self, id: u32, location: JsValue) -> Result<js_sys::Promise, JsValue> {
         let location = serde_wasm_bindgen::from_value(location).map_err(js)?;
         let project = self
             .session
             .capture_project_save(id, location)
-            .map_err(js)?
-            .pruned()
             .map_err(js)?;
-        let mut bytes = Vec::new();
-        project.write(&mut bytes).map_err(js)?;
-        Ok(bytes)
+        Ok(future_to_promise(async move {
+            raster_project::save(project).await
+        }))
+    }
+    pub fn save_recovery(&self, key: String) -> Result<js_sys::Promise, JsValue> {
+        let project = self.session.capture_project_recovery().map_err(js)?;
+        Ok(future_to_promise(async move {
+            raster_project::save_recovery(project, key).await
+        }))
     }
     pub fn export_ready(&self) -> bool {
         self.session
@@ -98,9 +103,7 @@ impl WebApp {
             let start = js_sys::Date::now();
             loop {
                 if let Some(image) = ticket.try_finish().map_err(js)? {
-                    let mut bytes = Vec::new();
-                    image.write_png(&mut bytes).map_err(js)?;
-                    return Ok(js_sys::Uint8Array::from(bytes.as_slice()).into());
+                    return raster_worker::png(image).await;
                 }
                 if js_sys::Date::now() - start > 60_000. {
                     return Err(js("PNG readback timed out"));
@@ -112,11 +115,12 @@ impl WebApp {
     pub fn prepare_document(
         &self,
         id: u32,
-        bytes: Option<Vec<u8>>,
+        bytes: Option<js_sys::Uint8Array>,
         width: u32,
         height: u32,
         epoch: u64,
         revision: u64,
+        recovered: Option<bool>,
     ) -> Result<js_sys::Promise, JsValue> {
         self.session.require_document_idle().map_err(js)?;
         if self.session.state().document_file.epoch != epoch
@@ -126,8 +130,19 @@ impl WebApp {
                 "The document changed while choosing a file; review those changes first",
             ));
         }
+        let recovered = recovered.unwrap_or(false);
+        if recovered
+            && (id != 0
+                || bytes.is_none()
+                || self.session.state().document_file.modified
+                || self.session.state().document_file.busy)
+        {
+            return Err(js("Recovery requires an unchanged, idle drawing"));
+        }
         let closing = id == 0 && self.session.state().document_file.close_ready;
-        let request = if closing {
+        let request = if recovered {
+            Some(DocumentRequest::Open)
+        } else if closing {
             Some(DocumentRequest::New)
         } else {
             self.session.state().requests.iter().find_map(|r| {
@@ -162,6 +177,7 @@ impl WebApp {
             live.renderer.queue().clone(),
         );
         let instance = live.instance.clone();
+        let lost = live.lost.clone();
         let config = live.config.clone();
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
@@ -176,12 +192,12 @@ impl WebApp {
                 ..Default::default()
             };
             let project = match bytes {
-                Some(bytes) => Project::read(bytes.as_slice(), limits),
-                None => layer_ui::new_drawing(width, height),
-            }
-            .map_err(js)?;
+                Some(bytes) => raster_project::open(bytes, limits.dimension).await?,
+                None => layer_ui::new_drawing(width, height).map_err(js)?,
+            };
             let mut renderer =
                 WgpuRasterizer::from_wgpu_staged(adapter, device, queue).map_err(js)?;
+            raster_worker::install(&mut renderer);
             let mut programs = Vec::new();
             for effect in project
                 .document
@@ -230,6 +246,7 @@ impl WebApp {
                 surface: None,
                 presenter,
                 blank_presented: true,
+                lost,
             };
             let mut candidate =
                 UiSession::from_project(WebRenderer(Some(gpu)), project, None, viewport)
@@ -241,6 +258,7 @@ impl WebApp {
                 epoch,
                 revision,
                 closing,
+                recovered,
             }
             .into())
         }))
@@ -259,10 +277,14 @@ impl WebApp {
             .session
             .take()
             .ok_or_else(|| js("Project already adopted"))?;
-        let mut retired = self
-            .session
-            .adopt_project(candidate, project.epoch, project.revision, location)
-            .map_err(|(e, _)| js(e))?;
+        let mut retired = if project.recovered {
+            self.session
+                .adopt_recovered_project(candidate, project.epoch, project.revision)
+        } else {
+            self.session
+                .adopt_project(candidate, project.epoch, project.revision, location)
+        }
+        .map_err(|(e, _)| js(e))?;
         let old = retired.renderer_mut().0.as_mut().unwrap();
         let next = self.session.renderer_mut().0.as_mut().unwrap();
         next.surface = old.surface.take();
@@ -288,7 +310,7 @@ impl WebApp {
             .poll_startup()
             .map_err(js)?;
         self.deferred_contacts.clear();
-        if project.closing {
+        if project.closing || project.recovered {
             serialize(&layer_ui::UiChange {
                 revision: self.session.state().revision,
                 regions: 255,

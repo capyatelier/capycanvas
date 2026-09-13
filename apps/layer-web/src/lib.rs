@@ -3,6 +3,8 @@
 mod documents;
 mod editor;
 mod header;
+mod raster_project;
+mod raster_worker;
 mod workspaces;
 
 use layer_core::{AssetId, Point};
@@ -56,6 +58,7 @@ pub struct WebGpu {
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
     blank_presented: bool,
+    lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// An unattached GPU, not a fallback rasterizer. Only viewport bookkeeping is
@@ -73,6 +76,16 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|gpu| gpu.renderer.raster_dependencies_ready(packet))
+    }
+    fn can_capture_raster(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|gpu| gpu.renderer.can_capture_raster())
+    }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,
@@ -463,6 +476,24 @@ impl WebApp {
             Ok(JsValue::UNDEFINED)
         }))
     }
+    pub fn gpu_failure(&self) -> Option<String> {
+        self.session
+            .engine()
+            .backend()
+            .0
+            .as_ref()?
+            .lost
+            .lock()
+            .ok()?
+            .clone()
+    }
+    pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
+        let change = self.session.suspend_renderer().map_err(js)?;
+        self.session.renderer_mut().0.take();
+        self.deferred_contacts.clear();
+        self.overviews.clear();
+        serialize(&change)
+    }
     pub fn attach_gpu(&mut self, mut gpu: WebGpu) -> Result<(), JsValue> {
         if self.gpu_ready() {
             return Err(js("GPU is already attached"));
@@ -476,7 +507,10 @@ impl WebApp {
             .as_ref()
             .unwrap()
             .configure(gpu.renderer.device(), &gpu.config);
-        self.session.renderer_mut().0 = Some(gpu);
+        self.session
+            .replace_renderer(WebRenderer(Some(gpu)))
+            .map_err(js)?;
+        self.startup = StartupProgress::default();
         Ok(())
     }
 }
@@ -520,6 +554,11 @@ impl WebGpu {
             })
             .await
             .map_err(|error| gpu_error("device", error))?;
+        let lost = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let failure = lost.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            *failure.lock().unwrap() = Some(format!("Canvas GPU stopped ({reason:?}): {message}"));
+        });
         device.on_uncaptured_error(std::sync::Arc::new(|error| {
             web_sys::console::error_1(&js(error))
         }));
@@ -527,6 +566,7 @@ impl WebGpu {
         let presenter = ViewportPresenter::new(&device, config.format);
         let mut renderer = WgpuRasterizer::from_wgpu_staged(adapter, device, queue)
             .map_err(|error| gpu_error("renderer", error))?;
+        raster_worker::install(&mut renderer);
         renderer.wait_for_startup_catalog();
         if let Some(error) = validation.pop().await {
             return Err(gpu_error("renderer", error));
@@ -538,6 +578,7 @@ impl WebGpu {
             config,
             presenter,
             blank_presented: false,
+            lost,
         })
     }
 }
@@ -859,8 +900,7 @@ impl WebApp {
             .blank_presented;
         let mut change = layer_ui::UiChange::default();
         if first {
-            // Present only paper without consuming the engine's pending replay.
-            // Loaded strokes and effects retain their initial reset/history.
+            // Present paper before restoring the document's committed raster.
             let view = self.session.state().camera.view();
             let doc = self.session.engine().document();
             let extent = [doc.width, doc.height];
@@ -881,6 +921,7 @@ impl WebApp {
                     layers: &layers,
                     dabs: &[],
                     dab_batches: &[],
+                    restore_rasters: &[],
                     reset_layers: true,
                     composite_all: true,
                 })
@@ -955,12 +996,14 @@ impl WebApp {
                 return Err(js("WebGPU surface validation failed"));
             }
         };
-        gpu.presenter.present(
-            &gpu.renderer,
-            &target.texture.create_view(&Default::default()),
-            view,
-            surround,
-        ).map_err(js)?;
+        gpu.presenter
+            .present(
+                &gpu.renderer,
+                &target.texture.create_view(&Default::default()),
+                view,
+                surround,
+            )
+            .map_err(js)?;
         gpu.renderer.queue().present(target);
         gpu.blank_presented = true;
         serialize(&change)

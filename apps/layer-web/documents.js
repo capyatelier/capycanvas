@@ -1,6 +1,6 @@
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,dispatch,applyChange,wake,element,button,message,gpuOperation}) {
+export function createDocuments({app,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
   const active=new Set(),handles=new Map();
   let nextHandle=0,closing=false;
   const pruneHandles=()=>{const current=app.state().document_file.location?.uri;for(const key of handles.keys())if(key!==current)handles.delete(key);};
@@ -79,6 +79,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         message("Preparing drawing…");
         candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision));
         applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
+        await retireRecovery();
       } else if(r.type==="save"||r.type==="export") {
         // Invoke the picker before awaiting work to retain browser user activation.
         const target=await destination(r);
@@ -90,7 +91,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
             wake();await new Promise(resolve=>setTimeout(resolve,16));
           }
         }
-        const bytes=r.type==="save"?app.save_project(id,target.location):await gpuOperation(()=>app.export_png(id));
+        const bytes=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_png(id));
         let success;
         if(target.handle) {
           const stream=await target.handle.createWritable();
@@ -98,6 +99,9 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
           catch(error){try{await stream.abort();}catch{}throw error;}
         } else success=!!await download(bytes,target.location.name,r.type==="export"?"image/png":"application/octet-stream");
         applyChange(app.finish_document(id,success));
+        if(success && r.type==="save" && !app.state().document_file.modified) {
+          await retireRecovery();
+        }
       } else throw new Error(`Unknown document operation: ${r.type}`);
     } catch(error) {
       if(request.kind.type==="document") {
@@ -105,14 +109,73 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
       } else dispatch({type:"complete_request",id:request.id,error:String(error)});
     } finally {candidate?.free();active.delete(request.id);pruneHandles();}
   }
+  // Each live tab owns its recovery record through a Web Lock. Abandoned
+  // records can be offered in another tab without racing a live drawing.
+  const recoveryKey=crypto.randomUUID(),lockName=key=>`capy-raster:${key}`;
+  let recoveryBusy=false,recoveryStarted=false,recoveryVersion=null;
+  const recoveryCall=(operation,key="")=>rasterWorker({operation:`recover-${operation}`,metadata:key,buffers:[]});
+  async function retireRecovery() {
+    try {await recoveryCall("delete",recoveryKey);recoveryVersion=null;}
+    catch(error){message(`Previous recovery copy could not be removed: ${error}`);}
+  }
+  async function autosave() {
+    if(!recoveryStarted||recoveryBusy)return;
+    const state=app.state().document_file;
+    if(state.busy)return;
+    const version=`${state.epoch}:${state.revision}:${state.modified}`;
+    if(version===recoveryVersion)return;
+    recoveryBusy=true;
+    try {
+      if(state.modified)await app.save_recovery(recoveryKey);
+      else await recoveryCall("delete",recoveryKey);
+      recoveryVersion=version;
+    } catch(error) {message(`Recovery copy could not be saved: ${error}`);}
+    finally {recoveryBusy=false;}
+  }
+  let recoveryInitialization;
+  function startRecovery() { return recoveryInitialization ||= initializeRecovery(); }
+  async function initializeRecovery() {
+    if(!navigator.locks)throw new Error("Recovery storage requires Web Locks");
+    await new Promise(resolve=>navigator.locks.request(lockName(recoveryKey),()=>{resolve();return new Promise(()=>{});}));
+    for(const key of await recoveryCall("list")) {
+      await navigator.locks.request(lockName(key),{ifAvailable:true},async lock=>{
+        if(!lock||key===recoveryKey)return;
+        const decision=await dialog("Recover drawing?",(form,finish)=>{
+          form.append(element("p","","An unsaved drawing from a closed tab is available."));
+          const footer=element("footer");
+          footer.append(button("Keep for Later",()=>finish(null)),button("Discard",()=>finish("discard")),button("Recover",()=>finish("recover"),"suggested-action"));form.append(footer);
+        });
+        if(decision==="discard")await recoveryCall("delete",key);
+        if(decision==="recover") {
+          let candidate;
+          try {
+            const state=app.state().document_file,bytes=await recoveryCall("get",key);
+            candidate=await gpuOperation(()=>app.prepare_document(0,bytes,0,0,state.epoch,state.revision,true));
+            applyChange(app.adopt_document(candidate,null));candidate=null;wake();
+            // Establish the replacement before removing the abandoned record.
+            await app.save_recovery(recoveryKey);await recoveryCall("delete",key);
+          } finally {candidate?.free();}
+        }
+      });
+      if(app.state().document_file.modified)break;
+    }
+    recoveryStarted=true;
+  }
+  setInterval(()=>{
+    if(!recoveryStarted && !recoveryBusy && app.gpu_ready() && app.brush_ready()) {
+      recoveryBusy=true;startRecovery().catch(error=>message(`Recovery unavailable: ${error}`)).finally(()=>{recoveryBusy=false;});
+    } else autosave();
+  },15000);
+  document.addEventListener("visibilitychange",()=>{if(document.hidden)autosave();});
+  // Exposed on the existing host controller for deterministic lifecycle tests.
   window.addEventListener("beforeunload",e=>{if(app.state().document_file.modified){e.preventDefault();e.returnValue="";}});
-  return {handle,refresh(){
+  return {handle,autosave,startRecovery,refresh(){
     if(closing || !app.state().document_file.close_ready)return;
     closing=true;
     const current=app.state().document_file,extent=app.editor_models(innerWidth,innerHeight).document_options.extent;
     // Close leaves an empty untitled workspace after the shared unsaved decision.
     gpuOperation(()=>app.prepare_document(0,undefined,...extent,current.epoch,current.revision))
-      .then(candidate=>{applyChange(app.adopt_document(candidate,null));wake();})
+      .then(async candidate=>{applyChange(app.adopt_document(candidate,null));wake();await retireRecovery();})
       .catch(error=>{app.reset_document_close();message(error);})
       .finally(()=>{closing=false;pruneHandles();});
   }};

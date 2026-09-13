@@ -1,4 +1,5 @@
-import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
+import init, { WebApp, WebGpu, configure_raster_worker } from "./pkg/layer_web.js";
+import { createRasterWorker } from "./raster-worker-client.js";
 import { createWorkspaceClient } from "./workspace-store.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
@@ -301,10 +302,7 @@ function frame(now) {
     refreshStartup();
     scheduleCompiler();
     if (pending.length) wake();
-  } catch (error) {
-    message(error);
-    console.error(error);
-  }
+  } catch (error) { stopGpu(error); }
 }
 function refreshStartup() {
   if (!gpuReady || compilerFailed) return;
@@ -344,9 +342,7 @@ function scheduleCompiler() {
       wake();
     } catch (error) {
       compilerFailed = true;
-      if (startupNotice) startupNotice.hidden = true;
-      message("Shader preparation failed. Reload the page to retry.");
-      console.error(error);
+      stopGpu(error);
     } finally {
       compilerScheduled = false;
     }
@@ -1390,6 +1386,8 @@ workspace.addEventListener("drop", (e) => {
 });
 try {
   await init();
+  const rasterWorker = createRasterWorker();
+  configure_raster_worker(rasterWorker);
   canvas.width = 800;
   canvas.height = 600;
   app = WebApp.create(canvas);
@@ -1428,7 +1426,7 @@ try {
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
-  documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
+  documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);
@@ -1437,13 +1435,29 @@ try {
   if (restoreError) message(restoreError);
   new ResizeObserver(() => arrange()).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
-  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes };
+  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes, documents, restartGpu };
   await startGpu();
 } catch (error) {
   $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
     element("p", "", "Reload the page. If the problem continues, check that the complete app package is being served."), element("pre", "", String(error)));
   $("status").textContent = "";
   console.error(error);
+}
+
+function stopGpu(error) {
+  gpuReady=false;pending.length=0;
+  applyChange(app.suspend_gpu());
+  if(startupNotice)startupNotice.hidden=true;
+  const notice=$("gpu-notice");notice.hidden=false;
+  notice.replaceChildren(element("p","",String(error)),button("Restart Canvas",()=>restartGpu()));
+  document.body.dataset.gpu="unavailable";
+}
+setInterval(()=>{if(gpuReady){const error=app.gpu_failure();if(error)stopGpu(error);}},1000);
+async function restartGpu() {
+  if(gpuReady)stopGpu("Restarting canvas…");
+  compilerFailed=false;firstCanvasRendered=false;
+  for(const key of Object.keys(startupTimes))startupTimes[key]=null;
+  await startGpu();
 }
 
 async function startGpu() {

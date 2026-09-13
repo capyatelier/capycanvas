@@ -9,13 +9,13 @@ use std::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 4) as usize;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(target_arch = "wasm32"))]
+const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 static NEXT_PUBLICATION: AtomicU64 = AtomicU64::new(1);
 
 /// Awaitable single publication, with errors preserved for every consumer.
@@ -49,12 +49,22 @@ impl<T> Publication<T> {
         self.value.lock().ok()?.clone()
     }
     fn wait(&self) -> Result<Arc<T>, String> {
-        let state = self.value.lock().map_err(|_| "Raster publication failed")?;
-        let (state, _) = self
-            .ready
-            .wait_timeout_while(state, CAPTURE_TIMEOUT, |v| v.is_none())
-            .map_err(|_| "Raster publication failed")?;
-        state.clone().ok_or("Raster capture did not complete")?
+        if let Some(value) = self.get() {
+            return value;
+        }
+        // Browser owners must yield and preflight their frame dependencies.
+        // Even a zero-duration Condvar wait uses unsupported Wasm OS clocks.
+        #[cfg(target_arch = "wasm32")]
+        return Err("Raster backing is pending; yield before retrying".into());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let state = self.value.lock().map_err(|_| "Raster publication failed")?;
+            let (state, _) = self
+                .ready
+                .wait_timeout_while(state, CAPTURE_TIMEOUT, |v| v.is_none())
+                .map_err(|_| "Raster publication failed")?;
+            state.clone().ok_or("Raster capture did not complete")?
+        }
     }
 }
 
@@ -124,6 +134,9 @@ impl TileBlob {
     pub fn compressed(&self) -> &[u8] {
         &self.compressed
     }
+    pub fn compressed_owned(&self) -> Arc<[u8]> {
+        self.compressed.clone()
+    }
     pub fn resident_bytes(&self) -> usize {
         self.compressed.len()
     }
@@ -158,6 +171,28 @@ impl TileBlob {
         };
         result.decode()?;
         Ok(result)
+    }
+
+    /// Transfer from this application's browser codec worker, which already
+    /// encoded or validated the blob. This avoids repeating decompression on the
+    /// input owner. Untrusted project files must use `from_compressed` instead.
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_verified_worker(
+        descriptor: PixelDescriptor,
+        digest: [u8; 32],
+        bytes: Arc<[u8]>,
+    ) -> Result<Self, String> {
+        if bytes.is_empty()
+            || bytes.len() > MAX_TILE_BYTES + 1024
+            || descriptor.byte_len([TILE_SIZE; 2]).is_none()
+        {
+            return Err("Invalid raster worker blob".into());
+        }
+        Ok(Self {
+            descriptor,
+            digest,
+            compressed: bytes,
+        })
     }
 }
 

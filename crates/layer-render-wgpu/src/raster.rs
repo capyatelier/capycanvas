@@ -12,6 +12,13 @@ use std::sync::{
 const CAPTURE_CHUNK: u64 = 16 * 1024 * 1024;
 use layer_core::raster::MAX_CAPTURE_BYTES;
 
+#[cfg(target_arch = "wasm32")]
+mod browser;
+#[cfg(target_arch = "wasm32")]
+pub use browser::BrowserRasterEncoder;
+#[cfg(target_arch = "wasm32")]
+use browser::CaptureWorker;
+
 // Reuse unmapped staging allocations; allocation/zeroing at pen-up can cost
 // several milliseconds even when the queue copy itself is cheap.
 #[derive(Default)]
@@ -76,7 +83,10 @@ struct Target {
 pub(super) struct RasterRuntime {
     targets: BTreeMap<LayerId, Target>,
     worker: Option<CaptureWorker>,
+    #[cfg(target_arch = "wasm32")]
+    encoder: Option<BrowserRasterEncoder>,
 }
+#[cfg(not(target_arch = "wasm32"))]
 struct CaptureWorker {
     sender: Option<mpsc::SyncSender<Vec<RasterCapture>>>,
     pending: Arc<AtomicUsize>,
@@ -84,6 +94,7 @@ struct CaptureWorker {
     staging: Arc<AtomicU64>,
     error: Arc<std::sync::Mutex<Option<String>>>,
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl CaptureWorker {
     fn new(device: wgpu::Device, pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
         let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(16);
@@ -166,6 +177,7 @@ impl CaptureWorker {
         Ok(())
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for CaptureWorker {
     fn drop(&mut self) {
         self.sender.take();
@@ -176,6 +188,7 @@ impl Drop for CaptureWorker {
 }
 
 struct Entry {
+    #[cfg(not(target_arch = "wasm32"))]
     offset: u64,
     size: u64,
     key: TileKey,
@@ -184,9 +197,13 @@ struct Entry {
 struct Chunk {
     buffer: wgpu::Buffer,
     entries: Vec<Entry>,
+    #[cfg(not(target_arch = "wasm32"))]
     ready: mpsc::Receiver<Result<(), String>>,
+    #[cfg(target_arch = "wasm32")]
+    ready: futures_channel::oneshot::Receiver<Result<(), String>>,
 }
 pub struct RasterCapture {
+    #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
     submission: wgpu::SubmissionIndex,
     chunks: Vec<Chunk>,
@@ -195,6 +212,7 @@ pub struct RasterCapture {
 }
 impl RasterCapture {
     /// Worker only. Cached readback scratch is bounded to four 16 MiB chunks.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<(), String> {
         let result: Result<(), String> = (|| {
             self.device
@@ -310,6 +328,70 @@ impl Drop for RasterCapture {
 }
 
 impl WgpuRasterizer {
+    pub(super) fn raster_restore_ready(&self, packet: FramePacket<'_>) -> bool {
+        let runtime = self.raster.as_ref();
+        let ready = |current: Option<&Target>, data: &RasterData| {
+            data.tiles.iter().all(|(key, tile)| {
+                let retained = !packet.reset_layers
+                    && current.is_some_and(|t| {
+                        !t.changed.contains(&key.coordinate)
+                            && t.data
+                                .tiles
+                                .get(key)
+                                .is_some_and(|old| old.same_capture(tile))
+                    });
+                retained || tile.try_backing().is_some()
+            })
+        };
+        for (id, root) in packet.restore_rasters {
+            let current = runtime.and_then(|r| r.targets.get(id));
+            match root.try_data() {
+                None => return false,
+                Some(Ok(data)) if !ready(current, &data) => return false,
+                _ => {}
+            }
+        }
+        for layer in packet.layers {
+            for (id, root) in std::iter::once((layer.id, &layer.raster))
+                .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
+            {
+                let source = if id == layer.id {
+                    layer.asset.as_ref()
+                } else {
+                    None
+                };
+                let current = runtime
+                    .and_then(|r| r.targets.get(&id))
+                    .filter(|t| t.source.as_ref() == source);
+                match root.try_data() {
+                    Some(Ok(data))
+                        if packet.reset_layers || current.is_none_or(|t| t.revision != *root) =>
+                    {
+                        if !ready(current, &data) {
+                            return false;
+                        }
+                    }
+                    None if packet.reset_layers => {
+                        if let Some(current) = current {
+                            if !ready(Some(current), &current.data) {
+                                return false;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+
+    /// Browser hosts supply a worker encoder; GPU mappings remain asynchronous
+    /// on their owning event loop. All candidates must retain this transport.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_browser_raster_encoder(&mut self, encoder: BrowserRasterEncoder) {
+        self.raster.get_or_insert_with(Default::default).encoder = Some(encoder);
+    }
+
     pub fn raster_ready(&self) -> bool {
         self.raster
             .as_ref()
@@ -490,6 +572,10 @@ impl WgpuRasterizer {
                 runtime.worker = Some(CaptureWorker::new(
                     (*self.device).clone(),
                     self.raster_buffers.clone(),
+                    #[cfg(target_arch = "wasm32")]
+                    runtime.encoder.clone().ok_or_else(|| {
+                        GpuRasterError::Effect("Browser raster worker is unavailable".into())
+                    })?,
                 )?);
             }
             let mut captures = Vec::new();
@@ -674,6 +760,7 @@ impl WgpuRasterizer {
                     },
                 );
                 entries.push(Entry {
+                    #[cfg(not(target_arch = "wasm32"))]
                     offset,
                     size: *count,
                     key: *key,
@@ -687,7 +774,10 @@ impl WgpuRasterizer {
         let chunks = chunks
             .into_iter()
             .map(|(buffer, entries)| {
+                #[cfg(not(target_arch = "wasm32"))]
                 let (tx, ready) = mpsc::channel();
+                #[cfg(target_arch = "wasm32")]
+                let (tx, ready) = futures_channel::oneshot::channel();
                 buffer
                     .slice(..)
                     .map_async(wgpu::MapMode::Read, move |result| {
@@ -701,6 +791,7 @@ impl WgpuRasterizer {
             })
             .collect();
         let capture = RasterCapture {
+            #[cfg(not(target_arch = "wasm32"))]
             device: (*self.device).clone(),
             submission,
             chunks,

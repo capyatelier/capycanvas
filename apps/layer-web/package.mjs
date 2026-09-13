@@ -58,9 +58,9 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "app.js"];
+  const modules = ["workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "raster-worker-client.js", "app.js"];
   for (const path of files) {
-    if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js")
+    if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js" && path !== "raster-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
     if (!path.endsWith(".js") && path !== "style.css") publish(path);
   }
@@ -88,6 +88,10 @@ export function fingerprintAssets(directory) {
   publish("tooltips.js");
   publish("pkg/layer_web.js", replaceRequired(read(join(directory, "pkg/layer_web.js")),
     "'layer_web_bg.wasm'", JSON.stringify(basename(names["pkg/layer_web_bg.wasm"]))));
+  publish("raster-worker.js", replaceRequired(read(join(directory, "raster-worker.js")),
+    'from "./pkg/layer_web.js"', `from "./${names["pkg/layer_web.js"]}"`));
+  publish("raster-worker-client.js", replaceRequired(read(join(directory, "raster-worker-client.js")),
+    '"./raster-worker.js"', JSON.stringify(`./${names["raster-worker.js"]}`)));
   let worker = read(join(directory, "workspace-worker.js"));
   for (const path of ["pkg/layer_web.js", "workspace-store.js"])
     worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);
@@ -159,7 +163,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["app.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "tooltips.js", "style.css"])
+    for (const path of ["app.js", "raster-worker-client.js", "raster-worker.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "tooltips.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));
