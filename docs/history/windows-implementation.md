@@ -2386,3 +2386,11 @@ handling. Concurrent document-operation recovery, physical input, mixed DPI,
 suspend/driver-reset behavior, installed MSIX/clean-machine delivery and 120 Hz
 painting/input latency remain open. No package or performance measurement was
 regenerated for this milestone.
+
+The milestone is integrated with upstream main through 65a9855, including steady
+command-icon presentation during canvas strokes. The merged 578-test suite,
+strict all-target Clippy and Release build pass. The merged native exhausted-
+recovery fixture passes Save/Save As, Zen, Cancel/Discard, durable reopen and
+identical PNG output. The compact picker regression also passes all three shapes,
+synthetic mouse/pen/touch, cancellation, keyboard, menus, slots/swap and retained
+drawer input. This integration preserves the accepted native wheel renderer.
