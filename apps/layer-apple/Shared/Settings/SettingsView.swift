@@ -7,8 +7,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             VStack {
-                TextField("Search settings", text: Binding(get: { model["query"].string },
-                    set: { action(["type": "search", "query": $0]) }))
+                EditorTextField("Search settings", value: model["query"].string) {
+                    action(["type": "search", "query": $0])
+                }
                     .textFieldStyle(.roundedBorder).padding(.horizontal).accessibilityIdentifier("settings-search")
                 List(selection: Binding<String?>(get: { model["page"].string }, set: { if let next = $0 { action(["type": "page", "page": next]) } })) {
                     ForEach(model["pages"].array.indices, id: \.self) { index in

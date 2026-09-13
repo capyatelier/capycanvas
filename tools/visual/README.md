@@ -326,10 +326,9 @@ requires 216. This fixture does not establish keyboard focus or iPad input.
 The separate `testColorControls` workflow exercises native contacts and button
 actions. Debug-only `CAPY_COLOR_PROBE` exposes the accepted Rust state on the
 native wheel's accessibility value. Release builds keep the human color
-readout. On iPad, a test runner with `CAPY_COLOR_ATTACH=1` can activate an already
-running isolated target when Xcode's PID handoff fails. That target must first
-be launched with the workflow's fresh persistence namespace, initial actions
-and probe variables; all control assertions stay enabled.
+readout. The workflow launches its own fresh namespace and initial actions.
+Use the [installed-device test configuration](../../apps/layer-apple/README.md#validation)
+for physical iPad runs; no separate prelaunch or attach mode is needed.
 
 Apple fields use physical-pixel RGBA8 samples from shared Rust. A field image
 changes only with hue, shape or size; the separate guide cache changes only

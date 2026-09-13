@@ -8,7 +8,7 @@ extension XCTestCase {
         app.launch()
         let manager = app.descendants(matching: .any)["workspace-library-manager"].firstMatch
         XCTAssertTrue(manager.waitForExistence(timeout: 30))
-        let start = app.staticTexts["Starting layout"].firstMatch
+        let start = app.buttons["workspace-history-r0"]
         XCTAssertTrue(start.waitForExistence(timeout: 10))
         #if os(macOS)
         start.click()

@@ -456,6 +456,14 @@ Apple hosts, retaining unmatched work and incomplete capture windows.
 See [INPUT.md](INPUT.md) for Pencil corrections, shared stroke/history handling,
 fast input checks and the physical-device evidence still required.
 
+For UI tests using already installed iPad apps, set `UseDestinationArtifacts`
+in the `.xctestrun` target with `TestHostBundleIdentifier`,
+`UITargetAppBundleIdentifier` and `TestBundleDestinationRelativePath`.
+Omit `TestHostPath`, `TestBundlePath`, `UITargetAppPath` and
+`DependentProductPaths`: retained local dependencies can make XCTest attempt
+to install an unavailable bundle during `app.launch()`. Tests launch their own
+isolated namespaces; no separate prelaunch/attach path is needed.
+
 Check editor behavior directly without driving system menus:
 
 ```sh
