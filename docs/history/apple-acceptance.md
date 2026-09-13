@@ -94,8 +94,9 @@ suitable for pickers and small forms. Apple's
 and [popover guidance](https://developer.apple.com/design/human-interface-guidelines/popovers/)
 describe these presentations. Physical finger and Pencil both moved a row after
 its native menu appeared in the isolated fixture. Automated touch synthesis
-failed the same handoff; this does not establish a physical UIKit limitation or
-validate the pending production adapter.
+failed the same handoff; this does not establish a physical UIKit limitation.
+The user subsequently confirmed the production workspace adapter with both
+finger and Pencil, including hold/lift menu retention and immediate grips.
 
 The subsequent readability review supersedes the blanket Liquid Glass request:
 text must remain readable over drawing content. App-owned popups, sheets and the
@@ -116,6 +117,49 @@ Do not force AppKit's high-contrast appearance names: Apple's
 [appearance documentation](https://developer.apple.com/documentation/appkit/nsappearance/name-swift.struct/accessibilityhighcontrastdarkaqua)
 reserves their selection for the system accessibility setting. These focused
 comparisons do not constitute a complete accessibility or physical-device pass.
+
+## Native context menus and workspace rows — 2026-09-12
+
+The Apple targets now share a menu projection of Rust sections, availability,
+checks, hints and action payloads. UIKit and AppKit provide native presentation
+for non-draggable context sources such as Zen. Queries are deferred until
+activation and retired when their source or document changes. Controls that
+open a picker/form on an ordinary tap retain their existing popovers.
+
+On iPad, Manage Workspaces attaches native context-menu and drag/drop
+interactions to its existing scroll view. The preview belongs to the held row
+and has an opaque backing so the original label cannot show through it. UIKit
+retains the finger/Pencil contact across the vertical menu and drag. Mouse and
+explicit grips retain the existing immediate pickup path. Native session and
+contact identities reject stale callbacks and duplicate drops; teardown retires
+native callbacks before deferring SwiftUI publication. Native edge scrolling
+reuses the grip path and schedules display callbacks only while an edge can
+scroll. Workspace order remains an application preference outside layout Undo.
+
+Both Apple hosts now use 56pt workspace row minima, matching Android's 56dp
+minimum and the web manager's 55px content plus divider. Measured default rows
+and grips are 56pt high on both AppKit-hosted presets; options targets are
+34pt wide and fill the row height. Native Settings text fields now retain
+explicit labels when populated, including the base-color hex fields.
+
+Validation includes native AppKit menu actions and shared Undo/Redo, asynchronous
+source loading and removal, and existing mouse/tablet row checks on both presets.
+The UIKit row-menu action passes and its move persists after restart. A 27-row
+Simulator workflow passes ordinary scrolling before a hold, menu dismissal,
+immediate grip dragging, offscreen capture and persisted order. Direct UIKit
+delegate checks exercise native-session edge scrolling, leaving/reentering the
+viewport, the resulting insertion target, cancelled lifts, old/new sessions and
+deferred teardown. The user confirmed the production finger/Pencil hold-to-drag
+workflow before the edge-scrolling extension; physical long-list edge scrolling
+is pending. Signed builds pass on both hosts. These checks do not establish
+complete visual parity or sustained drawing performance.
+
+Mac workspace row menus retain the working vertical custom surface. An owned
+AppKit context-menu probe posted tablet-subtype drag events during native menu
+tracking; the app-local event monitor did not receive them. Native row handoff
+therefore remains unaccepted on Mac; a native replacement must preserve the
+same held contact. This does not affect the native non-row source/action checks.
+Whole-layer-row pickup remains required on both hosts and is a separate gap.
 
 ## Readable popup surfaces — 2026-09-12
 

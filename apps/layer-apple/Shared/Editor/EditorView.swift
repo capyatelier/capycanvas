@@ -127,9 +127,10 @@ struct EditorZenButton: View {
         IconTile(icon: zen["icon"].string, label: zen["tooltip"].string,
             selected: zen["selected"].bool, size: CGFloat(store.catalog["zen_icon_size"].number)) { store.invoke("zen_mode") }
             .frame(width: 36, height: 36).background(EditorPalette(source: store.state["palette"])["bg"], in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityIdentifier("zen-button")
             .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
             .modifier(HeaderControlMeasurement(id: "zen-button"))
-            .offset(x: 6 + store.headerLeadingInset, y: 6).accessibilityIdentifier("zen-button")
+            .offset(x: 6 + store.headerLeadingInset, y: 6)
     }
 }
 

@@ -52,11 +52,11 @@ enum ReorderSurface: Equatable {
         guard let target, target.valid(dragging) else { cancel(); return false }
         return true
     }
-    func recognizeHold() {
+    func recognizeHold(openContext: Bool = true) {
         guard validate(), !held, !dragging else { return }
         held = true
         suppressClick = true
-        if device != .mouse { target?.openContext?() }
+        if openContext && device != .mouse { target?.openContext?() }
     }
     /// Called once native movement recognition wins. A pre-hold pan cannot
     /// admit a tile or a touch/pen row, even if an adapter calls it accidentally.

@@ -37,12 +37,39 @@ struct WorkspaceRowMeasurement: ViewModifier {
     @Published private(set) var menuPoint = CGPoint.zero
     @Published private(set) var drag: Drag?
     @Published private(set) var hint: Hint?
+    @Published private(set) var nativeDragging = false
     @Published var menuSize = CGSize(width: 240, height: 180)
     var frames: [String: WorkspaceRowFrame] = [:]
     var viewport = CGRect.zero
     var enabled = true
     var items: [JSON] = []
     var commit: (String, String?) -> Void = { _, _ in }
+    var activate: (JSON) -> Void = { _ in }
+    var usesNativeRowMenus: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+    func nativeDragChanged(_ active: Bool) { if nativeDragging != active { nativeDragging = active } }
+    func nativeMenu(at point: CGPoint) -> NativeReorderMenu? {
+        guard enabled, viewport.contains(point),
+              let (id, frame) = frames.first(where: { $0.value.row.contains(point) }),
+              let row = items.first(where: { $0["id"].string == id }) else { return nil }
+        let sections = [row["switcher_actions"].array,
+            row["actions"].array.filter { !$0["primary"].bool }].map { section in
+                section.map { item in
+                    ["label": item["label"].raw, "enabled": item["enabled"].raw,
+                     "selected": item["checked"].raw, "action": item["action"].raw]
+                }
+            }
+        return NativeReorderMenu(id: id, bounds: frame.row,
+            content: AppleContextMenu(JSON(["sections": sections])) { [weak self] action in
+                guard let self, enabled, items.contains(where: { $0["id"].string == id }) else { return }
+                closeMenu(); activate(action)
+            })
+    }
     var menuBounds: CGRect {
         let width = min(240, viewport.width), height = min(menuSize.height, viewport.height)
         return CGRect(x: max(viewport.minX, min(menuPoint.x, viewport.maxX - width)),
@@ -60,7 +87,7 @@ struct WorkspaceRowMeasurement: ViewModifier {
     }
     func closeMenu() { if menu != nil { menu = nil } }
     func cancel() {
-        contact.cancel()
+        contact.cancel(); nativeDragChanged(false)
         if drag != nil { drag = nil }; if hint != nil { hint = nil }; closeMenu()
     }
     func acceptsContext(at point: CGPoint) -> Bool {
@@ -85,7 +112,7 @@ struct WorkspaceRowMeasurement: ViewModifier {
                 drag = nil; hint = nil
                 if let before { commit(id, before.before) }
             },
-            cancel: { [weak self] in self?.drag = nil; self?.hint = nil })
+            cancel: { [weak self] in self?.drag = nil; self?.hint = nil; self?.nativeDragChanged(false) })
     }
     func context(at point: CGPoint) {
         guard !contact.dragging, viewport.contains(point),

@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct WorkspaceSwitcherRows: View {
+    // Match the web manager's 55-point content plus divider and Android's
+    // 56dp row minimum. Keep the actual controls tall, not just their spacing.
+    private let rowHeight: CGFloat = 56
     @ObservedObject var manager: WorkspaceManager
     @ObservedObject var library: WorkspaceLibrary
     @StateObject private var interaction = WorkspaceRowInteraction()
@@ -23,7 +26,7 @@ struct WorkspaceSwitcherRows: View {
             ForEach(rows, id: \.workspaceRowID) { row in
                 let id = row["id"].string
                 HStack(spacing: 6) {
-                    Button {} label: { SharedIcon(name: "grip", size: 12).frame(width: 16, height: 32) }
+                    Button {} label: { SharedIcon(name: "grip", size: 12).frame(width: 16, height: rowHeight).contentShape(Rectangle()) }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                         .help("Drag to reorder").accessibilityLabel("Reorder " + row["title"].string)
                         .accessibilityIdentifier("workspace-grip-" + id)
@@ -32,7 +35,7 @@ struct WorkspaceSwitcherRows: View {
                         if !interaction.contact.consumeClick() { manager.select(id) }
                     } label: {
                         Text(row["title"].string).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8).contentShape(Rectangle())
+                            .padding(.vertical, 8).frame(minHeight: rowHeight).contentShape(Rectangle())
                     }.buttonStyle(.plain).help(row["title"].string)
                         .accessibilityIdentifier("workspace-select-" + id).focusable().focused($focus, equals: "row-" + id)
                         .accessibilityAddTraits(manager.selection == id ? .isSelected : [])
@@ -50,7 +53,7 @@ struct WorkspaceSwitcherRows: View {
                     }
                     Button {
                         if interaction.menu == id { interaction.closeMenu() } else { interaction.showMenu(id) }
-                    } label: { Text("⋮").frame(width: 26, height: 32) }
+                    } label: { Text("⋮").frame(width: 34, height: rowHeight).contentShape(Rectangle()) }
                         .buttonStyle(.plain).accessibilityLabel("Options for " + row["title"].string)
                         .accessibilityIdentifier("workspace-options-" + id).focusable().focused($focus, equals: "options-" + id)
                         .modifier(WorkspaceRowMeasurement(id: id, part: \.options))
@@ -79,13 +82,14 @@ struct WorkspaceSwitcherRows: View {
         interaction.commit = { [weak manager] id, before in
             manager?.activate(JSON(["type": "edit_switcher", "edit": ["type": "move", "id": id, "before": before as Any? ?? NSNull()]]))
         }
+        interaction.activate = { [weak manager] in manager?.activate($0) }
     }
     @ViewBuilder private var overlays: some View {
         if let hint = interaction.hint {
             Rectangle().fill(Color.accentColor).frame(height: 2).offset(y: hint.y - 1)
                 .allowsHitTesting(false).accessibilityHidden(true)
         }
-        if let drag = interaction.drag, let row = rows.first(where: { $0["id"].string == drag.id }) {
+        if !interaction.nativeDragging, let drag = interaction.drag, let row = rows.first(where: { $0["id"].string == drag.id }) {
             HStack { SharedIcon(name: "grip", size: 12); Text(row["title"].string).lineLimit(1); Spacer() }
                 .padding(.horizontal, 10).frame(width: drag.bounds.width, height: drag.bounds.height)
                 .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 6)))

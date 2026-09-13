@@ -18,7 +18,7 @@ extension EditorLaunchTests {
         let painter = app.buttons["workspace-select-builtin:workspace:painter"]
         let illustrator = app.buttons["workspace-select-builtin:workspace:illustrator"]
         let photographer = app.buttons["workspace-select-builtin:workspace:photographer"]
-        let menu = app.descendants(matching: .any)["workspace-row-menu"].firstMatch
+        let menu = app.buttons["Show in top bar"]
         XCTAssertTrue(list.waitForExistence(timeout: 30))
         XCTAssertTrue(painter.waitForExistence(timeout: 10))
         XCTAssertTrue(illustrator.isSelected)
@@ -64,7 +64,7 @@ extension EditorLaunchTests {
         XCTAssertTrue(!painter.isHittable || painter.frame.minY > firstCustom.frame.minY,
             "The grip drop must persist below the original visible defaults after edge scrolling")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "workspace-switcher-after-scrolling"; attachment.lifetime = .keepAlways; add(attachment)
     }
 }

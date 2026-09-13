@@ -11,6 +11,31 @@ struct WorkspaceContext: ViewModifier {
     @State private var generation = UUID()
     @State private var popupID = UUID()
     func body(content: Content) -> some View {
+        Group {
+            if openOnTap { legacyMenu(content) }
+            else {
+                content.nativeEditorContextMenu(identity: "\(store.state["document_file"]["epoch"].uint):\(target.stableKey)",
+                    load: loadNativeMenu, visibility: { store.workspace.popover(popupID, open: $0) })
+            }
+        }
+        .onChange(of: target.stableKey) { _, _ in generation = UUID(); menu = JSON() }
+        .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in generation = UUID(); menu = JSON() }
+        .onDisappear { generation = UUID(); menu = JSON(); store.workspace.popover(popupID, open: false) }
+    }
+    private func loadNativeMenu(_ completion: @escaping @MainActor (AppleContextMenu?) -> Void) {
+        let request = UUID(), epoch = store.state["document_file"]["epoch"].uint
+        generation = request
+        store.query(["type": "context", "target": target.raw]) { result in
+            guard generation == request, store.state["document_file"]["epoch"].uint == epoch, !result.isNull else {
+                completion(nil); return
+            }
+            completion(AppleContextMenu(result) { action in
+                guard generation == request, store.state["document_file"]["epoch"].uint == epoch else { return }
+                store.dispatch(action)
+            })
+        }
+    }
+    private func legacyMenu(_ content: Content) -> some View {
         content.editorContextAction(open)
             .simultaneousGesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { value in
                 switch value { case .first: doubleClick?(); case .second: open() }
@@ -21,7 +46,6 @@ struct WorkspaceContext: ViewModifier {
                     .modifier(EditorPopupPresentation())
             }
             .onChange(of: menu.isNull) { _, empty in store.workspace.popover(popupID, open: !empty) }
-            .onDisappear { generation = UUID(); menu = JSON(); store.workspace.popover(popupID, open: false) }
     }
     private func open() {
         let request = UUID(); generation = request

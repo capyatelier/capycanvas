@@ -289,6 +289,8 @@ CAPY_PROPERTY_INVENTORY=/tmp/capy-inventory.json \
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-menu-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-appearance.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/native-context-menu.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/native-context-source.swift
 ```
 
 The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
@@ -324,6 +326,20 @@ require their own evidence. Save/Load Layout remains excluded.
 native application appearance changes with an isolated AppKit editor window.
 `testPopupThemeFollowsExplicitAndSystem` runs the Settings workflow on either
 Apple target and attaches captures for reviewing sheet and popup colors.
+
+The native context-menu checks invoke actual AppKit menu items and verify shared
+actions/Undo, availability, checks and shortcuts. The source check opens one
+temporary window, waits for native menu dismissal between actions, and verifies
+that removing a source retires its pending query; keep that fixture in the
+foreground. `testNativeZenContextAction` checks the UIKit source and resulting
+Zen layout. `testNativeWorkspaceContextAction` checks the UIKit row menu and its
+persisted move action. None of these checks uses Mac system-menu coordinates.
+For quick UIKit delegate/lifecycle checks with one booted iPad Simulator, run
+`python3 apps/layer-apple/scripts/test-native-rows.py` (use `--simulator` to choose
+among several). It builds a disposable callback fixture, requires its completion
+marker even if `simctl` exits successfully, and removes its own app afterward.
+The callback fixture includes real scroll-view edge movement and deferred
+teardown; it does not synthesize or prove physical menu-to-drag gestures.
 
 Tool Settings renders checkable and ordinary actions with the same shared
 button component on both Apple targets. Labels use the shared bold text size,

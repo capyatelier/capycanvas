@@ -102,6 +102,11 @@ private struct PreferenceText: View {
     @State private var text = ""
     @FocusState private var editing: Bool
     var body: some View {
+        // iPad TextField titles are placeholders and disappear once populated.
+        // Keep the setting name visible beside its value on both Apple hosts.
+        LabeledContent(label) { field.labelsHidden().multilineTextAlignment(.trailing) }
+    }
+    private var field: some View {
         TextField(label, text: $text).focused($editing).onSubmit { commit(text) }
             .onAppear { text = value }.onChange(of: value) { _, next in if !editing { text = next } }
             .onChange(of: editing) { old, next in if old && !next { commit(text) } }

@@ -5,6 +5,18 @@
 	};
 	"objectVersion" = "56";
 	"objects" = {
+		"6C77B3C3DB09F6D5DB9793F6" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Bridge/AppleContextMenu.swift";
+			"sourceTree" = "<group>";
+		};
+		"537968318B8B3183E9A7F3A0" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Bridge/AppleContextMenuRequest.swift";
+			"sourceTree" = "<group>";
+		};
 		"668CB14733DFAAFE919B6249" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -593,10 +605,28 @@
 			"path" = "iOS/Platform/EditorAppearance.swift";
 			"sourceTree" = "<group>";
 		};
+		"54E908E9376305EC20A1576E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Platform/NativeContextMenu.swift";
+			"sourceTree" = "<group>";
+		};
+		"5DD976DC9A32119C714E5268" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Platform/NativeContextMenuSource.swift";
+			"sourceTree" = "<group>";
+		};
 		"B6A91FAD38C90953906B7E60" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "iOS/Platform/NativeReorderInput.swift";
+			"sourceTree" = "<group>";
+		};
+		"0428AADFD38EE2C4DD22EACC" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Platform/NativeRowMenus.swift";
 			"sourceTree" = "<group>";
 		};
 		"50310923A19004D5BF8FDCCF" = {
@@ -615,6 +645,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "iOS/Tests/EditorLaunchTests.swift";
+			"sourceTree" = "<group>";
+		};
+		"21F7AEBB59275D0F3D4BAC13" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Tests/NativeContextMenuChecks.swift";
 			"sourceTree" = "<group>";
 		};
 		"4AC35E74B9B49A72BF6AB181" = {
@@ -683,6 +719,18 @@
 			"path" = "macOS/Platform/EditorAppearance.swift";
 			"sourceTree" = "<group>";
 		};
+		"9646C9A9CFB7D29BB5D210F2" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "macOS/Platform/NativeContextMenu.swift";
+			"sourceTree" = "<group>";
+		};
+		"D1203360BD6A9C25DFBEC3C5" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "macOS/Platform/NativeContextMenuSource.swift";
+			"sourceTree" = "<group>";
+		};
 		"DEECB91A3DE993B42A773DB9" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -730,6 +778,14 @@
 			"explicitFileType" = "wrapper.application";
 			"path" = "CapyCanvas-iPad.app";
 			"sourceTree" = "BUILT_PRODUCTS_DIR";
+		};
+		"8989E207EB1A81CC3111B8AF" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "6C77B3C3DB09F6D5DB9793F6";
+		};
+		"C851E0CB38D61B9E543707DF" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "537968318B8B3183E9A7F3A0";
 		};
 		"517D7966D36F8DAC7926A494" = {
 			"isa" = "PBXBuildFile";
@@ -1055,9 +1111,21 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E1BA7907CD2F7A44A043BAAB";
 		};
+		"52E49FD9DE083A79A288EA7C" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "54E908E9376305EC20A1576E";
+		};
+		"784DF5E7518C7F88871FE103" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "5DD976DC9A32119C714E5268";
+		};
 		"4D74C50F6055C208741B5E50" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "B6A91FAD38C90953906B7E60";
+		};
+		"0E7033AD8490CF5437AF2A17" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "0428AADFD38EE2C4DD22EACC";
 		};
 		"7E69E8F237D3F717B7D32EF1" = {
 			"isa" = "PBXBuildFile";
@@ -1098,6 +1166,8 @@
 			"isa" = "PBXSourcesBuildPhase";
 			"buildActionMask" = "2147483647";
 			"files" = (
+				"8989E207EB1A81CC3111B8AF",
+				"C851E0CB38D61B9E543707DF",
 				"517D7966D36F8DAC7926A494",
 				"9FDA844E7032488A5C9B117D",
 				"0416A4C0867A741D4CF30CDD",
@@ -1179,7 +1249,10 @@
 				"0AAB755A28F6FEEE1762BD43",
 				"A54EA1B42FDE69B923E0A57F",
 				"04A395B2EF830CA5FD8DDB22",
+				"52E49FD9DE083A79A288EA7C",
+				"784DF5E7518C7F88871FE103",
 				"4D74C50F6055C208741B5E50",
+				"0E7033AD8490CF5437AF2A17",
 				"7E69E8F237D3F717B7D32EF1",
 				"F9C788D506A6E35C3D50DB47",
 			);
@@ -1387,6 +1460,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "421C829F55D51AEC9446F61C";
 		};
+		"E9BE3D34665786C3B8FF2B11" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "21F7AEBB59275D0F3D4BAC13";
+		};
 		"599E04C69B9F05AF9D2425E3" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "4AC35E74B9B49A72BF6AB181";
@@ -1417,6 +1494,7 @@
 				"A503A43C13BB1BC8EC0713E4",
 				"A1AD62B21AD1F20F962AA4E2",
 				"8C4ED6217549AA38906B85BB",
+				"E9BE3D34665786C3B8FF2B11",
 				"599E04C69B9F05AF9D2425E3",
 				"E3F46F0FEC67C3D9C998E0C3",
 			);
@@ -1510,6 +1588,14 @@
 			"explicitFileType" = "wrapper.application";
 			"path" = "CapyCanvas-Mac.app";
 			"sourceTree" = "BUILT_PRODUCTS_DIR";
+		};
+		"33AB7EEEDDEAC691A57A7BB4" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "6C77B3C3DB09F6D5DB9793F6";
+		};
+		"0740703DB47AA581A3F9D355" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "537968318B8B3183E9A7F3A0";
 		};
 		"E64BC9AAC3B7FC1937A28003" = {
 			"isa" = "PBXBuildFile";
@@ -1839,6 +1925,14 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "A5B7B4BA1DD812CE2C758383";
 		};
+		"C769C6711DB7FD46D116EEE2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "9646C9A9CFB7D29BB5D210F2";
+		};
+		"0A96D849E9CB3BD80CF9C0EF" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "D1203360BD6A9C25DFBEC3C5";
+		};
 		"F55DBC0AC6F4926CC6024C1D" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "DEECB91A3DE993B42A773DB9";
@@ -1882,6 +1976,8 @@
 			"isa" = "PBXSourcesBuildPhase";
 			"buildActionMask" = "2147483647";
 			"files" = (
+				"33AB7EEEDDEAC691A57A7BB4",
+				"0740703DB47AA581A3F9D355",
 				"E64BC9AAC3B7FC1937A28003",
 				"4B753A3CF43BA65CB45D0294",
 				"86A718BEF3D3234494D05E79",
@@ -1964,6 +2060,8 @@
 				"C11679B3358D93ECE4378DF3",
 				"2EE5A95F4E8123A9A93D960C",
 				"48784626CAB7B90BA65A9425",
+				"C769C6711DB7FD46D116EEE2",
+				"0A96D849E9CB3BD80CF9C0EF",
 				"F55DBC0AC6F4926CC6024C1D",
 				"1181F9ED0788A3DCD693CD1E",
 				"950CDE4AA49F2D2500E6753D",
@@ -2286,6 +2384,8 @@
 		"0D6E4079E36703EBD37C0072" = {
 			"isa" = "PBXGroup";
 			"children" = (
+				"6C77B3C3DB09F6D5DB9793F6",
+				"537968318B8B3183E9A7F3A0",
 				"668CB14733DFAAFE919B6249",
 				"8678D73C2CD2F16B2F4C4BDE",
 				"DC26C6467362BAF0FAA01475",
@@ -2384,10 +2484,14 @@
 				"E0041892EC32CC1F566BEEB5",
 				"25EC3074B1CBAC53FDB152BF",
 				"E1BA7907CD2F7A44A043BAAB",
+				"54E908E9376305EC20A1576E",
+				"5DD976DC9A32119C714E5268",
 				"B6A91FAD38C90953906B7E60",
+				"0428AADFD38EE2C4DD22EACC",
 				"50310923A19004D5BF8FDCCF",
 				"A448F54CB6160438B9BE6307",
 				"421C829F55D51AEC9446F61C",
+				"21F7AEBB59275D0F3D4BAC13",
 				"4AC35E74B9B49A72BF6AB181",
 				"E3074AFA18004156B1184C29",
 				"38A94B87502172530B078A49",
@@ -2399,6 +2503,8 @@
 				"CEBE18A28E15055326B50AC1",
 				"C111DBD1BF5E1FFB9D1C6086",
 				"A5B7B4BA1DD812CE2C758383",
+				"9646C9A9CFB7D29BB5D210F2",
+				"D1203360BD6A9C25DFBEC3C5",
 				"DEECB91A3DE993B42A773DB9",
 				"F91440B57C22D445A5BE2440",
 				"692C302C46D7D2304E6304E9",
