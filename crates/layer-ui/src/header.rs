@@ -431,13 +431,13 @@ pub struct HeaderItemBounds {
     pub bounds: Bounds,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct HeaderMetric {
     pub id: u32,
     pub width: f32,
     pub compact: f32,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct HeaderGeometry {
     pub items: Vec<HeaderItemBounds>,
     pub zones: [Bounds; 3],

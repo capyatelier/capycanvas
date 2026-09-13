@@ -237,7 +237,7 @@ pub(super) struct LayerInteraction {
     pub collapsed: BTreeSet<LayerId>,
     pub selected: BTreeSet<LayerId>,
     pub editing: Option<LayerId>,
-    clipboard_mask: Option<(LayerMask, Point, Vec<layer_core::Stroke>)>,
+    clipboard_mask: Option<(LayerMask, Point)>,
     pub path: Vec<Point>,
     original: Option<Layer>,
     solo: Option<Vec<(LayerId, bool)>>,
@@ -610,17 +610,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .layer(LayerId(id))
                     .and_then(|l| l.mask.clone())
                     .ok_or("No mask")?;
-                let strokes = mask
-                    .strokes
-                    .iter()
-                    .map(|id| doc.stroke(*id).cloned().ok_or("Missing mask stroke"))
-                    .collect::<Result<Vec<_>, _>>()?;
                 self.layer_interaction.clipboard_mask =
-                    Some((mask.clone(), doc.layer_offset(mask.id), strokes));
+                    Some((mask.clone(), doc.layer_offset(mask.id)));
             }
             LayerAction::PasteMask { id } => {
                 let mut layer = self.editable_layer(id)?;
-                let (mut mask, origin, strokes) = self
+                let (mut mask, origin) = self
                     .layer_interaction
                     .clipboard_mask
                     .clone()
@@ -634,15 +629,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 mask.id = self.engine.allocate_layer_id();
                 mask.show_area = false;
-                mask.strokes = Default::default();
-                let target = mask.id;
                 layer.mask = Some(mask);
                 let mut edits = vec![Edit::ReplaceLayer(Box::new(layer))];
-                for mut stroke in strokes {
-                    stroke.id = self.engine.allocate_stroke_id();
-                    stroke.layer_id = target;
-                    edits.push(Edit::InsertStroke(Box::new(stroke)));
-                }
                 edits.extend([
                     Edit::SetActiveLayer { id: LayerId(id) },
                     Edit::SetMaskTarget(true),
@@ -895,33 +883,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .properties
                         .parent
                         .map(|p| ids.get(&p).copied().unwrap_or(p));
-                    copy.strokes.clear();
                     if let Some(mask) = &mut copy.mask {
                         mask.id = self.engine.allocate_layer_id();
-                        mask.strokes = Default::default();
                     }
                     edits.push(Edit::InsertLayer {
                         index: index + offset,
                         layer: copy.clone(),
                     });
-                    for (target, ids) in std::iter::once((new_id, &source.strokes)).chain(
-                        source
-                            .mask
-                            .iter()
-                            .map(|m| (copy.mask.as_ref().unwrap().id, m.strokes.as_ref())),
-                    ) {
-                        for id in ids {
-                            let mut stroke = self
-                                .engine
-                                .document()
-                                .stroke(*id)
-                                .ok_or("Missing stroke")?
-                                .clone();
-                            stroke.id = self.engine.allocate_stroke_id();
-                            stroke.layer_id = target;
-                            edits.push(Edit::InsertStroke(Box::new(stroke)));
-                        }
-                    }
                 }
                 edits.push(Edit::SetActiveLayer { id: root_id });
                 self.layer_edit(Edit::Batch(edits))?;
@@ -980,8 +948,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if layer.kind != LayerKind::Paint {
                             return Err("Choose a paint layer".into());
                         }
-                        layer.strokes.clear();
-                        layer.operations.clear();
+                        layer.raster = Default::default();
+                        layer.pending_operations.clear();
                         layer.asset = None;
                     }
                     LayerAction::AlphaLock { value, .. } => {
@@ -1064,8 +1032,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         mask.show_area = false;
                         mask.offset.x -= layer.properties.offset.x;
                         mask.offset.y -= layer.properties.offset.y;
-                        layer.operations.push(layer_core::LayerOperation {
-                            after_stroke: layer.strokes.len(),
+                        layer.pending_operations.push(layer_core::LayerOperation {
                             coverage: mask,
                             kind: layer_core::LayerOperationKind::ApplyMask,
                         });
@@ -1090,7 +1057,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     LayerAction::ClearMask { reveal, .. } => {
                         let m = layer.mask.as_mut().ok_or("No mask")?;
                         m.id = self.engine.allocate_layer_id();
-                        m.strokes = Default::default();
+                        m.raster = Default::default();
+                        m.pending_operations = Default::default();
                         m.initial = None;
                         m.inverted = false;
                         m.default_coverage = f32::from(reveal);
@@ -1691,14 +1659,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }));
         }
         self.engine
-            .append_layer_operation(
-                id,
-                layer_core::LayerOperation {
-                    after_stroke: layer.strokes.len(),
-                    coverage,
-                    kind,
-                },
-            )
+            .append_layer_operation(id, layer_core::LayerOperation { coverage, kind })
             .map_err(error)?;
         self.layer_interaction.changed = true;
         Ok(())

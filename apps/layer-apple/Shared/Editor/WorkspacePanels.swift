@@ -45,7 +45,6 @@ struct WorkspacePanels: View {
                 }
             }
             WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)
-            if store.snapshot["partial_zen"].bool { WorkspaceZenToolbars(store: store) }
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
             WorkspaceTabSlideOverlay(store: store, slide: workspace.tabSlide).zIndex(250)

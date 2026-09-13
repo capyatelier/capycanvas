@@ -319,7 +319,12 @@ cargo test --locked -p layer-windows --lib filter_packages::tests::recovery_test
 
 The native fixtures create isolated profiles. The document check removes the
 process-owned device twice, then compares exported PNG bytes and verifies
-history, state, thumbnails and subsequent saving. The lifecycle check overlaps
+history, state, thumbnails and subsequent saving. It queues a complete pen stroke
+while reconstruction runs, then repeats with a stroke already visibly painting
+and its final samples queued during reconstruction. The smoke samples vary
+pressure, tilt and twist; per-process lifecycle traces verify admission occurred
+inside the reconstruction interval. A missed interval fails the fixture.
+The lifecycle check overlaps
 removal with startup, minimized windows and close decisions. The Rust regression
 checks failed-pipeline cleanup and replacement of a removed hardware device.
 The multiwindow fixture removes the shared device from each of two open windows,
@@ -328,7 +333,9 @@ The `-FailGpu` variant removes the device and prevents reconstruction in its
 isolated test profile until the normal retry deadline expires. It checks Save,
 Save As, canceled pickers, Cancel/Discard close decisions, retained preferences,
 and durable reopen with identical exported pixels. It also checks failure in Zen
-mode: File remains accessible without changing the saved Zen preference.
+mode: File remains accessible without changing the saved Zen preference. A
+complete pen stroke and an unfinished tail are admitted during failed recovery;
+the saved/reopened drawing must contain only the complete stroke.
 
 When reconstruction fails, painting stops and the existing drawing remains
 saveable. Completed admitted strokes are retained; an unfinished stroke is

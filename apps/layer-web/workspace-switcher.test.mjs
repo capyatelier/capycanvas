@@ -199,22 +199,30 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
       await wait(`JSON.parse(layerApp.app.workspace_view()).switcher.some(row=>row.id===${JSON.stringify(f)})`);
       assert.equal((await view()).selected,f); assert.deepEqual(await layout(),preview);
     } finally {await call("Target.closeTarget",{targetId:target.targetId},null);}
-    // Long names and many shown entries stay within the header; keyboard focus
-    // and horizontal scrolling can reach entries beyond its visible width.
+    // The shared title bar uses its compact Window menu when the retained
+    // switcher cannot fit; every workspace stays reachable through its manager.
     for(const id of custom)await send({type:"edit_switcher",edit:{type:"show",id,visible:true}});
-    assert.ok(await evaluate("document.querySelector('.workspace-switcher').scrollWidth > document.querySelector('.workspace-switcher').clientWidth"));
-    assert.ok(await evaluate("document.querySelector('.workspace-switcher').getBoundingClientRect().width <= 420"));
+    assert.ok(await evaluate("document.querySelector('.workspace-switcher').hidden"));
+    assert.ok(await evaluate("!document.querySelector('#header-workspace-selector').hidden"));
+    const compactSwitch=async id=>{
+      await click('#header-workspace-selector > summary');
+      for(const label of ['Workspaces','Manage Workspaces…']) {
+        await evaluate(`(()=>{const b=[...document.querySelectorAll('#header-workspace-selector .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)});if(!b)throw Error('Missing '+${JSON.stringify(label)});b.dataset.compactSwitch='true';})()`);
+        await click('[data-compact-switch]');
+      }
+      await click(`.workspace-choice[data-id=${JSON.stringify(id)}]`);await click('.workspace-manager footer .suggested-action');
+    };
     const beforeRestart={pins:await pins(),order:await order()};
     await click(".workspace-manager footer button"); await reload(); await wait(ready); await idle();
     assert.deepEqual(await pins(),beforeRestart.pins); assert.deepEqual(await order(),beforeRestart.order); assert.deepEqual(await shown(),[initial.id,...beforeRestart.pins]);
     assert.deepEqual(await durable(),original,"restart preserves original workspace and history");
-    await click(`.workspace-switcher button[data-workspace-id=${JSON.stringify(custom[0])}]`);
+    await compactSwitch(custom[0]);
     assert.equal((await view()).id,custom[0]);
     assert.equal(await evaluate(`document.querySelector('.workspace-switcher button[data-workspace-id=${JSON.stringify(custom[0])}]').getAttribute('aria-pressed')`),"true");
     assert.deepEqual(await shown(),await pins(),"temporary entry disappears when switching to a pinned workspace");
     await send({type:"edit_switcher",edit:{type:"show",id:custom[0],visible:false}});
     assert.deepEqual(await shown(),[custom[0],...await pins()]);
-    await click(`.workspace-switcher button[data-workspace-id=${JSON.stringify(p)}]`);
+    await compactSwitch(p);
     assert.deepEqual(await shown(),await pins());
     console.log("PASS: configurable Web pill, narrow grips on every row, mouse/touch/pen pickup and menus, same-contact drag, hidden-row order, keyboard, scrolling, cancel/blur, preview preservation, cross-tab refresh and restart");
   } catch(error) {await shot("failure");console.error("Workspace switcher failure",await view());await writeFile(`${artifacts}/events.json`,JSON.stringify(await evaluate("workspaceEvents"),null,2));throw error;}

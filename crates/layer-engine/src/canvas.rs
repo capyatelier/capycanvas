@@ -30,6 +30,8 @@ const INPUT_BATCH: usize = 4096;
 // A small wet microbatch amortizes page ping-pong and reservoir passes while
 // keeping exchange far below the eight-sample display-frame cadence that made
 // carried color advance in visible bands.
+const MAX_CONTACT_POINTS: usize = 131_072;
+const CORRECTION_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_WET_DABS_PER_BATCH: u32 = 3;
 // Smudge contacts compose into one bounded semi-Lagrangian backtrace. Live
 // input retains an incomplete chunk as replaceable GPU preview work, so these
@@ -75,6 +77,7 @@ pub struct EngineMetrics {
 
 #[derive(Clone, Debug)]
 struct ActiveStroke {
+    before: layer_core::raster::RasterRevision,
     id: StrokeId,
     layer_id: LayerId,
     tool: StrokeTool,
@@ -104,6 +107,11 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     dab_generator: DabGenerator,
     finalized_real_points: usize,
     active_stroke: Option<ActiveStroke>,
+    completed_stroke: Option<Stroke>,
+    completed_at: Option<web_time::Instant>,
+    completed_before: Option<layer_core::raster::RasterRevision>,
+    restore_rasters: Vec<(LayerId, layer_core::raster::RasterRevision)>,
+    rebuild_completed: bool,
     estimates: std::collections::BTreeMap<(u64, u64), corrections::EstimatedPoint>,
     pending_smudge_dabs: Vec<Dab>,
     dabs: Vec<Dab>,
@@ -135,12 +143,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn with_capacity(
         mut backend: B,
-        document: Document,
+        mut document: Document,
         input: InputConsumer<PenEvent>,
         view: ViewState,
         input_transform: ViewTransform,
         capacity: EngineCapacity,
     ) -> Result<Self, B::Error> {
+        for layer in &mut document.layers {
+            if layer.asset.is_some() && layer.raster.is_empty() {
+                layer.raster = layer_core::raster::RasterRevision::pending();
+            }
+        }
         backend.resize_surface(view.width_px, view.height_px)?;
         let mut transforms = VecDeque::with_capacity(TRANSFORM_HISTORY);
         transforms.push_back(input_transform);
@@ -155,10 +168,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             tool: StrokeTool::Brush,
             instant_feedback: InstantFeedbackConfig::default(),
             ruler_snapping: Some(12.),
-            builder: StrokeBuilder::with_capacity(capacity.stroke_points),
+            builder: StrokeBuilder::with_capacity(capacity.stroke_points.min(MAX_CONTACT_POINTS)),
             dab_generator: DabGenerator::default(),
             finalized_real_points: 0,
             active_stroke: None,
+            completed_stroke: None,
+            completed_at: None,
+            completed_before: None,
+            restore_rasters: Vec::new(),
+            rebuild_completed: false,
             estimates: Default::default(),
             pending_smudge_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
             dabs: Vec::with_capacity(capacity.dabs_per_frame),
@@ -192,15 +210,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         &mut self.backend
     }
 
-    /// Replace GPU state while retaining the editor, input queue and history.
-    /// The caller prepares source assets in the replacement before this boundary.
-    /// A failed resize leaves the current backend and replay state untouched.
+    /// Replace GPU state while retaining committed raster roots and history.
+    /// Prepare sources and resize before adoption; failure leaves live input intact.
+    /// Unsubmitted contacts cannot be recovered by historical stroke replay.
     pub fn replace_backend(&mut self, mut backend: B) -> Result<B, B::Error> {
         backend.resize_surface(self.view.width_px, self.view.height_px)?;
-        let previous = std::mem::replace(&mut self.backend, backend);
+        self.discard_unsubmitted_input();
+        self.restore_rasters.clear();
         self.rebuild_all = true;
         self.composite_all = true;
-        Ok(previous)
+        Ok(std::mem::replace(&mut self.backend, backend))
     }
 
     pub fn metrics(&self) -> EngineMetrics {
@@ -349,8 +368,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    /// Append an ordered raster operation without replaying unchanged strokes.
-    /// Undo/device recovery still replay the same durable operation definition.
+    /// Append a command for the next raster submission. Its resulting immutable
+    /// pixels become the edit's undo/save state; the command is then discarded.
     pub fn append_layer_operation(
         &mut self,
         id: LayerId,
@@ -387,7 +406,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             operations.push((
                 target.layer,
                 layer_core::LayerOperation {
-                    after_stroke: 0,
                     coverage,
                     kind: layer_core::LayerOperationKind::Transform(target.transform),
                 },
@@ -419,6 +437,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         // None preserves the selection; Some(None) explicitly clears it.
         selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
+        self.flush_pending_edits()?;
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.estimates.clear();
         if self.has_active_stroke() {
             return Err(DocumentError::InvalidLayerOperation(
                 "Finish the stroke first",
@@ -426,7 +448,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         let mut layers = std::collections::BTreeMap::new();
         let mut batches = Vec::with_capacity(operations.len());
-        for (id, mut operation) in operations {
+        for (id, operation) in operations {
             let owner = self
                 .document()
                 .target_owner(id)
@@ -439,11 +461,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 ));
             }
             let layer = layers.entry(owner.id).or_insert_with(|| owner.clone());
-            let (strokes, history) = layer.target_history_mut(id).unwrap();
+            let history = layer.target_operations_mut(id).unwrap();
             let index = history.len() as u32;
-            operation.after_stroke = strokes.len();
             let damage = operation.bounds([self.document().width, self.document().height]);
             history.push(operation);
+            if id == layer.id {
+                layer.raster = layer_core::raster::RasterRevision::pending();
+            } else if let Some(mask) = &mut layer.mask {
+                mask.raster = layer_core::raster::RasterRevision::pending();
+            }
+
             batches.push(DabBatch {
                 material_update: 0,
                 stroke_id: StrokeId(0),
@@ -493,7 +520,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
     }
     pub fn wants_continuous_frames(&self) -> bool {
-        self.has_active_stroke() || self.editor.document().has_animated_effects()
+        self.has_pending_input()
+            || self.has_active_stroke()
+            || self.has_pending_document_edits()
+            || self.editor.document().has_animated_effects()
+    }
+    pub fn has_pending_input(&self) -> bool {
+        !self.input.is_empty()
     }
 
     pub fn set_layer_opacity(&mut self, id: LayerId, opacity: f32) -> Result<(), DocumentError> {
@@ -572,53 +605,120 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
+        self.flush_pending_edits()?;
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.estimates.clear();
         let image = self.editor.undo_changes_image();
         let changed = self.editor.undo()?;
         self.transform_preview = None;
-        self.rebuild_all |= changed && image;
+        self.composite_all |= changed && image;
         Ok(changed)
     }
 
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
+        self.flush_pending_edits()?;
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.estimates.clear();
         let image = self.editor.redo_changes_image();
         let changed = self.editor.redo()?;
         self.transform_preview = None;
-        self.rebuild_all |= changed && image;
+        self.composite_all |= changed && image;
         Ok(changed)
     }
 
-    pub fn apply_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+    pub fn apply_edit(&mut self, mut edit: Edit) -> Result<(), DocumentError> {
+        fn discard_submitted(edit: &mut Edit, document: &Document) {
+            match edit {
+                Edit::Batch(edits) => {
+                    for edit in edits {
+                        discard_submitted(edit, document);
+                    }
+                }
+                Edit::ReplaceLayer(layer) => {
+                    if let Some(old) = document.layer(layer.id) {
+                        if layer
+                            .pending_operations
+                            .starts_with(&old.pending_operations)
+                        {
+                            layer
+                                .pending_operations
+                                .drain(..old.pending_operations.len());
+                        }
+                        if let (Some(mask), Some(old)) = (&mut layer.mask, &old.mask) {
+                            if mask.id == old.id
+                                && mask.pending_operations.starts_with(&old.pending_operations)
+                            {
+                                std::sync::Arc::make_mut(&mut mask.pending_operations)
+                                    .drain(..old.pending_operations.len());
+                            }
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+        discard_submitted(&mut edit, self.document());
+        self.flush_pending_edits()?;
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.estimates.clear();
+        fn prepare(edit: &mut Edit, document: &Document, batches: &mut Vec<DabBatch>) {
+            let layer = match edit {
+                Edit::Batch(edits) => {
+                    for edit in edits {
+                        prepare(edit, document, batches);
+                    }
+                    return;
+                }
+                Edit::ReplaceLayer(layer) => &mut **layer,
+                Edit::InsertLayer { layer, .. } => layer,
+                _ => return,
+            };
+            if layer.asset.is_some()
+                && document
+                    .layer(layer.id)
+                    .is_none_or(|old| old.asset != layer.asset)
+            {
+                layer.raster = layer_core::raster::RasterRevision::pending();
+            }
+            if !layer.pending_operations.is_empty() {
+                layer.raster = layer_core::raster::RasterRevision::pending();
+                for (index, operation) in layer.pending_operations.iter().enumerate() {
+                    batches.push(DabBatch {
+                        material_update: 0,
+                        stroke_id: StrokeId(0),
+                        layer_id: layer.id,
+                        kind: DabBatchKind::LayerOperation(index as u32),
+                        stroke_start: false,
+                        stroke_end: false,
+                        first_dab: 0,
+                        dab_count: 0,
+                        style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
+                        damage: operation.bounds([document.width, document.height]),
+                    });
+                }
+            }
+        }
+        let mut operation_batches = Vec::new();
+        prepare(&mut edit, self.document(), &mut operation_batches);
         fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
             match edit {
-                Edit::InsertStroke(_) | Edit::RemoveStroke { .. } => true,
-                Edit::InsertLayer { layer, .. } => {
-                    !layer.strokes.is_empty() || layer.asset.is_some()
-                }
+                Edit::InsertLayer { layer, .. } => layer.asset.is_some(),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
                 // A batch may replace a layer inserted earlier in that batch;
                 // it is absent from this pre-edit snapshot, so be conservative.
-                Edit::ReplaceLayer(layer) => document.layer(layer.id).is_none_or(|old| {
-                    old.strokes != layer.strokes
-                        || old.operations != layer.operations
-                        || old.asset != layer.asset
-                        || old.mask.as_ref().map(|m| {
-                            (
-                                &m.initial,
-                                m.id,
-                                m.default_coverage,
-                                &m.strokes,
-                                &m.operations,
-                            )
-                        }) != layer.mask.as_ref().map(|m| {
-                            (
-                                &m.initial,
-                                m.id,
-                                m.default_coverage,
-                                &m.strokes,
-                                &m.operations,
-                            )
-                        })
-                }),
+                Edit::ReplaceLayer(layer) => {
+                    document.layer(layer.id).is_none_or(|old| {
+                        old.asset != layer.asset
+                            || old.mask.as_ref().map(|m| {
+                                (&m.initial, m.id, m.default_coverage, &m.pending_operations)
+                            }) != layer.mask.as_ref().map(|m| {
+                                (&m.initial, m.id, m.default_coverage, &m.pending_operations)
+                            })
+                    })
+                }
                 _ => false,
             }
         }
@@ -626,9 +726,33 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let changes_composite =
             edit.changes_image() && !matches!(&edit, Edit::SetActiveLayer { .. });
         self.editor.perform(edit)?;
+        self.batches.extend(operation_batches);
         self.transform_preview = None;
         self.rebuild_all |= rebuild;
         self.composite_all |= changes_composite;
+        Ok(())
+    }
+
+    fn flush_pending_edits(&mut self) -> Result<(), DocumentError> {
+        if self
+            .batches
+            .iter()
+            .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+            || self
+                .document()
+                .layers
+                .iter()
+                .any(|l| l.asset.is_some() && l.raster.try_data().is_none())
+        {
+            if !self.backend.can_submit() || !self.backend.can_capture_raster() {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Raster backing is busy; retry the edit",
+                ));
+            }
+            self.render_frame().map_err(|_| {
+                DocumentError::InvalidLayerOperation("Could not submit the preceding raster edit")
+            })?;
+        }
         Ok(())
     }
 
@@ -660,14 +784,57 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         timestamp_ns: Option<u64>,
         presentation_timestamp_ns: Option<u64>,
     ) -> Result<(), EngineError<B::Error>> {
+        if !self.backend.can_submit() {
+            return Ok(());
+        }
+        if !self.backend.can_capture_raster()
+            && (self.input.peek().is_some_and(|e| {
+                e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
+            }) || self.document().layers.iter().any(|l| {
+                l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
+            }))
+        {
+            return Ok(());
+        }
+        if self
+            .completed_at
+            .is_some_and(|at| at.elapsed() >= CORRECTION_WINDOW)
+        {
+            self.completed_stroke = None;
+            self.completed_before = None;
+            self.completed_at = None;
+            self.estimates.clear();
+        }
+        if self.builder.real_points().len() >= MAX_CONTACT_POINTS {
+            self.cancel_active();
+            return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
+                "Stroke exceeded the live input budget and was cancelled",
+            )));
+        }
         let mut rebuilt = false;
         if self.rebuild_all {
             self.build_full_scene();
             self.rebuild_all = false;
             rebuilt = true;
         }
-        self.process_input()?;
-        if let Some(timestamp_ns) = timestamp_ns {
+        // Complete queued raster operations before starting another contact.
+        if !self
+            .batches
+            .iter()
+            .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+            && !self
+                .document()
+                .layers
+                .iter()
+                .any(|l| l.asset.is_some() && l.raster.try_data().is_none())
+        {
+            self.process_input()?;
+        }
+        let awaiting_boundary = self
+            .input
+            .peek()
+            .is_some_and(|e| e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION));
+        if let Some(timestamp_ns) = timestamp_ns.filter(|_| !awaiting_boundary) {
             self.append_continuous(timestamp_ns);
         }
         self.advance_finalized_prefix();
@@ -677,7 +844,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.rebuild_all = false;
             rebuilt = true;
         }
-        self.build_predicted_preview(timestamp_ns, presentation_timestamp_ns);
+        if !awaiting_boundary {
+            self.build_predicted_preview(timestamp_ns, presentation_timestamp_ns);
+        }
         self.composite_all |= rebuilt;
 
         let packet = FramePacket {
@@ -689,6 +858,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             layers: &self.editor.document().layers,
             dabs: &self.dabs,
             dab_batches: &self.batches,
+            restore_rasters: &self.restore_rasters,
             reset_layers: rebuilt,
             composite_all: self.composite_all,
         };
@@ -705,10 +875,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
         self.dabs.clear();
         self.batches.clear();
+        self.restore_rasters.clear();
         if result.is_err() {
             self.rebuild_all = true;
         } else {
             self.composite_all = false;
+            self.editor.finish_raster_submission();
         }
         self.metrics.frames = self.metrics.frames.saturating_add(1);
         result
@@ -797,29 +969,46 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
     }
 
-    /// Drain admitted samples without submitting GPU work. The producer must be
-    /// quiescent or owned by this caller; completed strokes retain their history.
-    pub fn flush_input(&mut self) -> Result<(), EngineError<B::Error>> {
-        while let Some(event) = self.input.pop() {
-            self.process_event(event)?;
+    /// Retire queued and active input after a renderer stops. Only already
+    /// submitted raster boundaries belong to history; CPU-only sample draining
+    /// cannot create a saveable raster edit. The producer must be quiescent.
+    pub fn discard_unsubmitted_input(&mut self) {
+        while self.input.pop().is_some() {}
+        if self.has_active_stroke() {
+            self.cancel_active();
         }
-        Ok(())
-    }
-
-    /// Retire input after the host stops accepting samples. Commit completed
-    /// strokes, then cancel only an unfinished stroke and its predicted tail.
-    pub fn finish_input(&mut self) -> Result<(), EngineError<B::Error>> {
-        self.flush_input()?;
-        self.cancel_active();
-        Ok(())
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.completed_at = None;
+        self.rebuild_completed = false;
+        self.estimates.clear();
     }
 
     fn process_input(&mut self) -> Result<(), EngineError<B::Error>> {
         for _ in 0..INPUT_BATCH {
+            if self.input.peek().is_some_and(|e| {
+                e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
+            }) && !self.backend.can_capture_raster()
+            {
+                break;
+            }
             let Some(event) = self.input.pop() else {
                 break;
             };
+            if self.builder.real_points().len() >= MAX_CONTACT_POINTS
+                && !matches!(event.phase, PenPhase::Up | PenPhase::Cancel)
+            {
+                self.cancel_active();
+                return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
+                    "Stroke exceeded the live input budget and was cancelled",
+                )));
+            }
             self.process_event(event)?;
+            // Publish one contact boundary before consuming the next contact.
+            // This keeps each undo revision tied to its exact GPU queue point.
+            if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
+                break;
+            }
         }
         Ok(())
     }
@@ -872,6 +1061,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         transform.surface_to_document[5] -= offset.y;
         match event.phase {
             PenPhase::Down => {
+                self.completed_stroke = None;
+                self.estimates.clear();
                 self.transform_preview = None;
                 if self.active_stroke.is_some() {
                     self.cancel_active();
@@ -927,6 +1118,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     }))
                 });
                 let active = ActiveStroke {
+                    before: self.document().target_raster(layer_id).unwrap().clone(),
                     id,
                     layer_id,
                     tool,
@@ -1032,13 +1224,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 stroke.alpha_locked = alpha_locked;
                 stroke.material_updates = active.material_updates.into();
                 stroke.selection = active.style.selection.clone();
+                self.completed_stroke = Some(stroke);
+                self.completed_at = Some(web_time::Instant::now());
+                self.completed_before = Some(active.before);
                 self.editor
-                    .perform(Edit::InsertStroke(Box::new(stroke)))
+                    .perform(Edit::SetRaster {
+                        target: active.layer_id,
+                        revision: layer_core::raster::RasterRevision::pending(),
+                    })
                     .map_err(EngineError::Document)?;
                 if has_end_taper {
                     // End taper depends on final stroke length. Replay after
                     // pen-up so the stored stroke and visible result agree.
                     self.rebuild_all = true;
+                    self.rebuild_completed = true;
                 }
                 self.metrics.committed_strokes = self.metrics.committed_strokes.saturating_add(1);
                 self.finalized_real_points = 0;
@@ -1352,54 +1551,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn build_full_scene(&mut self) {
+        if self.active_stroke.is_none() && !self.rebuild_completed {
+            return;
+        }
         self.dabs.clear();
         self.batches.clear();
-        enum Replay {
-            Stroke(StrokeId),
-            Operation(LayerId, u32),
-        }
-        let mut strokes = Vec::new();
-        for layer in &self.editor.document().layers {
-            for target in layer.masks().map(|m| m.id).chain([layer.id]) {
-                let (ink, operations) = layer.target_history(target).unwrap();
-                for index in 0..=ink.len() {
-                    for (op, _) in operations
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, o)| o.after_stroke == index)
-                    {
-                        strokes.push(Replay::Operation(target, op as u32));
-                    }
-                    if let Some(stroke) = ink.get(index).and_then(|id| self.document().stroke(*id))
-                    {
-                        strokes.push(Replay::Stroke(stroke.id));
-                    }
-                }
-            }
-        }
-        for replay in strokes {
-            let stroke = match replay {
-                Replay::Stroke(id) => self
-                    .editor
-                    .document()
-                    .stroke(id)
-                    .expect("replay stroke exists"),
-                Replay::Operation(layer_id, index) => {
-                    self.batches.push(DabBatch {
-                        material_update: 0,
-                        stroke_id: StrokeId(0),
-                        layer_id,
-                        kind: DabBatchKind::LayerOperation(index),
-                        stroke_start: false,
-                        stroke_end: false,
-                        first_dab: 0,
-                        dab_count: 0,
-                        style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
-                        damage: Rect::EMPTY,
-                    });
-                    continue;
-                }
-            };
+        if self.rebuild_completed
+            && let Some(stroke) = self.completed_stroke.as_ref()
+        {
+            self.rebuild_completed = false;
             let mut style = style_for(&stroke.brush, stroke.tool);
             style.alpha_locked = stroke.alpha_locked;
             style.selection = stroke.selection.clone();
@@ -1517,6 +1677,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn cancel_active(&mut self) {
+        self.dabs.clear();
+        self.batches.clear();
         if let Some(active) = &self.active_stroke {
             self.estimates.retain(|_, e| e.stroke != active.id);
         }
@@ -1703,6 +1865,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingRenderer {
+        capture_blocked: bool,
         time_seconds: f32,
         fail_resize: bool,
         size: [u32; 2],
@@ -1718,6 +1881,9 @@ mod tests {
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn can_capture_raster(&self) -> bool {
+            !self.capture_blocked
+        }
         fn set_transform_preview(
             &mut self,
             preview: Option<&layer_render::TransformPreview>,
@@ -1749,9 +1915,38 @@ mod tests {
             if self.size != [packet.view.width_px, packet.view.height_px] {
                 return Err(BackendError("surface size mismatch"));
             }
-            if packet.reset_layers {
+            if packet.reset_layers
+                && packet
+                    .dab_batches
+                    .iter()
+                    .any(|b| b.kind == DabBatchKind::Persistent)
+            {
                 self.persistent.clear();
                 self.material_batches.clear();
+            }
+            for layer in packet.layers {
+                for revision in
+                    std::iter::once(&layer.raster).chain(layer.mask.iter().map(|m| &m.raster))
+                {
+                    if revision.try_data().is_none() {
+                        // A renderer contract double publishes a distinct committed tile.
+                        use layer_core::raster::*;
+                        let blob = TileBlob::encode(
+                            layer_core::color::PixelDescriptor::SRGB8_PAINT,
+                            &vec![1; MAX_TILE_BYTES],
+                        )
+                        .unwrap();
+                        let mut data = RasterData::default();
+                        data.tiles.insert(
+                            TileKey {
+                                plane: RasterPlane::Color,
+                                coordinate: [0, 0],
+                            },
+                            RasterTile::backed(blob),
+                        );
+                        revision.publish(Ok(data)).unwrap();
+                    }
+                }
             }
             self.preview.clear();
             self.styles.clear();
@@ -1793,7 +1988,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_replacement_replays_active_and_committed_ink_without_changing_history() {
+    fn backend_replacement_restores_committed_roots_and_discards_unsubmitted_ink() {
         for preset in [
             DefaultBrushPreset::GPen,
             DefaultBrushPreset::NaturalBlender,
@@ -1812,12 +2007,6 @@ mod tests {
             )
             .unwrap();
             canvas.set_brush(default_brush(preset)).unwrap();
-            canvas
-                .set_instant_feedback(InstantFeedbackConfig {
-                    enabled: false,
-                    ..Default::default()
-                })
-                .unwrap();
             for (sequence, phase, x) in [
                 (1, PenPhase::Down, 10.),
                 (2, PenPhase::Move, 40.),
@@ -1830,54 +2019,45 @@ mod tests {
             }
             let checkpoint = canvas.checkpoint();
             let document = canvas.document().clone();
-            let previous = canvas
-                .replace_backend(RecordingRenderer::default())
-                .unwrap();
-            assert!(canvas.has_active_stroke());
-            canvas.render_frame_at(80_000_000).unwrap();
-            assert!(canvas.backend().saw_reset);
-            assert_eq!(
-                canvas.backend().persistent,
-                previous.persistent,
-                "{preset:?}"
-            );
-            if preset == DefaultBrushPreset::WatercolorWash {
-                assert_eq!(canvas.backend().material_batches, previous.material_batches);
-            }
-            assert_eq!(canvas.document(), &document);
-            assert_eq!(canvas.checkpoint(), checkpoint);
-            // A terminal event queued before replacement still commits exactly once.
             input.push(event(6, PenPhase::Up, 90.)).unwrap();
             canvas
                 .replace_backend(RecordingRenderer::default())
                 .unwrap();
+            assert!(!canvas.has_active_stroke() && !canvas.has_pending_input());
             canvas.render_frame_at(96_000_000).unwrap();
-            assert!(!canvas.has_active_stroke());
-            assert_eq!(canvas.document().strokes().count(), 2);
-            let committed = canvas.backend().persistent.clone();
-            let final_checkpoint = canvas.checkpoint();
+            assert!(canvas.backend().saw_reset);
+            assert_eq!(
+                canvas.backend().persistent_dabs,
+                0,
+                "restoration never replays dabs"
+            );
+            assert_eq!(canvas.document(), &document);
+            assert_eq!(canvas.checkpoint(), checkpoint);
+            assert_eq!(canvas.metrics().committed_strokes, 1);
             assert!(canvas.undo().unwrap());
             canvas.render_frame().unwrap();
-            assert_eq!(canvas.document().strokes().count(), 1);
-            assert!(canvas.can_redo());
+            assert!(canvas.document().layers[0].raster.is_empty());
             canvas
                 .replace_backend(RecordingRenderer::default())
                 .unwrap();
             canvas.render_frame().unwrap();
-            assert!(canvas.can_redo(), "replacement must retain the redo branch");
+            assert!(canvas.can_redo());
             assert!(canvas.redo().unwrap());
             canvas.render_frame().unwrap();
-            assert_eq!(canvas.backend().persistent, committed, "{preset:?}");
-            assert_eq!(canvas.checkpoint(), final_checkpoint);
+            assert_eq!(
+                canvas.document().layers[0].raster,
+                document.layers[0].raster
+            );
+            assert_eq!(canvas.checkpoint(), checkpoint);
         }
     }
 
     #[test]
-    fn input_retirement_commits_beyond_one_batch_and_discards_only_unfinished_ink() {
+    fn input_retirement_preserves_only_submitted_raster_boundaries() {
         let (mut input, consumer) = input_queue(INPUT_BATCH + 10);
         let mut canvas = CanvasEngine::new(
             RecordingRenderer::default(),
-            Document::new("CPU retirement", 128, 128),
+            Document::new("retirement", 128, 128),
             consumer,
             view(128, 128),
             ViewTransform {
@@ -1886,6 +2066,11 @@ mod tests {
             },
         )
         .unwrap();
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        canvas.render_frame().unwrap();
+        let root = canvas.document().layers[0].raster.clone();
+        let checkpoint = canvas.checkpoint();
         for index in 0..=INPUT_BATCH + 1 {
             let phase = if index == 0 {
                 PenPhase::Down
@@ -1894,24 +2079,18 @@ mod tests {
             } else {
                 PenPhase::Move
             };
-            input.push(event(index as u64 + 1, phase, 30.)).unwrap();
+            input.push(event(index as u64 + 3, phase, 30.)).unwrap();
         }
-        input.push(event(9000, PenPhase::Down, 40.)).unwrap();
-        input.push(event(9001, PenPhase::Move, 80.)).unwrap();
-        canvas.finish_input().unwrap();
-        assert!(!canvas.has_active_stroke());
-        assert_eq!(canvas.document().strokes().count(), 1);
-        assert_eq!(
-            canvas.backend().persistent_dabs,
-            0,
-            "no GPU submit occurred"
-        );
-        let checkpoint = canvas.checkpoint();
-        assert!(canvas.undo().unwrap());
-        assert_eq!(canvas.document().strokes().count(), 0);
-        assert!(canvas.redo().unwrap());
+        canvas.discard_unsubmitted_input();
+        assert!(!canvas.has_active_stroke() && !canvas.has_pending_input());
+        assert_eq!(canvas.document().layers[0].raster, root);
         assert_eq!(canvas.checkpoint(), checkpoint);
-        canvas.finish_input().unwrap();
+        assert_eq!(canvas.metrics().committed_strokes, 1);
+        assert!(canvas.undo().unwrap());
+        assert!(canvas.document().layers[0].raster.is_empty());
+        assert!(canvas.redo().unwrap());
+        assert_eq!(canvas.document().layers[0].raster, root);
+        canvas.discard_unsubmitted_input();
         assert_eq!(canvas.checkpoint(), checkpoint, "retirement is idempotent");
     }
 
@@ -1942,7 +2121,7 @@ mod tests {
         );
         assert!(!canvas.backend().fail_resize);
         canvas.render_frame().unwrap();
-        assert_eq!(canvas.document().strokes().count(), 1);
+        assert_eq!(canvas.metrics().committed_strokes, 1);
         assert!(canvas.undo().unwrap());
         assert!(canvas.redo().unwrap());
     }
@@ -1973,7 +2152,13 @@ mod tests {
         input.push(event(2, PenPhase::Up, 40.)).unwrap();
         canvas.render_frame_at(900_000_000_000).unwrap();
         assert_eq!(canvas.backend().time_seconds, 0.);
-        assert_eq!(canvas.document().strokes().count(), 0);
+        assert!(
+            canvas
+                .document()
+                .target_raster(canvas.document().active_target())
+                .unwrap()
+                .is_empty()
+        );
         canvas.render_frame_at(901_000_000_000).unwrap();
         assert_eq!(canvas.backend().time_seconds, 1.);
     }
@@ -2045,7 +2230,7 @@ mod tests {
                 input.push(up).unwrap();
                 canvas.render_frame().unwrap();
                 let before = canvas.backend().material_batches.clone();
-                let stroke = canvas.document().strokes().next().unwrap();
+                let stroke = canvas.completed_stroke.as_ref().unwrap();
                 assert_eq!(
                     stroke.material_updates.last().copied(),
                     Some(stroke.points.len() as u32)
@@ -2135,13 +2320,18 @@ mod tests {
                 .unwrap();
             producer.push(event(2, PenPhase::Up, 48.)).unwrap();
             engine.render_frame().unwrap();
-            let stroke = engine.document().strokes().next().unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
             assert_eq!(stroke.selection.as_ref(), Some(&expected));
             assert_eq!(stroke.layer_id, engine.document().active_target());
+            let committed = engine
+                .document()
+                .target_raster(stroke.layer_id)
+                .unwrap()
+                .identity();
             engine.apply_edit(Edit::SetSelection(None)).unwrap();
             engine.rebuild_all = true;
             engine.render_frame().unwrap();
-            assert!(!engine.backend.styles.is_empty());
+            assert!(engine.backend.styles.is_empty());
             assert!(
                 engine
                     .backend
@@ -2152,19 +2342,23 @@ mod tests {
             engine.undo().unwrap(); // Deselect.
             engine.undo().unwrap(); // Stroke.
             engine.render_frame().unwrap();
-            assert_eq!(engine.document().strokes().count(), 0);
+            assert!(
+                engine
+                    .document()
+                    .target_raster(engine.document().active_target())
+                    .unwrap()
+                    .is_empty()
+            );
             engine.redo().unwrap();
             engine.redo().unwrap();
             engine.render_frame().unwrap();
             assert_eq!(
                 engine
                     .document()
-                    .strokes()
-                    .next()
+                    .target_raster(engine.document().active_target())
                     .unwrap()
-                    .selection
-                    .as_ref(),
-                Some(&expected)
+                    .identity(),
+                committed
             );
             assert!(
                 engine
@@ -2186,7 +2380,7 @@ mod tests {
             );
             producer.push(event(4, PenPhase::Cancel, 64.)).unwrap();
             engine.render_frame().unwrap();
-            assert_eq!(engine.document().strokes().count(), 1);
+            assert_eq!(engine.metrics().committed_strokes, 1);
         }
     }
 
@@ -2295,7 +2489,7 @@ mod tests {
             assert!(engine.commit_transform().unwrap());
             let layer = &engine.document().layers[0];
             for p in [&preview, &companion] {
-                let (_, ops) = layer.target_history(p.layer).unwrap();
+                let ops = layer.target_operations(p.layer).unwrap();
                 assert_eq!(ops.len(), 1);
                 assert_eq!(ops[0].kind, LayerOperationKind::Transform(p.transform));
                 assert_eq!(ops[0].coverage.initial, p.selection);
@@ -2307,15 +2501,20 @@ mod tests {
             assert_eq!(engine.document().selection, before.selection);
             assert!(!engine.can_undo());
             assert!(engine.redo().unwrap());
-            engine.build_full_scene();
-            assert_eq!(
-                engine
-                    .batches
-                    .iter()
-                    .filter(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
-                    .map(|b| b.layer_id)
-                    .collect::<Vec<_>>(),
-                [LayerId(9), before.active_layer]
+            engine.render_frame().unwrap();
+            assert!(
+                engine.batches.is_empty(),
+                "redo must restore pixels without replaying operations"
+            );
+            assert_eq!(engine.document().selection.as_ref(), Some(&moved));
+            assert!(!engine.document().layers[0].raster.is_empty());
+            assert!(
+                !engine.document().layers[0]
+                    .mask
+                    .as_ref()
+                    .unwrap()
+                    .raster
+                    .is_empty()
             );
         }
     }
@@ -2367,7 +2566,7 @@ mod tests {
         assert!(engine.commit_transform().unwrap());
         assert!(engine.transform_preview.is_none());
         assert_eq!(engine.document().selection.as_ref(), Some(&placed));
-        let operation = &engine.document().layer(layer).unwrap().operations[0];
+        let operation = &engine.document().layer(layer).unwrap().pending_operations[0];
         assert_eq!(operation.coverage.initial, preview.selection);
         assert_eq!(
             operation.kind,
@@ -2380,7 +2579,7 @@ mod tests {
                 .document()
                 .layer(layer)
                 .unwrap()
-                .operations
+                .pending_operations
                 .is_empty()
         );
         assert!(
@@ -2409,7 +2608,7 @@ mod tests {
     }
 
     #[test]
-    fn appended_raster_operations_are_incremental_ordered_and_replayed_after_undo() {
+    fn appended_raster_operations_are_incremental_and_undo_restores_revisions() {
         for kind in [
             layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
                 affine: layer_core::Affine::translation(Point { x: 10., y: 4. }),
@@ -2444,15 +2643,17 @@ mod tests {
             let count = engine.backend.persistent_dabs;
             let coverage =
                 layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
-            let op = layer_core::LayerOperation {
-                after_stroke: 0,
-                coverage,
-                kind,
-            };
+            let op = layer_core::LayerOperation { coverage, kind };
             engine.append_layer_operation(id, op).unwrap();
             assert!(engine.has_pending_document_edits());
+            let operated = engine.document().layer(id).unwrap().raster.identity();
             assert_eq!(
-                engine.document().layer(id).unwrap().operations[0].after_stroke,
+                engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .len(),
                 1
             );
             assert!(matches!(
@@ -2467,12 +2668,31 @@ mod tests {
             );
             assert!(!engine.has_pending_document_edits());
             engine.undo().unwrap();
-            assert!(engine.document().layer(id).unwrap().operations.is_empty());
+            assert!(
+                engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .is_empty()
+            );
             engine.render_frame().unwrap();
-            assert!(engine.backend.saw_reset);
+            assert!(!engine.backend.saw_reset);
             engine.redo().unwrap();
             engine.render_frame().unwrap();
-            assert_eq!(engine.document().layer(id).unwrap().operations.len(), 1);
+            assert_eq!(
+                engine.document().layer(id).unwrap().raster.identity(),
+                operated
+            );
+            assert!(
+                engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .is_empty()
+            );
+            assert_eq!(engine.backend.persistent_dabs, count);
         }
     }
 
@@ -2503,7 +2723,111 @@ mod tests {
     }
 
     #[test]
-    fn estimated_samples_correct_original_transforms_and_survive_pen_up_and_redo() {
+    fn capture_backpressure_allows_live_moves_and_defers_only_the_commit_boundary() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("backpressure", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        engine.render_frame().unwrap();
+        engine.backend_mut().capture_blocked = true;
+        for (sequence, phase, x) in [
+            (1, PenPhase::Down, 8.),
+            (2, PenPhase::Move, 16.),
+            (3, PenPhase::Up, 24.),
+        ] {
+            input.push(event(sequence, phase, x)).unwrap();
+        }
+        engine.render_frame_for(10_000_000, 18_000_000).unwrap();
+        assert_eq!(engine.metrics().input_events, 2);
+        assert!(engine.backend().persistent_dabs > 0);
+        assert!(engine.has_active_stroke() && engine.has_pending_input());
+        assert_eq!(engine.metrics().committed_strokes, 0);
+        assert!(engine.document().layers[0].raster.is_empty());
+        let frames = engine.metrics().frames;
+        let dabs = engine.backend().persistent_dabs;
+        engine.render_frame_for(200_000_000, 208_000_000).unwrap();
+        assert_eq!(engine.metrics().frames, frames);
+        assert_eq!(
+            engine.backend().persistent_dabs,
+            dabs,
+            "waiting pen-up must not advance continuous ink"
+        );
+        engine.backend_mut().capture_blocked = false;
+        engine.render_frame_for(210_000_000, 218_000_000).unwrap();
+        assert_eq!(engine.metrics().input_events, 3);
+        assert_eq!(engine.metrics().committed_strokes, 1);
+        assert!(!engine.has_active_stroke() && !engine.has_pending_input());
+        assert!(engine.undo().unwrap());
+        assert!(!engine.undo().unwrap());
+    }
+
+    #[test]
+    fn live_contact_budget_cancels_without_committing_partial_pixels() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("bounded", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        input.push(event(1, PenPhase::Down, 8.)).unwrap();
+        engine.render_frame().unwrap();
+        let checkpoint = engine.checkpoint();
+        for sequence in 2..=MAX_CONTACT_POINTS as u64 {
+            engine.builder.push(
+                event(sequence, PenPhase::Move, 8.),
+                ViewTransform::IDENTITY,
+                PressureCurve::default(),
+            );
+        }
+        assert!(engine.render_frame().is_err());
+        assert!(!engine.has_active_stroke());
+        assert_eq!(engine.checkpoint(), checkpoint);
+        assert!(!engine.can_undo());
+        engine.render_frame().unwrap();
+        assert!(engine.document().layers[0].raster.is_empty());
+    }
+
+    #[test]
+    fn completed_contact_estimates_expire_without_retaining_historical_input() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("expiry", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        let mut down = event(1, PenPhase::Down, 8.);
+        down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+        input.push(down).unwrap();
+        input.push(event(2, PenPhase::Up, 12.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.completed_stroke.is_some());
+        let root = engine.document().layers[0].raster.identity();
+        engine.completed_at = Some(
+            web_time::Instant::now() - CORRECTION_WINDOW - std::time::Duration::from_millis(1),
+        );
+        down.flags = SampleFlags(SampleFlags::CORRECTION.0);
+        down.pressure = 0.1;
+        input.push(down).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.completed_stroke.is_none());
+        assert!(engine.completed_before.is_none());
+        assert!(engine.estimates.is_empty());
+        assert_eq!(engine.document().layers[0].raster.identity(), root);
+    }
+
+    #[test]
+    fn estimated_samples_use_original_transforms_and_close_the_window_on_undo() {
         for feedback in [false, true] {
             let (mut input, consumer) = input_queue(32);
             let mut engine = CanvasEngine::new(
@@ -2554,47 +2878,54 @@ mod tests {
             up.view_revision = 31;
             input.push(up).unwrap();
             engine.render_frame().unwrap();
-            let id = engine.document().strokes().next().unwrap().id;
-            let snapshot = engine.document().clone();
+            let original = engine
+                .document()
+                .target_raster(engine.document().active_target())
+                .unwrap()
+                .identity();
             let saved = engine.checkpoint();
-            engine.undo().unwrap();
-            engine.render_frame().unwrap();
-            assert!(engine.document().stroke(id).is_none());
-            // The correction belongs to redoable ink, not a new stroke.
             correction.pressure = 0.7;
             correction.twist_radians = 2.1;
             correction.flags = SampleFlags::CORRECTION;
             input.push(correction).unwrap();
             engine.render_frame().unwrap();
-            assert!(engine.document().stroke(id).is_none());
-            engine.redo().unwrap();
-            engine.render_frame().unwrap();
-            let stroke = engine.document().stroke(id).unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
             assert_eq!(stroke.points.len(), 2);
             assert_eq!(stroke.points[0].pressure, 0.7);
             assert_eq!(stroke.points[0].twist, 2.1);
-            assert_eq!(snapshot.stroke(id).unwrap().points[0].pressure, 0.9);
+            let corrected = engine
+                .document()
+                .target_raster(stroke.layer_id)
+                .unwrap()
+                .identity();
+            assert_ne!(corrected, original);
             assert_ne!(engine.checkpoint(), saved);
             assert_eq!(engine.metrics.committed_strokes, 1);
             assert!(engine.estimates.is_empty());
-            let truth = engine.document().clone();
-            let (_, consumer) = input_queue(4);
-            let mut replay = CanvasEngine::new(
-                RecordingRenderer::default(),
-                truth.clone(),
-                consumer,
-                view(64, 64),
-                ViewTransform::IDENTITY,
-            )
-            .unwrap();
-            replay.render_frame().unwrap();
-            assert_eq!(engine.backend.persistent, replay.backend.persistent);
-            correction.pressure = 0.1; // A duplicate final update is inert.
+            engine.undo().unwrap();
+            engine.render_frame().unwrap();
+            assert!(
+                engine
+                    .document()
+                    .target_raster(engine.document().active_target())
+                    .unwrap()
+                    .is_empty()
+            );
+            correction.pressure = 0.1;
             input.push(correction).unwrap();
             engine.render_frame().unwrap();
-            assert_eq!(engine.document(), &truth);
+            engine.redo().unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(
+                engine
+                    .document()
+                    .target_raster(engine.document().active_target())
+                    .unwrap()
+                    .identity(),
+                corrected
+            );
+            assert!(engine.completed_stroke.is_none());
             engine.undo().unwrap();
-            assert_eq!(engine.document().strokes().count(), 0);
             assert!(
                 !engine.undo().unwrap(),
                 "sensor updates must not add undo steps"
@@ -2629,7 +2960,7 @@ mod tests {
         correction.flags = SampleFlags::CORRECTION;
         input.push(correction).unwrap();
         engine.render_frame().unwrap();
-        let stroke = engine.document().strokes().next().unwrap();
+        let stroke = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(stroke.points.len(), 2);
         assert!(stroke.points.iter().all(|p| p.pressure == down.pressure));
         assert_eq!(engine.metrics.committed_strokes, 1);
@@ -2681,7 +3012,13 @@ mod tests {
                 .iter()
                 .all(|p| p.pressure == 0.8)
         );
-        assert_eq!(engine.document().strokes().count(), 0);
+        assert!(
+            engine
+                .document()
+                .target_raster(engine.document().active_target())
+                .unwrap()
+                .is_empty()
+        );
         assert!(engine.estimates.is_empty());
     }
 
@@ -2703,7 +3040,7 @@ mod tests {
         )
         .unwrap();
         engine.render_frame().unwrap();
-        assert_eq!(engine.document().strokes().count(), 1);
+        assert_eq!(engine.metrics().committed_strokes, 1);
         assert_eq!(engine.metrics().committed_strokes, 1);
         assert!(engine.backend().persistent_dabs > 0);
         assert!(engine.backend().saw_reset);
@@ -2791,7 +3128,7 @@ mod tests {
             up.surface_position.y = 50.;
             producer.push(up).unwrap();
             engine.render_frame().unwrap();
-            let stroke = engine.document().strokes().next().unwrap().clone();
+            let stroke = engine.completed_stroke.as_ref().unwrap().clone();
             assert!(
                 stroke
                     .points
@@ -2819,9 +3156,8 @@ mod tests {
             engine.render_frame().unwrap();
             assert_eq!(
                 engine
-                    .document()
-                    .strokes()
-                    .last()
+                    .completed_stroke
+                    .as_ref()
                     .unwrap()
                     .points
                     .last()
@@ -2895,9 +3231,8 @@ mod tests {
         engine.render_frame().unwrap();
         assert!(
             engine
-                .document()
-                .strokes()
-                .next()
+                .completed_stroke
+                .as_ref()
                 .unwrap()
                 .points
                 .iter()
@@ -2946,9 +3281,8 @@ mod tests {
         engine.render_frame().unwrap();
         assert!(
             engine
-                .document()
-                .strokes()
-                .last()
+                .completed_stroke
+                .as_ref()
                 .unwrap()
                 .points
                 .iter()
@@ -3020,7 +3354,7 @@ mod tests {
         producer.push(event(2, PenPhase::Up, 24.0)).unwrap();
         engine.render_frame().unwrap();
 
-        let stroke = engine.document().strokes().next().unwrap();
+        let stroke = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(stroke.brush.diameter, BrushSnapshot::default().diameter);
     }
 
@@ -3078,7 +3412,7 @@ mod tests {
         engine
             .render_frame_for(up.timestamp_ns, up.timestamp_ns)
             .unwrap();
-        let stroke = engine.document().strokes().next().unwrap();
+        let stroke = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(stroke.points.len(), 3);
         assert_eq!(stroke.points.last().unwrap().position.x, 28.0);
         let mut replay = Vec::new();
@@ -3144,7 +3478,7 @@ mod tests {
             engine
                 .render_frame_for(up.timestamp_ns, up.timestamp_ns)
                 .unwrap();
-            let stroke = engine.document().strokes().next().unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
             assert_eq!(stroke.points.len(), inputs.len());
             for (point, input) in stroke.points.iter().zip(inputs) {
                 assert_eq!(point.position, input.surface_position);
@@ -3292,7 +3626,7 @@ mod tests {
                     .render_frame_at(events.last().unwrap().timestamp_ns)
                     .unwrap();
             }
-            let stroke = engine.document().strokes().next().unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
             let mut replay = Vec::new();
             DabGenerator::generate(stroke, &mut replay);
             assert_eq!(engine.backend().persistent, replay);
@@ -3359,7 +3693,7 @@ mod tests {
 
         producer.push(event(3, PenPhase::Up, 200.0)).unwrap();
         engine.render_frame().unwrap();
-        let stroke = engine.document().strokes().next().unwrap();
+        let stroke = engine.completed_stroke.as_ref().unwrap();
         let mut replay = Vec::new();
         DabGenerator::generate(stroke, &mut replay);
         assert_eq!(engine.backend().persistent, replay);

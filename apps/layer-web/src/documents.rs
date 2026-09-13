@@ -53,17 +53,48 @@ impl WebApp {
     pub fn reset_document_close(&mut self) {
         self.session.reset_document_close();
     }
-    pub fn save_project(&mut self, id: u32, location: JsValue) -> Result<Vec<u8>, JsValue> {
+    pub fn save_project(&mut self, id: u32, location: JsValue) -> Result<js_sys::Promise, JsValue> {
         let location = serde_wasm_bindgen::from_value(location).map_err(js)?;
         let project = self
             .session
             .capture_project_save(id, location)
-            .map_err(js)?
-            .pruned()
             .map_err(js)?;
-        let mut bytes = Vec::new();
-        project.write(&mut bytes).map_err(js)?;
-        Ok(bytes)
+        // Reserve one immutable checkpoint before yielding. WebGPU callbacks
+        // need the event loop, and drawing may continue while this save waits.
+        Ok(future_to_promise(async move {
+            let deadline = js_sys::Date::now() + 30_000.;
+            loop {
+                let mut ready = true;
+                for layer in &project.document.layers {
+                    for revision in
+                        std::iter::once(&layer.raster).chain(layer.masks().map(|mask| &mask.raster))
+                    {
+                        if let Some(data) = revision.try_data() {
+                            for tile in data.map_err(js)?.tiles.values() {
+                                if let Some(backing) = tile.try_backing() {
+                                    backing.map_err(js)?;
+                                } else {
+                                    ready = false;
+                                }
+                            }
+                        } else {
+                            ready = false;
+                        }
+                    }
+                }
+                if ready {
+                    break;
+                }
+                if js_sys::Date::now() > deadline {
+                    return Err(js("Raster capture did not complete"));
+                }
+                yield_browser().await?;
+            }
+            let project = project.pruned().map_err(js)?;
+            let mut bytes = Vec::new();
+            project.write(&mut bytes).map_err(js)?;
+            Ok(js_sys::Uint8Array::from(bytes.as_slice()).into())
+        }))
     }
     pub fn export_ready(&self) -> bool {
         self.session

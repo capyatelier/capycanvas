@@ -143,7 +143,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
       place(r.shadow,r.placement.bounds);
       const anchor=r.drawer.anchor;
-      const source=r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
+      const source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
         [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
       r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
       if(source&&r.connection&&!r.closing) {

@@ -45,20 +45,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    /// CPU-only queue pressure relief on the sole input/render owner.
-    pub fn flush_input(&mut self) -> Result<UiChange, String> {
-        self.engine.flush_input().map_err(error)?;
-        self.input_pending = false;
-        self.refresh_document();
-        self.refresh_commands();
-        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
-    }
-
     /// Preserve saveable source state after rendering cannot resume. The host
-    /// has stopped new canvas input and delivered every admitted sample first.
+    /// has stopped new canvas input. Unsubmitted samples are discarded; only
+    /// completed raster captures can supply recovery pixels.
     pub fn suspend_renderer(&mut self) -> Result<UiChange, String> {
         let retired_regions = self.input(UiInput::Blur)?.change.regions;
-        self.engine.finish_input().map_err(error)?;
+        self.engine.discard_unsubmitted_input();
         self.input_pending = false;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
@@ -98,6 +90,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("The replacement GPU could not resume filter validation".into());
         }
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
+        self.input_pending = false;
+        self.refresh_file_state();
+        self.sync_renderer_telemetry();
         self.rendering_suspended = false;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();

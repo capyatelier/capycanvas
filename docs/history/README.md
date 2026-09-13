@@ -48,6 +48,9 @@ remains at its existing path while implementation work continues.
 
 ## Brushes and rendering
 
+- [Color-management and raster-project implementation plan](color-management-research.md).
+- [Color-management delivery milestones and merge gates](color-management-milestones.md).
+- [Color-management code and product review](color-management-review.md).
 - [Advanced brush engine](advanced-brush-engine.md).
 - [Wgpu rendering program](rendering-program.md).
 - [Rendering optimization log](optimization-log.md).

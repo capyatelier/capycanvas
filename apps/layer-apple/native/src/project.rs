@@ -122,7 +122,6 @@ pub unsafe extern "C" fn capy_apple_project_task(
     };
     app.perform(|app| {
         let session = &mut app.host.session;
-        session.require_document_idle()?;
         let epoch = session.state().document_file.epoch;
         let mut save_request = None;
         let payload = if opening == 0 {
@@ -154,6 +153,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 project: None,
             }
         } else if opening == 1 {
+            session.require_document_idle()?;
             let gpu = session
                 .engine()
                 .backend()

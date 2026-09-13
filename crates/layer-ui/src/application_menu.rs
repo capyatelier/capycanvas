@@ -78,7 +78,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             item
         };
         let mut model = match menu {
-            M::Primary if self.state.platform == Platform::Gtk => ContextMenu {
+            M::Primary if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) => ContextMenu {
                 title: menu.label().into(),
                 sections: vec![
                     M::ALL

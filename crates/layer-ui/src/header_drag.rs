@@ -5,7 +5,8 @@ use crate::{
     TabHit, tab_drag::TabDrag,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum HeaderDragSource {
     Item(u32),
     Component(HeaderItem),
@@ -25,7 +26,7 @@ pub struct HeaderDrag {
     detached: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct HeaderDragPreview {
     pub geometry: HeaderGeometry,
     pub held: Bounds,

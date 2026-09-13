@@ -8,6 +8,9 @@ import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkTitleBarState} from "./title-bar-state.test.mjs";
+import {checkTitleBar} from "./title-bar.test.mjs";
+import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -190,7 +193,7 @@ try {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
+  if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls") || process.argv.includes("--title-bar") || process.argv.includes("--title-bar-state")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
@@ -200,7 +203,16 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--zen")) {
+  if (process.argv.includes("--title-bar-feedback")) {
+    await checkTitleBarFeedback({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar-state")) {
+    await checkTitleBarState({call,evaluate,settle,reload});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar")) {
+    await checkTitleBar({call,evaluate,settle,reload});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--zen")) {
     await checkZen({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--icons")) {

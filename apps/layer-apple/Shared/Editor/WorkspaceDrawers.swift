@@ -1,24 +1,5 @@
 import SwiftUI
 
-struct WorkspaceZenToolbars: View {
-    @ObservedObject var store: EditorStore
-    var body: some View {
-        ForEach(store.snapshot["zen_toolbars"]["sections"].array.indices, id: \.self) { index in
-            let section = store.snapshot["zen_toolbars"]["sections"][index]
-            let panel = store.panel(section["panel"].string)
-            let tiles = section["tiles"].array.compactMap { pair in panel["tiles"].array.first { $0["id"].uint == pair[0].uint }?.raw }
-            WorkspaceToolbar(store: store,
-                panel: panel.replacing("tiles", with: JSON(tiles)).replacing("tile_style", with: section["style"]),
-                geometry: JSON(["tiles": section["tiles"].array.map { $0[1].raw }]),
-                vertical: ["left", "right"].contains(section["edge"].string))
-                .background(EditorPalette(source: store.state["palette"])["panel"], in: RoundedRectangle(cornerRadius: 6))
-                .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
-                .placed(section["bounds"]).zIndex(150).environment(\.workspaceGesturesEnabled, false)
-                .accessibilityElement(children: .contain).accessibilityIdentifier("zen-toolbar-\(index)")
-        }
-    }
-}
-
 struct WorkspaceCollapsedColumns: View {
     @ObservedObject var store: EditorStore
     var body: some View {
@@ -134,7 +115,7 @@ private struct WorkspaceContentDrawer: View {
                     .modifier(NavigatorReveal())
                     .background(GeometryReader { body in
                         Color.clear.preference(key: ColumnDrawerMeasurements.self,
-                            value: drawer.interactive && !drawer.model["tabs"].isNull && !store.snapshot["partial_zen"].bool
+                            value: drawer.interactive && !drawer.model["tabs"].isNull
                                 ? [drawer.model["tabs"]["group"].uint: body.frame(in: .named("editor-workspace"))] : [:])
                     })
                     .placed(placement["bounds"])
@@ -144,7 +125,7 @@ private struct WorkspaceContentDrawer: View {
                 // This view observes the drawer itself. Reading interactive in
                 // the parent list left a reopened drawer with stale disabled
                 // gesture preferences when its identity survived the close.
-                .environment(\.workspaceGesturesEnabled, drawer.interactive && !store.snapshot["partial_zen"].bool)
+                .environment(\.workspaceGesturesEnabled, drawer.interactive)
                 .allowsHitTesting(drawer.interactive)
                 .onPreferenceChange(DrawerHeights.self) { heights in for (column, height) in heights { drawer.measure(height, column: column) } }
         }

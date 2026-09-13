@@ -116,7 +116,7 @@ export async function checkWorkspaceStore({evaluate}) {
   assert.ok(result.resetDurable); assert.ok(result.customUnchanged);
   assert.equal(result.customError,"invalid_data");
   assert.equal(result.recovered.entity.id,"builtin:workspace:painter");
-  assert.equal(result.recovered.entity.working.colors.shape,undefined);
+  assert.equal(result.recovered.entity.working.colors.shape,"circle");
   assert.deepEqual(result.recovered.generations,{metadata:"2",layout:"2",working:"2"});
   console.log(`PASS: ${fixtures.length} IndexedDB/SQLite contract cases, aborted transaction, newer database, unavailable storage and quota errors`);
   console.log('PASS: corrupt default recovery, reset transaction rollback, live ownership, reopen persistence and custom workspace preservation');

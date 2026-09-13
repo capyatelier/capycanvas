@@ -207,6 +207,7 @@ pub struct LayerCanvasMetrics {
     pub maximum_tip_gap_surface_px: f32,
     pub last_endpoint_correction_surface_px: f32,
     pub maximum_endpoint_correction_surface_px: f32,
+    pub raster_backing_reserved_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -804,6 +805,7 @@ fn merge_metrics(
         maximum_tip_gap_surface_px: engine.maximum_tip_gap_surface_px,
         last_endpoint_correction_surface_px: engine.last_endpoint_correction_surface_px,
         maximum_endpoint_correction_surface_px: engine.maximum_endpoint_correction_surface_px,
+        raster_backing_reserved_bytes: raster.raster_backing_reserved_bytes,
     }
 }
 
@@ -1408,10 +1410,21 @@ mod tests {
                 },
                 LayerStatus::Ok
             );
+            // A frame publishes one contact boundary. Drain both committed
+            // contacts before changing the brush and starting prediction.
+            for _ in 0..2 {
+                assert_eq!(
+                    unsafe { layer_canvas_draw_frame(canvas.0) },
+                    LayerStatus::Ok
+                );
+            }
+            let mut metrics = LayerCanvasMetrics::default();
             assert_eq!(
-                unsafe { layer_canvas_draw_frame(canvas.0) },
+                unsafe { layer_canvas_get_metrics(canvas.0, &mut metrics) },
                 LayerStatus::Ok
             );
+            assert_eq!(metrics.input_events, 4);
+            assert_eq!(metrics.committed_strokes, 2);
             let mut baseline = vec![0_u8; 128 * 128 * 4];
             assert_eq!(
                 unsafe {

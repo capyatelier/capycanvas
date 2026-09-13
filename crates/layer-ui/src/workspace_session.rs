@@ -284,7 +284,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !self.workspace_transition || self.workspace_preview.is_some() {
             return Err("Layout preview is already open or not ready".into());
         }
-        self.workspace_preview = Some(self.state.workspace.clone());
+        // A workspace/layout picker can open while the title editor is showing
+        // an uncommitted preview. Its own baseline must already be durable:
+        // applying a picker preview clears the title editor's transient state.
+        let mut original = self.state.workspace.clone();
+        self.state.customization.committed_header(&mut original.layout);
+        self.workspace_preview = Some(original);
         Ok(())
     }
     pub fn preview_workspace_layout(&mut self, layout: &DockLayout) -> Result<UiChange, String> {

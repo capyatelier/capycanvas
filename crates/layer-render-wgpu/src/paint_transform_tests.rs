@@ -6,7 +6,6 @@ fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOper
     coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
     coverage.initial = selection;
     LayerOperation {
-        after_stroke: 0,
         coverage,
         kind: LayerOperationKind::Transform(ImageTransform {
             affine,
@@ -67,6 +66,7 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                 layers,
                 dabs,
                 dab_batches: batches,
+                restore_rasters: &[],
                 reset_layers: reset,
                 composite_all: false,
                 time_seconds: 0.,
@@ -169,9 +169,8 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                             operation(20 + i as u64, p.transform.affine, p.selection.clone());
                         op.kind = LayerOperationKind::Transform(p.transform);
                         expected
-                            .target_history_mut(p.layer)
+                            .target_operations_mut(p.layer)
                             .unwrap()
-                            .1
                             .push(op.clone());
                         replay.push(DabBatch {
                             layer_id: p.layer,
@@ -296,9 +295,8 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                     let mut op = operation(20 + i as u64, p.transform.affine, p.selection.clone());
                     op.kind = LayerOperationKind::Transform(p.transform);
                     paint
-                        .target_history_mut(p.layer)
+                        .target_operations_mut(p.layer)
                         .unwrap()
-                        .1
                         .push(op.clone());
                     commits.push(DabBatch {
                         layer_id: p.layer,
@@ -358,15 +356,14 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                 coverage.offset.x -= paint.properties.offset.x;
                 coverage.offset.y -= paint.properties.offset.y;
                 let apply = LayerOperation {
-                    after_stroke: 0,
                     coverage,
                     kind: LayerOperationKind::ApplyMask,
                 };
                 let apply_batch = DabBatch {
                     damage: apply.bounds(extent),
-                    ..op_batch(paint.operations.len() as u32, &apply)
+                    ..op_batch(paint.pending_operations.len() as u32, &apply)
                 };
-                paint.operations.push(apply);
+                paint.pending_operations.push(apply);
                 frame(
                     &mut r,
                     std::slice::from_ref(&paint),
@@ -424,6 +421,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
                 dabs,
                 dab_batches: batches,
                 time_seconds: 0.,
+                restore_rasters: &[],
                 reset_layers: reset,
                 composite_all: false,
             })
@@ -506,7 +504,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             let mut expected = layer.clone();
             let mut op = operation(20, affine, Some(selection.clone()));
             op.kind = LayerOperationKind::Transform(preview.transform);
-            expected.operations.push(op.clone());
+            expected.pending_operations.push(op.clone());
             let operation = DabBatch {
                 damage: op.bounds(extent),
                 ..op_batch(0, &op)
@@ -542,6 +540,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
                 dabs: &[],
                 dab_batches: &[],
                 time_seconds: 0.,
+                restore_rasters: &[],
                 reset_layers: false,
                 composite_all: false,
             })
@@ -592,7 +591,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             damage: op.bounds(extent),
             ..op_batch(0, &op)
         };
-        layer.operations.push(op);
+        layer.pending_operations.push(op);
         r.set_transform_preview(None).unwrap();
         frame(&mut r, &[layer], &[], &[operation], false);
         assert_eq!(
@@ -687,7 +686,7 @@ fn ordered_transforms_preserve_wetness_and_match_combined_replay() {
             assert!(before.len() > 1 && before[1].iter().any(|v| *v != 0));
         }
         let translate = operation(10, Affine::translation(Point { x: 40., y: 0. }), None);
-        layer.operations.push(translate.clone());
+        layer.pending_operations.push(translate.clone());
         let first = op_batch(0, &translate);
         submit(
             &mut r,
@@ -720,7 +719,7 @@ fn ordered_transforms_preserve_wetness_and_match_combined_replay() {
         // A second transform in the same submission must not overwrite the
         // first transform's uniforms or source before the first draw executes.
         let undo = operation(11, Affine::translation(Point { x: -40., y: 0. }), None);
-        layer.operations.push(undo.clone());
+        layer.pending_operations.push(undo.clone());
         let second = op_batch(1, &undo);
         submit(
             &mut r,
@@ -789,6 +788,7 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
                 layers: std::slice::from_ref(layer),
                 dabs,
                 dab_batches: batches,
+                restore_rasters: &[],
                 reset_layers: reset,
                 time_seconds: 0.,
                 composite_all: false,
@@ -813,7 +813,7 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         damage: op.bounds(extent),
         ..op_batch(0, &op)
     };
-    layer.operations.push(op);
+    layer.pending_operations.push(op);
     submit(&mut r, &layer, &[], std::slice::from_ref(&op_batch), false);
     let incremental = r.readback_srgb_rgba8().unwrap();
     assert_ne!(incremental, before);
@@ -902,6 +902,7 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
             layers,
             dabs,
             dab_batches: batches,
+            restore_rasters: &[],
             reset_layers: reset,
             time_seconds: 0.,
             composite_all: all,
@@ -911,7 +912,7 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
     };
     for (clipped, target) in [(false, 1), (true, 1), (false, 9), (true, 9)] {
         layers[1].properties.clipped = clipped;
-        layers[2].operations.clear();
+        layers[2].pending_operations.clear();
         layers[2].mask.as_mut().unwrap().linked = target == 1;
         let before = render(&mut r, &layers, &dabs, &brushes, true, false);
         let mut preview = layer_render::TransformPreview {
@@ -945,7 +946,7 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
             damage: op.bounds(extent),
             ..op_batch(0, &op)
         };
-        layers[2].operations.push(op);
+        layers[2].pending_operations.push(op);
         let incremental = render(
             &mut r,
             &layers,
@@ -1063,6 +1064,7 @@ fn measure_transform_latency(live: bool) {
             layers: std::slice::from_ref(&layer),
             dabs: &[d],
             dab_batches: &[b],
+            restore_rasters: &[],
             reset_layers: true,
             time_seconds: 0.,
             composite_all: true,
@@ -1092,7 +1094,7 @@ fn measure_transform_latency(live: bool) {
             ..op_batch(i as u32, &operations[i])
         });
         if !live {
-            layer.operations = operations;
+            layer.pending_operations = operations;
         }
         r.telemetry = telemetry::Telemetry::new(r.device(), r.queue());
         let mut cpu = Vec::new();
@@ -1135,6 +1137,7 @@ fn measure_transform_latency(live: bool) {
                 } else {
                     &batches[i % 2..i % 2 + 1]
                 },
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,

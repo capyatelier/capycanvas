@@ -90,7 +90,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
             wake();await new Promise(resolve=>setTimeout(resolve,16));
           }
         }
-        const bytes=r.type==="save"?app.save_project(id,target.location):await gpuOperation(()=>app.export_png(id));
+        const bytes=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_png(id));
         let success;
         if(target.handle) {
           const stream=await target.handle.createWritable();

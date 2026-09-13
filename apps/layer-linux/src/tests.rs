@@ -114,9 +114,8 @@ fn native_default_workspace() {
             .unwrap()
             .session
             .engine()
-            .document()
-            .strokes()
-            .count(),
+            .metrics()
+            .committed_strokes,
         3
     );
     let output = "../../artifacts/familiar-workspace/default";
@@ -406,7 +405,7 @@ fn native_document_files() {
     );
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _recovered| {
         *result.borrow_mut() = Some((project, location))
     }));
     w.window.present();
@@ -449,6 +448,29 @@ fn native_document_files() {
     w.wake();
     ready(&w);
     assert!(state(&w).document_file.modified);
+    // Autosave publishes a separate durable copy without acknowledging Save.
+    let recovery_dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
+    w.recovery.capture(&w);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let recovery_path = loop {
+        pump(20);
+        if let Ok(entries) = std::fs::read_dir(&recovery_dir)
+            && let Some(path) = entries
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|e| e == "capy"))
+        {
+            break path;
+        }
+        assert!(Instant::now() < deadline, "autosave did not publish");
+    };
+    let recovery = layer_core::Project::read(
+        std::fs::File::open(&recovery_path).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(recovery.assets.len(), 1);
+    assert!(state(&w).document_file.modified);
     w.dispatch(UiAction::Invoke {
         command: CommandId::SaveDocument,
     });
@@ -462,6 +484,15 @@ fn native_document_files() {
         "{:?}",
         state(&w).host_error
     );
+    w.recovery.capture(&w);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while recovery_path.exists() {
+        pump(20);
+        assert!(
+            Instant::now() < deadline,
+            "saved recovery copy was not removed"
+        );
+    }
     let project =
         layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
     assert_eq!(project.assets.len(), 1);
@@ -469,6 +500,53 @@ fn native_document_files() {
         .block_on(crate::files::export_pixels(&w, 900))
         .unwrap();
     assert_eq!([before.width, before.height], [384, 256]);
+    // A native surface/device replacement retains saved identity, exact raster
+    // and undo roots. Hiding/unrealizing the picture exercises the GTK signals.
+    let checkpoint = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .checkpoint();
+    w.area.set_visible(false);
+    pump(30);
+    w.area.unrealize();
+    assert!(
+        w.gpu.borrow().is_some(),
+        "surface teardown retains the session"
+    );
+    w.area.set_visible(true);
+    ready(&w);
+    let restored = glib::MainContext::default()
+        .block_on(crate::files::export_pixels(&w, 901))
+        .unwrap();
+    assert_eq!(restored.bytes, before.bytes);
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .checkpoint(),
+        checkpoint
+    );
+    assert_eq!(state(&w).document_file.location, Some(location.clone()));
+    assert!(!state(&w).document_file.modified);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    w.wake();
+    ready(&w);
+    assert!(state(&w).document_file.modified);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    w.wake();
+    ready(&w);
+    assert!(!state(&w).document_file.modified);
     // GDK_DEBUG=no-portals selects GTK's chooser fallback in this isolated
     // display; production keeps GtkFileDialog's normal portal selection.
     let chooser = || {
@@ -517,7 +595,11 @@ fn native_document_files() {
     open.response(gtk::ResponseType::Accept);
     finish();
     let (opened, origin) = created.borrow_mut().take().unwrap();
-    assert_eq!(opened, project);
+    let mut opened_bytes = Vec::new();
+    let mut project_bytes = Vec::new();
+    opened.write(&mut opened_bytes).unwrap();
+    project.write(&mut project_bytes).unwrap();
+    assert_eq!(opened_bytes, project_bytes);
     assert_eq!(origin, Some(location.clone()));
     let invalid = output.join("invalid.capy");
     std::fs::write(&invalid, b"not a project").unwrap();
@@ -592,9 +674,11 @@ fn native_document_files() {
         command: CommandId::NewDocument,
     });
     pump(200);
-    click(&find_button(w.window.upcast_ref(), CANCEL_DOCUMENT_LABEL).unwrap());
-    pump(160);
-    assert!(!state(&w).document_file.busy);
+    // The title-bar customization bank also owns a hidden Cancel button.
+    // Target the current native dialog rather than the first label in the window.
+    let dialog = w.window.visible_dialog().unwrap();
+    click(&find_button(dialog.upcast_ref(), CANCEL_DOCUMENT_LABEL).unwrap());
+    finish();
     assert!(created.borrow().is_none());
     let reopened = Workspace::with_project(&app, Some((project, Some(location))));
     reopened.window.present();
@@ -689,9 +773,8 @@ fn native_startup_latency() {
             .unwrap()
             .session
             .engine()
-            .document()
-            .strokes()
-            .count()
+            .metrics()
+            .committed_strokes
     };
     send(PenPhase::Down, 400.);
     w.dispatch(UiAction::SetBrushSize { value: 24. });
@@ -2258,8 +2341,16 @@ fn native_selected_brushes() {
     {
         let gpu = w.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();
-        assert_eq!(doc.strokes().count(), 3);
-        assert!(doc.strokes().all(|s| s.selection.is_some()));
+        assert_eq!(
+            gpu.as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .metrics()
+                .committed_strokes,
+            3
+        );
+        assert!(doc.selection.is_some());
     }
     let dir = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(dir).unwrap();
@@ -2292,7 +2383,15 @@ fn native_selected_brushes() {
             doc.selection.is_none(),
             "mask creation consumes the selection"
         );
-        assert_eq!(doc.strokes().count(), 3);
+        assert_eq!(
+            gpu.as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .metrics()
+                .committed_strokes,
+            3
+        );
     }
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -2515,7 +2614,7 @@ fn native_connected_tools() {
             .document()
             .layers
             .iter()
-            .map(|l| l.operations.len())
+            .map(|l| l.pending_operations.len())
             .sum::<usize>(),
         1
     );
@@ -2538,7 +2637,7 @@ fn native_connected_tools() {
             .document()
             .layers
             .iter()
-            .map(|l| l.operations.len())
+            .map(|l| l.pending_operations.len())
             .sum::<usize>(),
         0
     );
@@ -2940,12 +3039,12 @@ fn native_operation_tool() {
         document()
             .layer(original.active_layer)
             .unwrap()
-            .operations
+            .pending_operations
             .len(),
         original
             .layer(original.active_layer)
             .unwrap()
-            .operations
+            .pending_operations
             .len()
             + 1
     );
@@ -3006,13 +3105,13 @@ fn native_operation_tool() {
             .mask
             .as_ref()
             .unwrap()
-            .operations
+            .pending_operations
             .len(),
         1
     );
     assert_eq!(
-        transformed.layers[0].operations.len(),
-        masked.layers[0].operations.len() + 1
+        transformed.layers[0].pending_operations.len(),
+        masked.layers[0].pending_operations.len() + 1
     );
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,
@@ -3035,11 +3134,16 @@ fn native_operation_tool() {
     });
     pump(150);
     assert_eq!(
-        document().layers[0].operations.len(),
-        masked.layers[0].operations.len()
+        document().layers[0].pending_operations.len(),
+        masked.layers[0].pending_operations.len()
     );
     assert_eq!(
-        document().layers[0].mask.as_ref().unwrap().operations.len(),
+        document().layers[0]
+            .mask
+            .as_ref()
+            .unwrap()
+            .pending_operations
+            .len(),
         1
     );
     capture_reference(&w, &format!("{dir}/operation-unlinked-mask.png"), 1.);
@@ -3196,7 +3300,7 @@ fn native_figure_tools() {
         let gpu = w.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();
         let layer_core::LayerOperationKind::Figure(f) =
-            &doc.layers[0].operations.last().unwrap().kind
+            &doc.layers[0].pending_operations.last().unwrap().kind
         else {
             panic!("figure");
         };
@@ -4244,7 +4348,10 @@ fn native_tool_and_color_panels() {
     assert!(state(&w).colors.transparent());
     let before = state(&w).colors.rgba();
     click(
-        &find_named(&color, "color-readout").unwrap().downcast().unwrap(),
+        &find_named(&color, "color-readout")
+            .unwrap()
+            .downcast()
+            .unwrap(),
     );
     assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Rgb);
     assert_eq!(state(&w).colors.rgba(), before);
@@ -4253,9 +4360,17 @@ fn native_tool_and_color_panels() {
         layer_ui::ColorShape::Triangle,
         layer_ui::ColorShape::Circle,
     ] {
-        let index = state(&w).colors.other_shapes().iter().position(|shape| *shape == expected).unwrap();
+        let index = state(&w)
+            .colors
+            .other_shapes()
+            .iter()
+            .position(|shape| *shape == expected)
+            .unwrap();
         click(
-            &find_named(&color, &format!("color-shape-{index}")).unwrap().downcast().unwrap(),
+            &find_named(&color, &format!("color-shape-{index}"))
+                .unwrap()
+                .downcast()
+                .unwrap(),
         );
         assert_eq!(state(&w).colors.wheel_shape(), expected);
     }
@@ -10147,7 +10262,7 @@ fn native_frame_pacing() {
                 .engine()
                 .document()
                 .layers[0]
-                .operations
+                .pending_operations
                 .len(),
             1
         );
@@ -10427,9 +10542,8 @@ fn native_frame_pacing() {
             .unwrap()
             .session
             .engine()
-            .document()
-            .strokes()
-            .count();
+            .metrics()
+            .committed_strokes;
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
         let start = Instant::now();
@@ -10555,27 +10669,20 @@ fn native_frame_pacing() {
         pump(150);
         if let Some(preset) = preset {
             let gpu = w.gpu.borrow();
-            let document = gpu.as_ref().unwrap().session.engine().document();
+            let engine = gpu.as_ref().unwrap().session.engine();
             assert_eq!(
-                document.strokes().count(),
+                engine.metrics().committed_strokes,
                 strokes_before + 1,
                 "pacing must draw a complete stroke"
             );
-            let stroke = document.strokes().last().unwrap();
             assert_eq!(
-                stroke.brush.execution,
+                engine.configured_brush().execution,
                 layer_core::default_brush(preset).execution
             );
             assert!(
-                stroke.points.len() > 100,
+                engine.metrics().input_events > 100,
                 "pacing must deliver real samples"
             );
-            if stroke.brush.execution == layer_core::BrushExecution::Watercolor {
-                assert!(
-                    stroke.material_updates.len() > 100,
-                    "pacing must advance material updates"
-                );
-            }
         }
         let stats = worker_stats.lock().unwrap();
         assert!(
@@ -12685,9 +12792,8 @@ fn native_workspace_controls_docking_and_ink() {
             .unwrap()
             .session
             .engine()
-            .document()
-            .strokes()
-            .count(),
+            .metrics()
+            .committed_strokes,
         0
     );
     click(&command(&w, CommandId::FitCanvas));
@@ -12722,6 +12828,7 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::AddLayer));
     assert_eq!(state(&w).layers.len(), 3);
     let view = state(&w).camera;
+    let mut stroke_points = Vec::new();
     for i in 0..=36 {
         let t = i as f32 / 36.0;
         let phase = if i == 0 {
@@ -12748,6 +12855,7 @@ fn native_workspace_controls_docking_and_ink() {
             tool: ToolKind::Pen,
             flags: SampleFlags::PRIMARY,
         };
+        stroke_points.push(view.input_transform().map(event.surface_position));
         w.gpu
             .borrow_mut()
             .as_mut()
@@ -12771,12 +12879,11 @@ fn native_workspace_controls_docking_and_ink() {
             .unwrap()
             .session
             .engine()
-            .document()
-            .strokes()
-            .count(),
+            .metrics()
+            .committed_strokes,
         1
     );
-    assert_stroke_positions(&w, &crate::snapshot(&w));
+    assert_stroke_positions(&w, &crate::snapshot(&w), &stroke_points);
     // Presentation must follow the same top-left transform as input even
     // after an asymmetric pan/zoom/rotation (a centered fit hides a Y flip).
     let center = view.viewport.map(|v| v as f32 * 0.5);
@@ -12788,7 +12895,7 @@ fn native_workspace_controls_docking_and_ink() {
     );
     w.changed(change);
     pump(150);
-    assert_stroke_positions(&w, &crate::snapshot(&w));
+    assert_stroke_positions(&w, &crate::snapshot(&w), &stroke_points);
     click(&command(&w, CommandId::FitCanvas));
     click(&command(&w, CommandId::Undo));
     assert!(white_pixels(&w) > after_ink + 500);
@@ -13052,9 +13159,8 @@ fn native_workspace_controls_docking_and_ink() {
             .unwrap()
             .session
             .engine()
-            .document()
-            .strokes()
-            .count(),
+            .metrics()
+            .committed_strokes,
         1
     );
     click(&command(&w, CommandId::FitCanvas));
@@ -13063,7 +13169,7 @@ fn native_workspace_controls_docking_and_ink() {
     w.window.present();
     pump(200);
     std::fs::create_dir_all("../../artifacts/ui").unwrap();
-    review(&w, "dark");
+    review(&w, "dark", &stroke_points);
     assert_eq!(
         crate::icons::name(
             &command(&w, CommandId::ZenMode)
@@ -13249,7 +13355,7 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::ToggleTheme));
     pump(200);
     assert_eq!(state(&w).theme, Theme::Light);
-    review(&w, "light");
+    review(&w, "light", &stroke_points);
     let center = state(&w).camera.viewport.map(|v| v as f32 * 0.5);
     let change = w
         .gpu
@@ -13277,37 +13383,27 @@ fn native_workspace_controls_docking_and_ink() {
     assert!(w.gpu.borrow().is_none());
 }
 
-fn review(w: &Workspace, theme: &str) {
+fn review(w: &Workspace, theme: &str, points: &[Point]) {
     // Save the exact texture that passed the ink assertion, without taking a
     // second scene snapshot between validation and artifact generation.
     let texture = crate::snapshot(w);
-    assert_stroke_positions(w, &texture);
+    assert_stroke_positions(w, &texture, points);
     // Sample the stroke itself: light-theme chrome is also almost white, so
     // whole-window white-pixel counts cannot compare across themes.
     let path = format!("../../artifacts/ui/gtk-{theme}.png");
     texture.save_to_png(&path).unwrap();
-    assert_stroke_positions(w, &gdk::Texture::from_filename(&path).unwrap());
+    assert_stroke_positions(w, &gdk::Texture::from_filename(&path).unwrap(), points);
 }
 
-fn assert_stroke_positions(w: &Workspace, texture: &gdk::Texture) {
+fn assert_stroke_positions(w: &Workspace, texture: &gdk::Texture, points: &[Point]) {
     let camera = state(w).camera;
-    let gpu = w.gpu.borrow();
-    let stroke = gpu
-        .as_ref()
-        .unwrap()
-        .session
-        .engine()
-        .document()
-        .strokes()
-        .next()
-        .unwrap();
     let [a, b, c, d, tx, ty] = camera.document_to_surface();
     let origin = w.area.compute_bounds(&w.window).unwrap();
     let scale = w.area.scale_factor() as f32;
     let mut bytes = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut bytes, texture.width() as usize * 4);
     for fraction in 1..=3 {
-        let point = stroke.points[stroke.points.len() * fraction / 4].position;
+        let point = points[points.len() * fraction / 4];
         let x = (origin.x() + (a * point.x + c * point.y + tx) / scale).round() as usize;
         let y = (origin.y() + (b * point.x + d * point.y + ty) / scale).round() as usize;
         let offset = (y * texture.width() as usize + x) * 4;

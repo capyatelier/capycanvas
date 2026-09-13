@@ -81,12 +81,14 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                     ink, baseline,
                     "fixture must change artwork: {platform}/{brush:?}"
                 );
-                let document = unsafe { &*app.0 }.host.session.engine().document().clone();
-                let last = document.strokes().last().unwrap();
-                assert_eq!(last.points.len(), 3);
-                assert_eq!(last.points[0].pressure, 0.85);
-                assert_eq!(last.points[0].tilt, [0.4, -0.25]);
-                assert_eq!(last.points[0].twist, 1.6);
+                let engine = unsafe { &*app.0 }.host.session.engine();
+                assert_eq!(engine.metrics().committed_strokes, 2);
+                // Completed contacts are stored as immutable raster revisions.
+                // Compare exact backing as well as composited pixels against
+                // the contact delivered with final pressure, tilt and twist.
+                let document = engine.document();
+                let samples =
+                    raster_samples(document.target_raster(document.active_target()).unwrap());
                 app.invoke("undo");
                 app.draw_frame();
                 assert_eq!(app.pixels(), baseline);
@@ -101,11 +103,11 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                     ink,
                     "unregistered/finished updates cannot start painting"
                 );
-                results.push((ink, last.clone()));
+                results.push((ink, samples));
             }
             assert_eq!(
                 results[0].1, results[1].1,
-                "correction changed stroke semantics: {platform}/{brush:?}"
+                "correction changed committed raster backing: {platform}/{brush:?}"
             );
             assert_eq!(
                 results[0].0, results[1].0,

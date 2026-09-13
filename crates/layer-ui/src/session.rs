@@ -425,7 +425,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
-        if self.state.platform == Platform::Gtk {
+        if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) {
             // Keep the editor entry reachable above the long panel list, also
             // in the recovery menu on a short tablet-sized window.
             menu.sections
@@ -1342,7 +1342,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 preview: (matches!(
                     self.state.platform,
                     Platform::Gtk | Platform::Web | Platform::Android
-                ) && whole && source_floating)
+                ) && whole
+                    && source_floating)
                     .then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
@@ -1410,8 +1411,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let preserve_size = matches!(
                 self.state.platform,
                 Platform::Gtk | Platform::Web | Platform::Android
-            )
-                && !drag.source_is_icon
+            ) && !drag.source_is_icon
                 && !(drag.panel.kind() == PanelKind::Tiles
                     && self.state.workspace.layout.group_panels(group)?.len() == 1);
             if preserve_size {
@@ -1735,12 +1735,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .as_ref()
                         .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
             }
-            CommandId::NewDocument
-            | CommandId::OpenDocument
-            | CommandId::SaveDocument
-            | CommandId::SaveDocumentAs
-            | CommandId::ExportDocument => {
+            CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
+            }
+            CommandId::SaveDocument | CommandId::SaveDocumentAs => {
+                self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
             }
             CommandId::CloseDocument => self.require_document_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
@@ -3318,7 +3317,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
-        self.input_pending = false;
+        self.input_pending = self.engine.has_pending_input();
+        let modified = self.state.document_file.modified;
+        self.refresh_file_state();
+        if modified != self.state.document_file.modified {
+            changed |= regions::DOCUMENT;
+        }
         changed |= self.poll_document_close();
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
@@ -4021,11 +4025,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             blend: l.properties.blend as u32,
             blend_label: l.properties.blend.label().into(),
             paint_revision: l
-                .strokes
-                .last()
-                .map_or(0, |id| id.0)
+                .raster
+                .identity()
                 .wrapping_mul(4099)
-                .wrapping_add(l.operations.len() as u64 * 2)
+                .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(u64::from(l.asset.is_some()))
                 .wrapping_add(if l.kind == LayerKind::Background {
                     u64::from(l.opacity.to_bits())
@@ -4035,7 +4038,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_revision: l.mask.as_ref().map_or(0, |m| {
                 m.id.0
                     .wrapping_mul(65537)
-                    .wrapping_add(m.strokes.last().map_or(0, |id| id.0) * 2)
+                    .wrapping_add(m.raster.identity().wrapping_mul(2))
                     .wrapping_add(u64::from(m.inverted))
             }),
             mask_id: l.mask.as_ref().map(|m| m.id.0),
@@ -4107,6 +4110,9 @@ mod tests {
     /// Protocol recorder only: no canvas storage or software rasterization.
     #[derive(Default)]
     struct Recorder {
+        pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
+        last_style: Option<layer_render::DabStyle>,
+        recorded_dabs: Vec<layer_render::Dab>,
         dabs: usize,
         composites: usize,
         validation: Option<layer_render::EffectValidationRequest>,
@@ -4184,7 +4190,51 @@ mod tests {
         }
         fn release_asset(&mut self, _: &AssetId) {}
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+            self.pending_operations.clear();
+            for batch in packet.dab_batches {
+                if let layer_render::DabBatchKind::LayerOperation(index) = batch.kind {
+                    let layer = packet
+                        .layers
+                        .iter()
+                        .find(|l| l.target_operations(batch.layer_id).is_some())
+                        .unwrap();
+                    self.pending_operations.push((
+                        batch.layer_id,
+                        layer.target_operations(batch.layer_id).unwrap()[index as usize].clone(),
+                    ));
+                }
+            }
             self.dabs += packet.dabs.len();
+            if let Some(batch) = packet.dab_batches.iter().rev().find(|b| b.dab_count > 0) {
+                self.last_style = Some(batch.style.clone());
+            }
+            self.recorded_dabs.extend_from_slice(packet.dabs);
+            for layer in packet.layers {
+                for (mask, revision) in std::iter::once((false, &layer.raster))
+                    .chain(layer.mask.iter().map(|m| (true, &m.raster)))
+                {
+                    if revision.try_data().is_none() {
+                        use layer_core::raster::*;
+                        let plane = if mask {
+                            RasterPlane::Mask
+                        } else {
+                            RasterPlane::Color
+                        };
+                        let bytes = vec![128; plane.descriptor().byte_len([TILE_SIZE; 2]).unwrap()];
+                        let mut data = RasterData::default();
+                        data.tiles.insert(
+                            TileKey {
+                                plane,
+                                coordinate: [0, 0],
+                            },
+                            RasterTile::backed(
+                                TileBlob::encode(plane.descriptor(), &bytes).unwrap(),
+                            ),
+                        );
+                        revision.publish(Ok(data)).unwrap();
+                    }
+                }
+            }
             self.composites += usize::from(packet.composite_all);
             Ok(())
         }
@@ -4538,6 +4588,43 @@ mod tests {
             s.state.workspace.layout.header,
             saved.history.layout().header
         );
+    }
+
+    #[test]
+    fn workspace_picker_cannot_adopt_an_uncommitted_header_baseline() {
+        for platform in [Platform::Gtk, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            let original = s.capture_workspace().unwrap();
+            s.dispatch(HeaderAction::Edit { editing: true }.action())
+                .unwrap();
+            s.dispatch(
+                HeaderAction::SetSize {
+                    size: HeaderSize::Large,
+                }
+                .action(),
+            )
+            .unwrap();
+            s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+                .unwrap();
+            s.begin_workspace_transition().unwrap();
+            s.begin_workspace_layout_preview().unwrap();
+            s.preview_workspace_layout(&WorkspacePreset::Painter.layout(platform))
+                .unwrap();
+            assert!(!s.state.customization.header_editing);
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            s.cancel_workspace_layout_preview();
+            s.end_workspace_transition();
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            assert_eq!(
+                s.state.workspace.layout.header,
+                original.history.layout().header
+            );
+            assert_eq!(
+                s.state.workspace.layout.canvas_info,
+                original.history.layout().canvas_info
+            );
+        }
     }
 
     #[test]
@@ -5297,7 +5384,84 @@ mod tests {
         .unwrap();
         assert!(!reopened.state.document_file.modified);
         assert_eq!(reopened.files.assets, project.assets);
-        assert_eq!(reopened.engine.document(), &project.document);
+        let mut reopened_stream = Vec::new();
+        reopened
+            .capture_project_recovery()
+            .unwrap()
+            .write(&mut reopened_stream)
+            .unwrap();
+        assert_eq!(reopened_stream, stream);
+    }
+
+    #[test]
+    fn renderer_replacement_retains_saved_checkpoint_and_history_but_discards_live_contact() {
+        let mut s = session();
+        invoke(&mut s, CommandId::AddLayer);
+        let checkpoint = s.engine.checkpoint();
+        let layer = s.engine.document().active_layer;
+        let root = s.engine.document().layers.last().unwrap().raster.clone();
+        s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        assert!(s.engine.has_active_stroke());
+        s.replace_renderer(Recorder::default()).unwrap();
+        assert!(!s.engine.has_active_stroke());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().active_layer, layer);
+        assert_eq!(s.engine.document().layers.last().unwrap().raster, root);
+        assert!(s.state.document_file.modified);
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert_eq!(s.renderer_mut().dabs, 0);
+        invoke(&mut s, CommandId::Undo);
+        assert!(!s.state.document_file.modified);
+        invoke(&mut s, CommandId::Redo);
+        assert!(s.state.document_file.modified);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+
+    #[test]
+    fn save_during_contact_uses_the_committed_boundary_and_keeps_live_ink_dirty() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let initial = s.engine.document().layers[0].raster.identity();
+        s.pen(event(&s, 1, PenPhase::Down, 0.3)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(s.command(CommandId::SaveDocument).enabled);
+        assert!(s.request_document_close().is_err());
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.state.requests.last().unwrap().id;
+        let snapshot = s
+            .capture_project_save(
+                id,
+                DocumentLocation {
+                    uri: "file:///tmp/active.capy".into(),
+                    name: "active.capy".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(snapshot.document.layers[0].raster.identity(), initial);
+        let recovery = s.capture_project_recovery().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            recovery.write(&mut bytes).unwrap();
+            layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap()
+        });
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(
+            s.state.document_file.modified,
+            "save must not acknowledge active samples"
+        );
+        s.pen(event(&s, 2, PenPhase::Up, 0.7)).unwrap();
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(worker.join().unwrap().document.layers[0].raster.is_empty());
+        let committed = s.engine.document().layers[0].raster.identity();
+        assert_ne!(committed, initial);
+        invoke(&mut s, CommandId::Undo);
+        assert!(!s.state.document_file.modified);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layers[0].raster.identity(), committed);
+        assert!(s.state.document_file.modified);
     }
 
     #[test]
@@ -5659,7 +5823,7 @@ mod tests {
                 pixels: coverage.clone(),
             });
             assert!(s.frame(6, 6).unwrap().canvas_wake);
-            let operation = &s.engine.document().layer(id).unwrap().operations[0];
+            let operation = &s.engine.document().layer(id).unwrap().pending_operations[0];
             assert_eq!(
                 operation.coverage.initial,
                 Some(Selection::pixels(coverage.clone())),
@@ -5667,7 +5831,14 @@ mod tests {
             );
             s.frame(7, 7).unwrap();
             invoke(&mut s, CommandId::Undo);
-            assert!(s.engine.document().layer(id).unwrap().operations.is_empty());
+            assert!(
+                s.engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .is_empty()
+            );
 
             // Esc cancels the gesture/request; changing tools also rejects an
             // already submitted reply. Neither creates an empty history entry.
@@ -5754,7 +5925,7 @@ mod tests {
                 .document()
                 .layer(id)
                 .unwrap()
-                .operations
+                .pending_operations
                 .last()
                 .unwrap()
                 .kind
@@ -5964,7 +6135,13 @@ mod tests {
                     send(&mut s, PenPhase::Move, [50. + i as f32, 90.]);
                 }
                 assert_eq!(s.layer_interaction.path.len(), 2);
-                let before = s.engine.document().layer(id).unwrap().operations.len();
+                let before = s
+                    .engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .len();
                 let plain = s.current_figure().unwrap();
                 let change = s
                     .input(UiInput::Key {
@@ -6006,9 +6183,18 @@ mod tests {
                 send(&mut s, PenPhase::Up, [130., 90.]);
                 s.frame(2, 2).unwrap();
                 key(&mut s, "shift", false, false, false);
-                let ops = &s.engine.document().layer(id).unwrap().operations;
-                assert_eq!(ops.len(), before + 1);
-                let LayerOperationKind::Figure(f) = &ops.last().unwrap().kind else {
+                let committed = s.engine.document().layer(id).unwrap().raster.identity();
+                assert!(
+                    s.engine
+                        .document()
+                        .layer(id)
+                        .unwrap()
+                        .pending_operations
+                        .is_empty()
+                );
+                let ops = &s.engine.backend().pending_operations;
+                assert_eq!(ops.len(), 1);
+                let LayerOperationKind::Figure(f) = &ops.last().unwrap().1.kind else {
                     panic!("figure");
                 };
                 assert!((f.start.x - 20.).abs() < 0.001 && (f.start.y - 20.).abs() < 0.001);
@@ -6024,19 +6210,31 @@ mod tests {
                 invoke(&mut s, CommandId::Undo);
                 s.frame(3, 3).unwrap();
                 assert_eq!(
-                    s.engine.document().layer(id).unwrap().operations.len(),
+                    s.engine
+                        .document()
+                        .layer(id)
+                        .unwrap()
+                        .pending_operations
+                        .len(),
                     before
                 );
                 invoke(&mut s, CommandId::Redo);
                 s.frame(4, 4).unwrap();
                 assert_eq!(
-                    s.engine.document().layer(id).unwrap().operations.len(),
-                    before + 1
+                    s.engine.document().layer(id).unwrap().raster.identity(),
+                    committed
                 );
+                assert!(s.engine.backend().pending_operations.is_empty());
                 assert_eq!(s.renderer_mut().dabs, 0, "no brush stamping for figures");
             }
         }
-        let before = s.engine.document().layer(id).unwrap().operations.len();
+        let before = s
+            .engine
+            .document()
+            .layer(id)
+            .unwrap()
+            .pending_operations
+            .len();
         for cancel in 0..3 {
             send(&mut s, PenPhase::Down, [30., 40.]);
             send(&mut s, PenPhase::Move, [90., 100.]);
@@ -6053,7 +6251,12 @@ mod tests {
             send(&mut s, PenPhase::Up, [90., 100.]);
             s.frame(5, 5).unwrap();
             assert_eq!(
-                s.engine.document().layer(id).unwrap().operations.len(),
+                s.engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .len(),
                 before
             );
         }
@@ -6061,7 +6264,12 @@ mod tests {
         send(&mut s, PenPhase::Up, [30., 40.]);
         s.frame(6, 6).unwrap();
         assert_eq!(
-            s.engine.document().layer(id).unwrap().operations.len(),
+            s.engine
+                .document()
+                .layer(id)
+                .unwrap()
+                .pending_operations
+                .len(),
             before
         );
         s.dispatch(UiAction::Color {
@@ -6091,7 +6299,12 @@ mod tests {
             send(&mut s, PenPhase::Up, [90., 100.]);
             s.frame(7, 7).unwrap();
             assert_eq!(
-                s.engine.document().layer(id).unwrap().operations.len(),
+                s.engine
+                    .document()
+                    .layer(id)
+                    .unwrap()
+                    .pending_operations
+                    .len(),
                 before
             );
         }
@@ -6163,10 +6376,24 @@ mod tests {
             "guide stores endpoints, not a stroke path"
         );
         assert!(!s.command(CommandId::Undo).enabled);
-        assert!(s.engine.document().layer(id).unwrap().operations.is_empty());
+        assert!(
+            s.engine
+                .document()
+                .layer(id)
+                .unwrap()
+                .pending_operations
+                .is_empty()
+        );
         send(&mut s, PenPhase::Up, [130.0, 140.0]);
         s.frame(3, 3).unwrap();
-        let operations = &s.engine.document().layer(id).unwrap().operations;
+        let committed = s.engine.document().layer(id).unwrap().raster.identity();
+        let operations: Vec<_> = s
+            .engine
+            .backend()
+            .pending_operations
+            .iter()
+            .map(|(_, op)| op)
+            .collect();
         assert_eq!(operations.len(), 1);
         let LayerOperationKind::Gradient {
             start,
@@ -6189,10 +6416,20 @@ mod tests {
         assert_eq!(s.renderer_mut().dabs, 0);
         invoke(&mut s, CommandId::Undo);
         s.frame(4, 4).unwrap();
-        assert!(s.engine.document().layer(id).unwrap().operations.is_empty());
+        assert!(
+            s.engine
+                .document()
+                .layer(id)
+                .unwrap()
+                .pending_operations
+                .is_empty()
+        );
         invoke(&mut s, CommandId::Redo);
         s.frame(5, 5).unwrap();
-        assert_eq!(s.engine.document().layer(id).unwrap().operations.len(), 1);
+        assert_eq!(
+            s.engine.document().layer(id).unwrap().raster.identity(),
+            committed
+        );
         for cancel in [0, 1, 2] {
             send(&mut s, PenPhase::Down, [30.0, 40.0]);
             send(&mut s, PenPhase::Move, [90.0, 100.0]);
@@ -6209,14 +6446,17 @@ mod tests {
             send(&mut s, PenPhase::Up, [90.0, 100.0]);
             s.frame(6, 6).unwrap();
             assert!(s.layer_interaction.path.is_empty());
-            assert_eq!(s.engine.document().layer(id).unwrap().operations.len(), 1);
+            assert_eq!(
+                s.engine.document().layer(id).unwrap().raster.identity(),
+                committed
+            );
         }
         send(&mut s, PenPhase::Down, [30.0, 40.0]);
         send(&mut s, PenPhase::Up, [30.0, 40.0]);
         s.frame(7, 7).unwrap();
         assert_eq!(
-            s.engine.document().layer(id).unwrap().operations.len(),
-            1,
+            s.engine.document().layer(id).unwrap().raster.identity(),
+            committed,
             "tap is not a whole-layer fill"
         );
         assert!(s.state.host_error.is_none());
@@ -6434,15 +6674,26 @@ mod tests {
                 s.frame(2, 2).unwrap();
                 let after = &s.engine.document().layers[0];
                 assert_eq!(
-                    after.operations.len(),
-                    before[0].operations.len() + usize::from(linked)
+                    after.raster.identity() != before[0].raster.identity(),
+                    linked
                 );
                 let mask = after.mask.as_ref().unwrap();
-                assert_eq!(mask.operations.len(), 1);
-                assert!(matches!(
-                    mask.operations[0].kind,
-                    LayerOperationKind::Transform(_)
-                ));
+                assert_ne!(
+                    mask.raster.identity(),
+                    before[0].mask.as_ref().unwrap().raster.identity()
+                );
+                assert!(mask.pending_operations.is_empty());
+                assert_eq!(
+                    s.engine.backend().pending_operations.len(),
+                    1 + usize::from(linked)
+                );
+                assert!(
+                    s.engine
+                        .backend()
+                        .pending_operations
+                        .iter()
+                        .all(|(_, op)| matches!(op.kind, LayerOperationKind::Transform(_)))
+                );
                 invoke(&mut s, CommandId::Undo);
                 assert_eq!(s.engine.document().layers, before);
                 s.layer_edit(layer_core::Edit::SetMaskTarget(false))
@@ -6504,14 +6755,7 @@ mod tests {
         invoke(&mut s, CommandId::ApplyTransform);
         s.frame(3, 3).unwrap();
         assert!(!s.operation.active());
-        let op = s
-            .engine
-            .document()
-            .layer(original.active_layer)
-            .unwrap()
-            .operations
-            .last()
-            .unwrap();
+        let op = &s.engine.backend().pending_operations.last().unwrap().1;
         assert_eq!(
             op.kind,
             layer_core::LayerOperationKind::Transform(preview.transform)
@@ -6565,8 +6809,8 @@ mod tests {
         s.frame(7, 7).unwrap();
         assert_eq!(s.renderer_mut().transform, before);
         for (phase, point) in [
-            (PenPhase::Down, Point { x: 300., y: 300. }),
-            (PenPhase::Move, Point { x: 340., y: 320. }),
+            (PenPhase::Down, Point { x: 256., y: 256. }),
+            (PenPhase::Move, Point { x: 296., y: 276. }),
         ] {
             let mut e = event(&s, 1, phase, 1.);
             e.surface_position = Affine(s.state.camera.document_to_surface()).map(point);
@@ -6745,8 +6989,8 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
         s.frame(20_000_000, 28_000_000).unwrap();
         assert_eq!(
-            s.engine.document().strokes().last().unwrap().brush,
-            original
+            s.engine.backend().last_style.as_ref().unwrap().execution,
+            original.execution_class()
         );
         invoke(&mut s, CommandId::Pen);
         assert_eq!(s.engine.configured_brush(), &original);
@@ -6847,15 +7091,15 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
         s.frame(20_000_000, 28_000_000).unwrap();
         assert_eq!(
-            s.engine.document().strokes().next().unwrap().brush,
-            original
+            s.engine.backend().last_style.as_ref().unwrap().execution,
+            original.execution_class()
         );
         s.pen(event(&s, 3, PenPhase::Down, 1.0)).unwrap();
         s.pen(event(&s, 4, PenPhase::Up, 1.0)).unwrap();
         s.frame(40_000_000, 48_000_000).unwrap();
-        let next = s.engine.document().strokes().nth(1).unwrap();
-        assert_eq!(next.brush.flow, 0.35);
-        assert_eq!(next.brush.diameter, 40.0);
+        assert_eq!(s.engine.metrics().committed_strokes, 2);
+        assert_eq!(s.engine.configured_brush().flow, 0.35);
+        assert_eq!(s.engine.configured_brush().diameter, 40.0);
     }
 
     #[test]
@@ -6883,8 +7127,8 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
         s.frame(20_000_000, 28_000_000).unwrap();
         assert_eq!(
-            s.engine.document().strokes().next().unwrap().tool,
-            StrokeTool::Eraser
+            s.engine.backend().last_style.as_ref().unwrap().mode,
+            layer_render::DabMode::Erase
         );
         assert_eq!(s.state.brush.preset, preset);
         s.dispatch(UiAction::Color {
@@ -6899,8 +7143,8 @@ mod tests {
         s.pen(event(&s, 4, PenPhase::Up, 1.0)).unwrap();
         s.frame(40_000_000, 48_000_000).unwrap();
         assert_eq!(
-            s.engine.document().strokes().nth(1).unwrap().tool,
-            StrokeTool::Brush
+            s.engine.backend().last_style.as_ref().unwrap().mode,
+            layer_render::DabMode::Paint
         );
     }
 
@@ -7705,7 +7949,13 @@ mod tests {
             s.pen(event(&s, seq, phase, 1.)).unwrap();
         }
         s.frame(30_000_000, 38_000_000).unwrap();
-        assert_eq!(s.engine.document().strokes().count(), 0);
+        assert!(
+            s.engine
+                .document()
+                .target_raster(s.engine.document().active_target())
+                .unwrap()
+                .is_empty()
+        );
         assert!(s.state.host_error.is_none());
         s.dispatch(UiAction::SetLayerOpacity {
             id: None,
@@ -7801,12 +8051,8 @@ mod tests {
         let copy = doc.layer(target).unwrap().mask.as_ref().unwrap();
         assert_ne!(original.id, copy.id);
         assert_eq!(doc.layer_offset(original.id), doc.layer_offset(copy.id));
-        assert_eq!(original.strokes.len(), 1);
-        assert_ne!(original.strokes[0], copy.strokes[0]);
-        assert!(std::sync::Arc::ptr_eq(
-            &doc.stroke(original.strokes[0]).unwrap().points,
-            &doc.stroke(copy.strokes[0]).unwrap().points
-        ));
+        assert!(!original.raster.is_empty());
+        assert_eq!(original.raster.identity(), copy.raster.identity());
         s.engine.undo().unwrap();
         assert!(s.engine.document().layer(target).unwrap().mask.is_none());
         assert_eq!(
@@ -7996,7 +8242,7 @@ mod tests {
             assert!(l.mask.is_none());
             if apply {
                 assert_eq!(
-                    l.operations.last().unwrap().kind,
+                    l.pending_operations.last().unwrap().kind,
                     LayerOperationKind::ApplyMask
                 );
             }
@@ -8088,7 +8334,7 @@ mod tests {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
             let mut menu = s.workspace_menu();
-            if platform == Platform::Gtk {
+            if CommandId::CustomizeWorkspaceUi.available_on(platform) {
                 assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
                 assert!(!format!("{menu:?}").contains("Show Menu Bar"));
                 menu.sections.remove(0);
@@ -8139,7 +8385,10 @@ mod tests {
                     .find(|item| matches!(
                         item.action,
                         Some(UiAction::Customize {
-                            action: CustomizationAction::SetPanelVisible { panel: Panel::Brushes, .. }
+                            action: CustomizationAction::SetPanelVisible {
+                                panel: Panel::Brushes,
+                                ..
+                            }
                         })
                     ))
                     .unwrap()
@@ -8960,15 +9209,10 @@ mod tests {
                 .unwrap();
         }
         s.frame(50_000_000, 58_000_000).unwrap();
-        assert_eq!(
-            s.engine
-                .document()
-                .layer(s.engine.document().active_layer)
-                .unwrap()
-                .strokes
-                .len(),
-            2
-        );
+        assert!(s.engine.has_pending_input());
+        s.frame(60_000_000, 68_000_000).unwrap();
+        assert_eq!(s.engine.metrics().committed_strokes, 2);
+        assert!(!s.engine.has_pending_input());
     }
     #[test]
     fn viewport_owns_initial_fit_and_layout_bounds_without_refitting_edits() {
@@ -9681,6 +9925,7 @@ mod tests {
         invoke(&mut app, CommandId::Undo);
         assert_eq!(app.engine.document().selection.as_ref(), Some(&all));
         invoke(&mut app, CommandId::FillSelection);
+        app.frame(1, 1).unwrap();
         let painted = app.engine.document().layers.clone();
         assert!(app.engine.checkpoint() != saved);
         invoke(&mut app, CommandId::ClearLayer);
@@ -9689,7 +9934,7 @@ mod tests {
                 .document()
                 .layer(app.engine.document().active_layer)
                 .unwrap()
-                .operations
+                .pending_operations
                 .is_empty()
         );
         invoke(&mut app, CommandId::Undo);
@@ -9709,7 +9954,12 @@ mod tests {
         assert!(!app.command(CommandId::FillSelection).enabled);
         for id in [CommandId::ClearLayer, CommandId::FillSelection] {
             assert!(
-                !app.state.commands.iter().find(|c| c.id == id).unwrap().enabled,
+                !app.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == id)
+                    .unwrap()
+                    .enabled,
                 "locked-layer actions remain visibly unavailable"
             );
         }
@@ -15486,18 +15736,23 @@ mod tests {
                     "availability refreshes after release"
                 );
             }
-            let stroke = app.engine.document().strokes().next().unwrap();
-            assert_eq!(stroke.points[0].pressure, 0.2);
-            assert_eq!(stroke.points[1].pressure, 0.8);
             let expected = app
                 .state
                 .camera
                 .input_transform()
                 .map(Point { x: 225.0, y: 300.0 });
-            assert!((stroke.points[0].position.x - expected.x).abs() < 0.001);
+            let first = app.engine.backend().recorded_dabs.first().unwrap();
+            assert!((first.center.x - expected.x).abs() < 0.001);
+            assert_eq!(app.engine.metrics().committed_strokes, 1);
             assert!(app.engine.backend().dabs > 0);
             invoke(&mut app, CommandId::Undo);
-            assert_eq!(app.engine.document().strokes().count(), 0);
+            assert!(
+                app.engine
+                    .document()
+                    .target_raster(app.engine.document().active_target())
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
     #[test]
@@ -15512,7 +15767,13 @@ mod tests {
         assert_eq!(app.state.commands, commands);
         app.pen(event(&app, 2, PenPhase::Cancel, 0.0)).unwrap();
         app.frame(20_000_000, 28_000_000).unwrap();
-        assert_eq!(app.engine.document().strokes().count(), 0);
+        assert!(
+            app.engine
+                .document()
+                .target_raster(app.engine.document().active_target())
+                .unwrap()
+                .is_empty()
+        );
         assert!(!app.command(CommandId::Undo).enabled);
         assert_eq!(
             app.state.commands, commands,

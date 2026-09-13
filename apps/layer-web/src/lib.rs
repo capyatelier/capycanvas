@@ -2,6 +2,7 @@
 
 mod documents;
 mod editor;
+mod header;
 mod workspaces;
 
 use layer_core::{AssetId, Point};
@@ -21,6 +22,7 @@ pub struct WebApp {
     startup: StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
     overviews: std::collections::BTreeMap<u32, editor::NavigatorSurface>,
+    header_drag: Option<layer_ui::HeaderDrag>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +73,9 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn can_capture_raster(&self) -> bool {
+        self.0.as_ref().is_none_or(|gpu| gpu.renderer.raster_ready())
+    }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,
@@ -377,6 +382,7 @@ impl WebApp {
             startup: StartupProgress::default(),
             deferred_contacts: Default::default(),
             overviews: Default::default(),
+            header_drag: None,
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -880,6 +886,7 @@ impl WebApp {
                     dab_batches: &[],
                     reset_layers: true,
                     composite_all: true,
+                    restore_rasters: &[],
                 })
                 .map_err(js)?;
         } else {
