@@ -28,8 +28,8 @@ fn three_member_target() -> UiSession<Recorder> {
 }
 
 #[test]
-fn gtk_member_trailing_edges_append_groups_without_taking_grips() {
-    for index in 0..3 {
+fn member_trailing_edges_append_groups_without_taking_grips() {
+    for (platform, index) in [Platform::Gtk, Platform::Web].into_iter().flat_map(|p| (0..3).map(move |i| (p, i))) {
         for item in [
             DockItem::Panel {
                 panel: Panel::Properties,
@@ -39,6 +39,7 @@ fn gtk_member_trailing_edges_append_groups_without_taking_grips() {
         ] {
             for offset in [-5., 0., 5.] {
                 let mut s = three_member_target();
+                s.set_platform(platform);
                 let r = s.layout(STACK_VIEW);
                 let members = s.state.workspace.layout.column_stack(4).members;
                 let c = r.collapsed.iter().find(|c| c.id == members[index]).unwrap();
@@ -385,7 +386,11 @@ fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
             ..
         }
     ));
-    for platform in [Platform::Web, Platform::Android] {
+    s.set_platform(Platform::Web);
+    for point in [center(below.empty), center(below.grip), gap] {
+        assert!(matches!(s.drop_hint(STACK_VIEW, point, &[], item, None).unwrap().target, DockTarget::StackColumn { .. }));
+    }
+    for platform in [Platform::Android] {
         s.set_platform(platform);
         for point in [center(below.empty), center(below.grip), gap] {
             assert!(
@@ -507,9 +512,15 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
 
 #[test]
 fn paint_defaults_open_right_stack_on_load_and_reset() {
+    for platform in [Platform::Gtk, Platform::Web] {
+        check_paint_default_stack(platform);
+    }
+}
+
+fn check_paint_default_stack(platform: Platform) {
     let mut s = session();
-    s.set_platform(Platform::Gtk);
-    let layout = crate::WorkspacePreset::Illustrator.layout(Platform::Gtk);
+    s.set_platform(platform);
+    let layout = crate::WorkspacePreset::Illustrator.layout(platform);
     let capture = crate::WorkspaceCapture {
         history: crate::LayoutHistory::new(&layout),
         working: crate::WorkspacePreset::Illustrator.working_state(),
@@ -650,6 +661,7 @@ fn closed_multi_column_stacks_ignore_width_resize_without_expanding_their_tree()
                     .contains(&Some(stack))
             })
             .unwrap();
+        assert!(divider.fixed, "Hosts must omit this resize affordance");
         let id = divider.id;
         let start = [
             divider.bounds.x + divider.bounds.width * 0.5,
@@ -992,7 +1004,7 @@ fn ordinary_drawers_and_unported_hosts_keep_the_existing_drawer_behavior() {
             &mut s,
             CustomizationAction::SetColumnDrawers {
                 column: left,
-                drawers: platform == Platform::Gtk,
+                drawers: platform.stacked_columns(),
             },
         );
         click_column(&mut s, Panel::Brushes);
@@ -1327,5 +1339,35 @@ fn adopting_drawers_off_closes_existing_drawer_presentations() {
             s.state.workspace.layout.column_stack(right).open_column,
             Some(right)
         );
+    }
+}
+
+#[test]
+fn same_order_drop_from_member_into_previous_column_is_not_cancelled() {
+    for platform in [Platform::Gtk, Platform::Web] {
+        let mut s = three_member_target();
+        s.set_platform(platform);
+        let before = crate::durable_layout(&s.state.workspace.layout);
+        let resolved = s.layout(STACK_VIEW);
+        let source = resolved.collapsed[2].groups[0].icons[0].bounds;
+        let last = resolved.collapsed[1].groups.last().unwrap();
+        let target = [last.bounds.x + 18., last.bounds.y + last.bounds.height + 3.];
+        let item = DockItem::Panel { panel: Panel::Color };
+        for (phase, position) in [
+            (ContactPhase::Down, [source.x + 18., source.y + 18.]),
+            (ContactPhase::Move, [900., 500.]),
+            (ContactPhase::Move, target),
+            (ContactPhase::Up, target),
+        ] {
+            s.dispatch(UiAction::DragWorkspace { item, phase, position, viewport: STACK_VIEW, tabs: Vec::new() }).unwrap();
+        }
+        let after = crate::durable_layout(&s.state.workspace.layout);
+        assert_eq!(s.layout(STACK_VIEW).collapsed.len(), 2);
+        assert_eq!(s.layout(STACK_VIEW).collapsed[1].groups.len(), 2);
+        assert_ne!(before, after);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
     }
 }

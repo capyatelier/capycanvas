@@ -1,6 +1,6 @@
 // Shared dock projections. The browser supplies widgets and measured body sizes.
 export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel}) {
-  const columns=new Map(),drawers=new Map();
+  const columns=new Map(),drawers=new Map(),connections=new Map();
   let resolved,animating=false;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
@@ -55,36 +55,77 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     };
     return root;
   }
-  function arrange(layout) {
+  function arrange(layout,layoutOnly=false) {
     resolved=layout;const live=new Set();
     for(const column of layout.collapsed) {
       live.add(column.id);let root=columns.get(column.id);
-      const key=JSON.stringify([column,state().customization.column_drawers,state().workspace.layout.panels.map(p=>[p.id,p.name])]);
-      if(root?.dataset.key===key)continue;
+      // Keep held tiles and their capture alive while geometry or selection changes.
+      const key=JSON.stringify(column.groups.map(g=>[g.group,g.icons.map(i=>{
+        const v=customization.view(i.panel);return[i.panel,v.title,v.icon];
+      })]));
       if(!root){root=element("section","collapsed-column");root.dataset.column=column.id;workspace.append(root);columns.set(column.id,root);}
-      root.dataset.key=key;root.replaceChildren();place(root,column.bounds);
-      customization.target(root,{kind:"group",group:column.groups[0]?.group ?? column.id});
-      const content=element("div","collapsed-content");place(content,local(column.content,column.bounds));root.append(content);
-      content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};
-      for(const [index,group] of column.groups.entries()) {
-        if(index>0) {
-          const divider=element('div','tile-divider column-divider');
-          divider.setAttribute('role','separator');divider.setAttribute('aria-orientation','horizontal');
-          place(divider,{x:0,y:group.bounds.y-column.content.y-10,width:column.content.width,height:8});
-          content.append(divider);
+      place(root,column.bounds);root.dataset.stack=column.stack;
+      if(root.dataset.key!==key) {
+        root.dataset.key=key;root.replaceChildren();
+        customization.target(root,{kind:"column",column:column.id});
+        const content=element("div","collapsed-content");root.append(content);
+        content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};
+        for(const [index,group] of column.groups.entries()) {
+          if(index>0) {
+            const divider=element('div','tile-divider column-divider');divider.dataset.group=group.group;
+            divider.setAttribute('role','separator');divider.setAttribute('aria-orientation','horizontal');content.append(divider);
+          }
+          for(const item of group.icons) {
+            const view=customization.view(item.panel),b=button("",()=>send({type:"toggle_column_drawer",group:group.group,panel:item.panel}),"dock-tab column-tab");
+            b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));
+            customization.target(b,{kind:"panel",panel:item.panel});
+            content.append(draggable(b,{kind:"panel",panel:item.panel},"hold"));
+          }
         }
+        root.append(grip({kind:"column",column:column.id}));
+      }
+      const content=root.querySelector('.collapsed-content');place(content,local(column.content,column.bounds));
+      for(const group of column.groups) {
+        const divider=content.querySelector(`.column-divider[data-group="${group.group}"]`);
+        if(divider)place(divider,{x:0,y:group.bounds.y-column.content.y-10,width:column.content.width,height:8});
         for(const item of group.icons) {
-          const view=customization.view(item.panel),b=button("",()=>send({type:"toggle_column_drawer",group:group.group,panel:item.panel}),"dock-tab column-tab");
-          b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));
-          b.setAttribute("aria-selected",String(state().customization.column_drawers.some(d=>d.anchor.column===column.id&&d.anchor.origin===item.panel)));
-          place(b,local(item.bounds,column.content));customization.target(b,{kind:"panel",panel:item.panel});
-          content.append(draggable(b,{kind:"panel",panel:item.panel},"hold"));
+          const b=content.querySelector(`.column-tab[data-panel="${item.panel}"]`);
+          b.setAttribute("aria-selected",String(column.open?group.active===item.panel:state().customization.column_drawers.some(d=>d.anchor.column===column.id&&d.anchor.origin===item.panel)));
+          place(b,local(item.bounds,column.content));
         }
       }
-      const handle=grip({kind:"column",column:column.id});place(handle,local(column.grip,column.bounds));root.append(handle);
+      place(root.querySelector(':scope > .panel-grip'),local(column.grip,column.bounds));
     }
     for(const[id,node]of columns)if(!live.has(id)){node.remove();columns.delete(id);}
-    refresh();
+    if(layoutOnly)openConnections();else refresh();
+  }
+  function markSource(source,direction) {
+    if(!source)return;
+    source.dataset.drawerFacing=direction;
+    // Flatten only ancestor corners actually reached by this active tile.
+    const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[direction];
+    for(let node=source.parentElement;node&&node!==workspace;node=node.parentElement) {
+      const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]];
+      const square=facing.filter(i=>{const[x,y]=corners[i];return x>=a.left-.5&&x<=a.right+.5&&y>=a.top-.5&&y<=a.bottom+.5;});
+      if(square.length)node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');
+    }
+  }
+  function bridge(node,c) {
+    if(!node){node=document.createElementNS("http://www.w3.org/2000/svg","svg");node.classList.add("drawer-bridge");node.setAttribute('aria-hidden','true');workspace.append(node);}
+    place(node,c.bounds);node.setAttribute("viewBox",`0 0 ${c.bounds.width} ${c.bounds.height}`);
+    const path=node.firstElementChild||document.createElementNS(node.namespaceURI,"path"),[a,b]=c.radii,l=c.length,d=c.depth,k=.5522848;
+    path.setAttribute("d",`M 0 0 L ${l} 0 L ${l} ${d-b} C ${l} ${d-b+b*k} ${l+b-b*k} ${d} ${l+b} ${d} L ${-a} ${d} C ${-a+a*k} ${d} 0 ${d-a+a*k} 0 ${d-a} Z`);
+    path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);if(!path.parentNode)node.append(path);
+    return node;
+  }
+  function openConnections() {
+    const live=new Set();
+    for(const column of resolved.collapsed)if(column.open)for(const[panel,c]of column.open.connections) {
+      const id=`${column.id}:${panel}`;live.add(id);
+      const node=bridge(connections.get(id),c);node.classList.add('column-connection');connections.set(id,node);
+      markSource(columns.get(column.id)?.querySelector(`.column-tab[data-panel="${panel}"]`),column.open.direction);
+    }
+    for(const[id,node]of connections)if(!live.has(id)){node.remove();connections.delete(id);}
   }
   function dispose(record) {customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
@@ -146,24 +187,10 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       const source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
         [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
       r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
-      if(source&&r.connection&&!r.closing) {
-        source.dataset.drawerFacing=r.placement.direction;
-        // Flatten only ancestor corners reached by the source, so clipping cannot cut its join.
-        const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[r.placement.direction];
-        for(let node=source.parentElement;node&&node!==workspace;node=node.parentElement) {
-          const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]];
-          const square=facing.filter(i=>{const[x,y]=corners[i];return x>=a.left-.5&&x<=a.right+.5&&y>=a.top-.5&&y<=a.bottom+.5;});
-          if(square.length)node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');
-        }
-      }
+      if(source&&r.connection&&!r.closing)markSource(source,r.placement.direction);
       if(r.connection) {
         const c=r.connection;
-        if(!r.bridge){r.bridge=document.createElementNS("http://www.w3.org/2000/svg","svg");r.bridge.classList.add("drawer-bridge");workspace.append(r.bridge);}
-        place(r.bridge,c.bounds);r.bridge.style.zIndex=r.column==null?"1899":"1799";
-        r.bridge.setAttribute("viewBox",`0 0 ${c.bounds.width} ${c.bounds.height}`);
-        const path=document.createElementNS(r.bridge.namespaceURI,"path"),[a,b]=c.radii,l=c.length,d=c.depth,k=.5522848;
-        path.setAttribute("d",`M 0 0 L ${l} 0 L ${l} ${d-b} C ${l} ${d-b+b*k} ${l+b-b*k} ${d} ${l+b} ${d} L ${-a} ${d} C ${-a+a*k} ${d} 0 ${d-a+a*k} 0 ${d-a} Z`);
-        path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);r.bridge.replaceChildren(path);
+        r.bridge=bridge(r.bridge,c);r.bridge.style.zIndex=r.column==null?"1899":"1799";
         r.root.style.borderRadius=c.square_corners.map(square=>square?"0":"8px").join(" ");
       } else {r.bridge?.remove();r.bridge=null;r.root.style.borderRadius="8px";}
       r.shadow.style.borderRadius=r.root.style.borderRadius;
@@ -195,6 +222,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       }
       more ||= progress<1;
     }
+    openConnections();
     // Geometry is transient and Rust suppresses identical measurement updates.
     dispatch({type:"measure_drawer_tiles",measurements});
     measureColumnDrawers();

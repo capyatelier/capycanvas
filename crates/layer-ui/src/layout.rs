@@ -1051,6 +1051,9 @@ impl GroupPlacement {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Divider {
+    /// Closed stacks have no body to resize; hosts omit the resize affordance.
+    #[serde(default)]
+    pub fixed: bool,
     pub id: u32,
     pub band: bool,
     pub axis: Axis,
@@ -2581,16 +2584,45 @@ impl DockLayout {
     }
 
     /// Dock topology without sizing or binary split association: A/(B/C) and
-    /// (A/B)/C describe the same column. Floating geometry/order still matters.
+    /// (A/B)/C describe the same column. Collapsed member boundaries and stack
+    /// preferences remain significant, as do floating geometry and order.
     pub(crate) fn same_placement(&self, other: &Self) -> bool {
         #[derive(PartialEq)]
         enum Part<'a> {
             Band(Edge),
             Split(Axis),
             Tabs(u32, &'a [Panel]),
+            Stack(bool, bool),
+            Member,
             End,
         }
-        fn append<'a>(node: &'a DockNode, parent: Option<Axis>, out: &mut Vec<Part<'a>>) {
+        fn append<'a>(
+            layout: &DockLayout,
+            node: &'a DockNode,
+            parent: Option<Axis>,
+            out: &mut Vec<Part<'a>>,
+        ) {
+            if layout.is_collapsed(node.id()) {
+                let stack = layout.column_stack(node.id());
+                out.push(Part::Stack(stack.drawers, stack.auto_hide));
+                for member in stack.members {
+                    if let Some(member) = node.find(member) {
+                        out.push(Part::Member);
+                        append_tree(layout, member, None, out);
+                        out.push(Part::End);
+                    }
+                }
+                out.push(Part::End);
+            } else {
+                append_tree(layout, node, parent, out);
+            }
+        }
+        fn append_tree<'a>(
+            layout: &DockLayout,
+            node: &'a DockNode,
+            parent: Option<Axis>,
+            out: &mut Vec<Part<'a>>,
+        ) {
             match node {
                 DockNode::Tabs { id, panels, .. } => out.push(Part::Tabs(*id, panels)),
                 DockNode::Split {
@@ -2603,8 +2635,8 @@ impl DockLayout {
                     if nested {
                         out.push(Part::Split(*axis));
                     }
-                    append(first, Some(*axis), out);
-                    append(second, Some(*axis), out);
+                    append(layout, first, Some(*axis), out);
+                    append(layout, second, Some(*axis), out);
                     if nested {
                         out.push(Part::End);
                     }
@@ -2615,7 +2647,7 @@ impl DockLayout {
             let mut out = Vec::new();
             for band in &layout.bands {
                 out.push(Part::Band(band.edge));
-                append(&band.root, None, &mut out);
+                append(layout, &band.root, None, &mut out);
                 out.push(Part::End);
             }
             out
@@ -2979,6 +3011,7 @@ impl DockLayout {
                 result.reveal_edges.push(band.edge);
             }
             result.dividers.push(Divider {
+                fixed: false,
                 id: band.id,
                 band: true,
                 axis: band.edge.axis(),
@@ -2987,6 +3020,9 @@ impl DockLayout {
                 reversed: matches!(band.edge, Edge::Bottom | Edge::Right),
             });
             resolve_node(&band.root, bounds, axis, self, &mut result, open_columns);
+        }
+        for divider in &mut result.dividers {
+            divider.fixed = self.fixed_stack_divider(divider);
         }
         result.work_area = remaining;
         result
@@ -4317,6 +4353,7 @@ fn resolve_node(
             let a = rest.strip(edge, first_size);
             let divider = rest.strip(edge, gap);
             result.dividers.push(Divider {
+                fixed: false,
                 id: *id,
                 band: false,
                 axis: *axis,
