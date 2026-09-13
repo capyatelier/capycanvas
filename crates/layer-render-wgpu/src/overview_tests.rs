@@ -56,7 +56,7 @@ fn overview_outline_remains_visible_on_light_and_dark_artwork_in_both_themes() {
                             ..placement()
                         }],
                     );
-                    presenter.present(&r, &surface, view(), [0.; 4]);
+                    presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
                     let bytes = page_bytes(&r, &output);
                     let edge: Vec<_> = (13..24).map(|x| pixel(&bytes, x, 32)[0]).collect();
                     assert!(
@@ -89,17 +89,17 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
         let target = target(&r, [128, 128], format);
         let surface = target.create_view(&Default::default());
         let mut presenter = ViewportPresenter::for_renderer(&r, format);
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         let baseline = page_bytes(&r, &target);
         let inset = placement();
         presenter.set_overviews(&r, &[inset]);
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         let rendered = page_bytes(&r, &target);
         // A retained native canvas has exactly the same overview pixels, with
         // transparent margins for native panel backgrounds and clipping.
         let mut native = ViewportPresenter::for_overviews(&r, format);
         native.set_overviews(&r, &[inset]);
-        native.present_overviews(&r, &surface, [128, 128]);
+        native.present_overviews(&r, &surface, [128, 128]).unwrap();
         let standalone = page_bytes(&r, &target);
         for y in 0..128 {
             for x in 0..128 {
@@ -125,7 +125,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
                 ..inset
             }],
         );
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         let clipped = page_bytes(&r, &target);
         for y in 0..128 {
             for x in 0..128 {
@@ -183,7 +183,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
             ..view()
         };
         presenter.set_overviews(&r, &[moved]);
-        presenter.present(&r, &surface, camera, [0.; 4]);
+        presenter.present(&r, &surface, camera, [0.; 4]).unwrap();
         let moved_bytes = page_bytes(&r, &target);
         assert_eq!(pixel(&moved_bytes, 32, 32), pixel(&rendered, 32, 32));
         assert_ne!(pixel(&moved_bytes, 18, 32), pixel(&rendered, 18, 32));
@@ -192,7 +192,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
             "camera cannot rebuild composition"
         );
         presenter.set_overviews(&r, &[]);
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         assert_eq!(
             page_bytes(&r, &target),
             baseline,
@@ -205,7 +205,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
                 ..inset
             }],
         );
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         assert_eq!(
             page_bytes(&r, &target),
             baseline,
@@ -213,7 +213,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
         );
         presenter.set_corner_radius(16.);
         presenter.set_overviews(&r, &[]);
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         let rounded = page_bytes(&r, &target);
         presenter.set_overviews(
             &r,
@@ -222,7 +222,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
                 ..inset
             }],
         );
-        presenter.present(&r, &surface, view(), [0.; 4]);
+        presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
         assert_eq!(
             pixel(&page_bytes(&r, &target), 0, 0),
             [0, 0, 0, 0],
@@ -253,7 +253,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
             },
         ],
     );
-    presenter.present(&r, &surface, view(), [0.; 4]);
+    presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
     let before = page_bytes(&r, &target);
     let blue = dab([0., 0., 1., 1.]);
     submit(
@@ -266,7 +266,7 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
         }],
         false,
     );
-    presenter.present(&r, &surface, view(), [0.; 4]);
+    presenter.present(&r, &surface, view(), [0.; 4]).unwrap();
     let after = page_bytes(&r, &target);
     for x in [32, 96] {
         assert!(pixel(&before, x, 32)[0] > pixel(&before, x, 32)[2]);
@@ -366,7 +366,7 @@ fn in_surface_overview_latency() {
                     ..camera
                 },
                 [0.03, 0.03, 0.03, 1.],
-            );
+            ).unwrap();
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             timer.end(&r.device, &r.queue);
             r.device

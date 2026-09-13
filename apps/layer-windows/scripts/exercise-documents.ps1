@@ -1,4 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu)
+param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailGpu)
+if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
 Add-Type -TypeDefinition @'
@@ -40,11 +41,12 @@ try{
     }}
     $bitmap.Save($imageSource,[Drawing.Imaging.ImageFormat]::Png)
 }finally{$bitmap.Dispose()}
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE')
+$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_TEST_GPU_UNAVAILABLE')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try {
 $env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
+if($FailGpu){$env:CAPY_TEST_GPU_UNAVAILABLE='1'}
 $env:CAPY_TRACE_UI='1'
 $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
@@ -144,6 +146,42 @@ function Choose-Path([string]$Path) {
     if($entry.Current.ProcessId -ne $review.Id){throw 'Wrong picker filename owner'}
     [CapyDocumentControls]::TypeText([IntPtr]$entry.Current.NativeWindowHandle,$Path)
     Picker-Button '1'
+}
+function Fail-Gpu {
+    if(!$FailGpu){return}
+    $script:scope=$root
+    $revision=(Model).state.document_file.revision
+    Invoke-Control 'Test GPU loss'
+    Wait-Until {(Model).windows_rendering_suspended} 'Exhausted GPU recovery did not preserve save services' 30
+    if((Model).state.document_file.revision -ne $revision){throw 'GPU failure changed committed drawing history'}
+    foreach($id in @('save_document','save_document_as','close_document')){
+        if(!((Model).state.commands|Where-Object id -eq $id).enabled){throw "GPU failure disabled $id"}
+    }
+    foreach($id in @('new_document','open_document','export_document','undo')){
+        if(((Model).state.commands|Where-Object id -eq $id).enabled){throw "GPU failure still enables $id"}
+    }
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ("gpu-unavailable-"+$review.Id+".png")) -ClientOnly *> (Join-Path $run ("gpu-unavailable-"+$review.Id+".json"))
+}
+function Start-RecoveryReview([string]$label){
+    $script:stderr=Join-Path $run ($label+'.stderr.log')
+    $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+    $null=$review.Handle
+    $script:lastModel=$null
+    [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
+    Write-Output "GPU save review process $($review.Id), $label"
+    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No GPU save review window' 30
+    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $script:scope=$root
+    # GPU readiness can precede the asynchronous restoration of saved Zen/layout.
+    Wait-Until {$model=Model;$model.brush_ready -and $model.windows_workspace.ready} 'GPU save review did not restore its workspace' 60
+    if((Model).state.workspace.zen_mode){
+        Invoke-Control 'Zen mode'
+        Wait-Until {!(Model).state.workspace.zen_mode -and !(Model).chrome_hidden} 'Reopened review could not leave Zen'
+    }
+    Wait-Until {
+        $compact=Find-Id 'application-menus';$full=Find-Id 'application-menu-file'
+        ($compact -and !$compact.Current.IsOffscreen) -or ($full -and !$full.Current.IsOffscreen)
+    } 'Restored application header did not become visible'
 }
 function Draw {
     $script:scope=$root
@@ -281,6 +319,8 @@ File-Command 'open_document';Confirm-Dialog;Invoke-Control 'Save';Picker 'Open';
 Wait-Until {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $first} 'Save-before-Open did not adopt the selected file'
 if((Model).state.document_file.modified){throw 'Opened project is unexpectedly dirty'}
 Draw
+Fail-Gpu
+if($FailGpu){File-Command 'save_document_as';Picker 'Save As';Picker-Button '2';Idle}
 $script:scope=$root;Invoke-Control 'Preferences'
 $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
@@ -305,6 +345,7 @@ $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWind
 $script:scope=$root
 Wait-Until {(Model).brush_ready} 'Untitled canvas did not finish starting' 45
 Draw
+Fail-Gpu
 File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Save';Picker 'Save As';Picker-Button '2';Idle
 if(!(Model).state.document_file.modified -or (Model).state.document_file.location -or (Model).state.document_file.close_ready){
     throw 'Cancelling the close-time picker lost the untitled drawing'
@@ -314,7 +355,37 @@ $review.CloseMainWindow()|Out-Null
 Confirm-Dialog;Invoke-Control 'Discard Changes'
 Wait-Closed 'Discarded close exceeded five seconds'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reported stderr'}
+if($FailGpu){
+    Start-RecoveryReview 'save-as'
+    Draw
+    $before=Join-Path $run 'Before GPU failure.png'
+    File-Command 'export_document';Picker 'Save As';Choose-Path $before;Idle
+    Wait-Until {Test-Path -LiteralPath $before} 'Baseline export did not finish'
+    $script:scope=$root;Invoke-Control 'Zen mode'
+    Wait-Until {(Model).state.workspace.zen_mode -and (Model).chrome_hidden} 'Zen did not hide the editor before GPU failure'
+    Fail-Gpu
+    if(!(Model).state.workspace.zen_mode){throw 'GPU failure rewrote the saved Zen preference'}
+    $recovered=Join-Path $run 'Saved after GPU failure.capy'
+    File-Command 'save_document_as';Picker 'Save As';Choose-Path $recovered;Idle
+    Wait-Until {(Test-Path -LiteralPath $recovered) -and !(Model).state.document_file.modified} 'Save As after GPU failure did not complete durably'
+    File-Command 'save_document';Idle
+    $review.CloseMainWindow()|Out-Null
+    Wait-Closed 'GPU save-as close exceeded five seconds'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'GPU save-as reported stderr'}
+    Remove-Item Env:CAPY_TEST_GPU_UNAVAILABLE
+    Start-RecoveryReview 'reopen'
+    File-Command 'open_document';Picker 'Open';Choose-Path $recovered;Idle
+    Wait-Until {(Model).state.document_file.location.uri -eq $recovered} 'Saved recovery project did not reopen'
+    $after=Join-Path $run 'After GPU failure.png'
+    File-Command 'export_document';Picker 'Save As';Choose-Path $after;Idle
+    Wait-Until {Test-Path -LiteralPath $after} 'Reopened project did not export'
+    if((Get-FileHash -LiteralPath $before).Hash -ne (Get-FileHash -LiteralPath $after).Hash){throw 'Saved recovery project changed exported pixels'}
+    $review.CloseMainWindow()|Out-Null
+    Wait-Closed 'Reopened recovery project close exceeded five seconds'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Reopened recovery project reported stderr'}
+}
 [PSCustomObject]@{
+    gpu_failure_save=if($FailGpu){'Save/Save As, Cancel, Discard, durable reopen and identical exported pixels passed'}else{'not requested'}
     shared_new_size_and_validation='passed'
     image_picker_draft_cancel_and_error_recovery='passed'
     image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'

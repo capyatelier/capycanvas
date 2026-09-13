@@ -354,6 +354,50 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
 }
 
 #[test]
+fn included_workspace_history_restores_layout_but_respects_active_owners() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let id = m.active_id().unwrap();
+        let mut capture = m.current().unwrap().capture().unwrap();
+        let original = capture.history.layout().clone();
+        let mut changed = original.clone();
+        changed.bands[0].extent += 60.;
+        capture.history.append(&changed, "Resize toolbar");
+        let current = capture.history.current.clone();
+        m.observe(capture.clone(), 2_000);
+        m.flush().await.unwrap();
+        for (revision, idle, enabled) in [
+            ("r0", true, true),
+            ("r0", false, false),
+            (current.as_str(), true, false),
+        ] {
+            let view = m
+                .history_view(&id, ManagerHistoryMode::Layout, Some(revision), idle, 3_000)
+                .await
+                .unwrap();
+            assert_eq!(view.restore.is_some(), enabled);
+        }
+        let other =
+            WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+        let view = other
+            .history_view(&id, ManagerHistoryMode::Layout, Some("r0"), true, 3_000)
+            .await
+            .unwrap();
+        assert!(view.restore.is_none());
+        let restored = m.change_layout(&id, Some("r0"), 4_000).await.unwrap();
+        assert_eq!(
+            restored.entity.capture().unwrap().history.layout(),
+            &original
+        );
+        assert_eq!(restored.entity.capture().unwrap().working, capture.working);
+        assert!(restored.entity.metadata.builtin);
+        assert!(m.rename(&id, "Renamed", "", 5_000).await.is_err());
+        assert!(m.delete_item(&id, None, 5_000).await.is_err());
+    });
+}
+
+#[test]
 fn photographer_size_upgrade_preserves_brush_edits_and_customized_layouts() {
     use layer_ui::{Panel, TileStyle, WorkspacePreset};
     pollster::block_on(async {

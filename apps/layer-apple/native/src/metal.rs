@@ -291,7 +291,7 @@ impl MetalHost {
             &target.texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(error)?;
         costs[2] = clock.elapsed().as_nanos() as u64 - costs[..2].iter().sum::<u64>();
         gpu.queue().present(target);
         self.blank_presented = true;

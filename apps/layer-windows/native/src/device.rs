@@ -5,6 +5,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+pub(crate) fn removed(device: &wgpu::Device) -> bool {
+    unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.is_some_and(|native| {
+        unsafe { native.raw_device().GetDeviceRemovedReason() }.is_err()
+    })
+}
+
 #[derive(Default)]
 pub(crate) struct DeviceState {
     lost: AtomicBool,
@@ -33,11 +39,7 @@ impl DeviceState {
             return true;
         }
         // Driver loss can precede the callback, including in idle sibling windows.
-        let removed = device.is_some_and(|device| {
-            unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.is_some_and(|native| {
-                unsafe { native.raw_device().GetDeviceRemovedReason() }.is_err()
-            })
-        });
+        let removed = device.is_some_and(removed);
         if removed {
             self.lost.store(true, Ordering::Release);
         }

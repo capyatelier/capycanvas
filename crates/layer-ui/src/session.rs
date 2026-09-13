@@ -77,6 +77,7 @@ pub struct UiSession<R: CanvasRenderer> {
     state: UiState,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
+    rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     navigator_preview: crate::navigator::Preview,
@@ -134,6 +135,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             engine,
             pen,
             input_pending: false,
+            rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
             navigator_preview: Default::default(),
@@ -1697,6 +1699,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
+        if self.rendering_suspended && !Self::command_without_renderer(id) {
+            return (false, false);
+        }
         if !id.available_on(self.state.platform) || self.state.document_file.close_ready {
             return (false, false);
         }
@@ -1821,6 +1826,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.rendering_suspended && !Self::action_without_renderer(&action) {
+            return Err("Painting is unavailable. Save the drawing and reopen it.".into());
+        }
         if self.workspace_read_only
             && !matches!(
                 &action,
@@ -2897,7 +2905,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
-        if self.workspace_transition || (self.workspace_read_only && event.phase == PenPhase::Down)
+        if self.rendering_suspended
+            || self.workspace_transition
+            || (self.workspace_read_only && event.phase == PenPhase::Down)
         {
             return Ok(());
         }

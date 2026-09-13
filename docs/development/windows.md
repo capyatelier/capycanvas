@@ -309,9 +309,12 @@ Run the document and lifecycle fixtures with actual D3D12 device removal enabled
 
 ```powershell
 ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailGpu
 ./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -RecoverGpu
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
 cargo test --locked -p layer-windows --lib device::tests::validation_error_releases_pipeline_and_allows_device_replacement -- --ignored --exact --nocapture
+cargo test --locked -p layer-windows --lib documents::recovery_tests -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p layer-windows --lib filter_packages::tests::recovery_tests -- --ignored --test-threads=1 --nocapture
 ```
 
 The native fixtures create isolated profiles. The document check removes the
@@ -321,6 +324,42 @@ removal with startup, minimized windows and close decisions. The Rust regression
 checks failed-pipeline cleanup and replacement of a removed hardware device.
 The multiwindow fixture removes the shared device from each of two open windows,
 checking reconstruction in the idle sibling and independent document Undo/Redo.
+The `-FailGpu` variant removes the device and prevents reconstruction in its
+isolated test profile until the normal retry deadline expires. It checks Save,
+Save As, canceled pickers, Cancel/Discard close decisions, retained preferences,
+and durable reopen with identical exported pixels. It also checks failure in Zen
+mode: File remains accessible without changing the saved Zen preference.
+
+When reconstruction fails, painting stops and the existing drawing remains
+saveable. Completed admitted strokes are retained; an unfinished stroke is
+canceled. Document/settings services stay alive until an approved close, and
+GPU-dependent commands are disabled. An accepted save can finish; a PNG export
+that has not captured its image is canceled. Reopen the saved drawing in a new
+window to resume painting.
+
+The document recovery test module selects hardware D3D12 explicitly and removes
+only its own process devices. Run it alone and serially. It exercises real worker
+completions before adoption, including a decoded image whose original file is
+already deleted, New/Open candidates with embedded image data, an accepted save,
+a captured PNG ticket and a viewport upload. It verifies retained pixels/history,
+failed-operation retry, protected export destinations and error return without
+unwinding. The ordinary CPU suite separately covers canceling a deferred import.
+
+The filter recovery module uses the same hardware selection/removal helpers and
+must also run alone and serially. It removes the device after file transport has
+started and after validation has been submitted but before publication. Original
+package files are then deleted. Reconstructed pixels, parameter values and
+one-step Undo/Redo must match uninterrupted replacement. Exhausted recovery must
+cancel the candidate without changing the current catalog or document. These are
+controlled worker/publication boundaries, not proof of removal during a particular
+shader-compiler instruction or native pointer event.
+
+The loader retains acquired source bytes while the device is removed or the
+renderer is absent. If painting becomes suspended, pending reads settle as a
+visible failure and late file results are discarded; new loads are rejected.
+Ordinary tests cover suspension both during acquisition and while waiting for
+a renderer, including completion after the failure has already been published.
+
 Run these separately from performance measurements. They do not establish
-physical driver-reset or suspend behavior. Saving after all reconstruction
-retries fail still needs implementation and acceptance.
+physical driver-reset or suspend behavior, every native picker/input overlap,
+or recovery during every filter operation.

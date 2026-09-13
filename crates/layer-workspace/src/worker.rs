@@ -149,6 +149,7 @@ pub fn validate_database_export_destination(source: &Path, destination: &Path) -
         source.to_path_buf(),
         PathBuf::from(format!("{}-wal", source.display())),
         PathBuf::from(format!("{}-shm", source.display())),
+        PathBuf::from(format!("{}-lock", source.display())),
     ] {
         let protected = resolved(&protected);
         #[cfg(windows)]

@@ -48,6 +48,9 @@ impl From<rusqlite::Error> for StoreError {
 pub struct SqliteStore {
     connection: Connection,
     clock: Arc<dyn Clock>,
+    // A shared OS lock lives as long as this connection, including suspension.
+    // The first opener after every native client exits can reclaim old leases.
+    _lifetime_lock: std::fs::File,
 }
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<Self> {
@@ -68,17 +71,27 @@ impl SqliteStore {
                 .create(parent)
                 .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
         }
+        let unavailable =
+            |e: std::io::Error| StoreError::new(ErrorKind::Unavailable, e.to_string());
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(path)
-                .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
+            options.mode(0o600);
         }
+        options.open(path).map_err(unavailable)?;
+        let mut lock_path = path.as_os_str().to_os_string();
+        lock_path.push("-lock");
+        let lifetime_lock = options.open(lock_path).map_err(unavailable)?;
+        let reclaim = match lifetime_lock.try_lock() {
+            Ok(()) => true,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                lifetime_lock.lock_shared().map_err(unavailable)?;
+                false
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(unavailable(error)),
+        };
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -130,8 +143,24 @@ impl SqliteStore {
             tx.execute_batch("CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL)")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        if reclaim {
+            tx.execute(
+                "UPDATE items SET owner=NULL,epoch=NULL,lease_until=NULL WHERE owner IS NOT NULL",
+                [],
+            )?;
+        }
         tx.commit()?;
-        Ok(Self { connection, clock })
+        if reclaim {
+            // No requests have run yet, so the unlock/relock gap cannot expose
+            // one of our own claims. Other openers retain every live claim.
+            lifetime_lock.unlock().map_err(unavailable)?;
+            lifetime_lock.lock_shared().map_err(unavailable)?;
+        }
+        Ok(Self {
+            connection,
+            clock,
+            _lifetime_lock: lifetime_lock,
+        })
     }
     pub fn handle(&mut self, request: StoreRequest) -> Result<StoreResponse> {
         match request {

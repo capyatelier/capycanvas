@@ -19,6 +19,7 @@ import SwiftUI
         defer { window.contentView = nil; window.close() }
         let host = NSHostingView(rootView: WorkspacePanels(store: store, workspace: store.workspace)
             .frame(width: 1200, height: 870).coordinateSpace(name: "editor-workspace")
+            .modifier(EditorPopoverHost())
             .onPreferenceChange(WorkspaceTabFrames.self) { store.workspace.tabFrames = $0 }
             .onPreferenceChange(WorkspaceTabs.self) { frames in
                 store.workspace.tabs = frames.compactMap { key, bounds in
@@ -38,7 +39,9 @@ import SwiftUI
         let hold = try holdDuration(marker)
         var number = 1
         func send(_ type: NSEvent.EventType, _ point: CGPoint, pen: Bool = false) async throws {
-            number += 1; try event(type, at: point, marker: marker, number: number, tablet: pen)
+            // XCTest delivers zero event numbers. Cover that native stream as
+            // well as the incrementing counter used by system mouse events.
+            number += 1; try event(type, at: point, marker: marker, number: platform == 0 ? number : 0, tablet: pen)
             try await drain(type == .leftMouseDown ? 0.02 : 0.08)
         }
         func center(_ item: JSON) -> CGPoint {
@@ -120,6 +123,40 @@ import SwiftUI
         start = CGPoint(x: icon.midX, y: icon.midY)
         try await send(.leftMouseDown, start, pen: true); try await send(.leftMouseUp, start, pen: true)
         try await wait("Open drawer tab and retained column icon") { source(.handle) != nil && source(.tile) != nil }
+        for pen in [false, true] {
+            let before = store.state["workspace"].stableKey
+            let tab = source(.handle)!.value.bounds
+            let brushes = JSON(["kind": "panel", "panel": "brushes"])
+            let neighbor = workspace.sourceInstances.values.first {
+                $0.item == brushes.stableKey && $0.surface == .handle && $0.layer >= 200 && !$0.bounds.isEmpty
+            }!.bounds
+            let origin = CGPoint(x: tab.midX, y: tab.midY)
+            let end = CGPoint(x: neighbor.minX + neighbor.width * 0.05, y: neighbor.midY)
+            try await send(.leftMouseDown, origin, pen: pen)
+            try require(input.contact.target != nil && !input.contact.requiresHold,
+                "A drawer tab must admit an immediate native contact")
+            for step in 1...6 {
+                let fraction = CGFloat(step) / 6
+                try await send(.leftMouseDragged, CGPoint(x: origin.x + (end.x - origin.x) * fraction,
+                    y: origin.y + (end.y - origin.y) * fraction), pen: pen)
+                try require(input.contact.dragging, "The native drawer tab must retain its immediate drag through intermediate moves")
+            }
+            try await send(.leftMouseUp, end, pen: pen)
+            try await wait("Native drawer tab order") {
+                store.state["customization"]["column_drawers"][0]["tabs"]["panels"][0].string == "toolbar"
+            }
+            let after = store.state["workspace"].stableKey
+            try await action(["type": "invoke", "command": "undo_workspace"])
+            try require(store.state["workspace"].stableKey == before, "One Undo restores the drawer tab order")
+            try await action(["type": "invoke", "command": "redo_workspace"])
+            try require(store.state["workspace"].stableKey == after, "One Redo restores the drawer tab order")
+            try await action(["type": "invoke", "command": "undo_workspace"])
+            if source(.handle) == nil {
+                try await action(["type": "customize", "action": ["type": "toggle_column_drawer", "group": 6, "panel": "toolbar"]])
+            }
+            try await wait("Restored drawer tab") { source(.handle) != nil }
+            note("PASS platform \(platform), \(pen ? "pen" : "mouse"): immediate native drawer-tab reorder and exact Undo/Redo")
+        }
         let iconID = source(.tile)!.key, tabID = source(.handle)!.key
         try require(iconID != tabID && workspace.hitSource(at: start)?.0 == iconID,
             "The column icon must keep its own hit target beside the open drawer tab for the same panel")

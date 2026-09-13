@@ -215,9 +215,13 @@ before editing resumes. App sleep and iPad backgrounding suspend input and flush
 within the platform's available lifetime; activation revalidates before editing.
 Discarded iPad scenes attempt a final workspace close and preserve artwork
 recovery. Teardown and an explicit Quit Anyway release their own claims without
-overwriting saved copies. An abrupt process kill can still retain only the last
-completed save, with ownership recovered after the shared lease expires. Full
-physical lifecycle/expiration coverage remains an acceptance requirement.
+overwriting saved copies. An abrupt process kill retains only the last completed
+save. The shared native store holds an OS file lock while any client is open;
+the first opener after all clients exit clears abandoned claims before restoring
+the saved workspace. A quick restart therefore does not select another preset
+while waiting for the old lease. If another client is still open, normal leases
+and fencing continue to protect its work. Full physical lifecycle/expiration
+coverage remains an acceptance requirement.
 
 ## Checks
 
@@ -257,8 +261,8 @@ checks that only a durable manual save clears the recovered document's dirty sta
 Save-before-recovery checks preserve the selected archive through both Mac saves
 and iPad staged exports, without requesting another Open location.
 
-The focused `testArtworkRecoveryAfterRestart` UI check passes on Mac and iPad
-Simulator. It waits for a completed private copy, terminates and relaunches the
+The focused `testArtworkRecoveryAfterRestart` UI check passes on Mac and the
+connected iPad. It waits for a completed private copy, terminates and relaunches the
 app, opens the offered drawing after document readiness, and verifies the restored
 layer count and a new recovery copy. It uses an isolated persistence namespace
 and actual in-app controls. This checks completed-copy restart; it does not model
@@ -272,8 +276,8 @@ ABI for both platform configurations, including immediately queued edits, scene
 restart, rapid edits across owners and forced write failure followed by retry.
 They require no UI automation and do not establish platform lifecycle delivery.
 
-The focused `testSettingsAndWorkspaceRestart` UI test runs on Mac and iPad
-Simulator. It saves a dark theme and visible Color panel, waits for write
+The focused `testSettingsAndWorkspaceRestart` UI test passes on Mac and the
+connected iPad. It saves a dark theme and visible Color panel, waits for write
 acknowledgment, terminates the app, and verifies both after relaunch without
 fixture actions. Debug test namespaces are private and isolated from user state.
 Other UI fixtures disable persistence explicitly. Release builds ignore all
@@ -281,5 +285,5 @@ persistence test environment variables.
 
 Remaining acceptance includes interrupted/background/termination delivery on
 physical devices, workspace retention across the complete window/surface matrix,
-bounded storage work under sustained workloads, physical recovery and provider delivery,
+bounded storage work under sustained workloads, interrupted recovery and provider delivery,
 and storage overhead in the hardware performance workloads.

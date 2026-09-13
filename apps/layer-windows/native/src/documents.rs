@@ -193,8 +193,12 @@ impl Worker {
         mailbox.pending = Some(job);
         self.shared.ready.notify_one();
     }
-    fn take(&self) -> Option<Result<Completed, String>> {
-        self.shared.mailbox.lock().unwrap().completed.take()
+    fn take(&self, defer_import: bool) -> Option<Result<Completed, String>> {
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        if defer_import && matches!(mailbox.completed, Some(Ok(Completed::Imported(_)))) {
+            return None;
+        }
+        mailbox.completed.take()
     }
     fn retire(&self, session: Box<UiSession<Renderer>>) {
         let mut mailbox = self.shared.mailbox.lock().unwrap();
@@ -461,6 +465,18 @@ impl DocumentService {
         self.import = Some(import);
         Ok(())
     }
+    pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        self.cancel_import(host);
+        if self.export.take().is_some() {
+            let active = self.active.take().ok_or("Missing PNG export request")?;
+            Self::complete(
+                host,
+                active.id,
+                Err("PNG export stopped because painting is unavailable".into()),
+            )?;
+        }
+        Ok(())
+    }
     fn cancel_import(&mut self, host: &mut NativeHost) {
         if let Some(import) = &self.import {
             import.cancelled.store(true, Ordering::Release);
@@ -574,6 +590,7 @@ impl DocumentService {
                     return Err("The file dialog no longer matches this document operation".into());
                 }
                 host.session.require_document_idle()?;
+                if host.session.rendering_suspended() { return Err("PNG export requires an available GPU".into()); }
                 location(path)?;
                 Ok(())
             })();
@@ -723,7 +740,20 @@ impl DocumentService {
         {
             self.cancel_import(host);
         }
-        let Some(completed) = self.worker.take() else {
+        // Keep decoded CPU bytes in the bounded completion slot until they can
+        // be uploaded. Canceled/stale imports and errors drain without a GPU.
+        let defer_import = self.import.as_ref().is_some_and(|import| {
+            if import.cancelled.load(Ordering::Acquire) || import.check(host).is_err() {
+                return false;
+            }
+            let gpu = host.session.engine().backend().0.as_ref();
+            let renderer_ready = gpu.is_some();
+            #[cfg(target_os = "windows")]
+            let renderer_ready = renderer_ready
+                && !gpu.is_some_and(|gpu| crate::device::removed(gpu.device()));
+            !renderer_ready
+        });
+        let Some(completed) = self.worker.take(defer_import) else {
             return Ok(());
         };
         if let Some(import) = self.import.take() {
@@ -890,6 +920,121 @@ mod tests {
         }
     }
 
+    #[test]
+    fn renderer_failure_cancels_waiting_export_but_preserves_an_accepted_save() {
+        let mut f = Fixture::new();
+        f.invoke(CommandId::AddLayer);
+        let document = f.host.session.engine().document().clone();
+        f.invoke(CommandId::ExportDocument);
+        let export = f.path("Not captured.png");
+        f.act(DocumentAction::Export {
+            id: f.request(),
+            path: export.clone(),
+        });
+        assert!(f.service.export.is_some());
+        f.host.suspend_renderer().unwrap();
+        f.service.renderer_unavailable(&mut f.host).unwrap();
+        assert!(!f.host.session.state().document_file.busy);
+        assert!(f.host.session.state().document_file.modified);
+        assert!(
+            f.host
+                .session
+                .state()
+                .host_error
+                .as_ref()
+                .unwrap()
+                .contains("PNG export stopped")
+        );
+        assert!(!std::path::Path::new(&export).exists());
+        f.invoke(CommandId::SaveDocumentAs);
+        let path = f.path("Accepted save.capy");
+        f.act(DocumentAction::Save {
+            id: f.request(),
+            path: path.clone(),
+        });
+        f.service.renderer_unavailable(&mut f.host).unwrap();
+        assert!(
+            f.service.active.is_some(),
+            "retirement must retain the writing job"
+        );
+        f.finish();
+        let saved = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
+        assert_eq!(saved.document.layers, document.layers);
+        assert!(!f.host.session.state().document_file.modified);
+    }
+
+    #[test]
+    fn suspended_renderer_saves_admitted_ink_and_keeps_close_decisions() {
+        use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+        let mut f = Fixture::new();
+        f.host.resize(512, 512, 1.).unwrap();
+        let view = f.host.session.state().camera.revision;
+        // This host has no GPU at any point; queue pressure must remain CPU-only.
+        for index in 0..8200 {
+            let phase = if index == 0 {
+                PenPhase::Down
+            } else if index == 8197 {
+                PenPhase::Up
+            } else if index == 8198 {
+                PenPhase::Down
+            } else {
+                PenPhase::Move
+            };
+            f.host
+                .retire_pointer_event(
+                    PenEvent {
+                        device_id: 1,
+                        sequence: index + 1,
+                        timestamp_ns: index * 1_000_000,
+                        view_revision: view,
+                        surface_position: layer_core::Point { x: 256., y: 256. },
+                        pressure: 0.5,
+                        tilt_radians: [0.; 2],
+                        twist_radians: 0.,
+                        distance: 0.,
+                        phase,
+                        tool: ToolKind::Pen,
+                        flags: SampleFlags::PRIMARY,
+                    },
+                    layer_ui::PointerButton::Primary,
+                )
+                .unwrap();
+        }
+        f.host.suspend_renderer().unwrap();
+        f.service.renderer_unavailable(&mut f.host).unwrap();
+        assert_eq!(f.host.session.engine().document().strokes().count(), 1);
+        assert!(f.host.session.state().document_file.modified);
+        assert!(f.host.session.command(CommandId::SaveDocumentAs).enabled);
+        assert!(!f.host.session.command(CommandId::ExportDocument).enabled);
+        assert!(!f.host.session.command(CommandId::Undo).enabled);
+        f.act(DocumentAction::Close);
+        let state = f.host.session.state().document_file.clone();
+        f.act(DocumentAction::RespondClose {
+            id: f.request(),
+            epoch: state.epoch,
+            revision: state.revision,
+            decision: CloseDecision::Cancel,
+        });
+        assert!(!f.host.session.state().document_file.close_ready);
+        let source = f.host.session.engine().document().clone();
+        f.invoke(CommandId::SaveDocumentAs);
+        let path = f.path("Recovered drawing.capy");
+        f.act(DocumentAction::Save {
+            id: f.request(),
+            path: path.clone(),
+        });
+        assert!(
+            f.host.session.state().document_file.modified,
+            "only durable completion clears dirty"
+        );
+        f.finish();
+        let project = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
+        assert_eq!(project.document.layers, source.layers);
+        assert!(!f.host.session.state().document_file.modified);
+        f.act(DocumentAction::Close);
+        assert!(f.host.session.state().document_file.close_ready);
+    }
+
     fn pending_import(f: &mut Fixture, id: u64, submitted: bool) {
         let document = f.host.session.engine().document();
         f.service.import = Some(ImageImport {
@@ -974,6 +1119,35 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn decoded_import_waits_for_renderer_and_can_still_be_superseded() {
+        let mut f = Fixture::new();
+        pending_import(&mut f, 1, true);
+        let original = f.host.session.engine().document().clone();
+        let asset = ProjectAsset {
+            extent: [1, 1],
+            format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+            bytes: Arc::from([40u8, 60, 80, 255]),
+        };
+        f.service.worker.shared.mailbox.lock().unwrap().completed =
+            Some(Ok(Completed::Imported(asset)));
+        f.service.poll(&mut f.host).unwrap();
+        assert!(
+            f.service.importing(),
+            "a temporary GPU gap must retain the decode"
+        );
+        assert!(f.host.error.is_none());
+        assert_eq!(f.host.session.engine().document(), &original);
+        // Save must remain able to cancel the import even without a renderer.
+        f.invoke(CommandId::SaveDocument);
+        f.service.poll(&mut f.host).unwrap();
+        assert!(!f.service.importing());
+        assert!(f.host.error.is_none());
+        assert_eq!(f.host.session.engine().document(), &original);
+        f.act(DocumentAction::Cancel { id: f.request() });
+        assert!(!f.host.session.state().document_file.busy);
+    }
+
     #[test]
     fn import_errors_recover_and_superseding_document_request_cancels_picker() {
         let mut f = Fixture::new();
@@ -1260,10 +1434,10 @@ mod gpu_tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction};
     use std::sync::mpsc;
-    fn invoke(host: &mut NativeHost, command: CommandId) {
+    pub(super) fn invoke(host: &mut NativeHost, command: CommandId) {
         host.dispatch(UiAction::Invoke { command }).unwrap();
     }
-    fn request(host: &NativeHost) -> (u32, u64, u64) {
+    pub(super) fn request(host: &NativeHost) -> (u32, u64, u64) {
         let id = host
             .session
             .state()
@@ -1290,7 +1464,7 @@ mod gpu_tests {
         }
         service.poll(host).unwrap();
     }
-    fn image(host: &mut NativeHost) -> layer_render::ReadbackImage {
+    pub(super) fn image(host: &mut NativeHost) -> layer_render::ReadbackImage {
         host.session.frame(0, 0).unwrap();
         // Explicit functional-test readback; project saving never reads the GPU.
         let renderer = host.session.renderer_mut();
@@ -1298,7 +1472,7 @@ mod gpu_tests {
         renderer.take_readback().unwrap().unwrap()
     }
 
-    fn png_pixels(path: &std::path::Path) -> layer_render::ReadbackImage {
+    pub(super) fn png_pixels(path: &std::path::Path) -> layer_render::ReadbackImage {
         let mut reader = png::Decoder::new(File::open(path).unwrap())
             .read_info()
             .unwrap();
@@ -1318,7 +1492,7 @@ mod gpu_tests {
             bytes,
         }
     }
-    fn capture_export(
+    pub(super) fn capture_export(
         service: &mut DocumentService,
         host: &mut NativeHost,
         path: &std::path::Path,
@@ -1756,3 +1930,7 @@ mod gpu_tests {
         std::fs::remove_dir(directory).unwrap();
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "document_recovery_tests.rs"]
+mod recovery_tests;

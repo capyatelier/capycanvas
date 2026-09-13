@@ -2346,3 +2346,146 @@ These checks preserve the accepted native wheel implementation. Permanent GPU
 failure and CPU saving, concurrent document-operation recovery, physical input,
 suspend/driver-reset behavior, installed distribution and 120 Hz acceptance
 remain open. Local profiles, screenshots and binaries are excluded from commits.
+
+### Saving after GPU reconstruction cannot finish
+
+Exhausted reconstruction now preserves the native document and settings services
+until the user saves or approves closing. The render owner stops input admission,
+retires already admitted samples without GPU submission, keeps completed stroke
+history and cancels an unfinished stroke. It then releases rendering resources,
+cancels pending GPU readbacks and filter candidates, and continues CPU document
+operations. An accepted save keeps its worker; an uncaptured PNG export is
+canceled. Source assets and in-memory document history remain owned by the session.
+
+The unavailable-painting screen uses the current theme and exposes File, Save,
+Save As and Preferences. It restores the header even when failure occurs in Zen
+mode, without rewriting the saved Zen preference. Shared command/action policy
+rejects operations that need rendering. The ordinary and retirement input paths
+reuse the same native contact, dialog and chrome arbitration.
+
+Validation:
+
+- 578 ordinary Rust tests pass across engine, host, UI, Windows and workspace;
+  five opt-in hardware tests are excluded from that suite. New CPU-only tests
+  exercise more than one engine batch and an overflowing native input queue,
+  completed versus unfinished strokes, durable archive contents, an accepted
+  save, a waiting PNG export, and transform/filter-candidate cancellation.
+- Strict all-target engine/host/UI/Windows Clippy and C++ input tests pass.
+  Debug and Release builds pass.
+- Debug and Release native document fixtures pass exhausted recovery, Save and
+  Save As, canceled pickers, dirty-close Cancel/Discard, preferences, and clean
+  shutdown. Release also covers failure in Zen. Saved projects reopen and export
+  PNG bytes identical to the pre-failure drawing. The failure screen was inspected.
+- Ordinary repeated-removal and two-window recovery fixtures still pass in
+  Release. The complete Release editor regression passes after the final header
+  and failure-screen changes.
+
+This fixture removes the process-owned D3D12 device and prevents reconstruction
+only in an isolated test host. Arbitrary ABI panics keep their existing fatal
+handling. Concurrent document-operation recovery, physical input, mixed DPI,
+suspend/driver-reset behavior, installed MSIX/clean-machine delivery and 120 Hz
+painting/input latency remain open. No package or performance measurement was
+regenerated for this milestone.
+
+The milestone is integrated with upstream main through 65a9855, including steady
+command-icon presentation during canvas strokes. The merged 578-test suite,
+strict all-target Clippy and Release build pass. The merged native exhausted-
+recovery fixture passes Save/Save As, Zen, Cancel/Discard, durable reopen and
+identical PNG output. The compact picker regression also passes all three shapes,
+synthetic mouse/pen/touch, cancellation, keyboard, menus, slots/swap and retained
+drawer input. This integration preserves the accepted native wheel renderer.
+
+### Document operations overlapping GPU removal
+
+A decoded image could finish while reconstruction temporarily removed the
+renderer. The document service then discarded that import, and successful GPU
+recovery cleared its transient error. The completion now waits in the existing
+bounded mailbox until a usable renderer returns. Canceled or stale imports and
+decoder errors still drain immediately, including after permanent GPU failure.
+
+Actual removal during New/Open also exposed mapped-buffer panics inside document
+preparation. The zero-filled unrestricted-coverage buffer now uses wgpu's normal
+zero initialization, without mapping. Uploads retain the same staging belt and
+copy commands but use its allocation API to return mapping errors. Rendering and
+viewport presentation propagate those errors through the existing host paths.
+The Windows, Web, GTK, Apple and Android presenter callers consume the result;
+no alternative renderer, queue or dependency was introduced.
+
+Four opt-in hardware D3D12 tests pass without worker panics:
+
+- A completed import survives removal before adoption, then temporary renderer
+  absence, even after its original source file is deleted. Restored pixels and
+  one-step Undo/Redo match the pre-removal reference.
+- New/Open candidates are checked both after worker completion and immediately
+  after submission. An obsolete candidate cannot replace the live document;
+  retry succeeds with embedded image data. A save accepted before removal still
+  completes durably and preserves source assets.
+- A captured PNG ticket either produces the exact captured image or reports an
+  error while preserving the existing destination. Export succeeds after GPU
+  replacement and does not acknowledge a document save.
+- A viewport upload on a removed device returns a mapping error without
+  unwinding. Retiring those resources permits reconstruction and identical pixels.
+
+The 579-test ordinary engine/host/UI/Windows/workspace suite passes, with nine
+opt-in hardware tests excluded. Strict all-target engine/host/UI/Windows Clippy,
+renderer-library Clippy and the Web Wasm compile check pass. Nine further rendering
+tests pass with hardware D3D12 selected, covering Navigator presentation,
+selection outlines and pixel transforms. Their two opt-in latency benchmarks
+were not run.
+
+These are process-owned device-removal and functional rendering checks. Physical
+digitizer input, mixed-display and sleep/driver-reset behavior, all native
+picker/input/filter overlaps, installed MSIX/clean-machine delivery, broad visual
+acceptance and 120 Hz painting/input latency remain separate. The other native
+presenter callers were mechanically updated and reviewed; their platform builds
+are not established by this Windows validation. No package was regenerated.
+
+Normal Debug and Release builds pass. The Debug native document fixture passes
+repeated reconstruction; the Release exhausted-recovery fixture passes Save,
+Save As, Cancel/Discard, restored Zen preferences, durable reopen and identical
+PNG output. The complete Release editor fixture also passes. A fixture race on
+reopen was corrected: it now waits for asynchronous workspace restoration before
+checking Zen, and for a visible header before invoking File. The same failed
+window successfully exited Zen and opened File during diagnosis; no production
+UI change was needed for that race.
+
+Integration with upstream main through 2142149 retains the native workspace
+lease-reclamation and included-layout history fixes. The combined suite passes
+581 ordinary tests, strict Clippy, the Web Wasm compile check and a normal
+Release build. The merged Release exhausted-recovery document fixture, workspace
+manager/starting-layout/history/restart fixture and two-window actual-removal
+fixture all pass with clean shutdown.
+
+### Filter loading across GPU reconstruction
+
+Native filter loading now checks actual D3D12 removal before submitting an
+acquired package. It keeps the existing bounded source mailbox until the
+replacement renderer is available. If GPU recovery is exhausted, pending reads
+report a failure immediately, completed file results are discarded and new loads
+are rejected. The read can finish without delaying access to saving. Shared
+validation cancellation preserves the current catalog, embedded programs and
+parameter values. No production queue, pause protocol or dependency was added.
+
+Three new opt-in hardware D3D12 checks pass: removal after file transport starts,
+removal after validation submission but before publication, and cancellation after
+exhausted recovery. Deleting the original package files proves that reconstruction
+uses retained bytes. Successful replacement matches uninterrupted pixels and
+one-step Undo/Redo while preserving a live parameter value; failed recovery leaves
+the source document unchanged. Device selection/removal helpers are shared with
+the document recovery tests. An ordinary regression covers pending reads and
+acquired packages during suspension, rejected new requests and late completion.
+
+The Windows ordinary suite passes 103 tests with 11 opt-in hardware tests excluded;
+strict all-target Windows Clippy and normal Debug/Release native builds pass.
+
+The four document recovery hardware tests pass with the shared helpers. The
+Release native runtime-filter fixture passes picker/previews, live WGSL and
+metadata replacement, retained parameter values, invalid WGSL and missing-module
+rejection, retry and clean shutdown. The Release exhausted-recovery document
+fixture also passes Save/Save As, canceled pickers, close decisions, restored Zen
+preferences, durable reopen and identical exported pixels.
+
+Actual native queued pointer overlap, physical pen and mixed-display acceptance,
+sleep/driver-reset behavior, installed MSIX/clean-machine checks, remaining visual
+review and 120 Hz painting/input latency remain open. No package or performance
+measurement was regenerated for this milestone.

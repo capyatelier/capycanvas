@@ -105,6 +105,115 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Native docking and contact identity — 2026-09-13
+
+Both hosts pass drawer-tab reorder, tear-off, redock and whole-group tear-off,
+collapsed/nested drawer navigation, and panel configuration followed by a live
+group drag. The connected iPad also passes held toolbar tiles with exact
+Undo/Redo and attached-column width/split resizing with history. Resulting panel
+captures retain readable controls and the accepted compact Color appearance.
+
+The original Mac drawer test failed at its first reorder. Native event tracing
+showed consecutive injected mouse-down events with the same event number zero;
+the adapter reused the preceding collapsed icon's hold policy for the drawer
+tab. AppKit now compares the mouse-down event object shared by its pan and press
+recognizers. This preserves native hold/slop and shared Rust drag/history rules.
+An unreachable event-type branch is removed; tablet subtype classification
+remains. Temporary diagnostic code is removed and the unchanged full Mac
+drawer workflow passes with zero failures or skips.
+
+The AppKit workspace fixture covers mouse and pen with both increasing and
+repeated zero event counters, immediate drawer-tab movement through intermediate
+points, exact Undo/Redo, held tile menus/release, collapsed-icon tear-off and
+focus cancellation on both Apple presets. It now mounts the shared popup host.
+Event round-trip checks tolerate only sub-millionth-point floating-point
+rounding; button, event, window and tablet-subtype checks remain. Separate full
+editor and real-canvas diagnostic fixtures also pass. Injected AppKit tablet
+events do not establish physical digitizer acceptance.
+
+Native layer and workspace-list checks pass on both presets. They retain pen
+hold/menu continuation, immediate mouse rows and pen grips, shared order/history,
+covered-row rejection, keyboard menus, scrolling, focus loss and source-removal
+checks. The workspace-list fixture now mounts the shared popup host, resolving
+its earlier keyboard-menu failure without changing product menu behavior.
+The final signed Mac batch passes all four workflows with zero failures or
+skips: drawer docking, panel configuration/live dragging, collapsed/nested
+drawers and workspace-switcher order/pin persistence across restart.
+
+The panel-control test now scopes duplicate Color controls to their popup and
+finds the current group through the visible Brush Size tab. It no longer relies
+on an obsolete preset group ID. Both signed iteration-28 builds pass; the iPad
+production executable is identical to the validated, installed iteration-23 app.
+All original failures, later passes, diagnostic cleanup and restored review
+state remain under `artifacts/apple-docking-workflows-v1/`. After the user
+opened Files, the `files-unlocked-v28` follow-up reached the visible export
+picker without an authentication prompt. XCTest reported no usable hit point
+for its remote Cancel element; tapping did not dismiss the picker and the test
+failed. The review namespace was restored and the artist descriptor is
+unchanged. Cancellation remains unverified, with no unlock question pending.
+The full feature, visual, physical-input, lifecycle and sustained-performance
+gates remain open.
+
+Before publication, main advanced through `688fd76`; the clean integration
+preserves milestone `d520d49` and all recovery stashes. Shared GPU upload
+mapping failures now propagate to the host, including Apple's initial blank
+presentation. Both signed iteration-29 builds pass. Mac mouse drawing,
+Undo/Redo and layers, and iPad Metal launch/layers each pass their native test
+with no failures or skips. The current iPad review app and runner are installed,
+the saved namespace is restored and the artist descriptor is unchanged.
+
+The merged suites pass 42 Apple, 25 host, 344 UI and 118 GPU checks, with 19
+existing hardware/benchmark skips. The strict filter-reference check still
+fails at maximum channel error 47. Its input, output and reference images and
+per-case error table exactly match the retained Metal baseline; no new pixel
+regression is observed and no oracle or tolerance is changed. Evidence is under
+`artifacts/apple-main-integration-688fd76/` and the docking folder's
+`integrated-v29/`.
+
+## Workspace recovery and editor workflows — 2026-09-13
+
+Fast native restarts now reclaim abandoned workspace ownership once every prior
+client has exited. A shared OS file lock protects live clients; the first new
+opener clears abandoned claims transactionally without shortening leases or
+adding a platform retry. A real killed-process regression covers saved contents,
+concurrent owners and stale fencing. The lock sidecar is protected from backup
+overwrite. Built-in Layout History now enables restoration while retaining
+name/deletion protections and owner/current/busy checks.
+
+Mac and the connected iPad pass settings/workspace restart, completed artwork
+recovery and independent windows. Mac also passes New/Export cancellation;
+the iPad export check awaits user input at the system Files prompt. Interrupted
+background/expiration and provider-delivery acceptance remain open.
+
+Both hosts pass Navigator/Diagnostics, numeric tool controls, system status,
+Layout History, filters and shortcut editing. Native curve/gradient labels now
+include point/stop counts; ineffective separate value attributes are removed.
+Shortcut search initially lost a character while typing. Settings, shortcut and
+filter search now reuse the existing local-draft text helper; the old
+workspace-only helper is removed. The full shortcut workflow now captures an
+existing accelerator, replaces its binding and executes the new action in the
+editor. Toolbar search, creation, rename, duplication and deletion also pass.
+
+After integrating main through `b56bca3`, both signed builds pass and each host
+passes six focused workflows with no failures or skips: Color, filters,
+shortcuts, toolbar editing, restart and history. The shared regression passes
+476 tests, with one existing hardware-only host check ignored. Six live Color
+captures pass the unchanged oracle, with guide error at most one channel level
+and field error zero. A final pull through `65a9855` retains steady command styling
+while drawing; the 410 Apple/host/UI regressions and both signed builds pass.
+Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers also pass their
+focused native follow-ups. The subsequent integration through `19d6722` also
+passes both signed builds, both native follow-ups, 411 Apple/host/UI checks and
+the focused CPU input-retirement regression. This retains the accepted Color
+appearance; full-editor visual and physical-input/performance acceptance remain open.
+
+Installed-device XCTest now uses the documented destination-artifact setup;
+normal launch/relaunch works and the obsolete Color attach branch is removed.
+The latest review app and runner are installed on the iPad, its saved namespace
+is restored, and artist app data remains intact. Private evidence and earlier
+failures remain under `artifacts/apple-lifecycle-workflows-v1/` and
+`artifacts/apple-feature-workflows-v1/`.
+
 ## Compact Color panel — 2026-09-13
 
 Both Apple editors now project the shared compact Color layout: Okhsv circle,
