@@ -231,65 +231,32 @@ pub(super) fn from_rgb(rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
     ]
 }
 
-/// The maximum-saturation envelope jumps near RGB blue in the reference gamut
-/// approximation. A hue guide should not display that saturation discontinuity.
-/// Join through RGB blue with monotone cubic ramps in this small neighborhood;
-/// the actual Okhsv conversion, field and stored coordinates remain unchanged.
+/// A smooth hue guide from the conservative C/L curve in Ottosson's Okhsl
+/// `get_ST_mid`. A 5% margin keeps this approximation away from the lower sRGB
+/// boundary. Normalize linear RGB to keep the brightest channel at one; scaling
+/// all channels together preserves Oklab hue. No cusp solver or RGB clipping is
+/// needed, including around blue. This is only the guide: Okhsv picking, field
+/// rendering and saved coordinates retain the full gamut.
+fn hue_preview_linear(hue: f32) -> [f64; 3] {
+    let angle = (hue.rem_euclid(360.) as f64).to_radians();
+    let (b, a) = angle.sin_cos();
+    let slope = 0.95
+        * (0.11516993
+            + 1. / (7.44778970
+                + 4.15901240 * b
+                + a * (-2.19557347
+                    + 1.75198401 * b
+                    + a * (-2.13704948 - 10.02301043 * b
+                        + a * (-4.24894561 + 5.38770819 * b + 4.69891013 * a)))));
+    let rgb = from_lab([1., slope * a, slope * b]);
+    let maximum = rgb.into_iter().fold(0., f64::max);
+    rgb.map(|v| v / maximum)
+}
 pub(super) fn hue_preview(hue: f32) -> [f32; 3] {
-    const LEFT: f32 = 258.;
-    const BLUE: f32 = 264.05203;
-    const RIGHT: f32 = 268.;
-    let hue = hue.rem_euclid(360.);
-    if !(LEFT..=RIGHT).contains(&hue) {
-        return to_rgb([hue, 100., 100.]);
-    }
-    struct Anchor {
-        color: [f32; 3],
-        slope: [f32; 3],
-    }
-    static ENDS: std::sync::LazyLock<[Anchor; 2]> = std::sync::LazyLock::new(|| {
-        [LEFT, RIGHT].map(|h| {
-            let before = to_rgb([h - 0.01, 100., 100.]);
-            let after = to_rgb([h + 0.01, 100., 100.]);
-            Anchor {
-                color: to_rgb([h, 100., 100.]),
-                slope: std::array::from_fn(|i| (after[i] - before[i]) / 0.02),
-            }
-        })
-    });
-    let (a, b, slopes, width, t) = if hue <= BLUE {
-        (
-            ENDS[0].color,
-            [0., 0., 1.],
-            [ENDS[0].slope, [0.; 3]],
-            BLUE - LEFT,
-            (hue - LEFT) / (BLUE - LEFT),
-        )
-    } else {
-        (
-            [0., 0., 1.],
-            ENDS[1].color,
-            [[0.; 3], ENDS[1].slope],
-            RIGHT - BLUE,
-            (hue - BLUE) / (RIGHT - BLUE),
-        )
-    };
-    std::array::from_fn(|i| {
-        let delta = b[i] - a[i];
-        if delta.abs() < 1e-6 {
-            return a[i];
-        }
-        let m0 = (slopes[0][i] * width / delta).clamp(0., 3.) * delta;
-        let m1 = (slopes[1][i] * width / delta).clamp(0., 3.) * delta;
-        ((2. * t * t * t - 3. * t * t + 1.) * a[i]
-            + (t * t * t - 2. * t * t + t) * m0
-            + (-2. * t * t * t + 3. * t * t) * b[i]
-            + (t * t * t - t * t) * m1)
-            .clamp(0., 1.)
-    })
+    hue_preview_linear(hue).map(|v| encoded(v) as f32)
 }
 
-/// Adaptive encoded-sRGB stops follow the hue guide, including its blue ramp.
+/// Adaptive encoded-sRGB stops follow the smooth interior hue guide.
 pub(super) fn hue_stops() -> Vec<super::ColorHueStop> {
     use super::ColorHueStop;
     fn stop(hue: f32) -> ColorHueStop {
@@ -407,28 +374,57 @@ mod tests {
         }
     }
     #[test]
-    fn hue_preview_removes_the_blue_seam_without_changing_conversion() {
-        let mut before = hue_preview(257.99);
-        for i in 1..=10020 {
-            let hue = 257.99 + i as f32 * 0.001;
+    fn hue_preview_stays_in_gamut_and_continuous_at_every_hue() {
+        let mut before = hue_preview(0.);
+        for i in 1..=360000 {
+            let hue = i as f32 * 0.001;
+            let linear = hue_preview_linear(hue);
+            // Check before transfer encoding: clamping must not conceal errors.
+            assert!(
+                linear
+                    .into_iter()
+                    .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
+            );
+            assert_eq!(linear.into_iter().fold(0., f64::max), 1.);
             let color = hue_preview(hue);
             assert!(
                 color
                     .into_iter()
                     .zip(before)
-                    .all(|(a, b)| (a - b).abs() < 0.1 / 255.),
+                    .all(|(a, b)| (a - b).abs() < 0.01 / 255.),
                 "hue {hue}: {before:?} -> {color:?}"
             );
+            let actual_hue = to_oklch(color, 0.)[2];
+            let difference = (actual_hue - hue + 180.).rem_euclid(360.) - 180.;
+            assert!(difference.abs() < 0.001, "hue {hue}: {actual_hue}");
             before = color;
         }
-        assert_eq!(hue_preview(264.05203), [0., 0., 1.]);
-        for hue in [0., 120., 240., 257., 269., 300., 359.] {
-            assert_eq!(hue_preview(hue), to_rgb([hue, 100., 100.]));
+        assert_eq!(hue_preview(360.), hue_preview(0.));
+        assert_eq!(hue_preview(-60.), hue_preview(300.));
+    }
+    #[test]
+    fn hue_preview_matches_independent_interior_curve_samples() {
+        // Evaluated with the author's JavaScript get_ST_mid, Oklab matrix and
+        // transfer function, using 0.95 * C/L and normalizing linear RGB.
+        for (hue, expected) in [
+            (0., [1., 0.163655202, 0.550018377]),
+            (29.233885, [1., 0.31651658, 0.251919346]),
+            (60., [1., 0.580053495, 0.129344782]),
+            (142.49534, [0.515005847, 1., 0.4830821]),
+            (180., [0.259638019, 1., 0.888443341]),
+            (240., [0.133308935, 0.695515072, 1.]),
+            (264.05203, [0.230930863, 0.455261708, 1.]),
+            (300., [0.605122904, 0.236994203, 1.]),
+        ] {
+            let actual = hue_preview(hue);
+            assert!(
+                actual
+                    .into_iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() < 0.000002),
+                "hue {hue}: {actual:?} != {expected:?}"
+            );
         }
-        // The existing canonical conversion (and saved coordinate meaning) is
-        // deliberately retained; the ring is a smoothly varying hue guide.
-        assert!(to_rgb([264., 100., 100.])[1] > 0.2);
-        assert!(hue_preview(264.)[1] < 0.01);
     }
     #[test]
     fn hue_gradient_matches_preview_around_cusps() {

@@ -108,23 +108,26 @@ For the compact Color panel, run
 This exercises native mouse/touch picking, overlapping paint swatches, the
 visible swap button and its context menu, both shape alternatives, readout
 cycles and keyboard activation. It checks 144/160/200/280/360 px panels in both
-themes, all three shapes and HSB (circle/square), HLS (triangle),
-OKLCH/RGB readouts, retaining screenshots and geometry. The entire control occupies one
+themes, all three shapes and their two readouts (shape units or RGB), retaining
+screenshots and geometry. The entire control occupies one
 square and compresses in short docks; `native_default_workspace` covers that
 shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
-is the design minimum. Values are read-only; tap the model label to cycle between
-HSB/HLS, OKLCH and RGB independently of the circle/square/triangle field. Two bare shape
+is the design minimum. Values are read-only; tap the model label to toggle between
+the shape's units and RGB. Two bare shape
 buttons follow the upper-right arc; the swap button sits beside the overlapping
 paints. Right-click or hold either paint swatch (or use Shift+F10 while focused)
 also opens the swap action. The readout has no tooltip or hover decoration.
 Picker coordinates are retained per paint so hue changes, drags through black,
 alpha edits, swaps and saved-state reloads do not lose powerless components.
-The circle uses a smooth elliptical projection of the full Okhsv square. Its
-ring rotates 24° counterclockwise to place RGB blue at the bottom, and its blue
-hue preview uses a short smooth ramp across the reference gamut-boundary jump.
-Actual Okhsv conversion and field sampling are unchanged by that preview ramp.
-Selecting circle defaults to OKLCH, square to HSB and triangle to HLS. The label
-cycles readout models independently until another shape is selected. All readouts
+The circle uses a smooth elliptical projection of the full Okhsv square, with
+extra spacing between the disc and hue ring. Its
+ring rotates 24° counterclockwise to place the blue hue at the bottom. Its hue
+guide uses the smooth C/L curve from Okhsl with a 5% margin, then scales linear
+RGB so the brightest channel is one. This preserves hue and softens the colors
+without the maximum-saturation boundary jump. Actual Okhsv conversion and field
+sampling retain their full range.
+Selecting a shape always restores its units: OKLCH for circle, HSB for square,
+HLS for triangle, including when the previous readout was RGB. All readouts
 use fixed digit cells and arc positions so digit-count changes do not move the values.
 Square remains HSV and triangle remains HLS.
 Switching shapes preserves sRGB paint; each model retains powerless coordinates.
@@ -132,7 +135,9 @@ The conversions adapt [Ottosson’s Okhsv reference](https://bottosson.github.io
 with explicit neutral/black handling and a more accurate blue gamut boundary.
 OKLCH shows lightness percent, chroma to three decimal places and hue degrees
 ([conversion reference](https://www.w3.org/TR/css-color-4/#oklch)). Neutral colors
-retain the picker's hue. Saved Lab readout preferences migrate to OKLCH.
+retain the picker's hue. Shape units are the default.
+Saved HSB/Lab/OKLCH preferences migrate to shape units;
+saved RGB preferences remain RGB.
 
 The Okhsv field stays on the CPU. Its raster reuses an interpolated saturation
 curve and sRGB transfer table; picking keeps full-precision conversion. Hosts

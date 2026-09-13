@@ -125,7 +125,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
           fieldContext.putImageData(new ImageData(clamped,fieldPixels,fieldPixels),0,0);
         }
         ctx.save();
-        if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,inner*.94,0,2*Math.PI);ctx.clip();}
+        if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,g.disc_radius*side,0,2*Math.PI);ctx.clip();}
         ctx.drawImage(field,0,0,side,side);ctx.restore();
       }
       // The ring depends on the color model and size, never the selected hue.

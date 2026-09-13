@@ -80,16 +80,19 @@ establish complete editor parity or hardware performance.
 For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
 for mouse/pen input, readout and shape buttons, swap, keyboard activation,
 cancellation, and both-theme captures at 144/160/200/280/360 px panel widths.
-All three shapes and HSB (circle/square), HLS (triangle), OKLCH/RGB readouts
-fit one square;
+All three shapes and their two readouts (shape units or RGB) fit one square;
 the four-tile minimum and short docks retain every control. GTK and Web use the
 same Rust allocations, coordinate memory and smooth elliptical Okhsv circle raster.
-The circle's hue guide rotates 24° counterclockwise and smooths the narrow blue
-gamut-boundary seam; actual Okhsv picking is unchanged. Selecting circle defaults
-to OKLCH (lightness %, chroma to three decimals, hue °); square defaults to HSB
-and triangle to HLS. Tapping the label cycles HSB/HLS, OKLCH and RGB. All readouts
+The disc has extra spacing inside the hue ring, from the shared geometry.
+The circle's hue guide rotates 24° counterclockwise and uses Okhsl's smooth C/L
+curve with a 5% margin. Normalizing linear RGB preserves hue and softens the ring
+without the maximum-saturation boundary jump; actual Okhsv picking is unchanged.
+Selecting a shape always restores its units: OKLCH for circle (lightness %,
+chroma to three decimals, hue °), HSB for square, HLS for triangle. Tapping the
+label toggles between those units and RGB. Shape units are the default;
+saved RGB preferences remain RGB. All readouts
 use fixed digit cells and stable arc positions. The focused test checks actual
-HSB/OKLCH glyph transforms across 9/10/100 at three widths.
+HSB/HLS/OKLCH glyph transforms across 9/10/100 at three widths.
 Square and triangle retain their original
 color models; switching shapes preserves the selected sRGB paint. Regression cases
 include dragging through different black positions and then changing hue.

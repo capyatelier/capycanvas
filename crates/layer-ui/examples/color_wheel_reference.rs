@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let mut sample = state.clone();
             if let Some(part) = part {
-                // The hue ring always displays fully saturated, opaque colors.
+                // The hue ring displays its opaque guide, independently of the paint.
                 if part == ColorWheelPart::Hue {
                     let hue = if request.shape.is_some() {
                         state.wheel_hue_color(state.wheel_hue_at(&geometry, point))

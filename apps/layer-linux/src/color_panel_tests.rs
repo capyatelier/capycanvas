@@ -147,14 +147,8 @@ fn native_color_panel_input() {
                         "{width}px hue {hue} unobscured"
                     );
                 }
-                assert_eq!(state(&w).colors.readout, if shape == layer_ui::ColorShape::Circle {
-                    layer_ui::ColorReadout::Oklch
-                } else { layer_ui::ColorReadout::Hsb });
-                for model in [
-                    layer_ui::ColorReadout::Hsb,
-                    layer_ui::ColorReadout::Oklch,
-                    layer_ui::ColorReadout::Rgb,
-                ] {
+                assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Shape);
+                for model in [layer_ui::ColorReadout::Shape, layer_ui::ColorReadout::Rgb] {
                     while state(&w).colors.readout != model {
                         w.dispatch(UiAction::Color {
                             action: layer_ui::ColorAction::ToggleReadout,
@@ -321,6 +315,9 @@ fn native_color_panel_input() {
             layer_ui::ColorShape::Triangle,
             layer_ui::ColorShape::Circle,
         ] {
+            if state(&w).colors.readout != layer_ui::ColorReadout::Rgb {
+                w.dispatch(UiAction::Color { action: layer_ui::ColorAction::ToggleReadout });
+            }
             let index = state(&w)
                 .colors
                 .other_shapes()
@@ -330,6 +327,12 @@ fn native_color_panel_input() {
             let p = locate(&format!("color-shape-{index}"), 0.5, 0.5);
             gesture(p, p);
             assert_eq!(state(&w).colors.wheel_shape(), expected);
+            assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Shape);
+            assert_eq!(state(&w).colors.readout_label(), match expected {
+                layer_ui::ColorShape::Circle => "OKLCH",
+                layer_ui::ColorShape::Square => "HSB",
+                layer_ui::ColorShape::Triangle => "HLS",
+            });
         }
         let before = state(&w).colors;
         let p = locate("color-swap", 0.5, 0.5);
@@ -369,7 +372,7 @@ fn native_color_panel_input() {
             }
         }
         let before = state(&w).colors.rgba();
-        for _ in 0..3 {
+        for _ in 0..2 {
             let expected = state(&w).colors.readout.next();
             let p = locate("color-readout", 0.12, 0.07);
             gesture(p, p);
