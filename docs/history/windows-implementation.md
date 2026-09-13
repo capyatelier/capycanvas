@@ -2448,3 +2448,10 @@ reopen was corrected: it now waits for asynchronous workspace restoration before
 checking Zen, and for a visible header before invoking File. The same failed
 window successfully exited Zen and opened File during diagnosis; no production
 UI change was needed for that race.
+
+Integration with upstream main through 2142149 retains the native workspace
+lease-reclamation and included-layout history fixes. The combined suite passes
+581 ordinary tests, strict Clippy, the Web Wasm compile check and a normal
+Release build. The merged Release exhausted-recovery document fixture, workspace
+manager/starting-layout/history/restart fixture and two-window actual-removal
+fixture all pass with clean shutdown.
