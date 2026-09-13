@@ -356,13 +356,13 @@ fn native_color_panel_input() {
                     bounds.y() + origin[1] + point[1],
                 ];
                 gesture(locate("color-wheel", 0.5, 0.5), p);
-                let values = state(&w).colors.components();
+                let values = state(&w).colors.wheel_components();
                 assert!(
                     (values[1] - s * 100.).abs() < 2. && values[2] < 2.,
                     "touch={touch}: {shape:?} {values:?}"
                 );
                 gesture(on_ring(90.), on_ring(270.));
-                assert!((state(&w).colors.components()[1] - values[1]).abs() < 0.001);
+                assert!((state(&w).colors.wheel_components()[1] - values[1]).abs() < 0.001);
             }
         }
         let before = state(&w).colors.rgba();

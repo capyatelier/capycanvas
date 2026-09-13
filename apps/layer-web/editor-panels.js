@@ -38,7 +38,9 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
           }
         }
       }
-      for (const {node,kind,index} of rows) node.setAttribute("aria-pressed", String(view[kind][index].selected));
+      for (const {node,kind,index} of rows) {
+        const pressed=String(view[kind][index].selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
+      }
     };
   }
   function toolSettings(root) {
@@ -78,52 +80,73 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);swap.append(icon("color-swap"));stage.append(swap);
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
-    let view,layout,paintKey="",fieldKey="",field=null;
+    let view,layout,layoutWidth=0,paintKey="",fieldKey="",ringKey="";
+    const field=document.createElement("canvas"),ring=document.createElement("canvas");
+    const ctx=wheel.getContext("2d",{willReadFrequently:true});
+    const fieldContext=field.getContext("2d",{willReadFrequently:true}),ringContext=ring.getContext("2d",{willReadFrequently:true});
     const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
     function draw() {
-      if(!view||stage.clientWidth<128)return;
-      layout=app.color_panel_layout(stage.clientWidth);
-      place(wheel,layout.wheel);
-      choices.forEach(({slot,node})=>place(node,layout[slot]));
-      shapes.forEach((node,i)=>{place(node,layout.shapes[i]);node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
-      place(swap,layout.swap);place(readout,layout.readout);
+      const width=stage.clientWidth;if(!view||width<128)return;
+      if(width!==layoutWidth){
+        layoutWidth=width;layout=app.color_panel_layout(width);
+        place(wheel,layout.wheel);
+        choices.forEach(({slot,node})=>place(node,layout[slot]));
+        shapes.forEach((node,i)=>place(node,layout.shapes[i]));
+        place(swap,layout.swap);place(readout,layout.readout);
+      }
+      shapes.forEach((node,i)=>{node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
       const half=layout.readout[2],r=layout.wheel[2]*view.geometry.outer+2;
       // The readout's curved hit area cannot intercept hue picking underneath.
       readout.style.clipPath=`path("M0 0H${half}V${half-r}A${r} ${r} 0 0 0 ${half-r} ${half}H0Z")`;
       const side=layout.wheel[2],scale=Math.min(devicePixelRatio||1,2),pixels=Math.ceil(side*scale);
       const ink=getComputedStyle(readout).color,focus=readout.matches(":focus-visible");
-      const next=JSON.stringify([view,pixels,stage.clientWidth,ink,focus]);if(next===paintKey)return;paintKey=next;
-      wheel.width=wheel.height=pixels;const ctx=wheel.getContext("2d",{willReadFrequently:true});ctx.scale(pixels/side,pixels/side);
+      const next=JSON.stringify([view,pixels,width,ink,focus]);if(next===paintKey)return;paintKey=next;
+      if(wheel.width!==pixels){wheel.width=wheel.height=pixels;}
+      ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/side,pixels/side);
       const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
       if(view.shape==="square") {
         const [x,y,w]=g.square.map(v=>v*side);
         ctx.save();ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();
-        const saturation=ctx.createLinearGradient(x,y,x+w,y);saturation.addColorStop(0,"white");saturation.addColorStop(1,rgba(view.hue_color));ctx.fillStyle=saturation;ctx.fillRect(x,y,w,w);
+        const saturation=ctx.createLinearGradient(x,y,x+w,y);saturation.addColorStop(0,"white");saturation.addColorStop(1,rgba(view.wheel_hue_color));ctx.fillStyle=saturation;ctx.fillRect(x,y,w,w);
         const value=ctx.createLinearGradient(x,y,x,y+w);value.addColorStop(0,"transparent");value.addColorStop(1,"black");ctx.fillStyle=value;ctx.fillRect(x,y,w,w);ctx.restore();
       } else {
-        const key=JSON.stringify([view.shape,view.components[0].value,pixels]);
+        // The smooth disc needs one color sample per logical pixel; bilinear
+        // scaling retains its gradient while ring, clip and markers stay HiDPI.
+        const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
+        const key=JSON.stringify([view.shape,view.wheel_components[0],fieldPixels]);
         if(key!==fieldKey) {
           // Rust produces CPU pixels. Keep this staging canvas in CPU memory;
           // drawing through an extra GPU Canvas 2D surface adds an upload/readback.
-          fieldKey=key;field=document.createElement("canvas");field.width=field.height=pixels;
-          field.getContext("2d",{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(app.color_field_pixels(pixels)),pixels,pixels),0,0);
+          fieldKey=key;if(field.width!==fieldPixels){field.width=field.height=fieldPixels;}
+          const bytes=app.color_field_pixels(fieldPixels);
+          // The Wasm binding already copies its result into owned JS memory.
+          // ImageData can view those same bytes without another full image copy.
+          const clamped=new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+          fieldContext.putImageData(new ImageData(clamped,fieldPixels,fieldPixels),0,0);
         }
         ctx.save();
         if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,inner*.94,0,2*Math.PI);ctx.clip();}
         ctx.drawImage(field,0,0,side,side);ctx.restore();
       }
-      const hue=ctx.createConicGradient(view.hue_start_degrees*Math.PI/180,cx,cy);
-      view.hue_stops.forEach((c,i)=>hue.addColorStop(i/(view.hue_stops.length-1),rgba(c)));
-      ctx.strokeStyle=hue;ctx.lineWidth=outer-inner;ctx.beginPath();ctx.arc(cx,cy,(inner+outer)/2,0,Math.PI*2);ctx.stroke();
+      // The ring depends on the color model and size, never the selected hue.
+      // Retain its raster so a drag only repaints the changing field and markers.
+      const nextRing=JSON.stringify([view.shape,pixels,side,g,view.hue_start_degrees]);
+      if(nextRing!==ringKey){
+        ringKey=nextRing;ring.width=ring.height=pixels;ringContext.scale(pixels/side,pixels/side);
+        const hue=ringContext.createConicGradient(view.hue_start_degrees*Math.PI/180,cx,cy);
+        app.color_hue_stops().forEach(stop=>hue.addColorStop(stop.offset,rgba(stop.color)));
+        ringContext.strokeStyle=hue;ringContext.lineWidth=outer-inner;ringContext.beginPath();ringContext.arc(cx,cy,(inner+outer)/2,0,Math.PI*2);ringContext.stroke();
+      }
+      ctx.drawImage(ring,0,0,side,side);
       const radius=Math.min(10,Math.max(6,side*.04));
-      for(const [p,fill] of [[view.hue_marker,rgba(view.hue_color)],[view.wheel_marker,rgba(view.marker_color)]]) {
+      for(const [p,fill] of [[view.wheel_hue_marker,rgba(view.wheel_hue_color)],[view.wheel_marker,rgba(view.marker_color)]]) {
         ctx.beginPath();ctx.arc(p[0]*side,p[1]*side,radius,0,2*Math.PI);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle="rgba(0,0,0,.5)";ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle="white";ctx.lineWidth=2;ctx.stroke();
       }
       drawReadout(half,scale,ink,focus);
     }
     function drawReadout(half,scale,ink,focus) {
-      numbers.width=numbers.height=Math.ceil(half*scale);
-      const ctx=numbers.getContext("2d",{willReadFrequently:true});ctx.scale(numbers.width/half,numbers.height/half);
+      const pixels=Math.ceil(half*scale);if(numbers.width!==pixels){numbers.width=numbers.height=pixels;}
+      const ctx=numbers.getContext("2d",{willReadFrequently:true});ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/half,pixels/half);
       const radius=layout.readout_radius,family='"Adwaita Sans",system-ui,sans-serif';
       let font=Math.min(12,Math.max(9,half*2*.044));
       ctx.font=`bold ${font}px ${family}`;ctx.fillStyle=ink;ctx.globalAlpha=.9;ctx.fillText(view.readout_label,2,font+1);
@@ -158,8 +181,13 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     root.navigatorDispose=()=>resize.disconnect();
     return ()=>{
       view=app.color_panel();
-      choices.forEach(({slot,node,paint})=>{const swatch=view.swatches.find(s=>s.slot===slot);node.setAttribute("aria-label",swatch.label);node.title=swatch.label;node.setAttribute("aria-pressed",String(swatch.selected));paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`;});
-      shapes.forEach((node,i)=>{const shape=view.other_shapes[i];if(node.dataset.colorShape!==shape){node.dataset.colorShape=shape;node.replaceChildren(icon(`color-${shape}`));}node.title=`Use ${shape==="triangle"?"HLS":"HSV"} ${shape}`;node.setAttribute("aria-label",node.title);});
+      choices.forEach(choice=>{
+        const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
+        if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}
+        const pressed=String(swatch.selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
+        paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`;
+      });
+      shapes.forEach((node,i)=>{const shape=view.other_shapes[i];if(node.dataset.colorShape!==shape){node.dataset.colorShape=shape;node.replaceChildren(icon(`color-${shape}`));}node.title=`Use ${shape==="triangle"?"HLS":shape==="circle"?"Okhsv":"HSV"} ${shape}`;node.setAttribute("aria-label",node.title);});
       readout.setAttribute("aria-label",view.readout_description);draw();
     };
   }
@@ -177,7 +205,12 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     overview.addEventListener("pointermove",e=>{if(contact===e.pointerId)send(e,"move");});
     overview.addEventListener("pointerup",e=>{if(contact===e.pointerId){send(e,"up");contact=null;}});
     for(const name of ["pointercancel","lostpointercapture"])overview.addEventListener(name,e=>{if(contact===e.pointerId){send(e,"cancel");contact=null;}});
-    return()=>{for(const[id,node]of buttons){const c=state().commands.find(c=>c.id===id);if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;}queuePositions();};
+    let commandsKey="";
+    return()=>{
+      const commands=buttons.map(([id])=>state().commands.find(c=>c.id===id)),key=JSON.stringify(commands);
+      if(key!==commandsKey){commandsKey=key;buttons.forEach(([,node],i)=>{const c=commands[i];if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;});}
+      queuePositions();
+    };
   }
   function measurePositions() {
     let resized=false;

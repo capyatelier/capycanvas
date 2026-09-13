@@ -67,7 +67,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
       assert.equal(bg.width,transparent.width);
       for(const model of ['hsb','lab','rgb']) {
         while((await read()).readout!==model)await send({type:'color',action:{op:'toggle_readout'}});
-        assert.equal(await evaluate('layerApp.app.color_panel().readout_label'),model==='hsb'?(shape==='triangle'?'HLS':'HSB'):model==='lab'?'Lab':'RGB');
+        assert.equal(await evaluate('layerApp.app.color_panel().readout_label'),model==='hsb'?(shape==='triangle'?'HLS':shape==='circle'?'Okhsv':'HSB'):model==='lab'?'Lab':'RGB');
         const name=`${theme}-${width}-${shape}-${model}`;reports.push({name,shape,model,...frames});
         const clip={x:frames.root.x-8,y:frames.root.y-44,width:frames.root.width+16,height:frames.root.height+52};
         for(const [suffix,scale] of [['',1],['-1x',.5]]) {
@@ -83,6 +83,31 @@ export async function checkColorPanel({call,evaluate,settle}) {
   assert.ok(await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(root)}),panel=root.closest('.panel').getBoundingClientRect(),stage=root.querySelector('.color-wheel-square').getBoundingClientRect();return stage.bottom<=panel.bottom&&stage.width>=128&&Math.abs(stage.width-stage.height)<1;})()`),'Short dock retains the entire square');
   await resizePanel(100,180);
   assert.equal(Math.round((await bounds(`${root}`)).width),128,'Four-tile width is enforced');
+  await setShape('circle');
+  // A smooth color field can use logical-pixel sampling while its clip, ring and
+  // markers stay HiDPI. Compare every interior channel with a full 2x raster at
+  // minimum, medium and large sizes, including both sides of Okhsv's blue cusp.
+  const sampling=await evaluate(`(()=>{
+    const a=layerApp.app,results=[];
+    for(const low of [108,236,312])for(const h of [0,60,120,180,240,264.05,264.1,300]){
+      const angle=(h-150)*Math.PI/180;
+      layerApp.dispatch({type:'color',action:{op:'pick_wheel',part:'hue',size:1,point:[.5+.43*Math.cos(angle),.5+.43*Math.sin(angle)]}});
+      const high=low*2,reference=a.color_field_pixels(high),bytes=a.color_field_pixels(low);
+      const src=document.createElement('canvas'),dst=document.createElement('canvas');src.width=src.height=low;dst.width=dst.height=high;
+      src.getContext('2d',{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),low,low),0,0);
+      const ctx=dst.getContext('2d',{willReadFrequently:true});ctx.drawImage(src,0,0,high,high);
+      const actual=ctx.getImageData(0,0,high,high).data,radius=a.color_panel().geometry.inner*.94*high-3;
+      let maximum=0,channels=0;
+      for(let y=0;y<high;y++)for(let x=0;x<high;x++){
+        if((x+.5-high/2)**2+(y+.5-high/2)**2>=radius*radius)continue;
+        const i=(y*high+x)*4;
+        for(let j=0;j<3;j++){maximum=Math.max(maximum,Math.abs(actual[i+j]-reference[i+j]));channels++;}
+      }
+      results.push({low,h,maximum,channels});
+    }return results;
+  })()`);
+  await writeFile(`${output}/raster-resolution.json`,JSON.stringify(sampling,null,2));
+  for(const sample of sampling)assert.ok(sample.maximum<=2,`Disc interpolation: ${JSON.stringify(sample)}`);
   if(native)await writeFile(`${inputDir}/ready`,'ready');
   for(const device of native?['mouse','touch','pen']:['mouse','pen']) {
     console.log('Color panel input:',device);
@@ -112,14 +137,13 @@ export async function checkColorPanel({call,evaluate,settle}) {
     }
     for(const shape of ['circle','square'])for(const saturation of [20,80]) {
       await setShape(shape);
-      for(const [index,value] of [[1,saturation],[2,0]])await send({type:'color',action:{op:'component',index,value}});
-      const target=await evaluate('layerApp.app.color_panel().wheel_marker');
+      const target=await evaluate(`(()=>{const g=layerApp.app.color_panel().geometry,s=${saturation}/100;if(${JSON.stringify(shape)}==='circle'){const a=2*s-1,r=g.inner*.94;return[g.center[0]+r*a/Math.SQRT2,g.center[1]+r*Math.sqrt(1-a*a/2)];}return[g.square[0]+s*g.square[2],g.square[1]+g.square[2]];})()`);
       await send({type:'set_color',rgba:[.2,.72,.58,1]});
       await gesture(device,await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,...target));
-      const values=await evaluate('layerApp.app.color_panel().components.map(c=>c.value)');
+      const values=await evaluate('layerApp.app.color_panel().wheel_components');
       assert.ok(Math.abs(values[1]-saturation)<2&&values[2]<2,`${device}: ${shape} retains black position: ${values}`);
       await gesture(device,await point(`${root} .color-wheel`,.935,.5),await point(`${root} .color-wheel`,.5,.935));
-      assert.ok(Math.abs((await evaluate('layerApp.app.color_panel().components[1].value'))-values[1])<.001,'Hue at black preserves saturation');
+      assert.ok(Math.abs((await evaluate('layerApp.app.color_panel().wheel_components[1]'))-values[1])<.001,'Hue at black preserves saturation');
     }
   }
   // The readout has neither a tooltip nor hover decoration; native key activation remains.

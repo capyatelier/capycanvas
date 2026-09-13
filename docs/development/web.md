@@ -80,10 +80,19 @@ establish complete editor parity or hardware performance.
 For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
 for mouse/pen input, readout and shape buttons, swap, keyboard activation,
 cancellation, and both-theme captures at 144/160/200/280/360 px panel widths.
-All three shapes and HSB (HLS for the triangle)/Lab/RGB readouts fit one square;
+All three shapes and Okhsv (circle), HSB (square), HLS (triangle), Lab/RGB readouts
+fit one square;
 the four-tile minimum and short docks retain every control. GTK and Web use the
-same Rust allocations, coordinate memory and circle raster. Regression cases
+same Rust allocations, coordinate memory and smooth elliptical Okhsv circle raster.
+The circle’s hue ring also uses Okhsv. Square and triangle retain their original
+color models; switching shapes preserves the selected sRGB paint. Regression cases
 include dragging through different black positions and then changing hue.
+The CPU raster reuses saturation/transfer curves and logical-pixel samples;
+ring, clip and markers retain display resolution. The focused test compares
+the interpolated field against a full 2× raster across sizes and hue cusps.
+The host retains staging canvases and the static ring, fetching hue stops only
+when rebuilding that ring. Measure both raster cost and complete DOM updates
+on the target device: a raster below 8.33 ms does not establish 120 Hz presentation.
 On Linux, use
 `LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/web" bash tools/performance/workspace-motion.sh web --color-panel`
 to verify mouse and touch through the private Mutter compositor, plus pen through

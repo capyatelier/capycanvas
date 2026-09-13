@@ -101,5 +101,25 @@ print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("viewport dimensions do not match", result.stderr)
 
+    def test_gamut_cusp_excludes_only_its_subpixel_fringe(self):
+        model = {"geometry": {"center": [0.5,0.5]}, "hue_start_degrees": 0,
+            "wheel_hue_stops": [
+                {"offset": 0.625, "color": [0,0,1]},
+                {"offset": 0.6250001, "color": [0,0.2,1]}]}
+        self.oracle.write_text(self.oracle.read_text().replace('"model": {',
+            '"model": {' + json.dumps(model)[1:-1] + ','))
+        self.image.putpixel((11,11), (255,90,128,255))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(report["excluded_cusp_pixels"], 0)
+        self.image.putpixel((22,11), (255,64,137,255))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(report["worst_samples"][0]["pixel"], [22,11])
+        self.image.putpixel((11,11), (255,64,128,0))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(report["maximum_channel_error"]["hue"], 255)
+
 if __name__ == "__main__":
     unittest.main()

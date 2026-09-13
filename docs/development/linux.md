@@ -108,19 +108,32 @@ For the compact Color panel, run
 This exercises native mouse/touch picking, overlapping paint swatches, the
 visible swap button and its context menu, both shape alternatives, readout
 cycles and keyboard activation. It checks 144/160/200/280/360 px panels in both
-themes, all three shapes and HSB (HLS for the triangle)/Lab/RGB readouts,
-retaining screenshots and geometry. The entire control occupies one
+themes, all three shapes and Okhsv (circle), HSB (square), HLS (triangle),
+Lab/RGB readouts, retaining screenshots and geometry. The entire control occupies one
 square and compresses in short docks; `native_default_workspace` covers that
 shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
-is the design minimum. Values are read-only; tap the HSB/Lab/RGB label to cycle
-the readout independently of the circle/square/triangle field. Two bare shape
+is the design minimum. Values are read-only; tap the model label to cycle between
+that model, Lab and RGB independently of the circle/square/triangle field. Two bare shape
 buttons follow the upper-right arc; the swap button sits beside the overlapping
 paints. Right-click or hold either paint swatch (or use Shift+F10 while focused)
 also opens the swap action. The readout has no tooltip or hover decoration.
 Picker coordinates are retained per paint so hue changes, drags through black,
 alpha edits, swaps and saved-state reloads do not lose powerless components.
-The circle is a concentric projection of the full HSV square; Lab readouts use
-CIE Lab with a D50 reference white ([conversion reference](https://www.w3.org/TR/css-color-4/#color-conversion-code)).
+The circle uses a smooth elliptical projection of the full Okhsv square, including
+a matching Okhsv hue ring and readout. Square remains HSV and triangle remains HLS.
+Switching shapes preserves sRGB paint; each model retains powerless coordinates.
+The conversions adapt [Ottosson’s Okhsv reference](https://bottosson.github.io/posts/colorpicker/)
+with explicit neutral/black handling and a more accurate blue gamut boundary.
+Lab readouts use CIE Lab with a D50 reference white ([conversion reference](https://www.w3.org/TR/css-color-4/#color-conversion-code)).
+
+The Okhsv field stays on the CPU. Its raster reuses an interpolated saturation
+curve and sRGB transfer table; picking keeps full-precision conversion. Hosts
+sample the smooth field at logical-pixel resolution and keep the ring, circular
+clip and markers at native resolution. Shared conversion/raster tests and the
+Web 2× interpolation comparison bound the measured color error. For native
+raster timings, run
+`cargo run --locked --release -p layer-ui --example color_wheel_bench`.
+This measures computation only, not GTK snapshotting or display latency.
 
 For real pointer/hold/drag delivery, use
 `bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.

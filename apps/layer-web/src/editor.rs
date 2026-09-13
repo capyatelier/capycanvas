@@ -50,6 +50,10 @@ impl WebApp {
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().colors.view())
     }
+    /// Static for each shape; fetch when switching models, not on every drag.
+    pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.state().colors.wheel_hue_stops())
+    }
     pub fn color_panel_layout(&self, size: f32) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::ColorPanelLayout::new(size))
     }
@@ -59,10 +63,10 @@ impl WebApp {
             return Err(js("Invalid color field size"));
         }
         let state = &self.session.state().colors;
-        let hue = state.components()[0];
+        let hue = state.wheel_components()[0];
         let mut pixels = vec![0; side as usize * side as usize * 4];
         let valid = match state.wheel_shape() {
-            layer_ui::ColorShape::Circle => layer_ui::render_hsv_disc(side, hue, &mut pixels),
+            layer_ui::ColorShape::Circle => layer_ui::render_okhsv_disc(side, hue, &mut pixels),
             layer_ui::ColorShape::Triangle => layer_ui::render_hls_field(side, hue, &mut pixels),
             layer_ui::ColorShape::Square => false,
         };

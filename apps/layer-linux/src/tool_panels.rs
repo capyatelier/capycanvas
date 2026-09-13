@@ -509,17 +509,18 @@ mod wheel {
                     &ring.to_path(),
                     &gtk::gsk::Stroke::new(geometry.outer - geometry.inner),
                 );
-                let stops: Vec<_> = (0..=6)
-                    .map(|i| {
-                        let [r, g, b] = layer_ui::hue_color(i as f32 * 60.);
-                        gtk::gsk::ColorStop::new(i as f32 / 6., gtk::gdk::RGBA::new(r, g, b, 1.))
-                    })
-                    .collect();
+                let state = self.color.borrow();
+                let colors = state.wheel_hue_stops();
+                let stops: Vec<_> = colors.iter().map(|stop| {
+                    let [r, g, b] = stop.color;
+                    gtk::gsk::ColorStop::new(stop.offset, gtk::gdk::RGBA::new(r, g, b, 1.))
+                }).collect();
                 snapshot.append_conic_gradient(&bounds, &center, -60., &stops);
                 snapshot.pop();
-                let state = self.color.borrow();
-                let hue = state.components()[0];
-                let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
+                let hue = state.wheel_components()[0];
+                // Smooth field colors need logical-pixel sampling; Cairo scales
+                // them bilinearly. The ring, clip and markers retain native DPI.
+                let side = size.ceil() as u32;
                 if state.wheel_shape() == ColorShape::Circle {
                     let mut cache = self.disc.borrow_mut();
                     if cache
@@ -527,7 +528,7 @@ mod wheel {
                         .is_none_or(|(s, h, _)| *s != side || *h != hue)
                     {
                         let mut pixels = vec![0; side as usize * side as usize * 4];
-                        layer_ui::render_hsv_disc(side, hue, &mut pixels);
+                        layer_ui::render_okhsv_disc(side, hue, &mut pixels);
                         for p in pixels.chunks_exact_mut(4) {
                             let native = u32::from_be_bytes([255, p[0], p[1], p[2]]).to_ne_bytes();
                             p.copy_from_slice(&native);
@@ -931,7 +932,7 @@ impl ColorPanel {
         self.wheel.queue_draw();
         for (button, shape) in self.shape_buttons.iter().zip(state.other_shapes()) {
             let (icon, description) = match shape {
-                ColorShape::Circle => ("layer-color-circle-symbolic", "Use HSV circle"),
+                ColorShape::Circle => ("layer-color-circle-symbolic", "Use Okhsv circle"),
                 ColorShape::Square => ("layer-color-square-symbolic", "Use HSV square"),
                 ColorShape::Triangle => ("layer-color-triangle-symbolic", "Use HLS triangle"),
             };
@@ -1076,7 +1077,7 @@ fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     // This is a tiny UI vector drawing, never a canvas or brush raster path.
     // GTK caches the resulting node until the color or allocation changes.
-    let [r, green, b] = layer_ui::hue_color(state.components()[0]).map(f64::from);
+    let [r, green, b] = state.wheel_hue_color(state.wheel_components()[0]).map(f64::from);
     if state.wheel_shape() == ColorShape::Square {
         let [x, y, w] = g.square.map(f64::from);
         let h = w;
@@ -1132,7 +1133,7 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     }
     let radius = (g.center[0] * 2. * 0.04).clamp(6., 10.) as f64;
     for (point, fill) in [
-        (g.hue_marker(state.components()[0]), [r, green, b]),
+        (g.hue_marker(state.wheel_components()[0]), [r, green, b]),
         (
             state.wheel_marker(g),
             [
