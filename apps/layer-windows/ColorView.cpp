@@ -3,6 +3,7 @@
 #include "NativeMenus.h"
 #include <d2d1_3.h>
 #include <d3d11.h>
+#include <dwrite.h>
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Input.h>
@@ -35,6 +36,52 @@ D2D1_GRADIENT_MESH_PATCH patch(std::array<Point2,16> const& p,std::array<Paint,4
         c[0],c[1],c[2],c[3],D2D1_PATCH_EDGE_MODE_ANTIALIASED,D2D1_PATCH_EDGE_MODE_ANTIALIASED,
         D2D1_PATCH_EDGE_MODE_ANTIALIASED,D2D1_PATCH_EDGE_MODE_ANTIALIASED};
 }
+
+// Keep glyphs as vectors until their final rotation and position.
+// This avoids resampling the raster of each tiny rotated TextBlock.
+struct GlyphOutline : winrt::implements<GlyphOutline,ID2D1SimplifiedGeometrySink> {
+    PathGeometry geometry;
+    PathFigure figure{nullptr};
+    HRESULT error=S_OK;
+    template<class F> void append(F action) noexcept {
+        if(FAILED(error))return;
+        try{action();}catch(...){error=to_hresult();}
+    }
+    void __stdcall SetFillMode(D2D1_FILL_MODE mode) noexcept override {
+        append([&]{geometry.FillRule(mode==D2D1_FILL_MODE_WINDING?FillRule::Nonzero:FillRule::EvenOdd);});
+    }
+    void __stdcall SetSegmentFlags(D2D1_PATH_SEGMENT) noexcept override {}
+    void __stdcall BeginFigure(Point2 p,D2D1_FIGURE_BEGIN begin) noexcept override {
+        append([&]{figure=PathFigure();figure.StartPoint({p.x,p.y});figure.IsFilled(begin==D2D1_FIGURE_BEGIN_FILLED);geometry.Figures().Append(figure);});
+    }
+    void __stdcall AddLines(Point2 const* points,UINT count) noexcept override {
+        append([&]{for(UINT i=0;i<count;i++){LineSegment line;line.Point({points[i].x,points[i].y});figure.Segments().Append(line);}});
+    }
+    void __stdcall AddBeziers(D2D1_BEZIER_SEGMENT const* curves,UINT count) noexcept override {
+        append([&]{for(UINT i=0;i<count;i++){auto const& c=curves[i];BezierSegment curve;
+            curve.Point1({c.point1.x,c.point1.y});curve.Point2({c.point2.x,c.point2.y});curve.Point3({c.point3.x,c.point3.y});figure.Segments().Append(curve);}});
+    }
+    void __stdcall EndFigure(D2D1_FIGURE_END end) noexcept override {
+        append([&]{figure.IsClosed(end==D2D1_FIGURE_END_CLOSED);});
+    }
+    HRESULT __stdcall Close() noexcept override {return error;}
+};
+PathGeometry glyphOutline(wchar_t scalar,double size){
+    static thread_local auto face=[]{
+        com_ptr<IDWriteFactory> factory;
+        check_hresult(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<::IUnknown**>(factory.put())));
+        com_ptr<IDWriteFontCollection> fonts;check_hresult(factory->GetSystemFontCollection(fonts.put()));
+        UINT index=0;BOOL found=FALSE;check_hresult(fonts->FindFamilyName(L"Segoe UI",&index,&found));check_bool(found);
+        com_ptr<IDWriteFontFamily> family;check_hresult(fonts->GetFontFamily(index,family.put()));
+        com_ptr<IDWriteFont> font;check_hresult(family->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STRETCH_NORMAL,DWRITE_FONT_STYLE_NORMAL,font.put()));
+        com_ptr<IDWriteFontFace> result;check_hresult(font->CreateFontFace(result.put()));return result;
+    }();
+    UINT32 code=scalar;UINT16 glyph=0;check_hresult(face->GetGlyphIndices(&code,1,&glyph));
+    auto sink=winrt::make_self<GlyphOutline>();
+    check_hresult(face->GetGlyphRunOutline(float(size),&glyph,nullptr,nullptr,1,false,false,sink.get()));
+    check_hresult(sink->Close());return sink->geometry;
+}
+
 struct Device {
     com_ptr<ID3D11Device> d3d;
     com_ptr<ID2D1Device2> d2d;
@@ -210,8 +257,8 @@ struct View:std::enable_shared_from_this<View>{
     Button swap,readout;
     Shapes::Path readoutHit;
     TextBlock readoutLabel;
-    Border readoutFocus;
-    struct Glyph {TextBlock text;MatrixTransform transform;};
+    Shapes::Path readoutFocus;
+    struct Glyph {Shapes::Path path;MatrixTransform transform;wchar_t scalar=0;double font=0;};
     std::vector<Glyph> glyphs;
     std::array<Border,3> chips;
     std::array<MatrixTransform,3> chipTransforms;
@@ -230,7 +277,7 @@ struct View:std::enable_shared_from_this<View>{
     J model()const{return object(data->model,L"color_panel");}
     hstring editingContext()const{return str(model(),L"shape")+L"/"+str(object(data->state,L"colors"),L"paint_slot");}
     void send(J const& action){data->dispatch(O({{L"type",S(L"color")},{L"action",action}}));}
-    void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();}
+    void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,L"Ready");}
     void pick(Point position){
         if(!pointer||context!=editingContext()||side<1)return;
         A location;location.Append(N(position.X));location.Append(N(position.Y));
@@ -259,7 +306,7 @@ struct View:std::enable_shared_from_this<View>{
     }
     void init(){
         auto weak=weak_from_this();
-        root.UseLayoutRounding(false);root.Background(clear());root.MinWidth(128);root.MinHeight(128);AutomationProperties::SetName(root,L"Color controls");
+        root.UseLayoutRounding(false);root.Background(clear());root.MinWidth(128);root.MinHeight(128);AutomationProperties::SetName(root,L"Color controls");AutomationProperties::SetAutomationId(root,L"color-controls");AutomationProperties::SetItemStatus(root,L"Ready");
         root.Children().Append(stage);stage.HorizontalAlignment(HorizontalAlignment::Center);stage.VerticalAlignment(VerticalAlignment::Center);
         AutomationProperties::SetAutomationId(stage,L"color-panel");AutomationProperties::SetName(stage,L"Color picker");
         wheel.Background(clear());AutomationProperties::SetName(image,L"Color wheel");
@@ -275,7 +322,7 @@ struct View:std::enable_shared_from_this<View>{
             if(self->pointer||!p.IsInContact()||(p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!p.Properties().IsLeftButtonPressed()))return;
             auto at=p.Position();auto shape=str(self->model(),L"shape");
             auto part=capy_color_hit(at.X,at.Y,float(self->side),shape==L"circle"?2:shape==L"triangle"?1:0);
-            if(part&&self->root.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->part=part;self->pick(at);e.Handled(true);}
+            if(part&&self->root.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->part=part;AutomationProperties::SetItemStatus(self->root,L"Picking");self->pick(at);e.Handled(true);}
         }});
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(self->pointer==e.Pointer().PointerId()){self->pick(e.GetCurrentPoint(self->wheel).Position());e.Handled(true);}
@@ -284,7 +331,7 @@ struct View:std::enable_shared_from_this<View>{
             if(self->pointer==e.Pointer().PointerId()){self->cancel();e.Handled(true);}
         }});
         root.PointerCanceled([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId())self->cancel();});
-        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->pointer.reset();self->part=0;}});
+        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->pointer.reset();self->part=0;AutomationProperties::SetItemStatus(self->root,L"Ready");}});
         root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock()){
             self->scaleChanged=self->root.XamlRoot().Changed(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
             self->refresh();
@@ -314,12 +361,11 @@ struct View:std::enable_shared_from_this<View>{
         for(int i=0;i<2;i++){
             shapes[i]=control(L"Color shape",[weak,i]{if(auto self=weak.lock())self->send(O({{L"op",S(L"shape")},{L"shape",array(self->model(),L"other_shapes").GetAt(i)}}));});
             stage.Children().Append(shapes[i]);AutomationProperties::SetAutomationId(shapes[i],L"color-shape-"+to_hstring(i));
-            shapes[i].UseSystemFocusVisuals(true);
             shapes[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->shapeHovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
             shapes[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->shapeHovered[i]=false;self->refresh();}});
         }
         swap=control(L"Swap foreground and background",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"swap")}}));});
-        stage.Children().Append(swap);AutomationProperties::SetAutomationId(swap,L"color-swap");swap.UseSystemFocusVisuals(true);
+        stage.Children().Append(swap);AutomationProperties::SetAutomationId(swap,L"color-swap");
         Grid swapContent;swapContent.Children().Append(swapFill);swapContent.Children().Append(colorIcon(L"swap",data->brush(L"text")));swap.Content(swapContent);
         swap.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->swapHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         swap.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swapHovered=false;self->refresh();}});
@@ -327,8 +373,8 @@ struct View:std::enable_shared_from_this<View>{
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
         readoutHit.Fill(clear());readoutBody.Children().Append(readoutHit);
         readoutLabel.FontFamily(FontFamily(L"Segoe UI"));readoutLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());readoutLabel.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(readoutLabel,Automation::Peers::AccessibilityView::Raw);
-        readoutBody.Children().Append(readoutLabel);readoutFocus.IsHitTestVisible(false);readoutFocus.CornerRadius({5,5,5,5});
-        readoutFocus.BorderThickness({1.5,1.5,1.5,1.5});readoutBody.Children().Append(readoutFocus);
+        readoutBody.Children().Append(readoutLabel);readoutFocus.IsHitTestVisible(false);
+        readoutFocus.Opacity(.9);readoutFocus.StrokeThickness(1.5);readoutBody.Children().Append(readoutFocus);
         for(int i=0;i<3;i++){
             chips[i].IsHitTestVisible(false);chips[i].CornerRadius({2,2,2,2});chips[i].RenderTransform(chipTransforms[i]);
             readoutBody.Children().Append(chips[i]);
@@ -362,8 +408,15 @@ struct View:std::enable_shared_from_this<View>{
         double labelFont=std::clamp(panelSize*.044,9.,12.);
         readoutLabel.Text(str(view,L"readout_label"));readoutLabel.FontSize(labelFont);readoutLabel.Foreground(ink);readoutLabel.Opacity(.9);
         readoutLabel.Measure({1000,1000});Canvas::SetLeft(readoutLabel,2);Canvas::SetTop(readoutLabel,labelFont+1-readoutLabel.BaselineOffset());
-        readoutFocus.BorderBrush(ink);readoutFocus.Visibility(focused?Visibility::Visible:Visibility::Collapsed);
-        readoutFocus.Width(readoutLabel.DesiredSize().Width+5);readoutFocus.Height(labelFont+4);Canvas::SetLeft(readoutFocus,1);Canvas::SetTop(readoutFocus,1);
+        readoutFocus.Stroke(ink);readoutFocus.Visibility(focused?Visibility::Visible:Visibility::Collapsed);
+        float w=readoutLabel.DesiredSize().Width+5,h=float(labelFont+4);
+        PathFigure focusFigure;focusFigure.StartPoint({6,1});focusFigure.IsClosed(true);focusFigure.IsFilled(false);
+        const std::array<Point,8> corners{{{w-4,1},{w+1,6},{w+1,h-4},{w-4,h+1},{6,h+1},{1,h-4},{1,6},{6,1}}};
+        for(size_t i=0;i<corners.size();i+=2){
+            LineSegment edge;edge.Point(corners[i]);focusFigure.Segments().Append(edge);
+            ArcSegment corner;corner.Point(corners[i+1]);corner.Size({5,5});corner.SweepDirection(SweepDirection::Clockwise);focusFigure.Segments().Append(corner);
+        }
+        PathGeometry focusGeometry;focusGeometry.Figures().Append(focusFigure);readoutFocus.Data(focusGeometry);
         auto texts=array(view,L"readout_layout_text");bool rgb=str(view,L"readout")==L"rgb";
         double font=labelFont,digit=0,total=0;std::array<double,3> widths{};
         for(;;font-=.25){
@@ -387,16 +440,19 @@ struct View:std::enable_shared_from_this<View>{
             if(rgb){chips[i].Width(chip);chips[i].Height(chip);chips[i].Background(fill(rgbColors[i]));at(chipTransforms[i],half,radius,mid+(along+chip*.5)/radius,-chip*.5,-font*.76);along+=chip+2;}
             for(auto c:texts.GetStringAt(i)){
                 if(index==glyphs.size()){
-                    Glyph glyph;glyph.text.FontFamily(FontFamily(L"Segoe UI"));glyph.text.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());glyph.text.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(glyph.text,Automation::Peers::AccessibilityView::Raw);glyph.text.Opacity(.8);
-                    glyph.text.RenderTransform(glyph.transform);readoutBody.Children().Append(glyph.text);glyphs.push_back(glyph);
+                    Glyph glyph;glyph.path.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(glyph.path,Automation::Peers::AccessibilityView::Raw);glyph.path.Opacity(.8);
+                    readoutBody.Children().Append(glyph.path);glyphs.push_back(glyph);
                 }
-                auto& glyph=glyphs[index++];glyph.text.Visibility(Visibility::Visible);glyph.text.Text(hstring(std::wstring(1,c)));
-                glyph.text.FontSize(font);glyph.text.Foreground(ink);glyph.text.Measure({1000,1000});
+                auto& glyph=glyphs[index++];glyph.path.Visibility(c==L' '?Visibility::Collapsed:Visibility::Visible);
+                if(glyph.scalar!=c||glyph.font!=font){
+                    glyph.scalar=c;glyph.font=font;glyph.path.Data(glyphOutline(c,font));glyph.path.Data().Transform(glyph.transform);
+                }
+                glyph.path.Fill(ink);
                 double cell=(c==L' '||(c>=L'0'&&c<=L'9'))?digit:advance(c);
-                at(glyph.transform,half,radius,mid+(along+cell*.5)/radius,-advance(c)*.5,-glyph.text.BaselineOffset());along+=cell;
+                at(glyph.transform,half,radius,mid+(along+cell*.5)/radius,-advance(c)*.5,0);along+=cell;
             }
         }
-        for(;index<glyphs.size();index++)glyphs[index].text.Visibility(Visibility::Collapsed);
+        for(;index<glyphs.size();index++)glyphs[index].path.Visibility(Visibility::Collapsed);
         AutomationProperties::SetName(readout,str(view,L"readout_description"));
     }
     void refresh(){
@@ -445,9 +501,9 @@ struct View:std::enable_shared_from_this<View>{
         for(int i=0;i<3;i++){
             auto swatch=find(array(view,L"swatches"),L"slot",slots[i]);
             swatchEdges[i].Fill(data->brush(L"panel"));auto stroke=color(str(object(data->state,L"palette"),L"text"));
-            bool selected=flag(swatch,L"selected"),focused=swatches[i].FocusState()==FocusState::Keyboard;
-            if(!(selected||hovered[i]||focused))stroke.A=64;
-            swatchEdges[i].Stroke(fill(stroke));swatchEdges[i].StrokeThickness(selected||hovered[i]||focused?2:1);
+            bool selected=flag(swatch,L"selected");
+            if(!(selected||hovered[i]))stroke.A=64;
+            swatchEdges[i].Stroke(fill(stroke));swatchEdges[i].StrokeThickness(selected||hovered[i]?2:1);
             swatchPaint[i].Fill(fill(rgba(array(swatch,L"rgba"))));
             AutomationProperties::SetName(swatches[i],str(swatch,L"label"));AutomationProperties::SetItemStatus(swatches[i],selected?L"Selected":L"");
         }

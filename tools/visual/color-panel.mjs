@@ -65,6 +65,22 @@ export async function captureColorPanels({manifest,fixturePath,output,evaluate,c
       error:Math.max(...['x','y','width','height'].map(p=>Math.abs(web[p]-fixture.frames[key][p])))}));
     const maximum=Math.max(...differences.map(d=>d.error));
     await writeFile(join(output,'geometry-'+fixture.name+'.json'),JSON.stringify({differences,maximum_error_points:maximum},null,2));
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:0,y:0});
+    const state=fixture.capture_state||'default';
+    if(state!=='default'){
+      const selectors={'color-readout':'.color-readout','color-shape-0':'.color-shape',
+        'color-background':'[data-color-slot="background"]','color-swap':'.color-swap'};
+      assert.ok(selectors[fixture.capture_target],'Unknown capture target');
+      if(state.endsWith('-hover')){
+        const box=frames[fixture.items[0].key+'/'+fixture.capture_target];
+        await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:box.x+box.width*.5,y:box.y+box.height*.5});
+      }else if(state.endsWith('-focus')){
+        await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+        await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+        await evaluate(`(()=>{const target=colorCaptureRoots[0].querySelector(${JSON.stringify(selectors[fixture.capture_target])});target.focus();if(!target.matches(':focus-visible'))throw Error('Missing keyboard focus');})()`);
+      }else throw Error('Unknown color capture state');
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    }
     const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:true});
     const png=Buffer.from(shot.data,'base64');
     assert.equal(png.readUInt32BE(16),fixture.width*fixture.scale);assert.equal(png.readUInt32BE(20),fixture.height*fixture.scale);

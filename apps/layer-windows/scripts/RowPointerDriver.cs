@@ -92,6 +92,12 @@ public static class CapyRowPointer {
    }
   }
  }
+ public static void Hover(int x,int y) {
+  lock(gate){
+   Check();if(active)throw new Exception("A review contact is already active.");
+   var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
+  }
+ }
  public static void Down(string device,int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");

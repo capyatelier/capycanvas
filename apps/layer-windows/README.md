@@ -232,7 +232,9 @@ Okhsv circle, HSV square, HLS triangle, overlapping paint swatches, shape
 buttons, swap, and curved shape/RGB readouts. Rust owns layout, projection,
 hue guides, field pixels and edits. WinUI owns buttons, native context menus
 and mouse/pen/touch capture. A solo docked Color panel fits the available
-height. Shared SVG color icons remain vectors when rotated.
+height. Shared SVG color icons and DirectWrite glyph outlines remain vectors
+until their final rotation. The native readout button retains the complete
+accessible color description.
 
 Run the isolated input fixture after a normal build:
 
@@ -245,6 +247,8 @@ readout's hue-ring hit area, cancellation, native keyboard activation,
 retained buttons, paint selection/swap, native swatch menus, and the negative
 mouse-hold menu case. Picker edits must leave the document unchanged. A failed
 live instance is retained for inspection; successful instances must exit zero.
+Drawer input waits for stable wheel bounds and for the previous native contact
+to release; visibility and the first paint update can precede those events.
 
 For a complete native/browser component comparison, generate synthetic models
 at the actual display scale (1.5 below), then build the separate review app:
@@ -270,6 +274,34 @@ $env:CAPY_CHROME='<absolute-path-to-chrome.exe>'
 node tools/visual/chrome-capture.mjs 512 344 1.5 artifacts/windows/compact-color-parity dark color-panel artifacts/windows/compact-color-parity/capture-manifest.json
 python tools/visual/compare.py artifacts/windows/compact-color-parity/web-dark-160.png artifacts/windows/compact-color-parity/native-dark-160.png --output artifacts/windows/compact-color-parity/diff-dark-160
 ~~~
+
+The fixture also accepts an optional `capture_state` and `capture_target`.
+Use `readout-focus` / `color-readout`, `shape-focus` or `shape-hover` /
+`color-shape-0`, `swatch-focus` or `swatch-hover` / `color-background`,
+and `swap-focus` or `swap-hover` / `color-swap`. The target is in the first
+picker. Put each state in a separate directory alongside copies of the original
+field files; retain the original fixture name and dimensions. For example:
+
+~~~powershell
+$source='artifacts/windows/compact-color-parity'
+$output=Join-Path $source 'shape-hover'
+New-Item -ItemType Directory -Force -Path $output | Out-Null
+$fixture=Get-Content "$source/dark-160.json" -Raw | ConvertFrom-Json
+$fixture | Add-Member -NotePropertyName capture_state -NotePropertyValue 'shape-hover'
+$fixture | Add-Member -NotePropertyName capture_target -NotePropertyValue 'color-shape-0'
+foreach($item in $fixture.items) {
+    if($item.field_file) { Copy-Item -LiteralPath (Join-Path $source $item.field_file) -Destination $output }
+}
+$fixture | ConvertTo-Json -Depth 80 | Set-Content "$output/dark-160.json"
+./apps/layer-windows/scripts/capture-compact-color.ps1 -Executable artifacts/windows/ColorFixture/CapyCanvas.exe -FixtureFile "$output/dark-160.json"
+$native=Get-Content "$output/native-dark-160.json" -Raw | ConvertFrom-Json
+@{schema=2;fixtures=@($native)} | ConvertTo-Json -Depth 80 | Set-Content "$output/capture-manifest.json"
+node tools/visual/chrome-capture.mjs 512 344 1.5 $output dark color-panel "$output/capture-manifest.json"
+~~~
+
+Native hover uses guarded OS mouse input; moving only the cursor does not
+reliably enter WinUI's pointer-over state. Focus uses the native keyboard focus
+state and browser focus-visible behavior. No reference styles are overridden.
 
 Compare every captured surface with the same unchanged whole-image comparator.
 Geometry, input and pixel results are separate evidence. Passing the first two

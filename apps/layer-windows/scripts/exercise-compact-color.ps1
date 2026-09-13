@@ -145,6 +145,17 @@ try{
     Invoke "zen-tile-toolbar-$tileId"
     Wait-Until {$null -ne (Find 'tool-drawer')} 'Color drawer did not open'
     $script:pickerScope=Control 'tool-drawer'
+    # A visible drawer can still be moving from its opening animation.
+    # Require the complete wheel to stay at its final coordinates before input.
+    $settled=@{bounds='';count=0}
+    Wait-Until {
+        $wheel=Find 'color-wheel';if(!$wheel){return $false}
+        $bounds=$wheel.Current.BoundingRectangle
+        $current=$bounds.ToString()
+        if($bounds.Width -gt 0 -and [Math]::Abs($bounds.Width-$bounds.Height) -lt 1 -and $current -eq $settled.bounds){$settled.count++}else{$settled.count=0}
+        $settled.bounds=$current
+        $settled.count -ge 3
+    } 'Color drawer wheel did not finish its opening animation'
     $drawerButton=(Control 'color-shape-0').GetRuntimeId() -join ':'
     Shape circle
     $index=0
@@ -152,6 +163,7 @@ try{
         $before=Paint;$start=Point .5 .5;$end=Point (.54+.04*$index) .56
         [CapyRowPointer]::Down($device,$start[0],$start[1]);[CapyRowPointer]::Move($end[0],$end[1]);[CapyRowPointer]::Up()
         Wait-Until {(Paint) -ne $before} "$device could not pick in the retained Color drawer"
+        Wait-Until {(Control 'color-controls').Current.ItemStatus -eq 'Ready'} "$device did not release the drawer wheel"
         $index++
     }
     Invoke 'color-readout'

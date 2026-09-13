@@ -11,7 +11,7 @@ struct Fixture:std::enable_shared_from_this<Fixture>{
     Window window;Canvas surface;ContentControl viewport;Bindings bindings;
     std::vector<Item> items;J source;std::filesystem::path output;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
-    hstring previous;int stable=0;
+    hstring previous;int stable=0;bool focused=false;
     static FrameworkElement findElement(DependencyObject const& parent,hstring const& id){
         if(auto element=parent.try_as<FrameworkElement>();element&&AutomationProperties::GetAutomationId(element)==id)return element;
         for(int i=0;i<VisualTreeHelper::GetChildrenCount(parent);i++)
@@ -32,6 +32,12 @@ struct Fixture:std::enable_shared_from_this<Fixture>{
                 if(hstring(id)==L"color-wheel"&&AutomationProperties::GetItemStatus(element)!=L"Ready")return;
                 frames.Insert(item.key+L"/"+id,frame(element));
             }
+        }
+        auto state=str(source,L"capture_state");
+        if(!focused&&std::wstring_view(state).ends_with(L"-focus")){
+            auto id=str(source,L"capture_target");auto target=findElement(items.front().root,id).try_as<Control>();
+            if(!target||!target.Focus(FocusState::Keyboard))throw hresult_error(E_FAIL,L"Cannot focus requested review control");
+            focused=true;stable=0;return;
         }
         auto current=frames.Stringify();stable=current==previous?stable+1:0;previous=current;if(stable<3)return;
         timer.Stop();auto scale=surface.XamlRoot().RasterizationScale();

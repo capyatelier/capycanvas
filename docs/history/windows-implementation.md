@@ -2059,3 +2059,36 @@ replaced and tolerances were not changed. Capture commands and evidence
 boundaries are in the Windows README; machine captures and reports stay
 ignored. Physical digitizer and final painting/performance acceptance remain
 separate, and the 120 Hz display is currently unavailable.
+
+### Compact picker text and state refinement
+
+Paired instrumentation measured the actual visible native/browser glyph
+baselines within 0.000026 logical pixels, with matching Segoe UI advances.
+The large curved-digit differences came from rasterization rather than layout.
+Native digits now use DirectWrite font outlines as retained WinUI geometry,
+transformed before rasterization. The readout remains a named native button.
+The temporary text instrumentation was removed after preserving local evidence.
+
+Keyboard focus follows main's styles. The readout uses a centered rounded
+stroke; shape, swatch and swap buttons do not add a system outline absent from
+the reference. Four focus and three hover states were captured in dark and
+light at size 160. Hover and focus affect the corresponding reference regions.
+Native captures use OS mouse input because cursor repositioning alone did not
+reliably cause pointer-over styling.
+
+Documented Debug/Release builds and the final production input fixture pass,
+including all projections/devices, keyboard activation, menus, cancellation,
+retained drawer input, unchanged documents and zero exit. A drawer test race
+was measured on the same failed instance: its visible wheel continued moving
+during the opening animation. The fixture now waits for stable complete bounds
+and native capture release before switching devices. No Rust behavior changed
+since the preceding 523-test and strict-Clippy checkpoint.
+
+All eight complete default captures improve: mean absolute channel error is
+0.433–1.326 on the 0–255 scale; maximum channel error is 82–101, down from
+137–146. Exact differing pixels remain 22.71–26.21%. The fourteen size-160
+focus/hover comparisons have mean error 0.838–0.986 and maximum 88–89.
+**Every zero-tolerance comparison still fails.** Text coverage, gradient
+quantization and edge rasterization remain open. The comparator, reference
+rendering and tolerances are unchanged. These results establish neither
+additional native display scales nor physical pen or 120 Hz painting acceptance.

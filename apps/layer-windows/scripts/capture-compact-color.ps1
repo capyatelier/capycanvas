@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable,[Parameter(Mandatory)][string]$FixtureFile)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -10,6 +11,8 @@ public static class CapyColorCapture {
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
 }
 '@
@@ -18,6 +21,9 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $FixtureFile=(Resolve-Path -LiteralPath $FixtureFile).Path
 $fixture=Get-Content -LiteralPath $FixtureFile -Raw|ConvertFrom-Json
 if($fixture.schema -ne 2 -or $fixture.name -notmatch '^(dark|light)-(128|160|226|360)$'){throw 'Expected the synthetic color fixture'}
+$captureState=if($fixture.capture_state){[string]$fixture.capture_state}else{'default'}
+if($captureState -notin @('default','readout-focus','shape-focus','swatch-focus','swap-focus','shape-hover','swatch-hover','swap-hover')){throw 'Unknown color capture state'}
+if($captureState -ne 'default' -and $fixture.capture_target -notin @('color-readout','color-shape-0','color-background','color-swap')){throw 'Unknown capture target'}
 $output=Split-Path -Parent $FixtureFile
 $metadata=Join-Path $output ("native-"+$fixture.name+'.json')
 $previousFixture=$env:CAPY_COLOR_FIXTURE
@@ -45,6 +51,24 @@ $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
 $surface=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'color-review-surface'))
 if(!$surface){throw 'Color review surface is missing from accessibility'}
+$surfaceBounds=$surface.Current.BoundingRectangle
+[CapyColorCapture]::SetForegroundWindow($handle)|Out-Null
+if([CapyColorCapture]::GetForegroundWindow() -ne $handle){throw 'Review does not own foreground input'}
+[CapyRowPointer]::Initialize([uint32]$review.Id)
+try{
+# Deliver a real mouse move; SetCursorPos alone need not enter WinUI pointer-over state.
+# The fixture's one-pixel outer gap is outside every production control.
+[CapyRowPointer]::Hover([int]$surfaceBounds.X+1,[int]$surfaceBounds.Y+1)
+Start-Sleep -Milliseconds 100
+if($captureState.EndsWith('-hover')){
+    $target=$surface.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,[string]$fixture.capture_target))
+    if(!$target){throw 'Hover target is missing'}
+    $targetBounds=$target.Current.BoundingRectangle
+    [CapyRowPointer]::Hover([int]($targetBounds.X+$targetBounds.Width*.5),[int]($targetBounds.Y+$targetBounds.Height*.5))
+    Start-Sleep -Milliseconds 300
+}
+}finally{[CapyRowPointer]::Dispose()}
 $bounds=$surface.Current.BoundingRectangle
 $width=$fixture.width*$report.scale;$height=$fixture.height*$report.scale
 if($bounds.Width -ne $width -or $bounds.Height -ne $height){throw "Incomplete color surface: $bounds"}
