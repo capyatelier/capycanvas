@@ -342,6 +342,13 @@ The Mac reference explicitly reserves window-control space and removes in-app
 menus. The browser fullscreen button is excluded to reflect Apple's different
 capabilities; the iPad fullscreen action remains an open feature gate.
 
+Chrome reports the resolved platform font and each workspace label's computed
+CSS font and canvas advance alongside its measured control rectangle. Use those
+records to distinguish font-family/weight differences from layout allocation.
+Apple's shared header measures and draws medium labels at the CSS weight of 500
+through the public font variation axis where supported. Font/width caches are
+bounded; the native font remains the fallback when that axis is unavailable.
+
 The deterministic background isolates header compositing, without Metal or
 UIKit rasterization. This is component evidence, not whole-editor or physical
 iPad pixel acceptance. Keep the complete raw differences, including fonts,

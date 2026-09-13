@@ -118,6 +118,33 @@ Do not force AppKit's high-contrast appearance names: Apple's
 reserves their selection for the system accessibility setting. These focused
 comparisons do not constitute a complete accessibility or physical-device pass.
 
+## Header font and background alignment — 2026-09-12
+
+A fresh 96-case comparison of both Apple presets against rebuilt local Chrome
+reproduced the header allocation error: the widest title differed by 1.220
+logical points and the largest edge difference was 1.078. Native font inspection
+showed that the system Medium instance uses weight 510, while the web requests
+CSS 500. Apple's shared header now measures and draws workspace labels using
+that public variation axis at 500, retaining the native font when unsupported.
+The workspace pill also uses the shared opaque 80%-background/20%-black track
+color. Font and text-width caches stay bounded.
+
+The same reference inputs now yield a maximum position/size difference of 0.603
+points and edge difference of 0.578, meeting the one-point component geometry
+bound across all 96 cases. Full sRGB differing-pixel fractions improve from
+13.05–25.62% to 3.15–11.65%; maximum channel error is 214. All corresponding
+full differences remain retained with the original comparison thresholds.
+The geometry result does not close full pixel acceptance, whole-editor
+composition, UIKit/device rasterization or the performance gates.
+
+Both signed Apple builds pass. The physical iPad remains on its prepared layer
+input fixture while awaiting feedback; this header change has not interrupted
+that check. The [header capture guide](../../tools/visual/README.md#complete-header-components)
+now describes recorded CSS/canvas metrics and the resolved browser font. Chrome's
+[system font matcher](https://chromium.googlesource.com/codesearch/chromium/src/%2B/refs/tags/142.0.7402.2/third_party/blink/renderer/platform/fonts/mac/font_matcher_mac.mm)
+applies the requested CSS weight as a variable-font weight value. Raw font,
+geometry and capture artifacts remain ignored.
+
 ## Layer scrolling and interruption validation — 2026-09-12
 
 A native 24-layer fixture exposed a stationary-capture bug: deleting the dragged
