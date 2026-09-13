@@ -273,7 +273,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         idle && !current,
                         true,
                     );
-                    add(ManagerAction::Rename(id.clone()), available, false);
+                    if !metadata.builtin {
+                        add(ManagerAction::Rename(id.clone()), available, false);
+                    }
                     add(
                         ManagerAction::Delete(id.clone()),
                         available && idle && !metadata.builtin,

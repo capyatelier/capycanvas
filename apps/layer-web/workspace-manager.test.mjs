@@ -100,7 +100,12 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
       assert.equal(await evaluate(`document.querySelector('[data-workspace-id="${row.id}"]').getAttribute('aria-pressed')`),'true');
     }
     await menu('Manage Workspaces…');
-    for (const row of (await view()).rows.filter(r=>r.id.startsWith('builtin:workspace:'))) { assert.equal(row.delete,false); assert.equal(row.options,true); }
+    for (const row of (await view()).rows.filter(r=>r.id.startsWith('builtin:workspace:'))) {
+      assert.equal(row.delete,false); assert.equal(row.options,false);
+      await click(`.workspace-row[data-id="${row.id}"] .workspace-options`);
+      assert.equal(await evaluate(`!!document.querySelector('.workspace-row-menu [data-action="rename"]')`),false);
+      await click(`.workspace-row[data-id="${row.id}"] .workspace-options`);
+    }
     await click(`.workspace-choice[data-id="${created}"]`); await click('.workspace-manager footer .suggested-action'); await idle();
     assert.deepEqual(normalized(await capture()),normalized(beforeRestart));
     await send({type:'invoke',command:'brush'}); await send({type:'set_brush_size',value:73});

@@ -428,8 +428,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                     id: r.id,
                     title: r.title,
                     subtitle: r.subtitle,
-                    rename: view.page != Page::ThisWorkspace && !r.builtin && !elsewhere
-                        || view.page == Page::Workspaces && !elsewhere,
+                    rename: view.page != Page::ThisWorkspace && !r.builtin && !elsewhere,
                     delete: view.page != Page::ThisWorkspace && !r.builtin && !elsewhere,
                 }
             })
@@ -583,8 +582,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                     .claim
                     .as_ref()
                     .is_some_and(|c| c.owner != self.manager.owner && c.expires_at_ms > now_ms());
-                if elsewhere || (item.metadata.builtin && matches!(operation, Mutation::Delete(_)))
-                {
+                if elsewhere || item.metadata.builtin {
                     return Err(StoreError::invalid(
                         "This workspace cannot be changed here.",
                     ));

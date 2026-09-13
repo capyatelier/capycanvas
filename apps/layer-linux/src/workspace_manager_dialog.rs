@@ -386,13 +386,14 @@ impl ManagerUi {
                             .is_some_and(|c| c.owner != manager.owner && c.expires_at_ms > now_ms())
                 });
                 {
-                    let mut actions = vec![ManagerButton {
-                        action: ManagerAction::Rename(item.id.clone()),
-                        label: "Rename…".into(),
-                        enabled: !elsewhere,
-                        primary: false,
-                    }];
+                    let mut actions = Vec::new();
                     if !item.builtin {
+                        actions.push(ManagerButton {
+                            action: ManagerAction::Rename(item.id.clone()),
+                            label: "Rename…".into(),
+                            enabled: !elsewhere,
+                            primary: false,
+                        });
                         actions.push(ManagerButton {
                             action: ManagerAction::Delete(item.id.clone()),
                             label: "Delete…".into(),

@@ -70,42 +70,75 @@ fn workspace(name: &str) -> Entity {
 }
 
 #[test]
-fn storage_enforces_included_workspace_delete_protection() {
+fn storage_enforces_included_workspace_name_and_delete_protection() {
     let mut f = Fixture::new();
+    let mut browser = BrowserDatabase::default();
     let mut entity = workspace("Painter");
     entity.metadata.builtin = true;
     let id = entity.id.clone();
-    f.store
-        .commit(
-            CommitBatch::prepare(
-                f.owner.clone(),
-                vec![Mutation::Create {
-                    entity,
-                    claim: true,
-                    name_policy: NamePolicy::Exact,
-                }],
-            )
-            .unwrap(),
+    let create = CommitBatch::prepare(
+        f.owner.clone(),
+        vec![Mutation::Create {
+            entity,
+            claim: true,
+            name_policy: NamePolicy::Exact,
+        }],
+    )
+    .unwrap();
+    browser.prepare_delivery(&create).unwrap();
+    browser
+        .execute(
+            StoreRequest::Commit {
+                batch: create.clone(),
+            },
+            1_000_000,
         )
         .unwrap();
+    f.store.commit(create).unwrap();
     let stored = f.store.load(&id).unwrap();
-    let mut metadata = stored.entity.metadata.clone();
-    metadata.deleted_at_ms = Some(2_000_000);
-    let deleting = Mutation::Update {
-        id: id.clone(),
-        generations: stored.generations,
-        fence: stored.claim.unwrap().fence,
-        metadata: Some(metadata),
-        content: None,
-        working: None,
-        name_policy: NamePolicy::Exact,
-    };
-    assert!(
-        f.store
-            .commit(CommitBatch::prepare(f.owner.clone(), vec![deleting]).unwrap())
-            .is_err()
-    );
-    assert_eq!(f.store.load(&id).unwrap().entity, stored.entity);
+    for deleting in [false, true] {
+        let mut metadata = stored.entity.metadata.clone();
+        if deleting {
+            metadata.deleted_at_ms = Some(2_000_000);
+        } else {
+            metadata.name = "Renamed".into();
+        }
+        let mutation = Mutation::Update {
+            id: id.clone(),
+            generations: stored.generations,
+            fence: stored.claim.as_ref().unwrap().fence,
+            metadata: Some(metadata),
+            content: None,
+            working: None,
+            name_policy: NamePolicy::Exact,
+        };
+        let batch = CommitBatch::prepare(f.owner.clone(), vec![mutation]).unwrap();
+        browser.prepare_delivery(&batch).unwrap();
+        assert_eq!(
+            browser
+                .execute(
+                    StoreRequest::Commit {
+                        batch: batch.clone()
+                    },
+                    1_000_000
+                )
+                .unwrap_err()
+                .kind,
+            ErrorKind::InvalidData
+        );
+        assert_eq!(
+            f.store.commit(batch).unwrap_err().kind,
+            ErrorKind::InvalidData
+        );
+        assert_eq!(f.store.load(&id).unwrap().entity, stored.entity);
+        let StoreResponse::Entity(saved) = browser
+            .execute(StoreRequest::Load { id: id.clone() }, 1_000_000)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(saved.entity, stored.entity);
+    }
 }
 
 #[test]

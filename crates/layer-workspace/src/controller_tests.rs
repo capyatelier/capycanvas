@@ -512,6 +512,13 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
     );
     f.input(serde_json::json!({"type":"form","kind":"rename","id":painter}));
     f.input(serde_json::json!({"type":"submit","name":"My Painter"}));
+    assert!(
+        f.controller
+            .view
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cannot be renamed"))
+    );
     assert_eq!(
         f.controller
             .view
@@ -520,8 +527,9 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
             .find(|r| r.id == painter)
             .unwrap()
             .title,
-        "My Painter"
+        "Painter"
     );
+    f.input(serde_json::json!({"type":"cancel"}));
     f.input(serde_json::json!({"type":"open","page":"workspaces"}));
     let row = f
         .controller
@@ -530,7 +538,7 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
         .iter()
         .find(|r| r.id == painter)
         .unwrap();
-    assert!(row.options);
+    assert!(!row.options);
     assert!(!row.delete);
     f.input(serde_json::json!({"type":"cancel"}));
     assert!(

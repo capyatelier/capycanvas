@@ -718,6 +718,8 @@ fn native_workspace_switcher_input() {
         assert!(handle.width() <= 16, "grips should stay narrow");
     }
     let popup = menu_button(&row(&w, &p)).unwrap().popover().unwrap();
+    assert!(find_button(popup.upcast_ref(), "Rename…").is_none());
+    assert!(find_button(popup.upcast_ref(), "Delete…").is_none());
     send(
         &dir,
         &mut step,
