@@ -708,6 +708,9 @@ body[data-theme="light"] .battery-charging path { fill:var(--battery-ink); strok
 .header-item-grip, .header-component-grip { display:flex; align-items:center; justify-content:center; width:20px; flex:none; opacity:.55; }
 .header-item-grip svg, .header-component-grip svg { width:12px; height:16px; }
 .header-editing .header-item { touch-action:none; cursor:grab; background:var(--bg); }
+#header.header-editing { z-index:1001; }
+.header-editing :is([data-header-overflow-item],[data-header-overflow-source]) { touch-action:none; cursor:grab; user-select:none; }
+.header-overflow-preview { display:flex; align-items:center; justify-content:flex-start; }
 .header-editing .header-item-content { pointer-events:none; user-select:none; }
 .header-editing .header-item.editing-selection { outline:2px solid var(--accent); outline-offset:-2px; }
 .header-zone { position:absolute; pointer-events:none; border-block:1px solid color-mix(in srgb,var(--accent) 35%,transparent); }

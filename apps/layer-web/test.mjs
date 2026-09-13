@@ -11,6 +11,7 @@ import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkTitleBarState} from "./title-bar-state.test.mjs";
 import {checkTitleBar} from "./title-bar.test.mjs";
 import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
+import {checkTitleBarOverflow} from "./title-bar-overflow.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -195,6 +196,8 @@ try {
   });
   if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls") || process.argv.includes("--title-bar") || process.argv.includes("--title-bar-state")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
+  if (process.argv.includes("--title-bar-overflow")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
+    `window.__overflowEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{const value={type,id:e.pointerId,pointer:e.pointerType,target:e.target.tagName,source:e.target.closest('details')?.id};__overflowEvents.push(value);setTimeout(()=>{value.prevented=e.defaultPrevented},0);},true)`});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
@@ -203,7 +206,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--title-bar-feedback")) {
+  if (process.argv.includes("--title-bar-overflow")) {
+    await checkTitleBarOverflow({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar-feedback")) {
     await checkTitleBarFeedback({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-state")) {

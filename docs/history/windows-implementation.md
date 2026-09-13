@@ -2673,3 +2673,12 @@ and preferences. GTK's replacement full-column opening remains a Windows port
 item, alongside the workspace-owned customizable title bar. This integration
 adds no claim of complete visual parity, physical input or 120 Hz acceptance,
 and does not refresh the previously validated portable/MSIX payloads.
+
+
+A later non-force atomic push encountered concurrent upstream title-bar overflow
+work through `0c472fb`. That integration preserves the cleaned-up drag constructor
+and adapts its two new test call sites. All 365 shared UI tests and strict Clippy
+pass; the normal Windows Release rebuild also passes. Windows does not yet invoke
+the shared HeaderDrag path, so the native editor/manager/multiwindow acceptance
+above continues to cover the unchanged native interaction paths. The additional
+header regression brings the ordinary test coverage across these suites to 671.

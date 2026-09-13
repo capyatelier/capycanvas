@@ -72,6 +72,15 @@ impl HeaderGeometry {
             distance(*a).total_cmp(&distance(*b))
         })?;
         let bounds = self.zones[zone.index()];
+        if let Some(overflow) = self.overflow[zone.index()]
+            && point[0] >= overflow.x
+        {
+            // The collapsed tail still has a before/after drop destination.
+            let before = (point[0] < overflow.x + overflow.width / 2.)
+                .then(|| self.hidden[zone.index()].first().copied())
+                .flatten();
+            return Some((zone, before));
+        }
         let before = self
             .items
             .iter()
@@ -142,26 +151,35 @@ impl HeaderDrag {
                 .iter()
                 .filter(|m| layout.location(m.id).is_some_and(|(z, _)| z == zone))
                 .collect::<Vec<_>>();
-            let index = items.iter().position(|m| m.id == id)?;
-            let tabs = items
-                .iter()
-                .enumerate()
-                .map(|(index, m)| TabHit {
-                    group: zone.index() as u32,
-                    index,
-                    bounds: m.bounds,
-                })
-                .collect::<Vec<_>>();
-            Some((
-                zone,
-                TabDrag::new(
-                    zone.index() as u32,
-                    index,
-                    press,
-                    &tabs,
-                    geometry.zones[zone.index()],
-                )?,
-            ))
+            if let Some(index) = items.iter().position(|m| m.id == id) {
+                let tabs = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, m)| TabHit {
+                        group: zone.index() as u32,
+                        index,
+                        bounds: m.bounds,
+                    })
+                    .collect::<Vec<_>>();
+                Some((
+                    zone,
+                    TabDrag::new(
+                        zone.index() as u32,
+                        index,
+                        press,
+                        &tabs,
+                        geometry.zones[zone.index()],
+                    )?,
+                ))
+            } else if geometry.overflow[zone.index()].is_some()
+                && geometry.hidden[zone.index()].contains(&id)
+            {
+                // An overflow row is a real item source, but has no visible
+                // tab slot to slide. Keep its native grab bounds through entry.
+                None
+            } else {
+                return None;
+            }
         } else {
             if let HeaderDragSource::Component(item) = source
                 && item.singleton()
@@ -174,6 +192,7 @@ impl HeaderDrag {
             }
             None
         };
+        let detached = slide.is_none();
         Some(Self {
             layout: layout.clone(),
             source,
@@ -184,7 +203,7 @@ impl HeaderDrag {
             press,
             grab,
             slide,
-            detached: !matches!(source, HeaderDragSource::Item(_)),
+            detached,
         })
     }
 
@@ -223,6 +242,7 @@ impl HeaderDrag {
         };
         if let (Some((zone, before)), Some((origin, slide))) = (&mut target, &self.slide)
             && zone == origin
+            && self.geometry.overflow[zone.index()].is_none_or(|b| point[0] < b.x)
         {
             let preview = slide.preview(point)?;
             // Tab insertion is an index before removal. Use original IDs so
@@ -382,6 +402,90 @@ mod tests {
             ));
             layout.remove(1).unwrap();
             assert!(!drag.is_current(&layout));
+        }
+    }
+    #[test]
+    fn overflow_sources_and_destinations_keep_stable_hidden_ids() {
+        for size in crate::HeaderSize::ALL {
+            let mut layout = HeaderLayout::painter();
+            layout.size = size;
+            let metrics = layout
+                .entries()
+                .map(|e| HeaderMetric {
+                    id: e.id,
+                    width: 200.,
+                    compact: 200.,
+                })
+                .collect::<Vec<_>>();
+            let geometry = layout.resolve(880., [0.; 2], &metrics, true);
+            let id = geometry.hidden[0][0];
+            let overflow = geometry.overflow[0].unwrap();
+            assert_eq!(
+                geometry.destination([overflow.x + 1., 24.], size.height()),
+                Some((HeaderZone::Left, Some(id)))
+            );
+            assert_eq!(
+                geometry.destination([overflow.x + overflow.width - 1., 24.], size.height()),
+                Some((HeaderZone::Left, None))
+            );
+            let visible = &geometry.items[0];
+            let mut drag = HeaderDrag::new(
+                &layout,
+                HeaderDragStart {
+                    source: HeaderDragSource::Item(visible.id),
+                    geometry: geometry.clone(),
+                    metrics: metrics.clone(),
+                    width: 880.,
+                    insets: [0.; 2],
+                    press: [visible.bounds.x + 10., 24.],
+                    grab: visible.bounds,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                drag.preview([overflow.x + 1., 24.]).unwrap().target,
+                Some((HeaderZone::Left, Some(id)))
+            );
+            assert_eq!(
+                drag.preview([overflow.x + overflow.width - 1., 24.])
+                    .unwrap()
+                    .target,
+                Some((HeaderZone::Left, None))
+            );
+            for grab in [
+                overflow,
+                Bounds {
+                    x: 90.,
+                    y: 100.,
+                    width: 180.,
+                    height: 34.,
+                },
+            ] {
+                let press = [grab.x + 12., grab.y + 10.];
+                let mut drag = HeaderDrag::new(
+                    &layout,
+                    HeaderDragStart {
+                        source: HeaderDragSource::Item(id),
+                        geometry: geometry.clone(),
+                        metrics: metrics.clone(),
+                        width: 880.,
+                        insets: [0.; 2],
+                        press,
+                        grab,
+                    },
+                )
+                .unwrap();
+                let detached = drag.preview([press[0] + 20., 260.]).unwrap();
+                assert_eq!(detached.held.x, grab.x + 20.);
+                assert_eq!(detached.held.y, 250.);
+                assert_eq!(detached.action, Some(HeaderAction::Remove { id }));
+                assert!(drag.is_current(&layout));
+                let reentry = drag.preview([440., 24.]).unwrap();
+                assert!(!reentry.detached);
+                assert!(
+                    matches!(reentry.action, Some(HeaderAction::Move { id: moved, zone: HeaderZone::Center, .. }) if moved == id)
+                );
+            }
         }
     }
     #[test]

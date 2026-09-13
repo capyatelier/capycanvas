@@ -59,19 +59,31 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   const overflow = zones.map((_, index) => {
     const node = menu(() => ({title:'Title Bar',sections:[]}), `More ${['left','center','right'][index]} title-bar items`, 'menu', 'header-overflow');
     node.id = `header-overflow-${index}`;
+    const rows=new Map();
     node.refreshMenu = () => {
-      const contents=node.querySelector('.popover'); contents.replaceChildren();
-      for(const id of geometry.hidden[index]) {
-        const spec=view.items.find(i=>i.id===id), entry=entries().find(e=>e.id===id);
-        const row=button(spec.label,()=>{
-          if(editing){node.open=false;select(id,true);}
-          else if(['menu','menu_labels','workspaces'].includes(entry.item.kind)) {
-            customization.renderMenu(contents, entry.item.kind==='workspaces'?application('window'):primary(),()=>{node.open=false;});
-          } else {node.open=false;activate(entry);}
-        });
-        row.dataset.headerOverflowItem=id; row.disabled=!editing&&!spec.enabled;
-        customization.target(row,{kind:'header',id}); contents.append(row);
+      const contents=node.querySelector('.popover');
+      for(const [id,row] of rows)if(!geometry.hidden[index].includes(id)){row.remove();rows.delete(id);}
+      for(const [order,id] of geometry.hidden[index].entries()) {
+        const spec=view.items.find(i=>i.id===id);
+        let row=rows.get(id);
+        if(!row) {
+          row=button('',()=>{
+            const entry=entries().find(e=>e.id===id);if(!entry)return;
+            if(editing){node.open=false;select(id,true);}
+            else if(['menu','menu_labels','workspaces'].includes(entry.item.kind)) {
+              customization.renderMenu(contents, entry.item.kind==='workspaces'?application('window'):primary(),()=>{node.open=false;});
+            } else {node.open=false;activate(entry);}
+          });
+          const grip=element('span','header-item-grip');grip.setAttribute('aria-hidden','true');grip.append(icon('grip'));
+          row.append(grip,element('span','header-overflow-label'));row.dataset.headerOverflowItem=id;
+          customization.target(row,{kind:'header',id});rows.set(id,row);
+        }
+        row.querySelector('.header-overflow-label').textContent=spec.label;
+        row.querySelector('.header-item-grip').hidden=!editing;row.disabled=!editing&&!spec.enabled;
+        if(contents.children[order]!==row)contents.insertBefore(row,contents.children[order]||null);
       }
+      // Nested application menus replace this container outside editing.
+      for(const child of [...contents.children])if(!rows.has(Number(child.dataset.headerOverflowItem)))child.remove();
       contents.style.left=`${Math.min(0,innerWidth-node.getBoundingClientRect().x-contents.offsetWidth-6)}px`;
     };
     root.append(node); return node;
@@ -222,6 +234,9 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     g.overflow.forEach((b,i)=>{
       if(!b){overflow[i].open=false;if(overflow[i].contains(document.activeElement))focus=view.model.zones[i].map(e=>records.get(e.id)).find(r=>!r.root.hidden)?.content.querySelector('summary,button')||root;}
       overflow[i].hidden=!b;if(b)place(overflow[i],b);
+      const summary=overflow[i].firstChild,ids=g.hidden[i];
+      if(editing&&ids.length===1)summary.dataset.headerOverflowSource=ids[0];
+      else delete summary.dataset.headerOverflowSource;
     });
     focus?.focus({preventScroll:true});
   }
@@ -240,11 +255,14 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   function queue(){if(!frame)frame=requestAnimationFrame(allocate);}
   function start(e) {
-    if(!editing||e.button!==0||contact||e.target.closest('.popover'))return;
-    const item=e.target.closest('[data-header-item]'),chip=e.target.closest('[data-header-component]');
-    if(!item&&!chip){if(e.target===root)select(null,true);return;}
-    const node=item||chip,source=item?{kind:'item',value:Number(item.dataset.headerItem)}:
-      chip.dataset.headerComponent==='tools'?{kind:'tools'}:{kind:'component',value:chips.get(chip.dataset.headerComponent).spec.item};
+    if(!editing||e.button!==0||contact)return;
+    const overflowItem=e.target.closest('[data-header-overflow-item],[data-header-overflow-source]');
+    if(e.target.closest('.popover')&&!overflowItem)return;
+    const item=overflowItem||e.target.closest('[data-header-item]'),chip=e.target.closest('[data-header-component]');
+    const chooser=e.target.closest('.header-overflow > summary');
+    if(!item&&!chip&&!chooser){if(e.target===root)select(null,true);return;}
+    const node=item||chip||chooser,source=item?{kind:'item',value:Number(item.dataset.headerItem??item.dataset.headerOverflowItem??item.dataset.headerOverflowSource)}:
+      chip?(chip.dataset.headerComponent==='tools'?{kind:'tools'}:{kind:'component',value:chips.get(chip.dataset.headerComponent).spec.item}):null;
     if(node.inert)return;
     if(item)select(source.value,true);
     contact={id:e.pointerId,node,parent:node.parentNode,source,press:point(e),grab:bounds(node),active:false,width:root.clientWidth};
@@ -257,14 +275,19 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     const p=point(e);
     if(!contact.active) {
       if(Math.hypot(p[0]-contact.press[0],p[1]-contact.press[1])<=8)return;
+      // A chooser for several hidden items opens on release; only an
+      // individually identified item can start a shared drag.
+      if(!contact.source){end(null,true);return;}
       if(!app.begin_header_drag({source:contact.source,width:contact.width,insets,metrics,press:contact.press,grab:contact.grab})){end(null,true);return;}
       contact.active=true;customization.dismissContext();suppressed=contact.id;
       ghost=contact.node.cloneNode(true);ghost.removeAttribute('id');
       for(const n of ghost.querySelectorAll('[id]'))n.removeAttribute('id');
       ghost.classList.add('header-drag-preview');ghost.inert=true;ghost.hidden=false;
+      if(contact.node.matches('[data-header-overflow-item]'))ghost.classList.add('header-overflow-preview');
       ghost.style.setProperty('--header-tile',`${size.tile}px`);ghost.style.setProperty('--header-icon',`${size.icon}px`);
       for(const name of ['--header-foreground','--header-background'])ghost.style.setProperty(name,root.style.getPropertyValue(name));
       workspace.append(ghost);root.classList.add('header-dragging');workspace.dataset.headerDragging='true';
+      for(const menu of root.querySelectorAll('details[open]'))menu.open=false;
     }
     const preview=app.header_drag_preview(...p);
     if(!preview){end(null,true);return;}
@@ -279,12 +302,19 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     cancel ||= root.clientWidth!==c.width || !c.node.isConnected || c.node.parentNode!==c.parent;
     if(cancel)customization.dismissContext();
     const action=c.active?app.finish_header_drag(...(e?point(e):c.press),cancel):null;
+    if(c.node.matches('[data-header-overflow-item],.header-overflow > summary')) {
+      if(!c.active&&!cancel) {
+        const menu=c.node.closest('details');
+        menu.open=c.node.tagName==='SUMMARY'&&!menu.open;
+      }
+      suppressed=c.id;
+    }
     ghost?.remove();ghost=null;root.classList.remove('header-dragging');delete workspace.dataset.headerDragging;
     for(const z of zones)z.classList.remove('header-drop-zone');
     if(workspace.hasPointerCapture(c.id))workspace.releasePointerCapture(c.id);
     if(geometry)present(geometry);
     if(action)dispatch(action);
-    if(c.source.kind==='item')select(entries().some(i=>i.id===c.source.value)?c.source.value:null,true);
+    if(c.source?.kind==='item')select(entries().some(i=>i.id===c.source.value)?c.source.value:null,true);
     queue();
   }
   root.addEventListener('pointerdown',start);bank.addEventListener('pointerdown',start);
