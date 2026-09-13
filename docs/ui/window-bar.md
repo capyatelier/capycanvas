@@ -1,49 +1,60 @@
 # Workspace window bar (GTK)
 
 The window bar is a workspace-owned arrangement of individual controls, not a
-dock for toolbar containers. Painter starts with Capy, Menu, Filters, Lasso and
-Transform on the left; workspace choices in the center; and Brush, Blend,
-Erase, Layers and Color on the right. It uses medium icons and hides canvas
-zoom/rotation. The canvas extends behind the transparent bar.
+dock for toolbar containers. The default workspaces are **Sketch**, **Paint** and
+**Photo** (their internal IDs remain unchanged). Paint starts with Capy, Main
+Menu, Filters, Lasso and Transform on the left; workspace choices in the center;
+and Brush, Blend, Erase, Layers, Color, Full Screen and Settings on the right.
+It uses medium icons and hides canvas zoom/rotation. The canvas extends behind
+the transparent bar. Existing saved workspace names and arrangements remain
+user-owned; changing the defaults does not reset them.
 
 ## Customize inline
 
-Choose **Window → Customize Workspace UI…**, press **Ctrl+Shift+U**, or use an
-item's secondary-click/long-press menu. The editor appears immediately below
-the bar, without opening a separate designer.
+Choose **Window → Customize Window Bar…** or use an item's
+secondary-click/long-press menu. The compact editor appears below the bar;
+there is no separate designer or opening shortcut.
 
-- A compact palette offers Capy, menus, workspace choices, document title,
-  clock, battery and spaces. Already-present singleton components are omitted;
-  removing one makes it available again. Click a component to add at the marked
-  position, or drag its grip directly into the bar. Component button bodies
-  require hold then drag with every device; grips need no hold.
-- Click in the bar to choose an insertion position, or click its **Left / Center /
-  Right** region label to append there. The marker and destination description
-  agree. Keyboard users can focus an item and press Enter/Space to insert before
-  it. Selecting a hidden item from More also chooses a position before that item.
-- **Add Tools…** opens the same searchable, multi-select picker used by toolbars,
-  separately from the editor. Filtering preserves selection. **Add Tools** inserts
-  the selected tools in selection order; picker **Cancel**/Escape returns to the
-  editor without changing its preview. Tools and spaces may repeat. Destination
-  validity and the 128-item limit are checked atomically in shared Rust.
-- Drag a grip immediately, or hold then drag an item body. The three regions
-  and insertion line show the destination. Release outside the bar or press
-  Escape to cancel. A touch/pen hold also opens the item's menu; a mouse hold
-  only arms dragging. See the [application convention](drag-and-reorder.md).
-- Click/tap an item and use **Remove**, or secondary-click/use Menu/Shift+F10
-  for move earlier/later, move between regions and remove. Delete removes a
-  focused item. Tab navigates while editing. The palette and editor controls wrap
-  at narrow widths; their height is measured, not a fixed catalog-sized panel.
-- **Small / Medium / Large** resizes the bar and its icons together. Native
-  window controls remain toolkit-owned and cannot be removed or rearranged.
-- **Options** controls canvas zoom/rotation visibility (always bottom right), and restores
-  the current workspace's baseline window bar. Window → Show Menu Bar controls
-  menu labels independently of the other items.
-- **Done** applies the preview; **Cancel** restores the bar and visibility from
-  when editing started. Escape cancels the active drag/menu first, then the editor.
-  Closing the window without Done does not save the preview. There is no editor
-  undo/redo stack. A completed customization is one ordinary workspace-history
-  change, separate from drawing history.
+- The palette offers **Add Tools…**, Capy, Main Menu, Menu Labels, Settings,
+  Full Screen, Workspaces, Document Title, Clock, Battery and Space.
+  Already-present singleton components are omitted. Removing one returns it
+  to the palette; tools disappear and can be added again using Add Tools.
+- Drag a component into the bar, or click it to insert at the marked position.
+  Click in the bar to choose a position; focusing an item also chooses a
+  position before it. There are no separate Left/Center/Right insertion buttons.
+- **Add Tools…** is a palette component, not a separate top-row action.
+  Clicking it or dropping it in the bar opens the same searchable, multi-select
+  picker used by toolbars. No Tools placeholder is saved. Filtering preserves
+  selection; confirming inserts tools in selection order. Picker Cancel/Escape
+  returns to the editor without adding anything.
+- Grips drag immediately after native movement slop; item and palette button
+  bodies require hold then drag for every device. Touch/pen holds can open the
+  existing context menu and continue into a drag; mouse holds only arm pickup.
+  See the [application convention](drag-and-reorder.md).
+- While held in the bar, the item tracks horizontally and its neighbors slide
+  to make room. Reorder thresholds use the same frozen-geometry algorithm as
+  tab groups, so animated neighbors do not cause oscillation. Moving more than
+  half a tile beyond the bar detaches the item. It then follows the pointer in
+  both axes with the original grab offset; a red outline indicates removal.
+  Returning inside reattaches it. Releasing detached outside removes an
+  existing item, but discards a new component. Escape, focus loss, source
+  replacement or window resizing cancels the active drag.
+- Click/tap a bar item to select it. **Left/Right** moves it one position,
+  crossing into the adjacent section at a boundary. **Delete/Backspace**
+  removes it. Native Tab, button activation and Menu/Shift+F10 continue to work;
+  there are no other custom editor shortcuts, arrangement buttons or Help.
+  The overflow menu also lets you select a hidden item for keyboard editing.
+- **Small / Medium / Large** resizes the bar and its icons together. Items
+  have consistent 6px gaps; **Space** adds exactly one tile, never flexible
+  space. Native window controls remain toolkit-owned and fixed.
+- **Show zoom and rotation** toggles the bottom-right canvas readout.
+  Its position is not customizable. Menu labels are added or removed as a
+  component, with no separate Show Menu Bar toggle.
+- **Done** commits the preview; **Cancel** restores the arrangement and canvas
+  visibility from when editing began. Closing without Done does not save the
+  preview. There is no Reset Bar or editor undo/redo stack. A completed edit
+  is one ordinary workspace-history change, separate from drawing history.
+  Drag motion itself never mutates the session or saves intermediate layouts.
 
 Tool tiles have 6px gaps; drawer origins have square bottom corners while open.
 An open action drawer (for example Color or Layers) gives its tile neutral grey
@@ -106,9 +117,22 @@ search field. The focused Web check protects the shared picker's existing toolba
 destinations; it does not imply that Web implements this GTK editor.
 
 Additional native cases are `native_header_editor_controls_input` (all component
-types, options, empty-bar recovery and defaults), `native_header_spacing_visual`
+types, sizes, visibility, empty-bar recovery and defaults),
+`native_header_editor_keyboard_input` (menu entry, focus, navigation,
+reordering, cross-region moves, contextual actions, removal and cancellation),
+`native_header_editor_short_window_input` (640×480 minimum window, full palette,
+bounded panel and keyboard access to Done),
+`native_header_spacing_visual`
 (both themes, all sizes, gaps, corners and grip alignment),
 `native_header_hold_context_input`, `native_header_cancel_caption_input`, and
-`native_drawer_dismissal_input`. Inspect their captured screenshots as well as
+`native_drawer_dismissal_input`. The new `native_header_slide_remove_input`
+checks live neighbor shifts, backtracking, grab offsets, detachment, re-entry,
+removal and palette return with mouse and touch; run it at 1× and 2×.
+`native_header_overflow_drag_input` runs at 640×600 and checks that hidden
+neighbors survive preview, removal and Cancel at every size.
+`native_header_tools_drop_input` checks the palette-to-modal handoff, and
+`native_header_window_actions_input` checks Settings and Full Screen at all
+sizes, including reopening Settings and restoring keyboard focus.
+Inspect their captured screenshots as well as
 assertions. Physical pen input and non-GTK window managers still require their
 own platform/hardware validation.

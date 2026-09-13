@@ -47,7 +47,9 @@ impl NativeWorkspaces {
                 let suffix = DEFAULT_WORKSPACES
                     .iter()
                     .find(|(key, _)| *key == id)
-                    .map(|(_, p)| p.name().to_lowercase())
+                    // Test/accessibility identity follows the stable workspace
+                    // ID, not a display label that can be shortened or renamed.
+                    .map(|(key, _)| key.rsplit(':').next().unwrap().to_string())
                     .unwrap_or_else(|| id.clone());
                 button.set_widget_name(&format!("workspace-switch-{suffix}"));
                 button.set_group(buttons.first().map(|(_, b)| b));

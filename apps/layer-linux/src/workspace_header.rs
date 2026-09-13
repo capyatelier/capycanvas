@@ -1,6 +1,8 @@
 //! GTK projection of workspace-owned window-bar items.
 use super::*;
 
+#[path = "workspace_header_drag.rs"]
+mod drag;
 #[path = "workspace_header_editor.rs"]
 mod editor;
 
@@ -94,8 +96,18 @@ pub(super) struct Header {
     geometry: RefCell<HeaderGeometry>,
     measuring: Cell<bool>,
     drop: Cell<Option<(HeaderZone, Option<u32>)>>,
+    drag: RefCell<Option<drag::NativeHeaderDrag>>,
+    insets: Cell<[f32; 2]>,
 }
 impl Header {
+    #[cfg(test)]
+    pub fn geometry_for_test(&self) -> HeaderGeometry {
+        self.geometry.borrow().clone()
+    }
+    #[cfg(test)]
+    pub fn drag_for_test(&self) -> Option<HeaderDragPreview> {
+        self.drag.borrow().as_ref().map(|d| d.preview.clone())
+    }
     pub fn new() -> Self {
         let root: BarSurface = glib::Object::new();
         root.set_widget_name("workspace-window-bar");
@@ -132,9 +144,6 @@ impl Header {
         root.add(&recovery);
         let editor = editor::Editor::new();
         root.add(&editor.root);
-        for zone in &editor.zones {
-            root.add(zone);
-        }
         Self {
             root,
             handle,
@@ -148,6 +157,8 @@ impl Header {
             geometry: RefCell::new(HeaderGeometry::default()),
             measuring: Cell::new(false),
             drop: Cell::new(None),
+            drag: RefCell::new(None),
+            insets: Cell::new([0.; 2]),
         }
     }
     pub fn height(&self) -> f32 {
@@ -184,11 +195,52 @@ impl Header {
                         .iter()
                         .find(|m| m.bounds.contains(x as f32, y as f32))
                         .map(|m| m.id);
+                    if let Some(id) = selected {
+                        if let Some(item) =
+                            w.header.items.borrow().iter().find(|i| i.entry.id == id)
+                        {
+                            item.root.grab_focus();
+                        }
+                    } else {
+                        w.header.root.grab_focus();
+                    }
                     w.header.editor.select(&w, zone, before, selected);
                 }
             }
         ));
         self.root.add_controller(pick);
+        // Only empty editable bar space belongs to this menu. Native caption
+        // menus outside editing and menus on actual controls retain ownership.
+        let background = gtk::GestureClick::new();
+        background.set_button(3);
+        background.set_propagation_phase(gtk::PropagationPhase::Capture);
+        background.connect_pressed(glib::clone!(
+            #[weak]
+            w,
+            move |gesture, _, x, y| {
+                if let Some((zone, before)) = w.header.drop_at([x as f32, y as f32])
+                    && !w
+                        .header
+                        .geometry
+                        .borrow()
+                        .items
+                        .iter()
+                        .any(|m| m.bounds.contains(x as f32, y as f32))
+                    && w.header.root.pick(x, y, gtk::PickFlags::DEFAULT).as_ref()
+                        == Some(w.header.root.upcast_ref())
+                {
+                    w.header.editor.select(&w, zone, before, None);
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    w.show_context(
+                        w.header.root.upcast_ref(),
+                        ContextTarget::Header { id: None },
+                        x,
+                        y,
+                    );
+                }
+            }
+        ));
+        self.root.add_controller(background);
         for (i, button) in self.overflow.iter().enumerate() {
             button.set_create_popup_func(glib::clone!(
                 #[weak]
@@ -223,25 +275,67 @@ impl Header {
             w,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, _, _modifiers| {
-                if key == gdk::Key::Escape
-                    && w.header.editing.get()
-                    && w.window.visible_dialog().is_none()
-                {
+            move |_, key, _, modifiers| {
+                if !w.header.editing.get() || w.window.visible_dialog().is_some() {
+                    return glib::Propagation::Proceed;
+                }
+                if key == gdk::Key::Escape {
                     let drag = w.workspace_drag.borrow().clone();
                     if let Some(drag) = drag {
                         w.workspace_drag_input(ContactPhase::Cancel, drag.point, drag.sequence);
                         return glib::Propagation::Stop;
                     }
-                    if w.popovers
-                        .borrow()
-                        .iter()
-                        .filter_map(|p| p.upgrade())
-                        .any(|p| p.is_visible())
+                }
+                if w.popovers
+                    .borrow()
+                    .iter()
+                    .filter_map(|p| p.upgrade())
+                    .any(|p| p.is_visible())
+                {
+                    return glib::Propagation::Proceed;
+                }
+                if matches!(key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab) {
+                    let direction = if key == gdk::Key::ISO_Left_Tab
+                        || modifiers.contains(gdk::ModifierType::SHIFT_MASK)
                     {
-                        return glib::Propagation::Proceed;
+                        gtk::DirectionType::TabBackward
+                    } else {
+                        gtk::DirectionType::TabForward
+                    };
+                    if !w.header.root.child_focus(direction) {
+                        gtk::prelude::GtkWindowExt::set_focus(&w.window, None::<&gtk::Widget>);
+                        w.header.root.child_focus(direction);
                     }
-                    w.dispatch(HeaderAction::Cancel.action());
+                    return glib::Propagation::Stop;
+                }
+                // Native Tab/Enter/menu behavior is unchanged. The only editor
+                // commands are moving or removing the selected bar item.
+                let focused_in_bar =
+                    gtk::prelude::GtkWindowExt::focus(&w.window).is_some_and(|f| {
+                        f == w.header.root
+                            || (f.is_ancestor(&w.header.root)
+                                && !f.is_ancestor(&w.header.editor.root))
+                    });
+                if focused_in_bar
+                    && modifiers
+                        .intersection(
+                            gdk::ModifierType::CONTROL_MASK
+                                | gdk::ModifierType::ALT_MASK
+                                | gdk::ModifierType::SHIFT_MASK
+                                | gdk::ModifierType::SUPER_MASK,
+                        )
+                        .is_empty()
+                    && let Some(id) = w.header.editor.selected_item()
+                {
+                    match key {
+                        gdk::Key::Delete | gdk::Key::BackSpace => {
+                            w.dispatch(HeaderAction::Remove { id }.action())
+                        }
+                        gdk::Key::Left | gdk::Key::Right => {
+                            w.header.editor.move_item(&w, id, key == gdk::Key::Right)
+                        }
+                        _ => return glib::Propagation::Proceed,
+                    }
                     return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
@@ -252,20 +346,27 @@ impl Header {
     pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
         let model = &state.workspace.layout.header;
         let editing = state.customization.header_editing;
-        let rebuild =
-            self.editing.replace(editing) != editing || self.model.borrow().as_ref() != Some(model);
+        let was_editing = self.editing.replace(editing);
+        let rebuild = was_editing != editing || self.model.borrow().as_ref() != Some(model);
         self.editor.refresh(model, editing);
+        self.editor
+            .refresh_canvas_info(state.workspace.layout.canvas_info.visible);
         self.handle.set_can_target(!editing);
+        self.root.set_focusable(editing);
         if rebuild {
             // Replacement invalidates the native source. Never complete a
             // pending drop against a different workspace or newly rebuilt item.
-            let drag =
-                w.workspace_drag.borrow().clone().filter(|d| {
-                    matches!(d.target, DragTarget::Header(_) | DragTarget::HeaderAdd(_))
-                });
+            let drag = w
+                .workspace_drag
+                .borrow()
+                .clone()
+                .filter(|d| matches!(d.target, DragTarget::Header(_)));
             if let Some(drag) = drag {
                 w.workspace_drag_input(ContactPhase::Cancel, drag.point, drag.sequence);
             }
+            // Return focus from the shared context menu before recording the
+            // item to restore across a model-driven widget replacement.
+            w.dismiss_context();
             // Item widgets are projections. Preserve keyboard position across
             // their replacement, including removal of the focused item.
             let focused = gtk::prelude::GtkWindowExt::focus(&w.window).and_then(|focus| {
@@ -276,7 +377,6 @@ impl Header {
             });
             let focused_id = focused.map(|index| self.items.borrow()[index].entry.id);
             self.drop.set(None);
-            w.dismiss_context();
             for popup in &self.overflow {
                 popup.popdown();
             }
@@ -318,8 +418,13 @@ impl Header {
                 if let Some(item) = next {
                     item.root.grab_focus();
                 } else {
-                    self.editor.size.grab_focus();
+                    self.editor.focus();
                 }
+            }
+            if editing && !was_editing {
+                self.editor.focus();
+            } else if !editing && was_editing {
+                w.area.grab_focus();
             }
             self.root.queue_allocate();
             w.surface.queue_allocate();
@@ -341,6 +446,8 @@ impl Header {
                 let (enabled, active) = match item.entry.item {
                     HeaderItem::Tool { control } => tool_state(state, control),
                     HeaderItem::Capy => (true, state.workspace.zen_mode),
+                    // Full Screen is an action, not a selected drawing tool.
+                    HeaderItem::Fullscreen => (true, false),
                     _ => (true, false),
                 };
                 button.set_sensitive(enabled || editing);
@@ -351,6 +458,23 @@ impl Header {
                     .is_some_and(|d| d.anchor == DrawerAnchor::Header { id: item.entry.id });
                 selected(button, active);
                 customization::drawer_origin(button, drawer.then_some(Edge::Bottom));
+                if item.entry.item == HeaderItem::Fullscreen
+                    && let Some(image) = button.child().and_downcast::<gtk::Image>()
+                {
+                    crate::icons::set(
+                        &image,
+                        Some(if state.fullscreen {
+                            "layer-fullscreen-exit-symbolic"
+                        } else {
+                            "layer-fullscreen-enter-symbolic"
+                        }),
+                    );
+                    button.set_tooltip_text(Some(if state.fullscreen {
+                        "Leave Full Screen"
+                    } else {
+                        "Full Screen"
+                    }));
+                }
                 if item.entry.item == HeaderItem::Capy {
                     if let Some(image) = button.child().and_downcast::<gtk::Image>() {
                         let icon = state
@@ -395,8 +519,19 @@ impl Header {
             }
         }
     }
-    pub fn select_drop(&self, w: &Workspace, zone: HeaderZone, before: Option<u32>) {
-        self.editor.select(w, zone, before, None);
+    pub fn is_editing(&self) -> bool {
+        self.editing.get()
+    }
+    pub fn select_context_item(&self, w: &Workspace, id: u32) {
+        let zone = self
+            .model
+            .borrow()
+            .as_ref()
+            .and_then(|m| m.location(id))
+            .map(|(z, _)| z);
+        if let Some(zone) = zone {
+            self.editor.select(w, zone, Some(id), Some(id));
+        }
     }
     fn build_item(
         &self,
@@ -414,7 +549,10 @@ impl Header {
         let mut button = None;
         let mut compact = None;
         let content: gtk::Widget = match entry.item {
-            HeaderItem::Capy | HeaderItem::Tool { .. } => {
+            HeaderItem::Capy
+            | HeaderItem::Tool { .. }
+            | HeaderItem::Settings
+            | HeaderItem::Fullscreen => {
                 let b = gtk::Button::new();
                 b.add_css_class("flat");
                 b.add_css_class("header-tool");
@@ -424,6 +562,8 @@ impl Header {
                         control: ToolbarControl::Color,
                     } => "colors",
                     HeaderItem::Tool { control } => tool_choice(control).icon,
+                    HeaderItem::Settings => "settings",
+                    HeaderItem::Fullscreen => "fullscreen-enter",
                     _ => ZenIcon::LookingUp.icon(),
                 };
                 let image = if matches!(
@@ -465,8 +605,13 @@ impl Header {
                     b.set_child(Some(&line));
                 }
                 let id = entry.id;
-                let capy = entry.item == HeaderItem::Capy;
-                if capy {
+                let command = match entry.item {
+                    HeaderItem::Capy => Some(CommandId::ZenMode),
+                    HeaderItem::Settings => Some(CommandId::Settings),
+                    HeaderItem::Fullscreen => Some(CommandId::Fullscreen),
+                    _ => None,
+                };
+                if command == Some(CommandId::ZenMode) {
                     w.commands
                         .borrow_mut()
                         .push((CommandId::ZenMode, b.clone()));
@@ -476,10 +621,8 @@ impl Header {
                     w,
                     move |_| {
                         if !w.header.editing.get() {
-                            w.dispatch(if capy {
-                                UiAction::Invoke {
-                                    command: CommandId::ZenMode,
-                                }
+                            w.dispatch(if let Some(command) = command {
+                                UiAction::Invoke { command }
                             } else {
                                 UiAction::ActivateHeaderItem { id }
                             });
@@ -581,17 +724,36 @@ impl Header {
             grip.add_css_class("flat");
             grip.add_css_class("header-grip");
             grip.set_valign(gtk::Align::Center);
+            grip.set_focusable(false);
             grip.set_size_request(20, 28);
             grip.set_widget_name(&format!("header-grip-{}", entry.id));
             grip.set_tooltip_text(Some("Drag to move this item"));
-            w.register_drag(&grip, DragTarget::Header(entry.id));
+            w.register_drag(&grip, DragTarget::Header(HeaderDragSource::Item(entry.id)));
             root.append(&grip);
         }
         root.append(&content);
         self.root.add(&root);
-        w.register_drag(&root, DragTarget::Header(entry.id));
+        w.register_drag(&root, DragTarget::Header(HeaderDragSource::Item(entry.id)));
         w.install_context(&root, ContextTarget::Header { id: Some(entry.id) });
         let id = entry.id;
+        root.connect_has_focus_notify(glib::clone!(
+            #[weak]
+            w,
+            move |root| {
+                if root.has_focus() && w.header.editing.get() {
+                    let zone = w
+                        .header
+                        .model
+                        .borrow()
+                        .as_ref()
+                        .and_then(|m| m.location(id))
+                        .map(|(z, _)| z);
+                    if let Some(zone) = zone {
+                        w.header.editor.select(&w, zone, Some(id), Some(id));
+                    }
+                }
+            }
+        ));
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed(glib::clone!(
@@ -611,22 +773,6 @@ impl Header {
                         0.,
                         root.height() as f64,
                     );
-                    return glib::Propagation::Stop;
-                }
-                if matches!(key, gdk::Key::Return | gdk::Key::space) && w.header.editing.get() {
-                    if let Some((zone, _)) = w
-                        .header
-                        .model
-                        .borrow()
-                        .as_ref()
-                        .and_then(|m| m.location(id))
-                    {
-                        w.header.editor.select(&w, zone, Some(id), Some(id));
-                    }
-                    return glib::Propagation::Stop;
-                }
-                if key == gdk::Key::Delete && w.header.editing.get() {
-                    w.dispatch(HeaderAction::Remove { id }.action());
                     return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
@@ -664,8 +810,12 @@ impl Header {
                 let natural = match item.entry.item {
                     HeaderItem::Workspaces => item.switcher_width().max(144.),
                     HeaderItem::DocumentTitle => 180.,
-                    HeaderItem::Space => size.tile() / 2.,
-                    HeaderItem::Capy | HeaderItem::Tool { .. } | HeaderItem::Menu => size.tile(),
+                    HeaderItem::Space
+                    | HeaderItem::Settings
+                    | HeaderItem::Fullscreen
+                    | HeaderItem::Capy
+                    | HeaderItem::Tool { .. }
+                    | HeaderItem::Menu => size.tile(),
                     _ => item
                         .content
                         .measure(gtk::Orientation::Horizontal, -1)
@@ -738,8 +888,11 @@ impl Header {
             && !model.entries().any(|e| {
                 matches!(
                     e.item,
-                    HeaderItem::Menu | HeaderItem::Capy | HeaderItem::Workspaces
-                ) || (e.item == HeaderItem::MenuLabels && model.show_menu_labels)
+                    HeaderItem::Menu
+                        | HeaderItem::Capy
+                        | HeaderItem::Workspaces
+                        | HeaderItem::MenuLabels
+                )
             });
         self.recovery.set_child_visible(recovery);
         if recovery {
@@ -757,9 +910,30 @@ impl Header {
             native[0],
             native[1] + if recovery { model.size.tile() } else { 0. },
         ];
+        self.insets.set(insets);
         let geometry = model.resolve(width, insets, &self.metrics(model.size), self.editing.get());
+        if self
+            .drag
+            .borrow()
+            .as_ref()
+            .is_some_and(|drag| !drag.fits(width, insets))
+        {
+            let pending = w.workspace_drag.borrow().clone();
+            if let Some(pending) = pending {
+                w.workspace_drag_input(ContactPhase::Cancel, pending.point, pending.sequence);
+            }
+        }
         for item in self.items.borrow().iter() {
             let allocation = geometry.items.iter().find(|m| m.id == item.entry.id);
+            if allocation.is_none()
+                && self.editing.get()
+                && gtk::prelude::GtkWindowExt::focus(&w.window)
+                    .is_some_and(|f| f == item.root || f.is_ancestor(&item.root))
+            {
+                // A move or resize can put the focused item in overflow. Keep
+                // its selection editable from the panel instead of losing focus.
+                self.root.grab_focus();
+            }
             item.root.set_child_visible(allocation.is_some());
             if let Some(a) = allocation {
                 if item.compact.is_some()
@@ -786,7 +960,8 @@ impl Header {
         }
         if self.editing.get() {
             let old_height = self.editor.height.get();
-            self.editor.allocate(width, height, &geometry);
+            self.editor
+                .allocate(width, height, w.surface.height() as f32);
             if old_height != self.editor.height.get() {
                 w.surface.queue_allocate();
             }
@@ -834,24 +1009,8 @@ impl Header {
         if !self.editing.get() {
             return None;
         }
-        let geometry = self.geometry.borrow();
-        HeaderZone::ALL.into_iter().find_map(|zone| {
-            let bounds = geometry.zones[zone.index()];
-            if !bounds.contains(point[0], point[1]) {
-                return None;
-            }
-            let before = geometry
-                .items
-                .iter()
-                .filter(|m| bounds.contains(m.bounds.x + m.bounds.width / 2., m.bounds.y + 1.))
-                .find(|m| point[0] < m.bounds.x + m.bounds.width / 2.)
-                .map(|m| m.id);
-            Some((zone, before))
-        })
-    }
-    pub fn drag_motion(&self, point: [f32; 2]) {
-        self.drop.set(self.drop_at(point));
-        self.root.queue_draw();
+        let height = self.model.borrow().as_ref()?.size.height();
+        self.geometry.borrow().destination(point, height)
     }
     pub fn clear_drop(&self) {
         self.drop.set(None);
@@ -887,7 +1046,9 @@ impl Header {
                 );
             }
         }
-        if let Some((zone, before)) = self.drop.get().or(Some(self.editor.insertion.get())) {
+        if self.drag.borrow().is_none()
+            && let Some((zone, before)) = self.drop.get().or(Some(self.editor.insertion.get()))
+        {
             let bounds = geometry.zones[zone.index()];
             let x = before
                 .and_then(|id| {
@@ -941,6 +1102,7 @@ impl Header {
                             w.header
                                 .editor
                                 .select(&w, HeaderZone::ALL[zone], Some(id), Some(id));
+                            w.header.root.grab_focus();
                         } else {
                             popover.popdown();
                             w.header.activate_overflow(&w, id);
@@ -979,9 +1141,15 @@ impl Header {
                 });
                 w.dispatch(UiAction::ActivateHeaderItem { id });
             }
-            HeaderItem::Capy => w.dispatch(UiAction::Invoke {
-                command: CommandId::ZenMode,
-            }),
+            HeaderItem::Capy | HeaderItem::Settings | HeaderItem::Fullscreen => {
+                w.dispatch(UiAction::Invoke {
+                    command: match entry.item {
+                        HeaderItem::Capy => CommandId::ZenMode,
+                        HeaderItem::Settings => CommandId::Settings,
+                        _ => CommandId::Fullscreen,
+                    },
+                })
+            }
             _ => {
                 let zone = self
                     .model

@@ -143,9 +143,9 @@ CAPY_WORKSPACE_DIR="$preview_dir/workspaces" LAYER_SETTINGS_FILE="$preview_dir/s
   dbus-run-session -- target/release/layer-linux
 ```
 
-Choose Painter, then Window → Customize Workspace UI… or Ctrl+Shift+U.
+Choose Paint, then Window → Customize Window Bar….
 Keep the printed/assigned profile path to reopen the same review workspace.
-Existing customized Painter histories deliberately do not receive the new
+Existing customized workspace histories deliberately do not receive the new
 defaults automatically, so a fresh profile is useful when reviewing the design.
 
 ## Acceptance (must be tested, not inferred from serialized state)
@@ -163,7 +163,7 @@ defaults automatically, so a fresh profile is useful when reviewing the design.
 - Recovery with menu/Capy/switcher removed; native close remains protected.
 - Workspace switching, duplicate/saved layouts, restart persistence;
   preview/cancel produce no saved revisions and Done applies the edit once.
-- Overlay visibility at bottom right, menu-label toggle under Window, true Zen return.
+- Overlay visibility at bottom right, menu-label component add/remove, true Zen return.
 - Caption drag, double/secondary click, maximized/fullscreen, light/dark, 1x/2x.
 - Shared unit/bridge tests, GTK isolated real-input tests, Web regressions,
   actual release executable and screenshot inspection. Report physical-device
@@ -201,3 +201,104 @@ name: Cargo substring filtering had accidentally selected both the default
 workspace and default-recovery tests. Physical pen and other native platforms
 were not revalidated by this integration. The Web build is a merge check, not a
 port of the GTK window-bar editor.
+
+## GTK editor ergonomics — 2026-09-13
+
+Replaced the full-width region strip and mixed Options/action rows with a
+460px-wide inline panel. The component palette and Add Tools are at the top,
+with insertion region/position immediately beside them. Selected-item actions
+are separate from adding; size and canvas-info visibility follow, then Reset
+Bar and adjacent Cancel/Done. Size is a labeled segmented choice, not a popup;
+the former cryptic footer is replaced by explicit help on demand. The panel
+measures its content and scrolls at the available window height.
+
+Editing context menus omit redundant Customize and global Capy preferences,
+disable the current region and impossible moves, and offer Done/Cancel.
+Empty editable bar space has its own menu; native caption menus outside editing
+and native window controls retain ownership. Context selection follows the
+clicked item. Shared context popovers restore their keyboard invoker on close.
+
+Keyboard entry establishes panel focus. F6 switches between panel and bar;
+arrows/Home/End select items, Alt+arrows reorder, Alt+Shift+arrows move regions,
+Delete removes, and Menu/Shift+F10 opens actions. Tab/Shift+Tab stay within the
+customization surface, with native popovers and nested dialogs retaining their
+own navigation. Rebuilds preserve focus; an overflowing item retains selection
+in the panel. Key releases still reach shared shortcut bookkeeping so repeated
+Ctrl+Shift+U entry works after Done/Cancel. Escape cancels drag/menu before preview.
+
+Validation: release GTK build; 435 shared tests (338 UI, 25 host, 72 native
+workspace; one hardware-GPU host case ignored). Thirteen isolated native runs
+passed, with no invalid header measurements or GTK criticals in their test logs:
+
+- Component hold/grip mouse/touch input: `wiS86W`; same at 2× scale: `4KhT60`.
+- Picker and nested cancellation: `TAdGx5`; held context menus: `DQwBmA`;
+  caption/Zen/cancellation: `aUJID8`; editor controls/defaults: `AcwdtB`.
+- Extended keyboard/context/focus/reopen journey: `iXLHze` (including the final
+  labeled Help button); minimum 640×480
+  window with every component available and keyboard Done access: `9dLgN4`.
+- Managed workspace persistence/restart: `uDtngz`; 640×600 overflow: `jpT0iQ`.
+- Drawer dismissal on bars/toolbars: `w9nKCP`; actual drawer controls: `x5G7At`.
+- Both themes/all sizes, shared SVGs and spacing: `PHJDke`.
+
+IDs above are under `/tmp/capy-workspace-motion.<ID>`. Reviewed the actual
+light/dark editor captures, narrow overflow layout, and minimum-window Done
+capture. The app's existing minimum window height is 480px; the short-window
+test uses that supported minimum. These checks use real GTK mouse, virtual
+touch and keyboard input under private Mutter, not physical pen hardware or
+other hosts. No Web editor port, workspace reset, or remote push in this change.
+
+## Simplified window-bar palette and live drag — 2026-09-13
+
+Supersedes the editor controls and shortcuts described in the ergonomics entry
+above. The 420px inline panel now contains only the wrapping component palette,
+bar size, bottom-right canvas-readout visibility, and Cancel/Done. Add Tools is
+a palette component: clicking or dropping it opens the existing modal toolbar
+tool picker. There are no region buttons, selected-item action row, Help, Reset,
+or dedicated opening/focus/movement shortcut combinations. Left/Right moves the
+selected bar item, including across region boundaries; Delete/Backspace removes
+it. Native Tab, button and context-menu navigation remain available.
+
+Removed the separate Show Menu Bar state/action as well as its menu entry;
+Menu Labels is simply a component to add/remove. All visible entry points say
+Customize Window Bar. The Window menu puts this entry first so recovery remains
+reachable at the minimum window height. Space has exactly one tile of width,
+with the normal 6px inter-item spacing and an additional grip only while editing.
+Defaults now use Sketch/Paint/Photo and include Full Screen and Settings on the
+right. Existing saved names/layouts are not reset or migrated.
+
+The shared HeaderDrag policy uses the existing TabDrag frozen-slot algorithm
+for horizontal movement. GTK retains/snapshots the actual item widgets, animates
+neighbors, and preserves the original grab offset. Half a tile beyond the bar
+detaches the item; an outside release removes it, returning singleton components
+to the palette. Re-entering reattaches the same contact. Motion never publishes
+session changes; release produces one edit, and editor Cancel restores its full
+starting state. Hidden overflow neighbors are captured without reparenting and
+remain intact after removal/cancellation. Native hold/slop/device arbitration
+still follows the application drag convention.
+
+Native testing also found and fixed missing keyboard focus when reopening the
+retained Settings dialog. Constrained-popover test coordinates now use the
+actual GdkPopup position rather than its unpositioned widget allocation.
+
+Validation passed: release GTK executable and isolated executable smoke capture
+(`/tmp/capy-header-release.957uAV/release.png`); 438 shared tests (341 UI, 25 host,
+72 native workspace; one hardware-specific host case ignored); and 17 isolated
+native runs with no GTK criticals or rejected header measurements:
+
+- Live slide/tear-off/re-entry/removal with mouse and touch: `o5i2xv`; 2×: `c5oMQb`.
+- Palette Tools drop/modal handoff: `XI7iwa`; click/search/multi-select: `qxPWQG`.
+- Catalog hold/grip/cancel: `V9JzY5`; context holds: `zXtnXD`.
+- Keyboard/region boundaries/removal: `fL9BGu`; all editor controls: `Qb4HEu`.
+- Managed save/switch/reopen: `d39qsy`; caption/Zen/cancel/blur: `nIQbyS`.
+- Settings/fullscreen/reopen at all sizes: `DuhDkM`.
+- 640×600 overflow activation/picker: `vK3AHb`; overflow drag at all sizes with
+  mouse/touch, hidden entries, removal and Cancel: `bnEUHn`.
+- 640×480 full-palette/footer/recovery entry: `4K3CLH`.
+- Both themes/all sizes, one-tile Space, gaps, corners and grips: `LbOqpz`.
+- Drawer dismissal on bar and toolbars: `QcOA9o`; drawer controls: `HFbVjG`.
+
+Native IDs are under `/tmp/capy-workspace-motion.<ID>`. Inspected the actual
+default bar, light/dark editor, sliding and detached ghosts, narrow overflow
+drag and minimum-window captures. These tests deliver real GTK mouse, virtual
+touch and keyboard input under private Mutter; physical pen and other hosts
+were not revalidated. Nothing was pushed and no existing user profile was wiped.

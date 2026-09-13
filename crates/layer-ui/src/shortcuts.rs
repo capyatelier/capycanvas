@@ -228,7 +228,6 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ZoomIn" => key("=", true, false),
         "command.ZoomOut" => key("-", true, false),
         "command.ZenMode" => key("tab", false, false),
-        "command.CustomizeWorkspaceUi" => key("u", true, true),
         // Browser-owned F11 is already excluded by KeyChord::available(Web).
         "command.Fullscreen" => key("f11", false, false),
         "command.Undo" => key("z", true, false),

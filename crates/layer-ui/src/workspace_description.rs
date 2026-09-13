@@ -70,13 +70,6 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
     if before.header != after.header {
         return if before.header.size != after.header.size {
             format!("Set window bar size to {}", after.header.size.label())
-        } else if before.header.show_menu_labels != after.header.show_menu_labels {
-            if after.header.show_menu_labels {
-                "Show menu bar"
-            } else {
-                "Hide menu bar"
-            }
-            .into()
         } else if let Some(e) = after
             .header
             .entries()

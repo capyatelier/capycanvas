@@ -69,6 +69,8 @@ pub enum HeaderItem {
     Capy,
     Menu,
     MenuLabels,
+    Settings,
+    Fullscreen,
     Workspaces,
     DocumentTitle,
     Clock,
@@ -77,10 +79,12 @@ pub enum HeaderItem {
     Tool { control: ToolbarControl },
 }
 impl HeaderItem {
-    pub const COMPONENTS: [Self; 8] = [
+    pub const COMPONENTS: [Self; 10] = [
         Self::Capy,
         Self::Menu,
         Self::MenuLabels,
+        Self::Settings,
+        Self::Fullscreen,
         Self::Workspaces,
         Self::DocumentTitle,
         Self::Clock,
@@ -92,6 +96,8 @@ impl HeaderItem {
             Self::Capy => "Capy (Zen Mode)",
             Self::Menu => "Main Menu",
             Self::MenuLabels => "Menu Labels",
+            Self::Settings => "Settings",
+            Self::Fullscreen => "Full Screen",
             Self::Workspaces => "Workspace Switcher",
             Self::DocumentTitle => "Document Title",
             Self::Clock => "Clock",
@@ -117,14 +123,12 @@ pub struct HeaderEntry {
 pub struct HeaderLayout {
     pub size: HeaderSize,
     pub zones: [Vec<HeaderEntry>; 3],
-    pub show_menu_labels: bool,
     next_id: u32,
 }
 impl Default for HeaderLayout {
     fn default() -> Self {
         Self::from_items(
             HeaderSize::Small,
-            true,
             [
                 vec![HeaderItem::Capy, HeaderItem::MenuLabels],
                 vec![HeaderItem::DocumentTitle],
@@ -132,27 +136,32 @@ impl Default for HeaderLayout {
                     HeaderItem::Workspaces,
                     HeaderItem::Clock,
                     HeaderItem::Battery,
-                    HeaderItem::Menu,
+                    HeaderItem::Fullscreen,
+                    HeaderItem::Settings,
                 ],
             ],
         )
     }
 }
 impl HeaderLayout {
-    pub fn context_menu(&self, id: Option<u32>) -> Result<ContextMenu, String> {
+    pub fn context_menu(&self, id: Option<u32>, editing: bool) -> Result<ContextMenu, String> {
         let entry =
             |label: &str, action: HeaderAction| ContextMenuItem::command(label, action.action());
-        let mut sections = vec![vec![ContextMenuItem::command(
-            "Customize Workspace UI…",
-            UiAction::Invoke {
-                command: CommandId::CustomizeWorkspaceUi,
-            },
-        )]];
+        let mut sections = if editing {
+            Vec::new()
+        } else {
+            vec![vec![ContextMenuItem::command(
+                "Customize Window Bar…",
+                UiAction::Invoke {
+                    command: CommandId::CustomizeWorkspaceUi,
+                },
+            )]]
+        };
         let mut title = "Window Bar".to_string();
         if let Some(id) = id {
             let item = self.entry(id)?;
             title = item.item.label();
-            if item.item == HeaderItem::Capy {
+            if item.item == HeaderItem::Capy && !editing {
                 sections.push(vec![ContextMenuItem::command(
                     "Change icon…",
                     UiAction::Preferences {
@@ -162,19 +171,24 @@ impl HeaderLayout {
                     },
                 )]);
             }
+            if !editing {
+                return Ok(ContextMenu { title, sections });
+            }
             let (zone, index) = self.location(id).unwrap();
             sections.push(
                 HeaderZone::ALL
                     .into_iter()
-                    .map(|zone| {
-                        entry(
-                            &format!("Move to {}", zone.label()),
+                    .map(|destination| {
+                        let mut item = entry(
+                            &format!("Move to {}", destination.label()),
                             HeaderAction::Move {
                                 id,
-                                zone,
+                                zone: destination,
                                 before: None,
                             },
-                        )
+                        );
+                        item.enabled = destination != zone;
+                        item
                     })
                     .collect(),
             );
@@ -203,9 +217,15 @@ impl HeaderLayout {
                 entry("Remove from Window Bar", HeaderAction::Remove { id }),
             ]);
         }
+        if editing {
+            sections.push(vec![
+                entry("Done", HeaderAction::Edit { editing: false }),
+                entry("Cancel Changes", HeaderAction::Cancel),
+            ]);
+        }
         Ok(ContextMenu { title, sections })
     }
-    fn from_items(size: HeaderSize, show_menu_labels: bool, zones: [Vec<HeaderItem>; 3]) -> Self {
+    fn from_items(size: HeaderSize, zones: [Vec<HeaderItem>; 3]) -> Self {
         let mut next_id = 1;
         let zones = zones.map(|zone| {
             zone.into_iter()
@@ -219,7 +239,6 @@ impl HeaderLayout {
         Self {
             size,
             zones,
-            show_menu_labels,
             next_id,
         }
     }
@@ -230,7 +249,6 @@ impl HeaderLayout {
         };
         Self::from_items(
             HeaderSize::Medium,
-            false,
             [
                 vec![
                     Capy,
@@ -256,6 +274,8 @@ impl HeaderLayout {
                     Tool {
                         control: ToolbarControl::Color,
                     },
+                    Fullscreen,
+                    Settings,
                 ],
             ],
         )
@@ -316,9 +336,6 @@ impl HeaderLayout {
                 .ok_or("Window-bar item IDs exhausted")?;
         }
         next.zones[zone.index()].splice(index..index, entries);
-        if items.contains(&HeaderItem::MenuLabels) {
-            next.show_menu_labels = true;
-        }
         next.validate()?;
         *self = next;
         Ok(())
@@ -354,10 +371,7 @@ impl HeaderLayout {
         let (zone, index) = self
             .location(id)
             .ok_or("The window-bar item no longer exists")?;
-        let removed = self.zones[zone.index()].remove(index);
-        if removed.item == HeaderItem::MenuLabels {
-            self.show_menu_labels = false;
-        }
+        self.zones[zone.index()].remove(index);
         Ok(())
     }
 }
@@ -421,11 +435,8 @@ impl HeaderLayout {
         let gaps = |count: usize| count.saturating_sub(1) as f32 * item_gap;
         // Zero-width native metrics denote unavailable informational items
         // (e.g. a desktop without a battery), not overflowed interactive items.
-        let visible = |e: &&HeaderEntry| {
-            editing
-                || ((e.item != HeaderItem::MenuLabels || self.show_menu_labels)
-                    && !metrics.iter().any(|m| m.id == e.id && m.width == 0.))
-        };
+        let visible =
+            |e: &&HeaderEntry| editing || !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
         let metric = |e: &HeaderEntry, compact: bool| {
             let m = metrics.iter().find(|m| m.id == e.id);
             m.map_or(tile, |m| if compact { m.compact } else { m.width })
@@ -586,13 +597,9 @@ pub enum HeaderAction {
     Remove {
         id: u32,
     },
-    ShowMenuLabels {
-        visible: bool,
-    },
     CanvasInfo {
         visible: bool,
     },
-    RestoreDefaults,
 }
 impl HeaderAction {
     pub fn action(self) -> UiAction {
@@ -671,6 +678,55 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
 mod tests {
     use super::*;
     #[test]
+    fn context_actions_match_editing_state_and_actual_region() {
+        let h = HeaderLayout::painter();
+        let capy = h.zones[0][0].id;
+        let normal = h.context_menu(Some(capy), false).unwrap();
+        let labels = normal
+            .sections
+            .iter()
+            .flatten()
+            .map(|i| i.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["Customize Window Bar…", "Change icon…"]);
+        for id in [None, Some(capy), Some(h.zones[2][0].id)] {
+            let menu = h.context_menu(id, true).unwrap();
+            let items = menu.sections.iter().flatten().collect::<Vec<_>>();
+            assert!(items.iter().any(|i| i.label == "Done"));
+            assert!(items.iter().any(|i| i.label == "Cancel Changes"));
+            assert!(
+                !items
+                    .iter()
+                    .any(|i| i.label.contains("Customize") || i.label.contains("icon"))
+            );
+            if let Some(id) = id {
+                let (zone, index) = h.location(id).unwrap();
+                for destination in HeaderZone::ALL {
+                    let item = items
+                        .iter()
+                        .find(|i| i.label == format!("Move to {}", destination.label()))
+                        .unwrap();
+                    assert_eq!(item.enabled, destination != zone);
+                }
+                assert_eq!(
+                    items
+                        .iter()
+                        .find(|i| i.label == "Move Earlier")
+                        .unwrap()
+                        .enabled,
+                    index > 0
+                );
+            } else {
+                assert!(
+                    !items
+                        .iter()
+                        .any(|i| i.label.starts_with("Move") || i.label.starts_with("Remove"))
+                );
+            }
+        }
+        assert!(h.context_menu(Some(u32::MAX), true).is_err());
+    }
+    #[test]
     fn edits_are_atomic_and_ids_are_not_reused() {
         let mut h = HeaderLayout::painter();
         let original = h.clone();
@@ -690,7 +746,7 @@ mod tests {
         assert_eq!(serde_json::from_str::<HeaderLayout>(&saved).unwrap(), h);
     }
     #[test]
-    fn hiding_labels_and_removing_the_component_agree() {
+    fn menu_labels_are_present_or_absent_not_separately_hidden() {
         let mut h = HeaderLayout::default();
         let id = h
             .entries()
@@ -698,10 +754,10 @@ mod tests {
             .unwrap()
             .id;
         h.remove(id).unwrap();
-        assert!(!h.show_menu_labels);
+        assert!(!h.entries().any(|e| e.item == HeaderItem::MenuLabels));
         h.add(HeaderZone::Right, None, &[HeaderItem::MenuLabels])
             .unwrap();
-        assert!(h.show_menu_labels);
+        assert!(h.entries().any(|e| e.item == HeaderItem::MenuLabels));
     }
     #[test]
     fn every_item_has_one_visible_or_overflow_destination_at_every_size() {

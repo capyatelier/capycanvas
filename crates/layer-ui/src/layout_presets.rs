@@ -14,9 +14,9 @@ impl WorkspacePreset {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Painter => "Painter",
-            Self::Illustrator => "Illustrator",
-            Self::Photographer => "Photographer",
+            Self::Painter => "Paint",
+            Self::Illustrator => "Sketch",
+            Self::Photographer => "Photo",
         }
     }
 
@@ -267,7 +267,8 @@ mod tests {
         assert!(layout.bands.is_empty() && layout.floating.is_empty());
         assert_eq!(layout.header, crate::HeaderLayout::painter());
         assert_eq!(layout.header.size, crate::HeaderSize::Medium);
-        assert!(!layout.header.show_menu_labels && !layout.canvas_info.visible);
+        assert!(!layout.header.entries().any(|e| e.item == crate::HeaderItem::MenuLabels));
+        assert!(!layout.canvas_info.visible);
         assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
     }
 

@@ -111,6 +111,15 @@ impl Driver {
     }
     fn point(&self, widget: &gtk::Widget) -> [f32; 2] {
         assert!(widget.is_mapped(), "{} is not mapped", widget.widget_name());
+        if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
+            let b = widget.compute_bounds(&popup).unwrap();
+            let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
+            let (dx, dy) = popup.surface_transform();
+            return [
+                surface.position_x() as f32 - dx as f32 + b.x() + b.width() / 2.,
+                surface.position_y() as f32 - dy as f32 + b.y() + b.height() / 2.,
+            ];
+        }
         let b = widget.compute_bounds(&self.w.window).unwrap();
         assert!(b.width() > 0. && b.height() > 0.);
         [b.x() + b.width() / 2., b.y() + b.height() / 2.]
@@ -146,7 +155,20 @@ impl Driver {
         find(self.w.window.upcast_ref(), text).unwrap_or_else(|| panic!("no visible label {text}"))
     }
     fn click_label(&mut self, text: &str) {
-        self.click(&self.label(text));
+        // Native menu pages animate and can scroll at short window heights.
+        // A mapped label is not necessarily inside its visible viewport.
+        pump(250);
+        let label = self.label(text);
+        let point = self.point(&label);
+        if point[1] < 0. || point[1] > self.w.window.height() as f32 {
+            let mut row = label.clone();
+            while !row.is_focusable() {
+                row = row.parent().unwrap();
+            }
+            assert!(row.grab_focus());
+            pump(250);
+        }
+        self.click(&label);
     }
     fn key(&mut self, key: u32) {
         self.perform(
@@ -154,8 +176,36 @@ impl Driver {
         );
     }
     fn edit(&mut self) {
-        self.perform(serde_json::json!([{ "key": 0xffe3, "down": true }, { "key": 0xffe1, "down": true }, { "key": 0x75, "down": true }, { "key": 0x75, "down": false }, { "key": 0xffe1, "down": false }, { "key": 0xffe3, "down": false }]));
+        // Exercise a discoverable entry, not a test-only action or shortcut.
+        let item = state(&self.w)
+            .workspace
+            .layout
+            .header
+            .entries()
+            .find(|e| self.named(&format!("header-item-{}", e.id)).is_mapped())
+            .cloned();
+        if let Some(item) = item {
+            let p = self.point(&self.named(&format!("header-item-{}", item.id)));
+            self.perform(serde_json::json!([{"point":p},{"button":273,"down":true},{"button":273,"down":false}]));
+        } else {
+            self.click_name("header-recovery");
+            self.click_label("Window");
+        }
+        self.click_label("Customize Window Bar…");
+        if !state(&self.w).customization.header_editing {
+            crate::capture(&self.w, self.dir.join("failed-entry.png").to_str().unwrap());
+            eprintln!(
+                "Editor entry focus: {:?}",
+                gtk::prelude::GtkWindowExt::focus(&self.w.window)
+            );
+        }
         assert!(state(&self.w).customization.header_editing);
+    }
+    fn slot(&mut self, zone: HeaderZone) {
+        let geometry = self.w.header.geometry_for_test();
+        let b = geometry.zones[zone.index()];
+        let point = [b.x + b.width - 2., b.y + b.height / 2.];
+        self.perform(serde_json::json!([{"point":point},{"down":true},{"down":false}]));
     }
     fn finish(self) {
         std::fs::write(self.dir.join("finished"), "done").unwrap();
@@ -182,10 +232,7 @@ fn native_header_managed_input() {
         "visible workspace choices, not just their container, must be centered"
     );
     d.edit();
-    d.named("header-size")
-        .downcast::<gtk::DropDown>()
-        .unwrap()
-        .set_selected(2);
+    d.click_name("header-size-2");
     pump(120);
     let capy = state(&d.w)
         .workspace
@@ -203,9 +250,8 @@ fn native_header_managed_input() {
             .is_some_and(|f| f.widget_name().starts_with("header-item-")),
         "keyboard position survives removal"
     );
-    d.click_name("header-options");
-    d.click_label("Show Zoom and Rotation");
-    d.click_name("header-zone-2");
+    d.click_name("header-canvas-info");
+    d.slot(HeaderZone::Right);
     d.click_name("header-add-tools");
     d.named("tool-search")
         .downcast::<gtk::SearchEntry>()
@@ -227,10 +273,7 @@ fn native_header_managed_input() {
     }
     assert_eq!(durable_layout(&state(&d.w).workspace.layout), saved);
     d.edit();
-    d.named("header-size")
-        .downcast::<gtk::DropDown>()
-        .unwrap()
-        .set_selected(0);
+    d.click_name("header-size-0");
     pump(150);
     assert_ne!(state(&d.w).workspace.layout.header, saved.header);
     // Closing without Done must persist the committed workspace, not the preview.
@@ -252,7 +295,7 @@ fn native_header_managed_input() {
             .unwrap()
             .active_name()
             .as_deref(),
-        Some("Painter")
+        Some("Paint")
     );
     assert_eq!(
         durable_layout(&state(&d.w).workspace.layout),
@@ -342,7 +385,7 @@ fn native_default_workspace_recovery_input() {
             .unwrap()
             .active_name()
             .as_deref(),
-        Some("Painter")
+        Some("Paint")
     );
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
     assert!(d.w.area.is_mapped());
@@ -370,7 +413,7 @@ fn native_default_workspace_recovery_input() {
             .unwrap()
             .active_name()
             .as_deref(),
-        Some("Painter")
+        Some("Paint")
     );
     assert_eq!(
         sql("SELECT owner IS NULL FROM items WHERE id='builtin:workspace:photographer'"),
@@ -527,7 +570,7 @@ fn native_header_catalog_preview_input() {
         assert!(state(&d.w).customization.header_editing);
     }
     // The ordinary tool picker adds into this preview, not directly to storage.
-    d.click_name("header-zone-2");
+    d.slot(HeaderZone::Right);
     d.click_name("header-add-tools");
     d.named("tool-search")
         .downcast::<gtk::SearchEntry>()
@@ -553,18 +596,11 @@ fn native_header_catalog_preview_input() {
             .unwrap();
     assert_eq!(saved.history.generation, capture.history.generation + 1);
     d.edit();
-    d.named("header-size")
-        .downcast::<gtk::DropDown>()
-        .unwrap()
-        .set_selected(2);
+    d.click_name("header-size-2");
     pump(120);
-    d.key(0xff1b);
+    d.click_name("header-edit-cancel");
     assert!(!state(&d.w).customization.header_editing);
-    assert_eq!(
-        state(&d.w).workspace.layout.header,
-        preview,
-        "Escape cancels uncommitted edits"
-    );
+    assert_eq!(state(&d.w).workspace.layout.header, preview);
     d.finish();
 }
 
@@ -600,13 +636,6 @@ fn native_header_picker_journey() {
             serde_json::json!([{"point":point},{"down":true},{"down":false}])
         });
         assert!(item.has_css_class("editing-selection"));
-        assert_eq!(
-            d.named("header-insertion-label")
-                .downcast::<gtk::Label>()
-                .unwrap()
-                .text(),
-            "Add to Right · before Brush"
-        );
         d.click_name("header-add-tools");
         assert_shared_icons(d.w.window.visible_dialog().unwrap().upcast_ref());
         assert!(d.w.window.visible_dialog().is_some());
@@ -686,7 +715,7 @@ fn native_header_picker_journey() {
         );
         assert_eq!(added.zones[2][2].id, before);
         assert!(state(&d.w).customization.header_editing);
-        d.click_name("header-zone-1");
+        d.slot(HeaderZone::Center);
         d.click_name("header-add-clock");
         let clock = state(&d.w)
             .workspace
@@ -708,8 +737,7 @@ fn native_header_picker_journey() {
         );
         assert!(!d.named("header-add-clock").is_mapped());
         d.click_name(&format!("header-item-{clock}"));
-        assert!(d.named("header-remove-item").is_sensitive());
-        d.click_name("header-remove-item");
+        d.key(0xff08); // Backspace removes the clicked item.
         assert!(d.named("header-add-clock").is_mapped());
         // Keyboard users choose an exact slot using a focused item and Enter.
         let target = d.named(&format!("header-item-{before}"));
@@ -816,6 +844,19 @@ fn native_header_spacing_visual() {
             assert!(
                 (grip.y() + grip.height() / 2. - item.height() as f32 / 2.).abs() < 1.,
                 "grip alignment"
+            );
+            d.click_name("header-add-space");
+            let model = state(&d.w).workspace.layout.header;
+            let space = model
+                .entries()
+                .find(|e| e.item == HeaderItem::Space)
+                .unwrap()
+                .id;
+            let space = d.named(&format!("header-item-{space}"));
+            assert_eq!(
+                space.width(),
+                size.tile() as i32 + 20,
+                "Space is one tile plus its editing grip"
             );
             crate::capture(
                 &d.w,
@@ -1083,19 +1124,24 @@ fn native_header_cancel_caption_input() {
         .id;
     d.click_name(&format!("header-item-{menu}"));
     d.click_label("Window");
-    d.click_label("Show Menu Bar");
-    assert!(state(&d.w).workspace.layout.header.show_menu_labels);
-    let labels = state(&d.w)
-        .workspace
-        .layout
-        .header
-        .entries()
-        .find(|e| e.item == HeaderItem::MenuLabels)
-        .unwrap()
-        .id;
+    let menu_model =
+        d.w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .application_menu(ApplicationMenu::Window);
+    assert!(!format!("{menu_model:?}").contains("Show Menu Bar"));
+    d.click_label("Customize Window Bar…");
+    d.click_name("header-add-menu-labels");
+    d.click_name("header-edit-done");
     assert!(
-        d.named(&format!("header-item-{labels}")).is_mapped(),
-        "Show Menu Bar exposes menu names at desktop width"
+        state(&d.w)
+            .workspace
+            .layout
+            .header
+            .entries()
+            .any(|e| e.item == HeaderItem::MenuLabels)
     );
     // Structural publication must not be dropped when settings change in the
     // same frame (native refreshes used to overwrite a queued layout update).
@@ -1349,12 +1395,14 @@ fn native_header_hold_context_input() {
     pump(160);
     let p = d.point(&d.named(&format!("header-item-{id}")));
     d.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
+    d.click_label("Customize Window Bar…");
+    let p = d.point(&d.named(&format!("header-item-{id}")));
+    d.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
     d.click_label("Move to Center");
     assert_eq!(
         state(&d.w).workspace.layout.header.location(id).unwrap().0,
         HeaderZone::Center
     );
-    d.edit();
     let item = d.named(&format!("header-item-{id}"));
     item.grab_focus();
     d.perform(serde_json::json!([{ "key": 0xffe1, "down": true }, { "key": 0xffc7, "down": true }, { "key": 0xffc7, "down": false }, { "key": 0xffe1, "down": false }]));
@@ -1373,16 +1421,15 @@ fn native_header_editor_controls_input() {
     let mut d = Driver::new("art.capycanvas.HeaderControls");
     d.edit();
     for size in HeaderSize::ALL {
-        let dropdown = d.named("header-size").downcast::<gtk::DropDown>().unwrap();
-        dropdown.set_selected(size as u32);
+        d.click_name(&format!("header-size-{}", size as usize));
         pump(220);
         assert_eq!(state(&d.w).workspace.layout.header.size, size);
         let editor = d.named("header-editor");
         assert!(
-            editor.height() < 240,
+            editor.height() < 450 && editor.width() <= 460,
             "The inline editor is compact at {size:?}"
         );
-        assert!(d.w.header.root.height() < size.height() as i32 + 300);
+        assert!(d.w.header.root.height() < size.height() as i32 + 470);
         assert_eq!(d.w.area.height(), d.w.surface.height());
     }
     for name in ["clock", "menu-labels"] {
@@ -1413,14 +1460,13 @@ fn native_header_editor_controls_input() {
         !d.named("header-add-clock").is_mapped(),
         "Existing singleton components do not clutter the palette"
     );
-    d.click_name("header-options");
-    d.click_label("Show Zoom and Rotation");
+    d.click_name("header-canvas-info");
     assert!(state(&d.w).workspace.layout.canvas_info.visible && d.w.view_info.is_visible());
     assert!(d.w.resolved().status.y > d.w.surface.height() as f32 / 2.);
     assert_eq!(d.w.view_info.halign(), gtk::Align::End);
-    d.click_name("header-options");
-    d.click_label("Restore Window Bar Defaults");
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::default());
+    d.click_name("header-edit-cancel");
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    d.edit();
     // Removing every editable navigation item cannot strand touch users.
     let ids = state(&d.w)
         .workspace
@@ -1437,12 +1483,12 @@ fn native_header_editor_controls_input() {
     assert!(d.named("header-recovery").is_mapped());
     d.click_name("header-recovery");
     d.click_label("Window");
-    d.click_label("Customize Workspace UI…");
+    d.click_label("Customize Window Bar…");
     assert!(state(&d.w).customization.header_editing);
     crate::capture(&d.w, d.dir.join("empty-bar-palette.png").to_str().unwrap());
     for (i, item) in HeaderItem::COMPONENTS.into_iter().enumerate() {
         let zone = HeaderZone::ALL[i % 3];
-        d.click_name(&format!("header-zone-{}", zone.index()));
+        d.slot(zone);
         let name = format!(
             "header-add-{}",
             item.label().to_lowercase().replace(' ', "-")
@@ -1458,6 +1504,160 @@ fn native_header_editor_controls_input() {
         d.dir.join("all-components-added.png").to_str().unwrap(),
     );
     d.click_name("header-edit-done");
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_editor_keyboard_input"]
+fn native_header_editor_keyboard_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderKeyboard");
+    let original = state(&d.w).workspace.layout;
+    d.edit();
+    assert_eq!(
+        gtk::prelude::GtkWindowExt::focus(&d.w.window)
+            .unwrap()
+            .widget_name(),
+        "header-add-tools"
+    );
+    for absent in [
+        "header-help",
+        "header-reset",
+        "header-remove-item",
+        "header-zone-0",
+        "header-move-earlier",
+    ] {
+        assert!(find_named(d.w.window.upcast_ref(), absent).is_none());
+    }
+    let id = original.header.zones[0][1].id;
+    d.click_name(&format!("header-item-{id}"));
+    for forward in [
+        true, true, true, true, true, true, false, false, false, false, false, false,
+    ] {
+        let previous = state(&d.w).workspace.layout.header;
+        let expected = previous.step(id, forward).unwrap();
+        let HeaderAction::Move { zone, before, .. } = expected else {
+            panic!()
+        };
+        let mut next = previous.clone();
+        next.move_item(id, zone, before).unwrap();
+        d.key(if forward { 0xff53 } else { 0xff51 });
+        assert_eq!(state(&d.w).workspace.layout.header, next);
+        assert_eq!(
+            gtk::prelude::GtkWindowExt::focus(&d.w.window)
+                .unwrap()
+                .widget_name(),
+            format!("header-item-{id}")
+        );
+    }
+    assert_eq!(state(&d.w).workspace.layout.header, original.header);
+    // Existing native keyboard context action and focus return survive rebuild.
+    d.key(0xff67);
+    d.click_label("Move to Center");
+    assert_eq!(
+        state(&d.w).workspace.layout.header.location(id).unwrap().0,
+        HeaderZone::Center
+    );
+    d.key(0xff08);
+    assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
+    let next = gtk::prelude::GtkWindowExt::focus(&d.w.window)
+        .unwrap()
+        .widget_name()
+        .strip_prefix("header-item-")
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    d.key(0xffff);
+    assert!(state(&d.w).workspace.layout.header.entry(next).is_err());
+    assert!(d.named("header-add-main-menu").is_mapped());
+    // Native Tab traverses controls and never fires canvas shortcuts.
+    let mut sized = false;
+    for _ in 0..36 {
+        d.key(0xff09);
+        let focus = gtk::prelude::GtkWindowExt::focus(&d.w.window).unwrap();
+        assert!(focus == d.w.header.root || focus.is_ancestor(&d.w.header.root));
+        assert!(!state(&d.w).workspace.zen_mode);
+        if focus.widget_name() == "header-size-2" {
+            d.key(0x20);
+            assert_eq!(state(&d.w).workspace.layout.header.size, HeaderSize::Large);
+            sized = true;
+        }
+    }
+    assert!(sized);
+    d.click_name("header-edit-cancel");
+    assert_eq!(state(&d.w).workspace.layout.header, original.header);
+    assert_eq!(
+        state(&d.w).workspace.layout.canvas_info,
+        original.canvas_info
+    );
+    d.edit();
+    let root = d.w.header.root.clone();
+    let x = (12..root.width() - 72)
+        .step_by(12)
+        .find(|x| {
+            root.pick(*x as f64, 20., gtk::PickFlags::DEFAULT).as_ref() == Some(root.upcast_ref())
+        })
+        .unwrap();
+    d.perform(serde_json::json!([{"point":[x,20]},{"button":273,"down":true},{"button":273,"down":false}]));
+    d.click_label("Cancel Changes");
+    assert!(!state(&d.w).customization.header_editing);
+    d.finish();
+}
+
+#[test]
+#[ignore = "640x480 isolated compositor, --native-test=native_header_editor_short_window_input"]
+fn native_header_editor_short_window_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderShortWindow");
+    assert!(
+        d.w.surface.height() == 480,
+        "run at the app’s minimum size with LAYER_MOTION_VIEWPORT=640x480"
+    );
+    d.edit();
+    d.w.dispatch(
+        HeaderAction::SetSize {
+            size: HeaderSize::Large,
+        }
+        .action(),
+    );
+    let ids = state(&d.w)
+        .workspace
+        .layout
+        .header
+        .entries()
+        .map(|e| e.id)
+        .collect::<Vec<_>>();
+    for id in ids {
+        d.w.dispatch(HeaderAction::Remove { id }.action());
+    }
+    pump(250);
+    let panel = d
+        .named("header-editor")
+        .downcast::<gtk::ScrolledWindow>()
+        .unwrap();
+    let bounds = panel.compute_bounds(&d.w.surface).unwrap();
+    assert!(bounds.y() + bounds.height() <= d.w.surface.height() as f32);
+    // The simplified palette can fit without scrolling even at the minimum
+    // size. Either way, native focus must reveal the footer, never clip it.
+    assert!(panel.height() <= 480 - HeaderSize::Large.height() as i32 - 12);
+    for _ in 0..40 {
+        if gtk::prelude::GtkWindowExt::focus(&d.w.window)
+            .unwrap()
+            .widget_name()
+            == "header-edit-done"
+        {
+            break;
+        }
+        d.key(0xff09);
+    }
+    let focus = gtk::prelude::GtkWindowExt::focus(&d.w.window).unwrap();
+    assert_eq!(focus.widget_name(), "header-edit-done");
+    let done = focus.compute_bounds(&d.w.surface).unwrap();
+    assert!(done.y() >= bounds.y() && done.y() + done.height() <= bounds.y() + bounds.height());
+    crate::capture(&d.w, d.dir.join("short-editor-done.png").to_str().unwrap());
+    d.key(0xff0d);
+    assert!(!state(&d.w).customization.header_editing);
+    d.edit();
+    d.click_name("header-edit-cancel");
+    assert!(!state(&d.w).customization.header_editing);
     d.finish();
 }
 
@@ -1479,6 +1679,21 @@ fn native_header_overflow_input() {
                 if !d.named(&format!("header-item-{}", entry.id)).is_mapped() {
                     let overflow = d.named(&format!("header-overflow-{}", zone.index()));
                     d.click(&overflow);
+                    if find_named(
+                        d.w.window.upcast_ref(),
+                        &format!("header-overflow-item-{}", entry.id),
+                    )
+                    .is_none()
+                    {
+                        crate::capture(&d.w, d.dir.join("missing-overflow.png").to_str().unwrap());
+                        eprintln!(
+                            "Missing overflow {:?} at {:?}; dialog {:?} fullscreen {}",
+                            entry.item,
+                            size,
+                            d.w.window.visible_dialog(),
+                            d.w.window.is_fullscreen()
+                        );
+                    }
                     let row = d.named(&format!("header-overflow-item-{}", entry.id));
                     if !row.is_mapped() {
                         crate::capture(&d.w, d.dir.join("overflow-failure.png").to_str().unwrap());
@@ -1516,7 +1731,22 @@ fn native_header_overflow_input() {
                     d.w.dispatch(UiAction::Customize {
                         action: CustomizationAction::CloseExpanded,
                     });
-                    d.key(0xff1b);
+                    if entry.item == HeaderItem::Settings {
+                        // On a narrow NavigationSplitView, Escape navigates
+                        // back to the sidebar first. Use the native close control.
+                        let content =
+                            find_named(d.w.preferences.dialog.upcast_ref(), "preferences-content")
+                                .unwrap();
+                        d.click(&find_css(&content, "close").unwrap());
+                    } else {
+                        d.key(0xff1b);
+                    }
+                    pump(400);
+                    if entry.item == HeaderItem::Fullscreen && d.w.window.is_fullscreen() {
+                        // Keep each overflow case in the same window geometry.
+                        d.key(0xffc8); // F11, native Full Screen shortcut.
+                        pump(400);
+                    }
                 }
             }
         }
@@ -1537,14 +1767,6 @@ fn native_header_overflow_input() {
             let zone = model.location(entry.id).unwrap().0;
             d.click_name(&format!("header-overflow-{}", zone.index()));
             d.click_name(&format!("header-overflow-item-{}", entry.id));
-            assert!(
-                d.named("header-insertion-label")
-                    .downcast::<gtk::Label>()
-                    .unwrap()
-                    .text()
-                    .contains(&format!("before {}", entry.item.label()))
-            );
-            assert!(d.named("header-remove-item").is_sensitive());
             d.click_name("header-add-tools");
             assert!(d.w.window.visible_dialog().is_some());
             crate::capture(
@@ -1717,10 +1939,9 @@ fn native_header_builder_input() {
     perform(
         serde_json::json!([{ "point": from }, { "button": 272, "down": true }, { "point": [from[0] + 18., from[1]] }, { "point": [800., 400.] }, { "button": 272, "down": false }]),
     );
-    assert_eq!(
-        state(&w).workspace.layout.header,
-        original,
-        "outside drop must cancel"
+    assert!(
+        state(&w).workspace.layout.header.entry(id).is_err(),
+        "outside drop removes the detached item"
     );
     perform(click(point("header-edit-done")));
     assert!(!state(&w).customization.header_editing);
@@ -1728,4 +1949,301 @@ fn native_header_builder_input() {
     std::fs::write(dir.join("finished"), "done").unwrap();
     w.window.close();
     pump(200);
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_slide_remove_input"]
+fn native_header_slide_remove_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderSlideRemove");
+    let original = state(&d.w).workspace.layout.header;
+    for touch in [false, true] {
+        for tool in [false, true] {
+            d.edit();
+            let id = original.zones[0][if tool { 2 } else { 1 }].id;
+            let neighbor = original.zones[0][if tool { 3 } else { 2 }].id;
+            let widget = d.named(&format!("header-item-{id}"));
+            let rect = widget.compute_bounds(&d.w.surface).unwrap();
+            let start = d.point(&d.named(&format!("header-grip-{id}")));
+            let offset = [start[0] - rect.x(), start[1] - rect.y()];
+            let initial = d.w.header.geometry_for_test();
+            let move_to = |d: &mut Driver, point: [f32; 2]| {
+                d.perform(if touch {
+                    serde_json::json!([{"touch":"move","point":point}])
+                } else {
+                    serde_json::json!([{"point":point}])
+                })
+            };
+            d.perform(if touch {
+                serde_json::json!([{"touch":"down","point":start}])
+            } else {
+                serde_json::json!([{"point":start},{"down":true}])
+            });
+            move_to(&mut d, [start[0] + 50., start[1] + 4.]);
+            let preview = d.w.header.drag_for_test().expect("native drag visual");
+            assert!(!preview.detached);
+            assert!((preview.held.x - (rect.x() + 50.)).abs() < 0.1);
+            assert_eq!(preview.held.y, 6.);
+            let x =
+                |g: &HeaderGeometry| g.items.iter().find(|m| m.id == neighbor).unwrap().bounds.x;
+            assert!(
+                x(&preview.geometry) < x(&initial),
+                "neighbors shift before release"
+            );
+            assert_eq!(
+                state(&d.w).workspace.layout.header,
+                original,
+                "motion is only a preview"
+            );
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("sliding-{touch}-{tool}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            // Backtracking uses grab-time slots, not the animated rectangles.
+            move_to(&mut d, start);
+            assert_eq!(
+                d.w.header.drag_for_test().unwrap().geometry.items,
+                initial.items
+            );
+            let outside = [start[0] + 170., 240.];
+            move_to(&mut d, outside);
+            let preview = d.w.header.drag_for_test().unwrap();
+            assert!(preview.detached && preview.target.is_none());
+            assert_eq!(preview.held.x, outside[0] - offset[0]);
+            assert_eq!(preview.held.y, outside[1] - offset[1]);
+            assert!(
+                matches!(preview.action, Some(HeaderAction::Remove { id:removed }) if removed == id)
+            );
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("detached-{touch}-{tool}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            // Re-entering attaches the same contact without applying an edit.
+            let center = [d.w.surface.width() as f32 / 2., start[1]];
+            move_to(&mut d, center);
+            assert!(!d.w.header.drag_for_test().unwrap().detached);
+            assert_eq!(
+                d.w.header.drag_for_test().unwrap().target.unwrap().0,
+                HeaderZone::Center
+            );
+            move_to(&mut d, outside);
+            d.perform(if touch {
+                serde_json::json!([{"touch":"up"}])
+            } else {
+                serde_json::json!([{"down":false}])
+            });
+            assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
+            assert!(d.w.header.drag_for_test().is_none());
+            for entry in state(&d.w).workspace.layout.header.entries() {
+                assert_eq!(d.named(&format!("header-item-{}", entry.id)).opacity(), 1.);
+            }
+            assert_eq!(
+                d.named("header-add-main-menu").is_mapped(),
+                !tool,
+                "only removed singleton components return to the palette"
+            );
+            d.click_name("header-edit-cancel");
+            assert_eq!(state(&d.w).workspace.layout.header, original);
+        }
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_tools_drop_input"]
+fn native_header_tools_drop_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderToolsDrop");
+    let original = state(&d.w).workspace.layout.header;
+    for touch in [false, true] {
+        d.edit();
+        let start = d.point(&d.named("header-add-grip-tools"));
+        let target = [d.w.surface.width() as f32 / 2., 25.];
+        d.perform(if touch {
+            serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":target}])
+        } else {
+            serde_json::json!([{"point":start},{"down":true},{"point":target}])
+        });
+        assert!(matches!(
+            d.w.header.drag_for_test().unwrap().action,
+            Some(HeaderAction::InsertTools {
+                zone: HeaderZone::Center,
+                ..
+            })
+        ));
+        assert!(
+            d.w.window.visible_dialog().is_none(),
+            "picker opens on drop, not during drag"
+        );
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("tools-drop-{touch}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        d.perform(if touch {
+            serde_json::json!([{"touch":"up"}])
+        } else {
+            serde_json::json!([{"down":false}])
+        });
+        assert!(d.w.window.visible_dialog().is_some());
+        assert!(d.w.header.drag_for_test().is_none());
+        assert_eq!(
+            state(&d.w).workspace.layout.header,
+            original,
+            "a Tools placeholder is never stored"
+        );
+        // Native editing keys belong to search, not to the selected bar item.
+        d.key(0x61);
+        d.key(0xff08);
+        d.key(0xffff);
+        assert_eq!(state(&d.w).workspace.layout.header, original);
+        d.named("tool-search")
+            .downcast::<gtk::SearchEntry>()
+            .unwrap()
+            .set_text("Brush opacity");
+        pump(300);
+        d.click_name(&format!(
+            "tool-choice-{}",
+            serde_json::to_string(&ToolbarControl::Opacity).unwrap()
+        ));
+        d.click_name("confirm-tools");
+        let model = state(&d.w).workspace.layout.header;
+        let entry = model
+            .entries()
+            .find(|e| {
+                e.item
+                    == HeaderItem::Tool {
+                        control: ToolbarControl::Opacity,
+                    }
+            })
+            .unwrap();
+        assert_eq!(model.location(entry.id).unwrap().0, HeaderZone::Center);
+        d.click_name("header-edit-cancel");
+        assert_eq!(state(&d.w).workspace.layout.header, original);
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "640px isolated compositor, --native-test=native_header_overflow_drag_input"]
+fn native_header_overflow_drag_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderOverflowDrag");
+    assert!(d.w.surface.width() <= 800, "run at 640x600");
+    for size in HeaderSize::ALL {
+        d.w.dispatch(HeaderAction::SetSize { size }.action());
+        pump(250);
+        for touch in [false, true] {
+            d.edit();
+            let original = state(&d.w).workspace.layout.header;
+            let geometry = d.w.header.geometry_for_test();
+            assert!(geometry.overflow.iter().any(Option::is_some));
+            let id = geometry.items[0].id;
+            let start = d.point(&d.named(&format!("header-grip-{id}")));
+            let outside = [start[0] + 30., size.height() + 180.];
+            d.perform(if touch {
+                serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":outside}])
+            } else {
+                serde_json::json!([{"point":start},{"down":true},{"point":outside}])
+            });
+            let preview = d.w.header.drag_for_test().expect("overflow drag preview");
+            assert!(preview.detached);
+            assert_eq!(state(&d.w).workspace.layout.header, original);
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("overflow-drag-{size:?}-{touch}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            d.perform(if touch {
+                serde_json::json!([{"touch":"up"}])
+            } else {
+                serde_json::json!([{"down":false}])
+            });
+            assert!(d.w.header.drag_for_test().is_none());
+            let model = state(&d.w).workspace.layout.header;
+            assert_eq!(model.entries().count(), original.entries().count() - 1);
+            assert!(model.entry(id).is_err());
+            assert_eq!(d.w.header.geometry_for_test().items, preview.geometry.items);
+            for entry in model.entries() {
+                assert_eq!(d.named(&format!("header-item-{}", entry.id)).opacity(), 1.);
+            }
+            // The editor transaction restores hidden entries as well as visible
+            // ones. No temporary capture allocation becomes authoritative.
+            d.click_name("header-edit-cancel");
+            assert_eq!(state(&d.w).workspace.layout.header, original);
+        }
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_window_actions_input"]
+fn native_header_window_actions_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderWindowActions");
+    let model = state(&d.w).workspace.layout.header;
+    let settings = model
+        .entries()
+        .find(|e| e.item == HeaderItem::Settings)
+        .unwrap()
+        .id;
+    let fullscreen = model
+        .entries()
+        .find(|e| e.item == HeaderItem::Fullscreen)
+        .unwrap()
+        .id;
+    for size in HeaderSize::ALL {
+        d.w.dispatch(HeaderAction::SetSize { size }.action());
+        pump(250);
+        d.click_name(&format!("header-item-{settings}"));
+        assert!(state(&d.w).settings_open && d.w.window.visible_dialog().is_some());
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("settings-open-{size:?}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        d.key(0xff1b);
+        pump(400); // Adwaita emits closed after its closing animation.
+        if state(&d.w).settings_open {
+            crate::capture(
+                &d.w,
+                d.dir.join("settings-not-closed.png").to_str().unwrap(),
+            );
+            eprintln!(
+                "Settings focus: {:?}, can close {}",
+                gtk::prelude::GtkWindowExt::focus(&d.w.window),
+                d.w.preferences.dialog.can_close()
+            );
+        }
+        assert!(!state(&d.w).settings_open);
+        for enabled in [true, false] {
+            d.click_name(&format!("header-item-{fullscreen}"));
+            pump(500);
+            assert_eq!(d.w.window.is_fullscreen(), enabled);
+            assert_eq!(state(&d.w).fullscreen, enabled);
+            let button = d.w.header.drawer_button(fullscreen).unwrap();
+            assert!(!button.has_css_class("selected-tool"));
+            let image = button.child().unwrap().downcast::<gtk::Image>().unwrap();
+            assert_eq!(
+                crate::icons::name(&image).as_deref(),
+                Some(if enabled {
+                    "layer-fullscreen-exit-symbolic"
+                } else {
+                    "layer-fullscreen-enter-symbolic"
+                })
+            );
+        }
+    }
+    assert_eq!(WorkspacePreset::Illustrator.name(), "Sketch");
+    assert_eq!(WorkspacePreset::Painter.name(), "Paint");
+    assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
+    d.finish();
 }

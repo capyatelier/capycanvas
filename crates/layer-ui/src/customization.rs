@@ -565,7 +565,7 @@ impl DockLayout {
     ) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
-            ContextTarget::Header { id } => return self.header.context_menu(id),
+            ContextTarget::Header { id } => return self.header.context_menu(id, false),
             ContextTarget::Column { column } => {
                 if !self.is_collapsed(column) {
                     return Err("The column is not collapsed".into());
@@ -1632,32 +1632,8 @@ impl CustomizationState {
                                 layout.header.move_item(id, zone, before)?
                             }
                             H::Remove { id } => layout.header.remove(id)?,
-                            H::ShowMenuLabels { visible } => {
-                                if visible
-                                    && !layout
-                                        .header
-                                        .entries()
-                                        .any(|e| e.item == HeaderItem::MenuLabels)
-                                {
-                                    let before = layout.header.zones[0].first().map(|e| e.id);
-                                    layout.header.add(
-                                        HeaderZone::Left,
-                                        before,
-                                        &[HeaderItem::MenuLabels],
-                                    )?;
-                                }
-                                layout.header.show_menu_labels = visible;
-                            }
                             H::CanvasInfo { visible } => {
                                 layout.canvas_info = CanvasInfoLayout { visible }
-                            }
-                            H::RestoreDefaults => {
-                                layout.header = HeaderLayout::default();
-                                if self.drawer.as_ref().is_some_and(|d| {
-                                    matches!(d.anchor, DrawerAnchor::Header { .. })
-                                }) {
-                                    self.drawer = None;
-                                }
                             }
                             _ => unreachable!(),
                         }

@@ -388,6 +388,15 @@ mod allocation {
                     self.obj().scale_factor() as f32,
                 );
             }
+            if let Some(owner) = &owner {
+                owner.header.snapshot_drag(
+                    snapshot,
+                    self.obj()
+                        .frame_clock()
+                        .map_or(0, |clock| clock.frame_time()),
+                    self.obj().scale_factor() as f32,
+                );
+            }
         }
     }
 }
@@ -610,8 +619,7 @@ struct NativeDockItem(DockItem);
 
 #[derive(Clone, Copy)]
 enum DragTarget {
-    Header(u32),
-    HeaderAdd(HeaderItem),
+    Header(HeaderDragSource),
     Dock(DockItem),
     Divider(u32),
     ColumnPanel(u32, Option<Panel>),
@@ -626,7 +634,7 @@ impl DragTarget {
         tabs: Vec<TabHit>,
     ) -> Option<UiAction> {
         Some(match self {
-            Self::Header(_) | Self::HeaderAdd(_) => return None,
+            Self::Header(_) => return None,
             Self::Dock(item) => UiAction::DragWorkspace {
                 item,
                 phase,
@@ -1121,7 +1129,10 @@ impl Workspace {
                 this.update_zen();
                 // Native dialogs own their keys. Workspace previews block canvas
                 // input, but must not swallow button activation or navigation.
-                if this.window.visible_dialog().is_some() || this.preferences.recording() {
+                if this.window.visible_dialog().is_some()
+                    || this.preferences.recording()
+                    || this.header.is_editing()
+                {
                     return glib::Propagation::Proceed;
                 }
                 // Space also pans the canvas, but focused color buttons own
@@ -1129,7 +1140,8 @@ impl Workspace {
                 if matches!(key, gdk::Key::space | gdk::Key::Return | gdk::Key::KP_Enter)
                     && gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
                         w.is::<gtk::Button>()
-                            && w.ancestor(crate::tool_panels::ColorWheel::static_type()).is_some()
+                            && w.ancestor(crate::tool_panels::ColorWheel::static_type())
+                                .is_some()
                     })
                 {
                     return glib::Propagation::Proceed;
@@ -1158,6 +1170,9 @@ impl Workspace {
                 if this.window.visible_dialog().is_some() {
                     return;
                 }
+                // Release the shortcut that opened the editor, even though its
+                // key presses now belong to native controls. Otherwise reopening
+                // with the same shortcut is mistaken for an already-held key.
                 this.interact(crate::input::key_input(key, false, modifiers, false, None));
             }
         ));
@@ -1441,14 +1456,13 @@ impl Workspace {
                 }
                 if matches!(
                     drag.target,
-                    DragTarget::Dock(DockItem::Tile { .. })
-                        | DragTarget::Header(_)
-                        | DragTarget::HeaderAdd(_)
+                    DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
                 ) {
                     self.dragging.set(false);
                 }
                 self.header.clear_drop();
                 self.clear_tab_slide(&mut drag);
+                self.header.cancel_drag(self);
                 self.restore_drag_cursor(&drag);
             }
             self.clear_drop();
@@ -2531,10 +2545,7 @@ impl Workspace {
     }
 
     fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
-        if matches!(
-            target,
-            DragTarget::Dock(_) | DragTarget::Header(_) | DragTarget::HeaderAdd(_)
-        ) {
+        if matches!(target, DragTarget::Dock(_) | DragTarget::Header(_)) {
             widget.set_cursor_from_name(Some(if widget.has_css_class("drag-hold") {
                 "default"
             } else {
@@ -2565,14 +2576,10 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
-                if matches!(target, DragTarget::Header(_) | DragTarget::HeaderAdd(_))
-                    && !self.header.editing.get()
-                {
+                if matches!(target, DragTarget::Header(_)) && !self.header.editing.get() {
                     return None;
                 }
-                if self.header.editing.get()
-                    && !matches!(target, DragTarget::Header(_) | DragTarget::HeaderAdd(_))
-                {
+                if self.header.editing.get() && !matches!(target, DragTarget::Header(_)) {
                     return None;
                 }
                 let target = if let DragTarget::Divider(id) = target
@@ -2750,11 +2757,8 @@ impl Workspace {
         else {
             return false;
         };
-        let phase = if matches!(
-            drag.target,
-            DragTarget::Header(_) | DragTarget::HeaderAdd(_)
-        ) && (!drag.source.is_ancestor(&self.surface)
-            || drag.source.parent() != drag.parent)
+        let phase = if matches!(drag.target, DragTarget::Header(_))
+            && (!drag.source.is_ancestor(&self.surface) || drag.source.parent() != drag.parent)
         {
             ContactPhase::Cancel
         } else {
@@ -2767,22 +2771,10 @@ impl Workspace {
             }
             self.clear_tab_slide(&mut drag);
             if drag.started {
-                if matches!(
-                    drag.target,
-                    DragTarget::Header(_) | DragTarget::HeaderAdd(_)
-                ) {
+                if matches!(drag.target, DragTarget::Header(_)) {
                     self.dragging.set(false);
-                    if phase == ContactPhase::Up
-                        && let Some((zone, before)) = self.header.drop_at(point)
-                    {
-                        let action = match drag.target {
-                            DragTarget::Header(id) => HeaderAction::Move { id, zone, before },
-                            DragTarget::HeaderAdd(item) => HeaderAction::Add { item, zone, before },
-                            _ => unreachable!(),
-                        };
-                        self.header.select_drop(self, zone, before);
-                        self.dispatch(action.action());
-                    }
+                    self.header
+                        .finish_drag(self, point, phase == ContactPhase::Cancel);
                     self.header.clear_drop();
                 } else if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
                     self.dragging.set(false);
@@ -2818,10 +2810,7 @@ impl Workspace {
                 self.dismiss_context();
                 return false;
             }
-            let recognized = if matches!(
-                drag.target,
-                DragTarget::Dock(_) | DragTarget::Header(_) | DragTarget::HeaderAdd(_)
-            ) {
+            let recognized = if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
                 self.surface.drag_check_threshold(
                     drag.origin[0] as i32,
                     drag.origin[1] as i32,
@@ -2844,25 +2833,28 @@ impl Workspace {
             drag.started = true;
             if matches!(
                 drag.target,
-                DragTarget::Dock(DockItem::Tile { .. })
-                    | DragTarget::Header(_)
-                    | DragTarget::HeaderAdd(_)
+                DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
             ) {
                 self.dragging.set(true);
             }
+            if let DragTarget::Header(source) = drag.target
+                && !self
+                    .header
+                    .start_drag(self, source, drag.origin, &drag.source)
+            {
+                self.workspace_drag.borrow_mut().take();
+                self.dragging.set(false);
+                self.restore_drag_cursor(&drag);
+                return false;
+            }
             self.start_tab_slide(&mut drag);
-            if matches!(
-                drag.target,
-                DragTarget::Dock(_) | DragTarget::Header(_) | DragTarget::HeaderAdd(_)
-            ) {
+            if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
                 self.set_drag_cursor(&mut drag, "grabbing");
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
             if !matches!(
                 drag.target,
-                DragTarget::Dock(DockItem::Tile { .. })
-                    | DragTarget::Header(_)
-                    | DragTarget::HeaderAdd(_)
+                DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
             ) {
                 self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
             }
@@ -2876,9 +2868,7 @@ impl Workspace {
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
         if !matches!(
             drag.target,
-            DragTarget::Dock(DockItem::Tile { .. })
-                | DragTarget::Header(_)
-                | DragTarget::HeaderAdd(_)
+            DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
         ) {
             self.dispatch_drag(drag.target, ContactPhase::Move, point);
         }
@@ -2889,11 +2879,8 @@ impl Workspace {
             }
             self.set_drag_cursor(&mut drag, "grabbing");
         }
-        if matches!(
-            drag.target,
-            DragTarget::Header(_) | DragTarget::HeaderAdd(_)
-        ) {
-            self.header.drag_motion(point);
+        if matches!(drag.target, DragTarget::Header(_)) {
+            self.header.drag_motion(self, point);
             self.set_drag_cursor(&mut drag, "grabbing");
         }
         true

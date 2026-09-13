@@ -295,6 +295,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let mut menu = match target {
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
+            ContextTarget::Header { id } => self
+                .state
+                .workspace
+                .layout
+                .header
+                .context_menu(id, self.state.customization.header_editing),
             _ => self
                 .state
                 .workspace
@@ -412,16 +418,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
         if self.state.platform == Platform::Gtk {
-            let mut labels = ContextMenuItem::command(
-                "Show Menu Bar",
-                HeaderAction::ShowMenuLabels {
-                    visible: !self.state.workspace.layout.header.show_menu_labels,
-                }
-                .action(),
-            );
-            labels.selected = Some(self.state.workspace.layout.header.show_menu_labels);
+            // Keep the editor entry reachable above the long panel list, also
+            // in the recovery menu on a short tablet-sized window.
             menu.sections
-                .push(vec![labels, command(CommandId::CustomizeWorkspaceUi)]);
+                .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
         }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
@@ -2052,7 +2052,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::MeasureHeader { height, items } => {
                 if !height.is_finite()
-                    || !(0.0..=512.).contains(&height)
+                    || !(0.0..1_000_000.).contains(&height)
                     || items.len() > 128
                     || items.iter().enumerate().any(|(i, m)| {
                         self.state.workspace.layout.header.entry(m.id).is_err()
@@ -2204,17 +2204,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         action: HeaderAction::Edit { editing: true }
                     }
                 );
-                let header_defaults = matches!(
-                    &action,
-                    CustomizationAction::Header {
-                        action: HeaderAction::RestoreDefaults
-                    }
-                )
-                .then(|| {
-                    self.managed_workspace
-                        .as_ref()
-                        .map_or_else(HeaderLayout::default, |w| w.baseline.header.clone())
-                });
                 let viewport = self
                     .logical_viewport
                     .or(self.interaction.viewport)
@@ -2228,9 +2217,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if editing_header && self.state.workspace.zen_mode {
                     self.state.workspace.zen_mode = false;
                     changed |= LAYOUT;
-                }
-                if let Some(header) = header_defaults {
-                    self.state.workspace.layout.header = header;
                 }
                 if changed & LAYOUT != 0
                     && let Some(before) = workspace_before.as_ref()
@@ -8069,7 +8055,12 @@ mod tests {
             let edit = |s: &mut UiSession<Recorder>, action| {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
-            let menu = s.workspace_menu();
+            let mut menu = s.workspace_menu();
+            if platform == Platform::Gtk {
+                assert_eq!(menu.sections[0][0].label, "Customize Window Bar…");
+                assert!(!format!("{menu:?}").contains("Show Menu Bar"));
+                menu.sections.remove(0);
+            }
             assert_eq!(
                 menu.sections[1].len(),
                 Panel::ALL
@@ -8108,7 +8099,21 @@ mod tests {
                 s.state.workspace.layout.panel(Panel::Brushes).unwrap(),
                 original.layout.panel(Panel::Brushes).unwrap()
             );
-            assert_eq!(s.workspace_menu().sections[1][0].selected, Some(false));
+            assert_eq!(
+                s.workspace_menu()
+                    .sections
+                    .iter()
+                    .flatten()
+                    .find(|item| matches!(
+                        item.action,
+                        Some(UiAction::Customize {
+                            action: CustomizationAction::SetPanelVisible { panel: Panel::Brushes, .. }
+                        })
+                    ))
+                    .unwrap()
+                    .selected,
+                Some(false)
+            );
             let saved = s.state.workspace.clone();
             saved.validate().unwrap();
             invoke(&mut s, CommandId::UndoWorkspace);
@@ -9570,7 +9575,7 @@ mod tests {
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
                 );
-                assert_eq!(app.workspace_menu().sections[1].iter().any(|i| matches!(
+                assert_eq!(app.workspace_menu().sections.iter().flatten().any(|i| matches!(
                         i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
                     )), available);
                 let result = app.dispatch(UiAction::Customize {

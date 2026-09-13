@@ -28,6 +28,8 @@ mod cursor;
 mod customization;
 mod header;
 pub use header::*;
+mod header_drag;
+pub use header_drag::*;
 mod drawers;
 pub use drawers::{
     ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
@@ -745,7 +747,7 @@ impl CommandId {
             Self::RedoWorkspace => "Redo Layout Change",
             Self::NewToolbar => "New Toolbar…",
             Self::ManageToolbars => "Manage Toolbars…",
-            Self::CustomizeWorkspaceUi => "Customize Workspace UI…",
+            Self::CustomizeWorkspaceUi => "Customize Window Bar…",
             Self::FitCanvas => "Fit canvas",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",

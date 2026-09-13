@@ -13419,7 +13419,7 @@ fn native_workspace_menu_input() {
         let (id, preset) = layer_workspace::DEFAULT_WORKSPACES[index];
         let button = find_named(
             w.header.root.upcast_ref(),
-            &format!("workspace-switch-{}", preset.name().to_lowercase()),
+            &format!("workspace-switch-{}", id.rsplit(':').next().unwrap()),
         )
         .unwrap();
         let bounds = button.compute_bounds(&w.window).unwrap();

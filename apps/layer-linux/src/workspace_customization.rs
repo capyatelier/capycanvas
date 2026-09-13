@@ -287,6 +287,7 @@ pub(super) struct Customization {
     pub(super) palette: gtk::CssProvider,
     palette_colors: Cell<Option<[[f32; 4]; 2]>>,
     context: gtk::PopoverMenu,
+    context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     popup: gtk::Popover,
     popup_control: Cell<Option<PanelControl>>,
     anchor: Cell<[f32; 2]>,
@@ -329,6 +330,7 @@ impl Customization {
             palette: gtk::CssProvider::new(),
             palette_colors: Cell::new(None),
             context: gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>),
+            context_focus: RefCell::new(None),
             popup: gtk::Popover::new(),
             popup_control: Cell::new(None),
             anchor: Cell::new([320.0, 120.0]),
@@ -360,6 +362,22 @@ impl Customization {
 
     pub fn bind(&self, w: &Rc<Workspace>) {
         self.manager.bind(w);
+        self.context.connect_closed(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                let source = w
+                    .customization
+                    .context_focus
+                    .take()
+                    .and_then(|p| p.upgrade());
+                if let Some(source) = source.filter(|s| s.is_mapped())
+                    && w.window.visible_dialog().is_none()
+                {
+                    source.grab_focus();
+                }
+            }
+        ));
         self.toolbar_dialog.set_widget_name("toolbar-dialog");
         self.toolbar_dialog.add_response("cancel", "");
         self.toolbar_dialog.add_response("confirm", "");
@@ -1409,6 +1427,11 @@ impl Workspace {
         x: f64,
         y: f64,
     ) {
+        if let ContextTarget::Header { id: Some(id) } = target
+            && self.header.is_editing()
+        {
+            self.header.select_context_item(self, id);
+        }
         let held_drag = {
             let mut pending = self.workspace_drag.borrow_mut();
             if let Some(drag) = pending.as_mut() {
@@ -1447,6 +1470,10 @@ impl Workspace {
             popover.set_autohide(false);
         }
         self.populate_workspace_menu(popover, menu);
+        // Unlike MenuButton popovers, this shared surface-owned context menu
+        // has no native invoker to restore keyboard focus to on dismissal.
+        *self.customization.context_focus.borrow_mut() =
+            widget.has_focus().then(|| widget.downgrade());
         popover.set_pointing_to(Some(&gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,
