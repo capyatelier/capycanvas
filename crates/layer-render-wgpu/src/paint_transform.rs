@@ -624,8 +624,7 @@ impl ImageTransformState {
         let operation = packet
             .layers
             .iter()
-            .find_map(|l| l.target_history(preview.layer))?
-            .1
+            .find_map(|l| l.target_operations(preview.layer))?
             .get(index as usize)?;
         if operation.kind != layer_core::LayerOperationKind::Transform(preview.transform)
             || operation.coverage.initial != preview.selection

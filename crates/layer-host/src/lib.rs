@@ -174,6 +174,7 @@ impl NativeHost {
                     layers: &layers,
                     dabs: &[],
                     dab_batches: &[],
+                    restore_rasters: &[],
                     reset_layers: true,
                     composite_all: true,
                 })
@@ -302,10 +303,10 @@ impl NativeHost {
     }
     fn enqueue(&mut self, event: PenEvent) -> Result<(), String> {
         if let Err(event) = self.session.pen(event) {
-            // The sole render owner may drain a full input queue. The platform
-            // UI thread never waits here, and a stroke boundary is never dropped.
+            // Relieve queue pressure through an actual frame boundary. Raster
+            // commits require GPU submission; CPU-only draining cannot save them.
             let previous = self.session.state().revision;
-            let change = self.session.flush_input()?;
+            let change = self.session.frame(event.timestamp_ns, event.timestamp_ns)?;
             self.apply_change(previous, change);
             self.session
                 .pen(event)
@@ -1486,10 +1487,16 @@ mod tests {
             host.session.frame(time as u64, time as u64).unwrap();
         }
         assert!(host.last_pen.is_none());
-        let stroke = host.session.engine().document().strokes().next().unwrap();
-        let before = stroke.points[0];
-        assert_eq!(before.pressure, 0.25);
-        let count = stroke.points.len();
+        let checkpoint = host.session.engine().checkpoint();
+        let before = host.session.engine().document().layers[0].raster.clone();
+        let mut before_pixels = vec![0; 64 * 48 * 4];
+        host.session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .copy_rgba8_srgb(&mut before_pixels, 64 * 4)
+            .unwrap();
         let camera = json!(host.session.state().camera);
         host.pointer_batch_updates(
             PointerBatch {
@@ -1505,17 +1512,33 @@ mod tests {
         )
         .unwrap();
         host.session.frame(30_000_000, 30_000_000).unwrap();
-        let stroke = host.session.engine().document().strokes().next().unwrap();
-        assert_eq!(stroke.points.len(), count);
-        assert_eq!(stroke.points[0].pressure, 0.9);
-        assert_eq!(stroke.points[0].tilt, [0.2, -0.3]);
-        assert_eq!(stroke.points[0].twist, 1.7);
-        assert!(stroke.points[0].position.x > before.position.x);
-        assert_eq!(host.session.engine().document().strokes().count(), 1);
+        let after = &host.session.engine().document().layers[0].raster;
+        assert_ne!(
+            after, &before,
+            "late correction publishes a replacement raster root"
+        );
+        assert_ne!(host.session.engine().checkpoint(), checkpoint, "a prior save remains dirty after correction");
+        assert_eq!(host.session.engine().metrics().committed_strokes, 1);
+        let mut after_pixels = vec![0; 64 * 48 * 4];
+        host.session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .copy_rgba8_srgb(&mut after_pixels, 64 * 4)
+            .unwrap();
+        assert_ne!(
+            after_pixels, before_pixels,
+            "corrected pressure/position changes pixels"
+        );
         assert!(host.last_pen.is_none());
         assert!(host.deferred_contacts.is_empty());
         assert_eq!(json!(host.session.state().camera), camera);
         host.session.require_document_idle().unwrap();
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Undo }).unwrap();
+        host.session.frame(40_000_000, 40_000_000).unwrap();
+        assert!(host.session.engine().document().layers[0].raster.is_empty());
+        assert!(!host.session.engine().can_undo(), "correction adds no undo entry");
     }
 
     #[test]

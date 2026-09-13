@@ -12,6 +12,10 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn can_capture_raster(&self) -> bool {
+        self.0.as_ref().is_none_or(|gpu| gpu.can_capture_raster())
+    }
+
     fn set_transform_preview(
         &mut self,
         preview: Option<&layer_render::TransformPreview>,

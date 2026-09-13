@@ -5,6 +5,10 @@
 Paths under `artifacts/` refer to ignored local outputs, not files shipped in
 this repository. See [publication notes](publication.md#publication-checks).
 
+The [GTK raster foundation qualification](../history/color-management-gtk-m1-validation.md)
+records the encoded sRGB8 replacement's baseline, repeated drawing comparison,
+dense-image/concurrent-save workloads, capture memory and native presentation.
+
 ## What is measured
 
 `layer-bench` submits 15 legacy and 10 painter-focused 4096×4096 workloads
@@ -17,7 +21,15 @@ It reports two time boundaries:
   generation, wgpu command encoding, uploads, and queue submission; this is the
   non-blocking production call;
 - **completed**: the same work plus a benchmark-only wait for that exact GPU
-  submission, isolating the full completed GPU workload.
+  submission, including changed-tile capture copies and any backing-capacity
+  delay needed to consume the measured input. Compression finishes asynchronously.
+
+Deferred input is drained before completion is recorded. CPU frame creation is
+reported separately from capacity/GPU waits. The capture allocated/reserved peak
+adds pending staging reservations, reusable spares and active CPU scratch; it is
+separate from the older canvas-residency counter and excludes source/history and
+driver allocations. A returned buffer can remain charged in its pending capture
+reservation until that job finishes, so the capture counter is conservative.
 
 Initialization, shader/pipeline creation, target allocation, brush selection,
 layer creation, and PNG export stay outside the measurement. Each repetition

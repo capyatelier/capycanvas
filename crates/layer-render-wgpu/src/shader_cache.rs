@@ -381,6 +381,7 @@ mod tests {
             layers: &doc.layers,
             dabs: &dabs,
             dab_batches: &batches,
+            restore_rasters: &[],
             reset_layers: true,
             composite_all: true,
         };

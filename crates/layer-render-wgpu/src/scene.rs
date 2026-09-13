@@ -121,6 +121,9 @@ impl Scene {
     ) -> Result<(), GpuRasterError> {
         self.jobs.clear();
         for layer in layers {
+            if r.has_raster_source(layer.id) {
+                continue;
+            }
             let Some((source, extent)) = layer.asset.as_ref().and_then(|a| r.images.get(a)) else {
                 continue;
             };
@@ -803,7 +806,7 @@ impl Scene {
         self.jobs.clear();
         self.used.fill(false);
         let layer = &packet.layers[layer_index];
-        let op = &layer.operations[operation_index];
+        let op = &layer.pending_operations[operation_index];
         let damage = pixel_rect(op.bounds(packet.document_extent), packet.document_extent);
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(());

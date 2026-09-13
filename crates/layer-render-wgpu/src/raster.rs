@@ -1,0 +1,854 @@
+//! Queue-ordered exact tile capture; mapping/compression runs on a worker.
+use super::*;
+use layer_core::raster::{
+    RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey,
+};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
+
+const CAPTURE_CHUNK: u64 = 16 * 1024 * 1024;
+use layer_core::raster::MAX_CAPTURE_BYTES;
+
+// Reuse unmapped staging allocations; allocation/zeroing at pen-up can cost
+// several milliseconds even when the queue copy itself is cheap.
+#[derive(Default)]
+pub(super) struct BufferPool {
+    buffers: std::sync::Mutex<Vec<wgpu::Buffer>>,
+    bytes: AtomicU64,
+    working: AtomicU64,
+}
+impl BufferPool {
+    fn take(&self, device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+        let mut buffers = self.buffers.lock().unwrap();
+        if let Some(index) = buffers.iter().position(|b| b.size() == size) {
+            self.bytes.fetch_sub(size, Ordering::Relaxed);
+            return buffers.swap_remove(index);
+        }
+        drop(buffers);
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bounded raster capture chunk"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+    fn put(&self, buffer: wgpu::Buffer) {
+        let mut buffers = self.buffers.lock().unwrap();
+        while self.bytes.load(Ordering::Relaxed) + buffer.size() > 64 * 1024 * 1024 {
+            let Some(index) = buffers
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.size() < buffer.size())
+                .min_by_key(|(_, b)| b.size())
+                .map(|(i, _)| i)
+            else {
+                break;
+            };
+            let old = buffers.swap_remove(index);
+            self.bytes.fetch_sub(old.size(), Ordering::Relaxed);
+        }
+        if self.bytes.load(Ordering::Relaxed) + buffer.size() <= 64 * 1024 * 1024 {
+            self.bytes.fetch_add(buffer.size(), Ordering::Relaxed);
+            buffers.push(buffer);
+        }
+    }
+}
+fn capture_allocation(bytes: u64) -> u64 {
+    let tail = bytes % CAPTURE_CHUNK;
+    bytes / CAPTURE_CHUNK * CAPTURE_CHUNK
+        + if tail == 0 {
+            0
+        } else {
+            tail.next_power_of_two()
+        }
+}
+
+struct Target {
+    source: Option<AssetId>,
+    revision: RasterRevision,
+    data: Arc<RasterData>,
+    changed: BTreeSet<[u32; 2]>,
+}
+#[derive(Default)]
+pub(super) struct RasterRuntime {
+    targets: BTreeMap<LayerId, Target>,
+    worker: Option<CaptureWorker>,
+}
+struct CaptureWorker {
+    sender: Option<mpsc::SyncSender<Vec<RasterCapture>>>,
+    pending: Arc<AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    staging: Arc<AtomicU64>,
+    error: Arc<std::sync::Mutex<Option<String>>>,
+}
+impl CaptureWorker {
+    fn new(device: wgpu::Device, pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
+        let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(16);
+        let pending = Arc::new(AtomicUsize::new(0));
+        let count = pending.clone();
+        let staging = Arc::new(AtomicU64::new(0));
+        let bytes = staging.clone();
+        let error = Arc::new(std::sync::Mutex::new(None));
+        let failure = error.clone();
+        let thread = std::thread::Builder::new()
+            .name("capy-raster-backing".into())
+            .spawn(move || {
+                // Establish the bounded spare pool on its worker. A burst of
+                // small commits must not allocate pinned memory at every pen-up.
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    for _ in 0..4 {
+                        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("raster staging spare"),
+                            size: CAPTURE_CHUNK,
+                            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                            mapped_at_creation: false,
+                        });
+                        pool.put(buffer);
+                    }
+                }))
+                .is_err()
+                {
+                    *failure.lock().unwrap() =
+                        Some("Could not prepare raster staging buffers".into());
+                }
+                while let Ok(captures) = receiver.recv() {
+                    let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
+                    // Dropped tickets publish failures even if a driver callback or
+                    // compression panics; never leave backpressure permanently set.
+                    let result = if failure.lock().unwrap().is_some() {
+                        drop(captures);
+                        Ok(())
+                    } else {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            for capture in captures {
+                                capture.finish()?;
+                            }
+                            Ok::<_, String>(())
+                        }))
+                        .unwrap_or_else(|_| Err("Raster backing worker panicked".into()))
+                    };
+                    if let Err(message) = result {
+                        *failure.lock().unwrap() = Some(message);
+                    }
+                    bytes.fetch_sub(size, Ordering::Release);
+                    count.fetch_sub(1, Ordering::Release);
+                }
+            })
+            .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
+        Ok(Self {
+            sender: Some(sender),
+            pending,
+            staging,
+            error,
+            thread: Some(thread),
+        })
+    }
+    fn ready(&self) -> bool {
+        // Reserve room for the largest legal next capture. The total staging
+        // ceiling remains 512 MiB, while small edits can share that allowance.
+        self.pending.load(Ordering::Acquire) < 16
+            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES
+    }
+    fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
+        let size = captures.iter().map(|c| c.staging_bytes).sum();
+        self.staging.fetch_add(size, Ordering::Release);
+        self.pending.fetch_add(1, Ordering::Release);
+        if self.sender.as_ref().unwrap().try_send(captures).is_err() {
+            self.pending.fetch_sub(1, Ordering::Release);
+            self.staging.fetch_sub(size, Ordering::Release);
+            return Err(GpuRasterError::Effect(
+                "Raster backing queue is full or stopped".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+impl Drop for CaptureWorker {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+struct Entry {
+    offset: u64,
+    size: u64,
+    key: TileKey,
+    tile: RasterTile,
+}
+struct Chunk {
+    buffer: wgpu::Buffer,
+    entries: Vec<Entry>,
+    ready: mpsc::Receiver<Result<(), String>>,
+}
+pub struct RasterCapture {
+    device: wgpu::Device,
+    submission: wgpu::SubmissionIndex,
+    chunks: Vec<Chunk>,
+    pool: Arc<BufferPool>,
+    pub staging_bytes: u64,
+}
+impl RasterCapture {
+    /// Worker only. Cached readback scratch is bounded to four 16 MiB chunks.
+    pub fn finish(mut self) -> Result<(), String> {
+        let result: Result<(), String> = (|| {
+            self.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(self.submission.clone()),
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .map_err(|e| e.to_string())?;
+            fn finish_chunk(chunk: &Chunk, pool: &BufferPool, lanes: usize) -> Result<(), String> {
+                chunk
+                    .ready
+                    .recv_timeout(READBACK_TIMEOUT)
+                    .map_err(|e| e.to_string())??;
+                let mapped = chunk
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .map_err(|e| e.to_string())?;
+                // Mapped readback memory is expensive for a compressor's repeated
+                // accesses. Copy once into cached memory, then return the GPU
+                // allocation immediately. At most four 16 MiB chunks exist here.
+                struct Scratch<'a> {
+                    bytes: Vec<u8>,
+                    pool: &'a BufferPool,
+                }
+                impl Drop for Scratch<'_> {
+                    fn drop(&mut self) {
+                        self.pool
+                            .working
+                            .fetch_sub(self.bytes.len() as u64, Ordering::Relaxed);
+                    }
+                }
+                let bytes = Scratch {
+                    bytes: mapped.to_vec(),
+                    pool,
+                };
+                pool.working
+                    .fetch_add(bytes.bytes.len() as u64, Ordering::Relaxed);
+                drop(mapped);
+                chunk.buffer.unmap();
+                pool.put(chunk.buffer.clone());
+                let encode = |entries: &[Entry]| -> Result<(), String> {
+                    for entry in entries {
+                        let begin = entry.offset as usize;
+                        entry.tile.publish(TileBlob::encode(
+                            entry.key.plane.descriptor(),
+                            &bytes.bytes[begin..begin + entry.size as usize],
+                        ))?;
+                    }
+                    Ok(())
+                };
+                if lanes > 1 && chunk.entries.len() >= 8 {
+                    std::thread::scope(|scope| {
+                        let mut jobs = Vec::new();
+                        for entries in chunk.entries.chunks(chunk.entries.len().div_ceil(lanes)) {
+                            jobs.push(scope.spawn(move || encode(entries)));
+                        }
+                        for job in jobs {
+                            job.join()
+                                .map_err(|_| "Raster compression worker panicked")??;
+                        }
+                        Ok::<_, String>(())
+                    })?;
+                } else {
+                    encode(&chunk.entries)?;
+                }
+                Ok(())
+            }
+            if self.chunks.len() == 1 {
+                finish_chunk(&self.chunks[0], &self.pool, 4)?;
+            } else {
+                let group_size = self.chunks.len().div_ceil(4);
+                let lanes = 4 / self.chunks.len().min(4);
+                std::thread::scope(|scope| {
+                    let mut jobs = Vec::new();
+                    for group in self.chunks.chunks_mut(group_size) {
+                        let pool = &self.pool;
+                        jobs.push(scope.spawn(move || {
+                            for chunk in group {
+                                finish_chunk(chunk, pool, lanes)?;
+                            }
+                            Ok::<_, String>(())
+                        }));
+                    }
+                    for job in jobs {
+                        job.join()
+                            .map_err(|_| "Raster compression worker panicked")??;
+                    }
+                    Ok::<_, String>(())
+                })?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            self.fail(error);
+        }
+        result
+    }
+    fn fail(&self, error: &str) {
+        for chunk in &self.chunks {
+            for entry in &chunk.entries {
+                if entry.tile.try_backing().is_none() {
+                    let _ = entry.tile.publish(Err(error.into()));
+                }
+            }
+        }
+    }
+}
+impl Drop for RasterCapture {
+    fn drop(&mut self) {
+        self.fail("Raster capture was abandoned before host backing completed");
+    }
+}
+
+impl WgpuRasterizer {
+    pub fn raster_ready(&self) -> bool {
+        self.raster
+            .as_ref()
+            .and_then(|r| r.worker.as_ref())
+            .is_none_or(CaptureWorker::ready)
+    }
+
+    pub(super) fn reconcile_rasters(
+        &mut self,
+        packet: FramePacket<'_>,
+        reset: bool,
+    ) -> Result<(), GpuRasterError> {
+        let mut runtime = self.raster.take().unwrap_or_default();
+        let result = (|| {
+            if let Some(error) = runtime
+                .worker
+                .as_ref()
+                .and_then(|w| w.error.lock().unwrap().clone())
+            {
+                return Err(GpuRasterError::Effect(error));
+            }
+            runtime.targets.retain(|id, _| {
+                packet
+                    .layers
+                    .iter()
+                    .any(|l| l.id == *id || l.masks().any(|m| m.id == *id))
+            });
+            for (id, revision) in packet.restore_rasters {
+                if let Some(current) = runtime.targets.get_mut(id) {
+                    let data = revision.wait_data().map_err(GpuRasterError::Effect)?;
+                    let mut before = if reset {
+                        RasterData::default()
+                    } else {
+                        (*current.data).clone()
+                    };
+                    before
+                        .tiles
+                        .retain(|key, _| !current.changed.contains(&key.coordinate));
+                    self.restore_raster(*id, &before, &data)?;
+                    current.revision = revision.clone();
+                    current.data = data;
+                    current.changed.clear();
+                }
+            }
+            for layer in packet.layers {
+                for (id, revision) in std::iter::once((layer.id, &layer.raster))
+                    .chain(layer.masks().map(|m| (m.id, &m.raster)))
+                {
+                    // Backgrounds, groups and generators have no editable color pages.
+                    if id == layer.id && !self.paint_layers.iter().any(|l| l.id == id) {
+                        continue;
+                    }
+                    let source = if id == layer.id {
+                        layer.asset.clone()
+                    } else {
+                        None
+                    };
+                    if runtime.targets.get(&id).is_some_and(|t| t.source != source) {
+                        runtime.targets.remove(&id);
+                    }
+                    let wanted = match revision.try_data() {
+                        Some(Ok(data)) => Some(data),
+                        Some(Err(error)) => return Err(GpuRasterError::Effect(error)),
+                        None => None,
+                    };
+                    if let Some(current) = runtime.targets.get_mut(&id) {
+                        if reset || (wanted.is_some() && current.revision != *revision) {
+                            let data = wanted.unwrap_or_else(|| current.data.clone());
+                            let mut before = if reset {
+                                RasterData::default()
+                            } else {
+                                (*current.data).clone()
+                            };
+                            before
+                                .tiles
+                                .retain(|key, _| !current.changed.contains(&key.coordinate));
+                            self.restore_raster(id, &before, &data)?;
+                            current.data = data;
+                            current.changed.clear();
+                            if revision.try_data().is_some() {
+                                current.revision = revision.clone();
+                            }
+                        }
+                    } else {
+                        let data = wanted.unwrap_or_default();
+                        if !data.tiles.is_empty() {
+                            self.restore_raster(id, &RasterData::default(), &data)?;
+                        }
+                        runtime.targets.insert(
+                            id,
+                            Target {
+                                source,
+                                revision: revision.clone(),
+                                data,
+                                changed: BTreeSet::new(),
+                            },
+                        );
+                    }
+                }
+            }
+            for batch in packet
+                .dab_batches
+                .iter()
+                .filter(|b| b.kind != DabBatchKind::Preview)
+            {
+                if let Some(target) = runtime.targets.get_mut(&batch.layer_id) {
+                    // Transport is included in batch damage. Terminal edge work
+                    // touches only this contact's coverage; earlier batches have
+                    // already accumulated their changed pages in this target.
+                    // Operation damage already includes selection bounds and
+                    // transformed source/destination footprints.
+                    let damage = batch_pixel_rect(batch, packet.document_extent);
+                    target.changed.extend(page_coordinates(damage));
+                    if batch.stroke_end && batch.style.rendering.edge_after_stroke {
+                        if let Some(layer) =
+                            self.paint_layers.iter().find(|l| l.id == batch.layer_id)
+                        {
+                            target.changed.extend(
+                                layer
+                                    .coverage_pages
+                                    .iter()
+                                    .filter(|p| p.owner == Some(batch.stroke_id))
+                                    .map(|p| p.coordinate),
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.raster = Some(runtime);
+        result
+    }
+
+    pub(super) fn commit_rasters(&mut self, layers: &[Layer]) -> Result<(), GpuRasterError> {
+        if !layers.iter().any(|l| {
+            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
+        }) {
+            return Ok(());
+        }
+        let mut runtime = self.raster.take().unwrap_or_default();
+        let result = (|| {
+            if runtime.worker.as_ref().is_some_and(|w| !w.ready()) {
+                return Err(GpuRasterError::Effect(
+                    "Raster backing queue is full".into(),
+                ));
+            }
+            let mut staging = 0;
+            for layer in layers {
+                for (id, revision) in std::iter::once((layer.id, &layer.raster))
+                    .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
+                {
+                    if revision.try_data().is_some() {
+                        continue;
+                    }
+                    let Some(current) = runtime.targets.get(&id) else {
+                        continue;
+                    };
+                    let (textures, _) = self.raster_textures(id);
+                    let mut target_bytes = 0;
+                    for key in textures.keys() {
+                        if !current.data.tiles.contains_key(key)
+                            || current.changed.contains(&key.coordinate)
+                        {
+                            target_bytes +=
+                                key.plane.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64;
+                        }
+                    }
+                    staging += capture_allocation(target_bytes);
+                }
+            }
+            if staging > MAX_CAPTURE_BYTES {
+                return Err(GpuRasterError::Effect(
+                    "Raster frame exceeds the 256 MiB staging budget".into(),
+                ));
+            }
+            if staging > 0 && runtime.worker.is_none() {
+                runtime.worker = Some(CaptureWorker::new(
+                    (*self.device).clone(),
+                    self.raster_buffers.clone(),
+                )?);
+            }
+            let mut captures = Vec::new();
+            for layer in layers {
+                for (id, revision) in std::iter::once((layer.id, &layer.raster))
+                    .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
+                {
+                    if revision.try_data().is_some() {
+                        continue;
+                    }
+                    let Some(current) = runtime.targets.get_mut(&id) else {
+                        continue;
+                    };
+                    if let Some(capture) =
+                        self.capture_raster(id, &current.data, &current.changed, revision)?
+                    {
+                        // Include capture copies in GPU-completed frame timings.
+                        self.last_submission = Some(capture.submission.clone());
+                        captures.push(capture);
+                    }
+                    current.revision = revision.clone();
+                    current.data = revision.wait_data().map_err(GpuRasterError::Effect)?;
+                    current.changed.clear();
+                }
+            }
+            if !captures.is_empty() {
+                runtime.worker.as_ref().unwrap().submit(captures)?;
+            }
+            Ok(())
+        })();
+        self.raster = Some(runtime);
+        result
+    }
+
+    pub(super) fn has_raster_source(&self, target: LayerId) -> bool {
+        self.raster
+            .as_ref()
+            .and_then(|r| r.targets.get(&target))
+            .is_some_and(|t| !t.data.tiles.is_empty())
+    }
+
+    pub(super) fn raster_staging_bytes(&self) -> u64 {
+        self.raster_buffers.bytes.load(Ordering::Relaxed)
+            + self.raster_buffers.working.load(Ordering::Relaxed)
+            + self
+                .raster
+                .as_ref()
+                .and_then(|r| r.worker.as_ref())
+                .map_or(0, |w| w.staging.load(Ordering::Acquire))
+    }
+
+    fn raster_textures(
+        &self,
+        target: LayerId,
+    ) -> (BTreeMap<TileKey, &wgpu::Texture>, Option<RasterWatercolor>) {
+        let mut textures = BTreeMap::new();
+        let mut watercolor = None;
+        if let Some(layer) = self.paint_layers.iter().find(|l| l.id == target) {
+            for page in &layer.pages {
+                textures.insert(
+                    TileKey {
+                        plane: RasterPlane::Color,
+                        coordinate: page.coordinate,
+                    },
+                    &page.active().texture,
+                );
+            }
+            for page in &layer.material_pages {
+                textures.insert(
+                    TileKey {
+                        plane: RasterPlane::Wetness,
+                        coordinate: page.coordinate,
+                    },
+                    &page.wetness.texture,
+                );
+            }
+            for page in &layer.watercolor_wetness_pages {
+                textures.insert(
+                    TileKey {
+                        plane: RasterPlane::WatercolorWetness,
+                        coordinate: page.coordinate,
+                    },
+                    &page.active().texture,
+                );
+            }
+            watercolor = layer.watercolor.map(|w| RasterWatercolor {
+                wet_edge: w.wet_edge,
+                burnt_edge: w.burnt_edge,
+                edge_width: w.edge_width,
+            });
+        } else {
+            for ((id, coordinate), page) in &self.layer_masks.pages {
+                if *id == target {
+                    textures.insert(
+                        TileKey {
+                            plane: RasterPlane::Mask,
+                            coordinate: *coordinate,
+                        },
+                        &page.texture,
+                    );
+                }
+            }
+        }
+        (textures, watercolor)
+    }
+
+    /// Capture only changed physical pages. The caller reserves bounded worker
+    /// capacity before issuing this request and owns the returned ticket until
+    /// every tile is host-backed. Unchanged captures are reused by identity.
+    pub fn capture_raster(
+        &self,
+        target: LayerId,
+        previous: &RasterData,
+        changed: &BTreeSet<[u32; 2]>,
+        revision: &RasterRevision,
+    ) -> Result<Option<RasterCapture>, GpuRasterError> {
+        let (textures, watercolor) = self.raster_textures(target);
+        let mut data = RasterData {
+            tiles: BTreeMap::new(),
+            watercolor,
+        };
+        let mut copies = Vec::new();
+        let mut total = 0;
+        for (key, texture) in textures {
+            if let Some(tile) = previous
+                .tiles
+                .get(&key)
+                .filter(|_| !changed.contains(&key.coordinate))
+            {
+                data.tiles.insert(key, tile.clone());
+            } else {
+                let size = key.plane.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64;
+                total += size;
+                if total > MAX_CAPTURE_BYTES {
+                    return Err(GpuRasterError::Effect(
+                        "Raster capture exceeds the 256 MiB staging budget".into(),
+                    ));
+                }
+                let tile = RasterTile::default();
+                data.tiles.insert(key, tile.clone());
+                copies.push((key, texture, tile, size));
+            }
+        }
+        if copies.is_empty() {
+            revision.publish(Ok(data)).map_err(GpuRasterError::Effect)?;
+            return Ok(None);
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("immutable raster revision capture"),
+            });
+        let mut chunks = Vec::new();
+        let mut index = 0;
+        while index < copies.len() {
+            let start = index;
+            let mut size = 0;
+            while index < copies.len() && size + copies[index].3 <= CAPTURE_CHUNK {
+                size += copies[index].3;
+                index += 1;
+            }
+            let buffer = self
+                .raster_buffers
+                .take(&self.device, size.next_power_of_two());
+            let mut entries = Vec::new();
+            let mut offset = 0;
+            for (key, texture, tile, count) in &copies[start..index] {
+                encoder.copy_texture_to_buffer(
+                    texture.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset,
+                            bytes_per_row: Some((*count / u64::from(PAGE_SIZE)) as u32),
+                            rows_per_image: Some(PAGE_SIZE),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: PAGE_SIZE,
+                        height: PAGE_SIZE,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                entries.push(Entry {
+                    offset,
+                    size: *count,
+                    key: *key,
+                    tile: tile.clone(),
+                });
+                offset += count;
+            }
+            chunks.push((buffer, entries));
+        }
+        let submission = self.queue.submit([encoder.finish()]);
+        let chunks = chunks
+            .into_iter()
+            .map(|(buffer, entries)| {
+                let (tx, ready) = mpsc::channel();
+                buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = tx.send(result.map_err(|e| e.to_string()));
+                    });
+                Chunk {
+                    buffer,
+                    entries,
+                    ready,
+                }
+            })
+            .collect();
+        let capture = RasterCapture {
+            device: (*self.device).clone(),
+            submission,
+            chunks,
+            staging_bytes: capture_allocation(total),
+            pool: self.raster_buffers.clone(),
+        };
+        revision.publish(Ok(data)).map_err(GpuRasterError::Effect)?;
+        Ok(Some(capture))
+    }
+
+    /// Restore changed pages only, from exact backing. Called on the GPU owner
+    /// after backing is ready; no historical dabs are generated.
+    pub fn restore_raster(
+        &mut self,
+        target: LayerId,
+        previous: &RasterData,
+        data: &RasterData,
+    ) -> Result<(), GpuRasterError> {
+        let index = self.paint_layers.iter().position(|l| l.id == target);
+        let mask = index.is_none();
+        data.validate_index(self.document_extent, mask)
+            .map_err(GpuRasterError::Effect)?;
+        // Decode every replacement before mutating live storage; corruption or
+        // failed capture cannot leave half a revision installed.
+        let mut replacements = Vec::new();
+        for (key, tile) in &data.tiles {
+            if previous
+                .tiles
+                .get(key)
+                .is_some_and(|old| old.same_capture(tile))
+            {
+                continue;
+            }
+            let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
+            if blob.descriptor != key.plane.descriptor() {
+                return Err(GpuRasterError::Effect(
+                    "Raster plane has the wrong pixel representation".into(),
+                ));
+            }
+            let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
+            replacements.push((*key, bytes));
+        }
+        if let Some(index) = index {
+            let layer = &mut self.paint_layers[index];
+            layer.pages.retain(|p| {
+                data.tiles.contains_key(&TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: p.coordinate,
+                })
+            });
+            layer.material_pages.retain(|p| {
+                data.tiles.contains_key(&TileKey {
+                    plane: RasterPlane::Wetness,
+                    coordinate: p.coordinate,
+                })
+            });
+            layer.watercolor_wetness_pages.retain(|p| {
+                data.tiles.contains_key(&TileKey {
+                    plane: RasterPlane::WatercolorWetness,
+                    coordinate: p.coordinate,
+                })
+            });
+            layer.coverage_pages.clear();
+            layer.watercolor = data.watercolor.map(|w| WatercolorLayerStyle {
+                wet_edge: w.wet_edge,
+                burnt_edge: w.burnt_edge,
+                edge_width: w.edge_width,
+            });
+        } else {
+            self.layer_masks.pages.retain(|(id, coordinate), _| {
+                *id != target
+                    || data.tiles.contains_key(&TileKey {
+                        plane: RasterPlane::Mask,
+                        coordinate: *coordinate,
+                    })
+            });
+        }
+        for (key, bytes) in replacements {
+            let texture = match key.plane {
+                RasterPlane::Color => {
+                    let mut page = self.create_page(key.coordinate, "restored raster tile");
+                    page.primary_needs_clear = false;
+                    let texture = page.primary.texture.clone();
+                    let pages = &mut self.paint_layers[index.unwrap()].pages;
+                    pages.retain(|p| p.coordinate != key.coordinate);
+                    pages.push(page);
+                    texture
+                }
+                RasterPlane::Mask => {
+                    let page = layer_masks::MaskPage::new(&self.device);
+                    let texture = page.texture.clone();
+                    self.layer_masks
+                        .pages
+                        .insert((target, key.coordinate), page);
+                    texture
+                }
+                RasterPlane::Wetness => {
+                    let wetness = self.create_scalar_page_surface("restored wetness tile");
+                    let texture = wetness.texture.clone();
+                    let pages = &mut self.paint_layers[index.unwrap()].material_pages;
+                    pages.retain(|p| p.coordinate != key.coordinate);
+                    pages.push(CanvasMaterialPage {
+                        coordinate: key.coordinate,
+                        wetness,
+                        needs_clear: false,
+                    });
+                    texture
+                }
+                RasterPlane::WatercolorWetness => {
+                    let primary = self.create_scalar_page_surface("restored watercolor wetness");
+                    let secondary = self.create_scalar_page_surface("watercolor wetness companion");
+                    let texture = primary.texture.clone();
+                    let pages = &mut self.paint_layers[index.unwrap()].watercolor_wetness_pages;
+                    pages.retain(|p| p.coordinate != key.coordinate);
+                    pages.push(WatercolorWetnessPage {
+                        coordinate: key.coordinate,
+                        primary,
+                        secondary,
+                        active_secondary: false,
+                        primary_needs_clear: false,
+                        secondary_needs_clear: true,
+                    });
+                    texture
+                }
+            };
+            self.queue.write_texture(
+                texture.as_image_copy(),
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some((bytes.len() / PAGE_SIZE as usize) as u32),
+                    rows_per_image: Some(PAGE_SIZE),
+                },
+                wgpu::Extent3d {
+                    width: PAGE_SIZE,
+                    height: PAGE_SIZE,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.preview_pages.clear();
+        self.preview_coverage_pages.clear();
+        self.preview_watercolor_wetness_pages.clear();
+        self.preview_damage = PixelRect::EMPTY;
+        self.preview_layer_id = None;
+        if let Some(scene) = &mut self.scene {
+            scene.begin_frame();
+        }
+        Ok(())
+    }
+}

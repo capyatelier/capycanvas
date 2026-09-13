@@ -128,6 +128,7 @@ impl RegionRequests {
                         layers,
                         dabs: &[],
                         dab_batches: &[],
+                        restore_rasters: &[],
                         reset_layers: false,
                         composite_all: true,
                     },

@@ -639,7 +639,7 @@ mod tests {
         let r = WgpuRasterizer::new_headless().unwrap();
         let mut flood = Flood::new(&r.device);
         for pixels in [
-            vec![0, 0, 0, 255, 2, 0, 0, 255, 4, 0, 0, 255, 2, 0, 0, 255],
+            vec![0, 0, 0, 255, 22, 0, 0, 255, 34, 0, 0, 255, 22, 0, 0, 255],
             vec![255, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0],
         ] {
             let source = source(&r, [4, 1], &pixels);

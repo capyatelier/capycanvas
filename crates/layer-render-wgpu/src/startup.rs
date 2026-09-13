@@ -225,21 +225,10 @@ impl WgpuRasterizer {
             required
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
-            for stroke in document.strokes() {
-                let mut style = style(&stroke.brush, stroke.tool, stroke.alpha_locked);
-                style.selection = stroke.selection.clone();
-                startup.masks.style(&startup.compiler, &style, DOCUMENT);
-                required.style(
-                    self,
-                    &style,
-                    layer_masks::MaskRenderer::is_mask(&document.layers, stroke.layer_id),
-                    false,
-                );
-            }
             if document
                 .layers
                 .iter()
-                .any(|l| l.mask.is_some() || !l.operations.is_empty())
+                .any(|l| l.mask.is_some() || !l.pending_operations.is_empty())
             {
                 required.render.push(self.layer_masks.initialize.clone());
                 required.compute.extend([
@@ -249,9 +238,9 @@ impl WgpuRasterizer {
                 ]);
             }
             if document.layers.iter().any(|l| {
-                l.operations
+                l.pending_operations
                     .iter()
-                    .chain(l.masks().flat_map(|m| m.operations.iter()))
+                    .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
                     .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))
             }) {
                 required.render.extend(
@@ -541,6 +530,7 @@ mod gpu_tests {
                 layers: &doc.layers,
                 dabs: &[],
                 dab_batches: &[],
+                restore_rasters: &[],
                 reset_layers: true,
                 composite_all: true,
                 time_seconds: 0.,
@@ -752,17 +742,21 @@ mod gpu_tests {
         let asset = AssetId("startup checker".into());
         doc.layers[0].asset = Some(asset.clone());
         if transform {
-            doc.layers[0].operations.push(layer_core::LayerOperation {
-                after_stroke: 0,
-                coverage: layer_core::LayerMask::reveal_all(
-                    LayerId(100),
-                    layer_core::Point::default(),
-                ),
-                kind: layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
-                    affine: layer_core::Affine::translation(layer_core::Point { x: 9., y: 13. }),
-                    ..Default::default()
-                }),
-            });
+            doc.layers[0]
+                .pending_operations
+                .push(layer_core::LayerOperation {
+                    coverage: layer_core::LayerMask::reveal_all(
+                        LayerId(100),
+                        layer_core::Point::default(),
+                    ),
+                    kind: layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
+                        affine: layer_core::Affine::translation(layer_core::Point {
+                            x: 9.,
+                            y: 13.,
+                        }),
+                        ..Default::default()
+                    }),
+                });
             if target == 2 {
                 let mut mask =
                     layer_core::LayerMask::reveal_all(LayerId(9), layer_core::Point::default());
@@ -775,7 +769,8 @@ mod gpu_tests {
                     ])
                     .unwrap(),
                 );
-                mask.operations = Arc::new(std::mem::take(&mut doc.layers[0].operations));
+                mask.pending_operations =
+                    Arc::new(std::mem::take(&mut doc.layers[0].pending_operations));
                 doc.layers[0].mask = Some(mask);
             }
         }
@@ -896,6 +891,7 @@ mod gpu_tests {
             layers: &doc.layers,
             dabs: &dabs,
             dab_batches: &batches,
+            restore_rasters: &[],
             reset_layers: true,
             composite_all: true,
         };

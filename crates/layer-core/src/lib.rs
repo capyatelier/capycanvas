@@ -5,8 +5,10 @@
 //! moves handles; late sensor corrections replace that storage without changing
 //! already captured document snapshots.
 
+pub mod color;
 mod effect_catalog;
 mod effects;
+pub mod raster;
 pub use effect_catalog::*;
 mod layers;
 pub use effects::*;
@@ -18,8 +20,8 @@ mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
-mod input_corrections;
 mod project;
+mod project_storage;
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
@@ -152,14 +154,17 @@ pub struct Layer {
     pub kind: LayerKind,
     pub visible: bool,
     pub opacity: f32,
-    /// Front-to-back stroke order for paint layers.
-    pub strokes: Vec<StrokeId>,
+    /// Exact committed pixels, shared with undo and in-flight save snapshots.
+    /// The indexed project container serializes backing separately from metadata.
+    #[serde(skip)]
+    pub raster: raster::RasterRevision,
     pub asset: Option<AssetId>,
     /// Document revision used to generate an AI suggestion.
     pub source_revision: Option<Revision>,
     pub properties: LayerProperties,
     pub mask: Option<LayerMask>,
-    pub operations: Vec<LayerOperation>,
+    #[serde(skip)]
+    pub pending_operations: Vec<LayerOperation>,
     pub effect: Option<Arc<EffectInstance>>,
 }
 
@@ -172,12 +177,12 @@ impl Layer {
             kind: self.kind,
             visible: self.visible,
             opacity: self.opacity,
-            strokes: Vec::new(),
+            raster: self.raster.clone(),
             asset: self.asset.clone(),
             source_revision: None,
             properties: self.properties.clone(),
             mask: self.mask.clone(),
-            operations: Vec::new(),
+            pending_operations: Vec::new(),
             effect: self.effect.clone(),
         }
     }
@@ -188,12 +193,12 @@ impl Layer {
             kind: LayerKind::Paint,
             visible: true,
             opacity: 1.0,
-            strokes: Vec::new(),
+            raster: Default::default(),
             asset: None,
             source_revision: None,
             properties: LayerProperties::default(),
             mask: None,
-            operations: Vec::new(),
+            pending_operations: Vec::new(),
             effect: None,
         }
     }
@@ -209,12 +214,12 @@ impl Layer {
             kind,
             visible: true,
             opacity: 1.0,
-            strokes: Vec::new(),
+            raster: Default::default(),
             asset: Some(asset),
             source_revision: None,
             properties: LayerProperties::default(),
             mask: None,
-            operations: Vec::new(),
+            pending_operations: Vec::new(),
             effect: None,
         }
     }
@@ -734,7 +739,7 @@ impl Default for BrushBounds {
 /// Exact, immutable brush semantics captured when a stroke begins.
 ///
 /// Dynamic mappings are Arc-backed so strokes share preset data. Editing a
-/// preset creates a new snapshot; old strokes remain deterministic on replay.
+/// preset creates a new snapshot; the active contact retains its own settings.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushSnapshot {
     pub schema_version: u16,
@@ -1121,7 +1126,9 @@ impl fmt::Display for BrushError {
 
 impl std::error::Error for BrushError {}
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Bounded contact data for live dynamics, taper and late sensor corrections.
+/// Never part of document persistence or undo history.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Stroke {
     pub id: StrokeId,
     pub layer_id: LayerId,
@@ -1194,6 +1201,7 @@ pub struct Document {
     pub id: Arc<str>,
     pub width: u32,
     pub height: u32,
+    pub color: color::DocumentColor,
     /// Front-to-back display order.
     pub layers: Vec<Layer>,
     pub active_layer: LayerId,
@@ -1203,7 +1211,6 @@ pub struct Document {
     /// Global, non-raster guides; edits are durable and share document undo.
     pub rulers: Vec<Ruler>,
     pub revision: Revision,
-    strokes: BTreeMap<StrokeId, Stroke>,
     next_layer_id: u64,
     next_stroke_id: u64,
 }
@@ -1233,6 +1240,7 @@ impl Document {
             id: id.into(),
             width,
             height,
+            color: color::DocumentColor::default(),
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),
                 Layer {
@@ -1241,12 +1249,12 @@ impl Document {
                     kind: LayerKind::Background,
                     visible: true,
                     opacity: 1.0,
-                    strokes: Vec::new(),
+                    raster: Default::default(),
                     asset: None,
                     source_revision: None,
                     properties: LayerProperties::default(),
                     mask: None,
-                    operations: Vec::new(),
+                    pending_operations: Vec::new(),
                     effect: None,
                 },
             ],
@@ -1256,7 +1264,6 @@ impl Document {
             reference_layers: BTreeSet::new(),
             rulers: Vec::new(),
             revision: 0,
-            strokes: BTreeMap::new(),
             next_layer_id: 3,
             next_stroke_id: 1,
         }
@@ -1264,14 +1271,6 @@ impl Document {
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
         self.layers.iter().find(|layer| layer.id == id)
-    }
-
-    pub fn stroke(&self, id: StrokeId) -> Option<&Stroke> {
-        self.strokes.get(&id)
-    }
-
-    pub fn strokes(&self) -> impl Iterator<Item = &Stroke> {
-        self.strokes.values()
     }
 
     pub fn allocate_layer_id(&mut self) -> LayerId {
@@ -1294,6 +1293,15 @@ impl Document {
     /// Applies one reversible edit and returns its exact inverse.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
         let inverse = match edit {
+            Edit::SetRaster { target, revision } => {
+                let raster = self
+                    .target_raster_mut(target)
+                    .ok_or(DocumentError::MissingLayer(target))?;
+                Edit::SetRaster {
+                    target,
+                    revision: std::mem::replace(raster, revision),
+                }
+            }
             Edit::Batch(edits) => {
                 let before = self.clone();
                 let mut inverses = Vec::with_capacity(edits.len());
@@ -1508,34 +1516,6 @@ impl Document {
                     Edit::SetMaskTarget(mask),
                 ])
             }
-            Edit::InsertStroke(stroke) => {
-                let target = self
-                    .target_owner(stroke.layer_id)
-                    .ok_or(DocumentError::MissingLayer(stroke.layer_id))?;
-                if target.id == stroke.layer_id && target.kind != LayerKind::Paint {
-                    return Err(DocumentError::NotDrawable(stroke.layer_id));
-                }
-                if self.strokes.contains_key(&stroke.id) {
-                    return Err(DocumentError::DuplicateStroke(stroke.id));
-                }
-                let layer_id = stroke.layer_id;
-                let stroke_id = stroke.id;
-                self.strokes.insert(stroke_id, *stroke);
-                self.target_strokes_mut(layer_id)
-                    .expect("target checked above")
-                    .push(stroke_id);
-                Edit::RemoveStroke { id: stroke_id }
-            }
-            Edit::RemoveStroke { id } => {
-                let stroke = self
-                    .strokes
-                    .remove(&id)
-                    .ok_or(DocumentError::MissingStroke(id))?;
-                self.target_strokes_mut(stroke.layer_id)
-                    .ok_or(DocumentError::MissingLayer(stroke.layer_id))?
-                    .retain(|candidate| *candidate != id);
-                Edit::InsertStroke(Box::new(stroke))
-            }
         };
         self.revision = self.revision.saturating_add(1);
         Ok(inverse)
@@ -1544,20 +1524,38 @@ impl Document {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
+    SetRaster {
+        target: LayerId,
+        revision: raster::RasterRevision,
+    },
     Batch(Vec<Edit>),
     ReplaceLayer(Box<Layer>),
     SetMaskTarget(bool),
     SetSelection(Option<Selection>),
     SetReferences(BTreeSet<LayerId>),
     SetRulers(Vec<Ruler>),
-    InsertLayer { index: usize, layer: Layer },
-    RemoveLayer { id: LayerId },
-    MoveLayer { id: LayerId, to: usize },
-    SetLayerOpacity { id: LayerId, opacity: f32 },
-    SetLayerVisibility { id: LayerId, visible: bool },
-    SetActiveLayer { id: LayerId },
-    InsertStroke(Box<Stroke>),
-    RemoveStroke { id: StrokeId },
+    InsertLayer {
+        index: usize,
+        layer: Layer,
+    },
+    RemoveLayer {
+        id: LayerId,
+    },
+    MoveLayer {
+        id: LayerId,
+        to: usize,
+    },
+    SetLayerOpacity {
+        id: LayerId,
+        opacity: f32,
+    },
+    SetLayerVisibility {
+        id: LayerId,
+        visible: bool,
+    },
+    SetActiveLayer {
+        id: LayerId,
+    },
 }
 
 impl Edit {
@@ -1570,7 +1568,7 @@ impl Edit {
             _ => true,
         }
     }
-    /// Guide-only edits affect presentation, never the canvas image or replay.
+    /// Guide-only edits affect presentation, never committed raster pixels.
     pub fn changes_image(&self) -> bool {
         match self {
             Self::SetRulers(_) => false,
@@ -1593,6 +1591,47 @@ pub struct Editor {
 struct HistoryEntry {
     edit: Edit,
     checkpoint: u64,
+    metadata_bytes: usize,
+}
+impl HistoryEntry {
+    fn new(edit: Edit, checkpoint: u64) -> Self {
+        fn serialized(value: &impl serde::Serialize) -> usize {
+            struct Count(usize);
+            impl std::io::Write for Count {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    self.0 = self.0.saturating_add(bytes.len());
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let mut count = Count(0);
+            if serde_json::to_writer(&mut count, value).is_err() {
+                return usize::MAX;
+            }
+            // Conservative allowance for allocations/nodes and binary scalars;
+            // shared metadata is charged repeatedly rather than undercounted.
+            count.0.saturating_mul(4)
+        }
+        fn size(edit: &Edit) -> usize {
+            std::mem::size_of::<Edit>().saturating_add(match edit {
+                Edit::Batch(edits) => edits.iter().map(size).fold(0usize, usize::saturating_add),
+                Edit::ReplaceLayer(layer) => serialized(layer),
+                Edit::InsertLayer { layer, .. } => serialized(layer),
+                Edit::SetSelection(selection) => serialized(selection),
+                Edit::SetRulers(rulers) => serialized(rulers),
+                Edit::SetReferences(ids) => serialized(ids),
+                _ => 0,
+            })
+        }
+        let metadata_bytes = size(&edit);
+        Self {
+            edit,
+            checkpoint,
+            metadata_bytes,
+        }
+    }
 }
 
 impl Editor {
@@ -1650,10 +1689,7 @@ impl Editor {
         let changes_project = edit.changes_project();
         let inverse = self.document.apply(edit)?;
         if !selection_only {
-            self.undo.push(HistoryEntry {
-                edit: inverse,
-                checkpoint: self.checkpoint,
-            });
+            self.undo.push(HistoryEntry::new(inverse, self.checkpoint));
             self.redo.clear();
         }
         if changes_project {
@@ -1663,7 +1699,84 @@ impl Editor {
                 .checked_add(1)
                 .expect("document history exhausted");
         }
+        self.trim_history();
         Ok(())
+    }
+
+    fn trim_history(&mut self) {
+        const BYTE_BUDGET: usize = 512 * 1024 * 1024;
+        const ENTRY_BUDGET: usize = 256;
+        fn layer_roots<'a>(layer: &'a Layer, roots: &mut Vec<&'a raster::RasterRevision>) {
+            roots.push(&layer.raster);
+            roots.extend(layer.mask.iter().map(|m| &m.raster));
+        }
+        fn roots<'a>(edit: &'a Edit, out: &mut Vec<&'a raster::RasterRevision>) {
+            match edit {
+                Edit::SetRaster { revision, .. } => out.push(revision),
+                Edit::Batch(edits) => {
+                    for edit in edits {
+                        roots(edit, out);
+                    }
+                }
+                Edit::ReplaceLayer(layer) => layer_roots(layer, out),
+                Edit::InsertLayer { layer, .. } => layer_roots(layer, out),
+                _ => (),
+            }
+        }
+        let mut seen_roots = std::collections::HashSet::new();
+        let mut seen_tiles = std::collections::HashSet::new();
+        let mut current = Vec::new();
+        for layer in &self.document.layers {
+            layer_roots(layer, &mut current);
+        }
+        for revision in current {
+            seen_roots.insert(revision.identity());
+            if let Some(Ok(data)) = revision.try_data() {
+                seen_tiles.extend(data.tiles.values().map(|t| t.identity()));
+            }
+        }
+        let mut bytes = 0usize;
+        for history in [&mut self.undo, &mut self.redo] {
+            let mut keep = 0;
+            for entry in history.iter().rev().take(ENTRY_BUDGET) {
+                bytes = bytes.saturating_add(entry.metadata_bytes);
+                let mut referenced = Vec::new();
+                roots(&entry.edit, &mut referenced);
+                for revision in referenced {
+                    if !seen_roots.insert(revision.identity()) {
+                        continue;
+                    }
+                    match revision.try_data() {
+                        Some(Ok(data)) => {
+                            bytes = bytes.saturating_add(data.tiles.len().saturating_mul(96));
+                            for (key, tile) in &data.tiles {
+                                if seen_tiles.insert(tile.identity()) {
+                                    bytes = bytes.saturating_add(match tile.try_backing() {
+                                        Some(Ok(blob)) => blob.resident_bytes(),
+                                        _ => {
+                                            key.plane
+                                                .descriptor()
+                                                .byte_len([raster::TILE_SIZE; 2])
+                                                .unwrap()
+                                                + 1024
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        // Reserve the entire permitted capture while the GPU
+                        // owner has not published its page index yet.
+                        None => bytes = bytes.saturating_add(raster::MAX_CAPTURE_BYTES as usize),
+                        Some(Err(_)) => (),
+                    }
+                }
+                if bytes > BYTE_BUDGET {
+                    break;
+                }
+                keep += 1;
+            }
+            history.drain(..history.len().saturating_sub(keep));
+        }
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
@@ -1672,10 +1785,7 @@ impl Editor {
         };
         let inverse = self.document.apply(entry.edit.clone())?;
         let entry = self.undo.pop().unwrap();
-        self.redo.push(HistoryEntry {
-            edit: inverse,
-            checkpoint: self.checkpoint,
-        });
+        self.redo.push(HistoryEntry::new(inverse, self.checkpoint));
         self.checkpoint = entry.checkpoint;
         Ok(true)
     }
@@ -1686,10 +1796,7 @@ impl Editor {
         };
         let inverse = self.document.apply(entry.edit.clone())?;
         let entry = self.redo.pop().unwrap();
-        self.undo.push(HistoryEntry {
-            edit: inverse,
-            checkpoint: self.checkpoint,
-        });
+        self.undo.push(HistoryEntry::new(inverse, self.checkpoint));
         self.checkpoint = entry.checkpoint;
         Ok(true)
     }
@@ -1697,6 +1804,32 @@ impl Editor {
     pub fn clear_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
+    }
+    /// Raster operation recipes live only until their queue-ordered submission.
+    /// Undo entries retain pixel revisions and pre-operation metadata.
+    pub fn finish_raster_submission(&mut self) {
+        for layer in &mut self.document.layers {
+            layer.pending_operations.clear();
+            if let Some(mask) = &mut layer.mask {
+                mask.pending_operations = Default::default();
+            }
+        }
+    }
+
+    /// Amend only the latest contact, before another document edit or history
+    /// navigation. The existing inverse remains its original pre-contact state.
+    pub fn amend_raster(
+        &mut self,
+        target: LayerId,
+        revision: raster::RasterRevision,
+    ) -> Result<(), DocumentError> {
+        self.document.apply(Edit::SetRaster { target, revision })?;
+        self.checkpoint = self.next_checkpoint;
+        self.next_checkpoint = self
+            .next_checkpoint
+            .checked_add(1)
+            .expect("document history exhausted");
+        Ok(())
     }
 
     /// Gesture preview, followed by restoration + one committed edit at release.
@@ -1710,9 +1843,7 @@ pub enum DocumentError {
     InvalidRuler(&'static str),
     InvalidLayerOperation(&'static str),
     MissingLayer(LayerId),
-    MissingStroke(StrokeId),
     DuplicateLayer(LayerId),
-    DuplicateStroke(StrokeId),
     ProtectedLayer(LayerId),
     NotDrawable(LayerId),
     LastPaintLayer,
@@ -1727,9 +1858,7 @@ impl fmt::Display for DocumentError {
             Self::InvalidRuler(message) => formatter.write_str(message),
             Self::InvalidLayerOperation(message) => formatter.write_str(message),
             Self::MissingLayer(id) => write!(formatter, "layer {} does not exist", id.0),
-            Self::MissingStroke(id) => write!(formatter, "stroke {} does not exist", id.0),
             Self::DuplicateLayer(id) => write!(formatter, "layer {} already exists", id.0),
-            Self::DuplicateStroke(id) => write!(formatter, "stroke {} already exists", id.0),
             Self::ProtectedLayer(id) => write!(formatter, "layer {} is protected", id.0),
             Self::NotDrawable(id) => write!(formatter, "layer {} cannot receive strokes", id.0),
             Self::LastPaintLayer => write!(formatter, "a document needs at least one paint layer"),
@@ -1829,21 +1958,61 @@ mod tests {
     }
 
     #[test]
-    fn edit_history_moves_arc_backed_strokes_without_copying_points() {
+    fn edit_history_restores_exact_revision_identity() {
         let mut editor = Editor::new(Document::new("study", 1024, 1536));
-        let stroke = dot(StrokeId(1), LayerId(1));
-        let points = stroke.points.clone();
+        let before = editor.document().layers[0].raster.clone();
+        let after = raster::RasterRevision::pending();
         editor
-            .perform(Edit::InsertStroke(Box::new(stroke)))
+            .perform(Edit::SetRaster {
+                target: LayerId(1),
+                revision: after.clone(),
+            })
             .unwrap();
-        assert_eq!(Arc::strong_count(&points), 2);
-        assert!(editor.undo().unwrap());
-        assert!(editor.document().stroke(StrokeId(1)).is_none());
-        assert!(editor.redo().unwrap());
-        assert!(Arc::ptr_eq(
-            &points,
-            &editor.document().stroke(StrokeId(1)).unwrap().points
-        ));
+        editor.undo().unwrap();
+        assert_eq!(editor.document().layers[0].raster, before);
+        editor.redo().unwrap();
+        assert_eq!(editor.document().layers[0].raster, after);
+        let snapshot = editor.document().clone();
+        editor
+            .amend_raster(LayerId(1), raster::RasterRevision::pending())
+            .unwrap();
+        assert_eq!(snapshot.layers[0].raster, after);
+        editor.undo().unwrap();
+        assert_eq!(editor.document().layers[0].raster, before);
+    }
+
+    #[test]
+    fn history_is_bounded_and_keeps_the_newest_exact_states() {
+        let mut editor = Editor::new(Document::new("bounded", 256, 256));
+        for i in 0..400 {
+            editor
+                .perform(Edit::SetLayerOpacity {
+                    id: LayerId(1),
+                    opacity: i as f32 / 400.,
+                })
+                .unwrap();
+        }
+        assert_eq!(editor.undo.len(), 256);
+        assert_eq!(editor.document().layers[0].opacity, 399. / 400.);
+        for _ in 0..256 {
+            assert!(editor.undo().unwrap());
+        }
+        assert!(!editor.undo().unwrap());
+        assert_eq!(editor.document().layers[0].opacity, 143. / 400.);
+        for _ in 0..256 {
+            assert!(editor.redo().unwrap());
+        }
+        assert_eq!(editor.document().layers[0].opacity, 399. / 400.);
+        // Unpublished GPU work is reserved at its full allowed staging size.
+        for _ in 0..8 {
+            editor
+                .perform(Edit::SetRaster {
+                    target: LayerId(1),
+                    revision: raster::RasterRevision::pending(),
+                })
+                .unwrap();
+        }
+        assert!(editor.undo.len() <= 2);
     }
 
     #[test]
@@ -1868,7 +2037,10 @@ mod tests {
         let mut editor = Editor::new(Document::new("checkpoint", 64, 64));
         let initial = editor.checkpoint();
         editor
-            .perform(Edit::InsertStroke(Box::new(dot(StrokeId(1), LayerId(1)))))
+            .perform(Edit::SetRaster {
+                target: LayerId(1),
+                revision: raster::RasterRevision::pending(),
+            })
             .unwrap();
         let saved = editor.checkpoint();
         assert_ne!(initial, saved);

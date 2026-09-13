@@ -9,8 +9,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
     let layers: Vec<_> = (1..=7)
         .map(|id| {
             let mut layer = Layer::paint(LayerId(id), "replay fixture");
-            layer.operations.push(LayerOperation {
-                after_stroke: 0,
+            layer.pending_operations.push(LayerOperation {
                 coverage: LayerMask::reveal_all(LayerId(100 + id), Point::default()),
                 kind: LayerOperationKind::Fill {
                     color: [0.1 + (id % 3) as f32 * 0.3, 0.25, 0.55, 0.2],
@@ -25,7 +24,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
         .map(|layer| DabBatch {
             kind: DabBatchKind::LayerOperation(0),
             dab_count: 0,
-            damage: layer.operations[0].bounds(extent),
+            damage: layer.pending_operations[0].bounds(extent),
             ..batch(layer.id.0)
         })
         .collect();
@@ -36,6 +35,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
             layers: &layers[..count],
             dabs: &[],
             dab_batches: &batches[count - 1..count],
+            restore_rasters: &[],
             reset_layers: count == 1,
             time_seconds: 0.,
             composite_all: true,
@@ -53,6 +53,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
             layers: &layers,
             dabs: &[],
             dab_batches: &batches,
+            restore_rasters: &[],
             reset_layers: true,
             time_seconds: 0.,
             composite_all: true,

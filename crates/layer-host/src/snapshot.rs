@@ -631,11 +631,16 @@ mod tests {
                     .into_iter()
                     .find(|g| Some(g.id as u64) == group["id"].as_u64())
                     .unwrap();
-                let expected = if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) {
-                    layer_ui::Bounds { x: x - 10., y: 400., ..bounds }
-                } else {
-                    actual.bounds
-                };
+                let expected =
+                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) {
+                        layer_ui::Bounds {
+                            x: x - 10.,
+                            y: 400.,
+                            ..bounds
+                        }
+                    } else {
+                        actual.bounds
+                    };
                 assert_eq!(group["bounds"], serde_json::to_value(expected).unwrap());
                 assert!(next.get("workspace_persistence").is_none());
             }
@@ -731,7 +736,23 @@ mod tests {
             Platform::Android,
             Platform::Windows,
         ] {
-            let (mut value, mut stream) = (host(platform), host(platform));
+            let mut value = host(platform);
+            let mut stream = NativeHost::new(platform).unwrap();
+            // These transports observe the same immutable raster identities.
+            // Independent blank documents intentionally have different cache revisions.
+            stream.session = layer_ui::UiSession::new(
+                crate::Renderer::default(),
+                value.session.engine().document().clone(),
+                [1, 1],
+            )
+            .unwrap();
+            stream.session.set_platform(platform);
+            stream
+                .dispatch(UiAction::RestoreWorkspace {
+                    workspace: WorkspaceState::for_platform(platform),
+                })
+                .unwrap();
+            stream.resize(2410, 1810, 2.).unwrap();
             same(&mut value, &mut stream);
             for action in [
                 UiAction::SetBrushSize { value: 37.3 },

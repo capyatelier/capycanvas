@@ -126,6 +126,9 @@ pub struct DabBatch {
 /// the small records it needs after return; canvas pixels remain GPU-owned.
 #[derive(Clone, Copy, Debug)]
 pub struct FramePacket<'a> {
+    /// Bounded rollback for cancellation or late correction of the latest
+    /// contact. Committed undo/redo uses the revisions on the layer metadata.
+    pub restore_rasters: &'a [(LayerId, layer_core::raster::RasterRevision)],
     /// Monotonic seconds since this editor session started; never wall time.
     pub time_seconds: f32,
     pub view: ViewState,
@@ -325,11 +328,20 @@ impl TransformPreview {
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
-/// work without waiting. Readback is explicit and never occurs implicitly in
-/// live ink. Production implementations rasterize, blend, and compose into GPU
-/// resources; the trait intentionally exposes no host pixel target.
+/// work without waiting. Committed raster boundaries capture affected pages;
+/// ordinary live ink does not need new backing capacity. Implementations compose
+/// into GPU resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Host frame-mailbox backpressure before consuming input.
+    fn can_submit(&self) -> bool {
+        true
+    }
+    /// Capacity for a new immutable raster boundary. Existing queue-ordered
+    /// copies do not prevent drawing the next contact into mutable GPU pages.
+    fn can_capture_raster(&self) -> bool {
+        true
+    }
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

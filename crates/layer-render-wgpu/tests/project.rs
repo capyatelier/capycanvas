@@ -1,6 +1,5 @@
-//! Compare a live, incrementally painted scene with a fresh GPU replay after
-//! saving and reopening. Snapshots use renderer-retained immutable sources.
-//! Readback is test-only, never part of project saving.
+//! Compare live painting with exact raster restoration after saving and reopening.
+//! File workers await queue-ordered tile capture while input remains responsive.
 use layer_core::*;
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
@@ -155,23 +154,26 @@ fn draw(
             })
             .unwrap();
         engine.render_frame_at(timestamp_ns).unwrap();
+        while engine.has_pending_input() {
+            std::thread::yield_now();
+            engine.render_frame_at(timestamp_ns).unwrap();
+        }
     }
 }
 fn operation(engine: &mut Engine, kind: LayerOperationKind, selection: Option<Selection>) {
+    while !engine.backend().raster_ready() {
+        std::thread::yield_now();
+    }
     let mut coverage = LayerMask::reveal_all(LayerId(0), Point::default());
     coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
     coverage.initial = selection;
     engine
-        .append_layer_operation(
-            LayerId(1),
-            LayerOperation {
-                after_stroke: engine.document().layer(LayerId(1)).unwrap().strokes.len(),
-                coverage,
-                kind,
-            },
-        )
+        .append_layer_operation(LayerId(1), LayerOperation { coverage, kind })
         .unwrap();
     engine.render_frame_at(1_000_000_000).unwrap();
+    while !engine.backend().raster_ready() {
+        std::thread::yield_now();
+    }
 }
 fn fixture(masked: bool) -> Project {
     let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1]);
@@ -302,8 +304,7 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             live.apply_edit(Edit::SetMaskTarget(false)).unwrap();
             let mut layer = live.document().layer(LayerId(1)).unwrap().clone();
             let applied = layer.mask.take().unwrap();
-            layer.operations.push(LayerOperation {
-                after_stroke: layer.strokes.len(),
+            layer.pending_operations.push(LayerOperation {
                 coverage: applied,
                 kind: LayerOperationKind::ApplyMask,
             });
@@ -368,7 +369,9 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
         let mut encoded = Vec::new();
         project.write(&mut encoded).unwrap();
         let decoded = Project::read(encoded.as_slice(), ProjectLimits::default()).unwrap();
-        assert_eq!(decoded, project);
+        let mut repeated = Vec::new();
+        decoded.write(&mut repeated).unwrap();
+        assert_eq!(repeated, encoded);
         let (mut restored, mut restored_input) = engine(&decoded);
         for time in [1_000_000_000, 1_750_000_000] {
             let expected = image(&mut live, time);
@@ -417,4 +420,72 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             "continued painting differs; masked={masked}"
         );
     }
+}
+
+#[test]
+fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
+    use layer_core::raster::{RasterPlane, TileKey};
+    let mut project = Project {
+        document: Document::new("sparse edit", 768, 256),
+        assets: Default::default(),
+    };
+    let source = AssetId::from("sparse-source");
+    project.document.layers[0].asset = Some(source.clone());
+    project.assets.insert(
+        source,
+        ProjectAsset {
+            extent: [768, 256],
+            format: ProjectAssetFormat::Rgba8Srgb,
+            bytes: [95, 37, 201, 255].repeat(768 * 256).into(),
+        },
+    );
+    let (mut live, _) = engine(&project);
+    let before = live.document().layers[0].raster.wait_data().unwrap();
+    before.validate([768, 256], false).unwrap();
+    let mut coverage = LayerMask::reveal_all(LayerId(99), Point::default());
+    coverage.default_coverage = 0.;
+    coverage.initial = Some(
+        Selection::polygon(vec![
+            Point { x: 20., y: 20. },
+            Point { x: 80., y: 20. },
+            Point { x: 80., y: 80. },
+            Point { x: 20., y: 80. },
+        ])
+        .unwrap(),
+    );
+    live.append_layer_operation(
+        LayerId(1),
+        LayerOperation {
+            coverage,
+            kind: LayerOperationKind::Fill {
+                color: [0.7, 0.1, 0.2, 0.6],
+                alpha_locked: false,
+            },
+        },
+    )
+    .unwrap();
+    live.render_frame().unwrap();
+    let after = live.document().layers[0].raster.wait_data().unwrap();
+    after.validate([768, 256], false).unwrap();
+    for x in 0..3 {
+        let key = TileKey {
+            plane: RasterPlane::Color,
+            coordinate: [x, 0],
+        };
+        assert_eq!(
+            before.tiles[&key].same_capture(&after.tiles[&key]),
+            x != 0,
+            "only the selected tile is captured"
+        );
+    }
+    live.undo().unwrap();
+    live.render_frame().unwrap();
+    let mut pixels = vec![0; 768 * 256 * 4];
+    live.backend_mut()
+        .copy_rgba8_srgb(&mut pixels, 768 * 4)
+        .unwrap();
+    assert_eq!(
+        pixels,
+        project.assets.values().next().unwrap().bytes.as_ref()
+    );
 }

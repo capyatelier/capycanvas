@@ -182,6 +182,7 @@ struct StrokeSpec {
 
 #[derive(Clone, Copy)]
 struct FrameMeasurement {
+    backing_reserved_bytes: u64,
     submit_micros: u64,
     completed_micros: u64,
     commit: bool,
@@ -190,6 +191,7 @@ struct FrameMeasurement {
 }
 
 struct BenchResult {
+    backing_reserved_bytes: u64,
     name: &'static str,
     repeats: usize,
     frames: usize,
@@ -198,6 +200,9 @@ struct BenchResult {
     p99_micros: u64,
     max_micros: u64,
     submit_p95_micros: u64,
+    submit_p50_micros: u64,
+    submit_p99_micros: u64,
+    commit_submit_p99_micros: u64,
     over_budget: usize,
     commit_over_budget: usize,
     dabs: u64,
@@ -227,6 +232,7 @@ struct Canvas {
     extent: [u32; 2],
     sequence: u64,
     real_timestamp_ns: u64,
+    submitted_events: u64,
 }
 
 impl Canvas {
@@ -260,6 +266,7 @@ impl Canvas {
             extent: [config.surface_width, config.surface_height],
             sequence: 0,
             real_timestamp_ns: 0,
+            submitted_events: 0,
         };
         canvas.draw()?;
         canvas.wait_idle()?;
@@ -275,6 +282,28 @@ impl Canvas {
             unsafe { layer_canvas_draw_frame_for(self.raw, now_ns, presentation_ns) },
             "draw predicted frame",
         )
+    }
+
+    // Backpressure can defer consumption. Never record an empty submission as
+    // a completed drawing frame. Count actual CPU frame creation separately
+    // from time spent awaiting bounded backing capacity.
+    fn drain_submitted(&mut self, clocks: Option<(u64, u64)>) -> Result<u64, String> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        let mut cpu = 0;
+        while self.metrics()?.input_events < self.submitted_events {
+            if Instant::now() >= deadline {
+                return Err("Input did not drain within the capture deadline".into());
+            }
+            self.wait_idle()?;
+            std::thread::yield_now();
+            let start = Instant::now();
+            match clocks {
+                Some((now, present)) => self.draw_for(now, present)?,
+                None => self.draw()?,
+            }
+            cpu += start.elapsed().as_micros() as u64;
+        }
+        Ok(cpu)
     }
 
     fn wait_idle(&mut self) -> Result<(), String> {
@@ -302,7 +331,18 @@ impl Canvas {
         if changed == 0 {
             return Err("warm-up stroke was not committed".to_owned());
         }
-        self.draw()?;
+        // A capture queue can defer the undo submission. Finish the actual
+        // restoration here, outside the drawing measurement window.
+        let frames = self.metrics()?.frames;
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        while self.metrics()?.frames == frames {
+            if Instant::now() >= deadline {
+                return Err("Warm-up undo did not finish".into());
+            }
+            self.draw()?;
+            self.wait_idle()?;
+            std::thread::yield_now();
+        }
         self.wait_idle()
     }
 
@@ -368,6 +408,7 @@ impl Canvas {
                 events.len()
             ));
         }
+        self.submitted_events += accepted as u64;
         Ok(())
     }
 
@@ -1553,12 +1594,24 @@ fn run_strokes(
             let started = Instant::now();
             let submit = canvas.submit(events);
             let draw = canvas.draw();
-            let submit_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            let mut submit_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
             submit?;
             draw?;
+            submit_micros += canvas.drain_submitted(None)?;
+            let drained_micros = started.elapsed().as_micros();
             canvas.wait_idle()?;
+            if std::env::var_os("CAPY_TRACE_SLOW_FRAMES").is_some()
+                && started.elapsed().as_millis() > 8
+            {
+                eprintln!(
+                    "slow frame start={start} commit={commit} measured={} cpu_us={submit_micros} drained_us={drained_micros} completed_us={}",
+                    measurements.is_some(),
+                    started.elapsed().as_micros()
+                );
+            }
             if let Some(output) = measurements.as_deref_mut() {
                 output.push(FrameMeasurement {
+                    backing_reserved_bytes: canvas.metrics()?.raster_backing_reserved_bytes,
                     submit_micros,
                     completed_micros: started.elapsed().as_micros().min(u64::MAX as u128) as u64,
                     commit,
@@ -1700,14 +1753,16 @@ fn run_strokes_feedback(
             let started = Instant::now();
             let submit = canvas.submit(&events);
             let draw = canvas.draw_for(now_ns, presentation_ns);
-            let submit_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            let mut submit_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
             submit?;
             draw?;
+            submit_micros += canvas.drain_submitted(Some((now_ns, presentation_ns)))?;
             canvas.wait_idle()?;
             let completed_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
             if let Some(output) = measurements.as_deref_mut() {
                 let metrics = canvas.metrics()?;
                 output.push(FrameMeasurement {
+                    backing_reserved_bytes: metrics.raster_backing_reserved_bytes,
                     submit_micros,
                     completed_micros,
                     commit,
@@ -1750,6 +1805,11 @@ fn summarize(
         move_times.get(index).copied().unwrap_or(0)
     };
     BenchResult {
+        backing_reserved_bytes: measurements
+            .iter()
+            .map(|m| m.backing_reserved_bytes)
+            .max()
+            .unwrap_or(0),
         name: kind.name(),
         repeats,
         frames: measurements.len(),
@@ -1758,6 +1818,17 @@ fn summarize(
         p99_micros: quantile(0.99),
         max_micros: move_times.last().copied().unwrap_or(0),
         submit_p95_micros: quantile_sorted(&submit_times, 0.95),
+        submit_p50_micros: quantile_sorted(&submit_times, 0.5),
+        submit_p99_micros: quantile_sorted(&submit_times, 0.99),
+        commit_submit_p99_micros: {
+            let mut times: Vec<_> = measurements
+                .iter()
+                .filter(|m| m.commit)
+                .map(|m| m.submit_micros)
+                .collect();
+            times.sort_unstable();
+            quantile_sorted(&times, 0.99)
+        },
         over_budget: move_times
             .iter()
             .filter(|micros| **micros > FRAME_BUDGET_MICROS)
@@ -1901,6 +1972,18 @@ fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Erro
             result.material_pages,
             result.preview_pages,
             result.storage_bytes as f64 / (1024.0 * 1024.0),
+        ));
+    }
+    report.push_str("\nCPU input submission and frame creation exclude GPU/capture-capacity waits; deferred input is drained before recording completion. Warm-up undo must submit its actual restoration frame before measurement. Background tile backing remains asynchronous.\n\n| scenario | CPU p50 ms | CPU p95 ms | CPU p99 ms | pen-up CPU p99 ms | capture allocated/reserved peak MiB |\n|---|---:|---:|---:|---:|---:|\n");
+    for result in results {
+        report.push_str(&format!(
+            "| {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} |\n",
+            result.name,
+            result.submit_p50_micros as f64 / 1000.,
+            result.submit_p95_micros as f64 / 1000.,
+            result.submit_p99_micros as f64 / 1000.,
+            result.commit_submit_p99_micros as f64 / 1000.,
+            result.backing_reserved_bytes as f64 / 1048576.
         ));
     }
     report.push_str(

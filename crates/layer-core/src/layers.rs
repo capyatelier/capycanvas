@@ -27,37 +27,31 @@ pub fn target_offset(layers: &[Layer], id: LayerId) -> Point {
 }
 
 impl Layer {
-    /// Coverage snapshots remain replayable after Apply mask removes the live mask.
+    /// Pending Apply mask keeps coverage alive until its submission completes.
     pub fn masks(&self) -> impl Iterator<Item = &LayerMask> {
         self.mask.iter().chain(
-            self.operations
+            self.pending_operations
                 .iter()
                 .filter(|op| !matches!(op.kind, LayerOperationKind::Transform(_)))
                 .map(|op| &op.coverage),
         )
     }
-    pub fn target_history(&self, id: LayerId) -> Option<(&[StrokeId], &[LayerOperation])> {
+    pub fn target_operations(&self, id: LayerId) -> Option<&[LayerOperation]> {
         if id == self.id {
-            return Some((&self.strokes, &self.operations));
+            return Some(&self.pending_operations);
         }
         self.masks()
             .find(|m| m.id == id)
-            .map(|m| (m.strokes.as_slice(), m.operations.as_slice()))
+            .map(|m| m.pending_operations.as_slice())
     }
-    /// Only editable targets, never immutable operation coverage snapshots.
-    pub fn target_history_mut(
-        &mut self,
-        id: LayerId,
-    ) -> Option<(&mut Vec<StrokeId>, &mut Vec<LayerOperation>)> {
+    pub fn target_operations_mut(&mut self, id: LayerId) -> Option<&mut Vec<LayerOperation>> {
         if id == self.id {
-            return Some((&mut self.strokes, &mut self.operations));
+            return Some(&mut self.pending_operations);
         }
-        self.mask.as_mut().filter(|m| m.id == id).map(|m| {
-            (
-                Arc::make_mut(&mut m.strokes),
-                Arc::make_mut(&mut m.operations),
-            )
-        })
+        self.mask
+            .as_mut()
+            .filter(|m| m.id == id)
+            .map(|m| Arc::make_mut(&mut m.pending_operations))
     }
 }
 
@@ -65,17 +59,15 @@ impl Layer {
 mod organization_tests {
     use super::*;
     #[test]
-    fn mask_history_is_bounded_ordered_and_retained_only_by_apply_mask() {
+    fn pending_mask_operations_validate_before_submission() {
         let op = LayerOperation {
-            after_stroke: 0,
             coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
             kind: LayerOperationKind::Transform(ImageTransform::default()),
         };
         let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-        mask.operations = Arc::new(vec![op.clone()]);
+        mask.pending_operations = Arc::new(vec![op.clone()]);
         assert!(mask.validate().is_ok());
         let mut snapshot = LayerOperation {
-            after_stroke: 0,
             coverage: mask.clone(),
             kind: LayerOperationKind::ApplyMask,
         };
@@ -85,13 +77,7 @@ mod organization_tests {
             snapshot.validate().is_err(),
             "transform coverage must not recursively contain transforms"
         );
-        Arc::make_mut(&mut mask.operations)[0].after_stroke = 1;
-        assert!(mask.validate().is_err());
-        mask.strokes = Arc::new(vec![StrokeId(1)]);
-        assert!(mask.validate().is_ok());
-        Arc::make_mut(&mut mask.operations).push(op);
-        assert!(mask.validate().is_err(), "replay order is monotonic");
-        mask.operations = Arc::default();
+        mask.pending_operations = Arc::default();
         mask.default_coverage = f32::NAN;
         assert!(mask.validate().is_err());
         mask.default_coverage = 1.;
@@ -557,25 +543,26 @@ mod selection_tests {
 pub struct LayerMask {
     /// Unique image identity, allocated from the document layer-ID allocator.
     pub id: LayerId,
+    #[serde(skip)]
+    pub raster: raster::RasterRevision,
     pub enabled: bool,
     pub linked: bool,
     pub offset: Point,
     pub initial: Option<Selection>,
     pub default_coverage: f32,
     pub inverted: bool,
-    pub strokes: Arc<Vec<StrokeId>>,
-    /// Ordered raster edits share the paint-layer operation format. Apply mask
-    /// retains this history; transform selections cannot contain nested edits.
-    pub operations: Arc<Vec<LayerOperation>>,
+    /// Commands awaiting submission share the paint-layer operation format.
+    /// Transform selections cannot contain nested commands.
+    #[serde(skip)]
+    pub pending_operations: Arc<Vec<LayerOperation>>,
     /// Inspection only; never participates in exported color.
     pub show_area: bool,
 }
 
-/// Ordered raster mutations retain their source coverage for deterministic undo
-/// and device-loss replay. They are not live composition masks after baking.
+/// Transient raster commands retain source coverage until their GPU submission.
+/// Raster revisions own the resulting pixels, undo states, and recovery data.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerOperation {
-    pub after_stroke: usize,
     pub coverage: LayerMask,
     pub kind: LayerOperationKind,
 }
@@ -613,7 +600,7 @@ impl LayerOperation {
         if self.kind != LayerOperationKind::ApplyMask
             && self.coverage.default_coverage == 0.0
             && !self.coverage.inverted
-            && self.coverage.strokes.is_empty()
+            && self.coverage.raster.is_empty()
             && let Some(selection) = &self.coverage.initial
             && !selection.inverted
         {
@@ -630,7 +617,9 @@ impl LayerOperation {
         }
     }
     fn validate(&self) -> Result<(), DocumentError> {
-        if !self.coverage.operations.is_empty() && self.kind != LayerOperationKind::ApplyMask {
+        if !self.coverage.pending_operations.is_empty()
+            && self.kind != LayerOperationKind::ApplyMask
+        {
             return Err(DocumentError::InvalidLayerOperation(
                 "Nested coverage operations",
             ));
@@ -651,7 +640,7 @@ impl LayerOperation {
             LayerOperationKind::ApplyMask => true,
             LayerOperationKind::Transform(transform) => {
                 transform.affine.inverse().is_some()
-                    && self.coverage.strokes.is_empty()
+                    && self.coverage.raster.is_empty()
                     && self.coverage.offset == Point::default()
                     && self.coverage.enabled
                     && !self.coverage.inverted
@@ -699,20 +688,13 @@ impl LayerMask {
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid mask value"));
         }
-        let mut previous = 0;
-        for op in self.operations.iter() {
+        for op in self.pending_operations.iter() {
             if !matches!(op.kind, LayerOperationKind::Transform(_)) {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Unsupported mask operation",
                 ));
             }
-            if op.after_stroke < previous || op.after_stroke > self.strokes.len() {
-                return Err(DocumentError::InvalidLayerOperation(
-                    "Invalid mask operation order",
-                ));
-            }
             op.validate()?;
-            previous = op.after_stroke;
         }
         Ok(())
     }
@@ -725,8 +707,8 @@ impl LayerMask {
             initial: None,
             default_coverage: 1.0,
             inverted: false,
-            strokes: Arc::default(),
-            operations: Arc::default(),
+            raster: Default::default(),
+            pending_operations: Arc::default(),
             show_area: false,
         }
     }
@@ -1049,24 +1031,32 @@ impl Document {
             .iter()
             .find(|l| l.id == target || l.mask.as_ref().is_some_and(|m| m.id == target))
     }
-    pub(crate) fn target_strokes_mut(&mut self, target: LayerId) -> Option<&mut Vec<StrokeId>> {
-        for layer in &mut self.layers {
-            if layer.id == target {
-                return Some(&mut layer.strokes);
-            }
-            if let Some(mask) = &mut layer.mask
-                && mask.id == target
-            {
-                return Some(Arc::make_mut(&mut mask.strokes));
-            }
-        }
-        None
-    }
     pub fn active_target(&self) -> LayerId {
         self.layer(self.active_layer)
             .and_then(|l| l.mask.as_ref())
             .filter(|_| self.active_mask)
             .map_or(self.active_layer, |m| m.id)
+    }
+    pub fn target_raster(&self, target: LayerId) -> Option<&raster::RasterRevision> {
+        let owner = self.target_owner(target)?;
+        if owner.id == target {
+            Some(&owner.raster)
+        } else {
+            owner.mask.as_ref().map(|m| &m.raster)
+        }
+    }
+    pub fn target_raster_mut(&mut self, target: LayerId) -> Option<&mut raster::RasterRevision> {
+        for layer in &mut self.layers {
+            if layer.id == target {
+                return Some(&mut layer.raster);
+            }
+            if let Some(mask) = &mut layer.mask
+                && mask.id == target
+            {
+                return Some(&mut mask.raster);
+            }
+        }
+        None
     }
     pub fn layer_offset(&self, id: LayerId) -> Point {
         target_offset(&self.layers, id)
@@ -1085,7 +1075,7 @@ impl Document {
         target.is_some()
     }
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
-        for op in &layer.operations {
+        for op in &layer.pending_operations {
             op.validate()?;
         }
         if let Some(mask) = &layer.mask {

@@ -125,6 +125,7 @@ fn submit(
         layers,
         dabs: &dabs,
         dab_batches: &batches,
+        restore_rasters: &[],
         reset_layers: reset,
         composite_all: all,
     })
@@ -146,9 +147,9 @@ fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
         .unwrap();
 }
 
-/// The import path must use the shared transfer curve before eight-bit linear
-/// composition, including dark values and partial alpha. Hardware sRGB decode
-/// approximations can move a value across a linear storage rounding boundary.
+/// Import decodes straight sRGB, premultiplies in linear light, then stores
+/// encoded RGB and unencoded alpha. The oracle includes both physical storage
+/// and final unassociation, including dark values and partial alpha.
 #[test]
 fn imported_ramp_uses_the_srgb_transfer_curve() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
@@ -193,17 +194,23 @@ fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
             } else {
                 ((encoded + 0.055) / 1.055).powf(2.4)
             };
-            let stored = (linear * alpha * 255.).round() / 255.;
-            let straight = if alpha == 0. { 0. } else { stored / alpha };
-            let expected = ((if straight <= 0.0031308 {
-                straight * 12.92
-            } else {
-                1.055 * straight.powf(1. / 2.4) - 0.055
-            }) * 255.)
-                .round() as u8;
+            // Fixed-function sRGB conversion may choose either adjacent
+            // storage code. Propagate that interval through unassociation;
+            // a uniform straight-RGB tolerance is incorrect near zero alpha.
+            let stored = scalar_srgb_encode(linear * alpha) * 255.;
+            let export = |code: f64| {
+                let value = if alpha == 0. {
+                    0.
+                } else {
+                    scalar_srgb_decode(code / 255.) / alpha
+                };
+                (scalar_srgb_encode(value.clamp(0., 1.)) * 255.).round() as u8
+            };
+            let low = export(stored.floor()).saturating_sub(1);
+            let high = export(stored.ceil()).saturating_add(1);
             assert!(
-                pixel[channel].abs_diff(expected) <= 1,
-                "sRGB ramp at pixel {index}, channel {channel}: source={source:?}, actual={pixel:?}, expected={expected}"
+                (low..=high).contains(&pixel[channel]),
+                "sRGB ramp at pixel {index}, channel {channel}: source={source:?}, actual={pixel:?}, permitted={low}..={high}"
             );
         }
     }
@@ -225,9 +232,11 @@ fn scalar_srgb_encode(v: f64) -> f64 {
     }
 }
 
+fn scalar_paint_store(linear: f64) -> f64 {
+    scalar_srgb_decode((scalar_srgb_encode(linear.clamp(0., 1.)) * 255.).round() / 255.)
+}
 fn scalar_stored_srgb_byte(linear: f64) -> u8 {
-    let stored = (linear.clamp(0., 1.) * 255.).round() / 255.;
-    (scalar_srgb_encode(stored) * 255.).round() as u8
+    (scalar_srgb_encode(linear.clamp(0., 1.)) * 255.).round() as u8
 }
 
 /// Pointwise ramps isolate filter math and premultiplied eight-bit storage
@@ -286,26 +295,37 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                 // the renderer output or WGSL implementation to make expected
                 // pixels. Rust's curve table is public application data; the
                 // scalar transfer functions/interpolation use f64 arithmetic.
-                let stored = (scalar_srgb_decode(f64::from(source[channel]) / 255.) * alpha * 255.)
-                    .round()
-                    / 255.;
-                let linear = if alpha == 0. { 0. } else { stored / alpha };
-                let adjusted = if id == "curves" {
-                    let channel_value =
-                        lookup(&values, 256 * (channel + 1), scalar_srgb_encode(linear));
-                    scalar_srgb_decode(lookup(&values, 0, channel_value))
-                } else {
-                    ((linear * 2_f64.powf(f64::from(values[1][0])) + f64::from(values[2][0]))
-                        .clamp(0., 1.))
-                    .powf(1. / f64::from(values[3][0]))
-                };
-                let stored = (adjusted.clamp(0., 1.) * alpha * 255.).round() / 255.;
-                let straight = if alpha == 0. { 0. } else { stored / alpha };
-                let expected = (scalar_srgb_encode(straight) * 255.).round() as u8;
+                let code = scalar_srgb_encode(
+                    scalar_srgb_decode(f64::from(source[channel]) / 255.) * alpha,
+                ) * 255.;
+                let mut permitted = Vec::new();
+                for input in [code.floor(), code.ceil()] {
+                    let stored = scalar_srgb_decode(input / 255.);
+                    let linear = if alpha == 0. { 0. } else { stored / alpha };
+                    let adjusted = if id == "curves" {
+                        let channel_value =
+                            lookup(&values, 256 * (channel + 1), scalar_srgb_encode(linear));
+                        scalar_srgb_decode(lookup(&values, 0, channel_value))
+                    } else {
+                        ((linear * 2_f64.powf(f64::from(values[1][0])) + f64::from(values[2][0]))
+                            .clamp(0., 1.))
+                        .powf(1. / f64::from(values[3][0]))
+                    };
+                    let code = scalar_srgb_encode(adjusted.clamp(0., 1.) * alpha) * 255.;
+                    for output in [code.floor(), code.ceil()] {
+                        let straight = if alpha == 0. {
+                            0.
+                        } else {
+                            scalar_srgb_decode(output / 255.) / alpha
+                        };
+                        permitted.push((scalar_srgb_encode(straight.clamp(0., 1.)) * 255.).round() as u8);
+                    }
+                }
+                let low = permitted.iter().min().unwrap().saturating_sub(1);
+                let high = permitted.iter().max().unwrap().saturating_add(1);
                 assert!(
-                    pixel[channel].abs_diff(expected) <= 1,
-                    "{id} pixel {index} channel {channel}: source={source:?}, actual={pixel:?}, expected={expected}, linear_byte={}",
-                    adjusted * alpha * 255.
+                    (low..=high).contains(&pixel[channel]),
+                    "{id} pixel {index} channel {channel}: source={source:?}, actual={pixel:?}, permitted={low}..={high}"
                 );
             }
         }
@@ -377,7 +397,7 @@ fn spatial_filters_match_linear_sampling_oracles() {
                 if k == 3 {
                     f64::from(c[3])
                 } else {
-                    (scalar_srgb_decode(f64::from(c[k]) / 255.) * a * 255.).round()
+                    scalar_paint_store(scalar_srgb_decode(f64::from(c[k]) / 255.) * a) * 255.
                 }
             })
         })
@@ -460,15 +480,31 @@ fn spatial_filters_match_linear_sampling_oracles() {
                     (std::f64::consts::TAU * phase).sin() * f64::from(size) / radius.max(1.);
                 std::array::from_fn(|k| p[k] + delta[k] * shift)
             };
-            let expected = sample(position).map(|v| v.round_ties_even() as u8);
+            let values = sample(position);
+            // Preserve the existing one-linear-code sampling gate, then
+            // include the encoded target's adjacent storage codes. One encoded
+            // code is not a uniform measure of error in linear sampling math.
+            let expected: [[u8; 2]; 4] = std::array::from_fn(|k| {
+                let code = |v: f64| {
+                    if k == 3 {
+                        v.clamp(0., 255.)
+                    } else {
+                        scalar_srgb_encode((v / 255.).clamp(0., 1.)) * 255.
+                    }
+                };
+                [
+                    code(values[k] - 1.).floor() as u8,
+                    code(values[k] + 1.).ceil() as u8,
+                ]
+            });
             let error = pixel
                 .iter()
                 .zip(expected)
-                .map(|(a, b)| a.abs_diff(b))
+                .map(|(&v, [low, high])| low.saturating_sub(v).max(v.saturating_sub(high)))
                 .max()
                 .unwrap();
             maximum = maximum.max(error);
-            if error > 1 {
+            if error > 0 {
                 if failing < 4 {
                     eprintln!(
                         "{id} size={size} wavelength={wavelength} time={time} at={p:?} sample={position:?}: actual={pixel:?}, expected={expected:?}"
@@ -548,7 +584,7 @@ fn runtime_filter_pixel_reference() {
     }
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/runtime-filters-v4.png"
+        "/tests/fixtures/runtime-filters-srgb8.png"
     );
     let mut reader = png::Decoder::new(std::fs::File::open(path).unwrap())
         .read_info()
@@ -648,6 +684,7 @@ fn gpu_preparation_is_shared_and_dependency_driven() {
         layers: &layers,
         dabs: &[],
         dab_batches: &[],
+        restore_rasters: &[],
         reset_layers: false,
         composite_all: true,
     })
@@ -1177,6 +1214,7 @@ fn cached_clipping_matches_tiled_composition() {
                 layers: &layers,
                 dabs: &[],
                 dab_batches: &[],
+                restore_rasters: &[],
                 reset_layers: reset,
                 composite_all: true,
             })

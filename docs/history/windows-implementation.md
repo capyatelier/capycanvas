@@ -2566,3 +2566,26 @@ Windows still uses its existing native header projection, as allowed by the
 shared port handoff. Projecting the new customizable title bar is remaining
 Windows design work. Physical input/display, packaging and performance acceptance
 remain open as described above.
+
+
+### Portable and MSIX refresh after native pen recovery
+
+The portable Windows 11 x64 package was rebuilt from clean published source
+`33eead2674bf7b7474fc318417dc72de90c836fc`. It contains 1,079 files and its two
+archive assemblies have identical SHA-256
+`155220f475ffa3d45a912fd9090208dbd36bf3bfbb78dad158162fa3603f5615`.
+The extracted package passes its complete inventory, launch from a path with
+spaces and unrelated working directory, app-local runtime origins, packaged
+filters, drawing/Undo/Redo, pan/resize and clean process exit on this host.
+
+An unsigned MSIX was then assembled from that exact portable payload, using the
+same committed packager source. Repeated assembly matches SHA-256
+`321f7da0b3e759d7ce75ce3adc92d78d3978dba5078ef90c1da1151b0ba44b3f`.
+Its 1,085-file archive passes inventory and MakeAppx extraction, activation
+metadata, repeat logo generation, normalization idempotence, ZIP32 preservation,
+signed-archive refusal without mutation and invalid-input rejection.
+
+This verifies reproducible archive assembly for the recorded inputs and portable
+runtime behavior on the development host. Installed MSIX launch/update/uninstall,
+distribution signing and clean-machine acceptance remain open. No elevation or
+installation was attempted. Artifacts and local reports remain outside Git.

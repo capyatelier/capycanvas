@@ -85,10 +85,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     self.builder.replace_real(index, new);
                     changed = true;
                 } else {
-                    changed |= self
-                        .editor
-                        .correct_stroke_point(estimate.stroke, index, old, new)
-                        .map_err(EngineError::Document)?;
+                    if let Some(stroke) = self.completed_stroke.as_mut()
+                        && stroke.id == estimate.stroke
+                        && stroke.points.get(index) == Some(&old)
+                    {
+                        std::sync::Arc::make_mut(&mut stroke.points)[index] = new;
+                        changed = true;
+                    }
                 }
             }
             if changed {
@@ -101,7 +104,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     if !active.feedback.enabled || estimate.index < self.finalized_real_points {
                         self.rebuild_corrected_active();
                     }
-                } else if self.document().stroke(estimate.stroke).is_some() {
+                } else if let Some(stroke) = self.completed_stroke.as_ref() {
+                    self.restore_rasters.push((
+                        stroke.layer_id,
+                        self.completed_before.as_ref().unwrap().clone(),
+                    ));
+                    self.editor
+                        .amend_raster(
+                            stroke.layer_id,
+                            layer_core::raster::RasterRevision::pending(),
+                        )
+                        .map_err(EngineError::Document)?;
+                    self.rebuild_completed = true;
                     self.rebuild_all = true;
                 }
                 estimate.point = point;

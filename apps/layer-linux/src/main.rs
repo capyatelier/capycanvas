@@ -1,6 +1,8 @@
 mod canvas;
 mod effects;
 mod files;
+#[cfg(test)]
+mod fullscreen_tests;
 mod icons;
 mod image_selector;
 mod input;
@@ -9,10 +11,9 @@ mod navigator;
 mod number_control;
 mod preferences;
 mod previews;
-mod system_status;
-#[cfg(test)]
-mod fullscreen_tests;
+mod recovery;
 mod render_thread;
+mod system_status;
 mod tiles;
 #[cfg(test)]
 mod timing;
@@ -59,6 +60,7 @@ fn main() -> gtk::glib::ExitCode {
             }
             app.activate_action("new-window", None);
             let workspace = active.borrow().last().unwrap().clone();
+            recovery::offer_stale(&workspace);
             if let Ok(path) = std::env::var("LAYER_UI_CAPTURE") {
                 let app = app.clone();
                 gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
@@ -126,7 +128,7 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
         #[strong]
         active,
         move |_, _| {
-            open_workspace(&app, &active, None);
+            open_workspace(&app, &active, None, None);
         }
     ));
     app.add_action(&new_window);
@@ -136,6 +138,7 @@ fn open_workspace(
     app: &adw::Application,
     active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
     project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+    recovered: Option<std::path::PathBuf>,
 ) {
     let settings = active.borrow().last().and_then(|w| {
         w.gpu
@@ -149,11 +152,13 @@ fn open_workspace(
     };
     let windows = Rc::downgrade(active);
     let application = app.downgrade();
-    *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
+    *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location, recovered| {
         if let (Some(app), Some(active)) = (application.upgrade(), windows.upgrade()) {
-            open_workspace(&app, &active, Some((project, location)));
+            open_workspace(&app, &active, Some((project, location)), recovered);
         }
     }));
+    workspace.recovery.recovered.set(recovered.is_some());
+    workspace.recovery.origin.replace(recovered);
     active.borrow_mut().push(workspace.clone());
     workspace.window.present();
     if let Some(settings) = settings {

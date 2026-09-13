@@ -75,6 +75,10 @@ enum {
   LAYER_BRUSH_NATURAL_BLENDER = 24,
 };
 
+/* Document mode: sRGB primaries, D65, SDR, encoded 8-bit RGB and linear
+ * 8-bit coverage. Paint stores encode(linear_RGB * alpha); GPU shaders and
+ * color settings use Float32 linear values. Export uses straight sRGB RGBA8.
+ * Display backgrounds and overlays never participate in project pixels. */
 typedef struct LayerCanvasConfig {
   uint32_t document_width;
   uint32_t document_height;
@@ -176,6 +180,9 @@ typedef struct LayerCanvasMetrics {
   float maximum_tip_gap_surface_px;
   float last_endpoint_correction_surface_px;
   float maximum_endpoint_correction_surface_px;
+  /* Conservative capture staging reservations, reusable spares and CPU scratch;
+   * excludes immutable source/history backing and driver allocations. */
+  uint64_t raster_backing_reserved_bytes;
 } LayerCanvasMetrics;
 
 typedef struct LayerGpuInfo {

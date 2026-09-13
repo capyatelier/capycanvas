@@ -596,6 +596,7 @@ impl Scene {
             layers: &request.layers,
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: false,
             composite_all: false,
         };
@@ -720,6 +721,7 @@ mod tests {
             layers: &layers,
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: true,
             composite_all: true,
         })
@@ -807,6 +809,7 @@ mod tests {
             layers: &layers,
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: true,
             composite_all: true,
         })
@@ -867,6 +870,7 @@ mod tests {
             layers: &layers,
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: true,
             composite_all: true,
         })
@@ -987,6 +991,7 @@ mod tests {
             layers: &layers,
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: true,
             composite_all: true,
         })
@@ -1037,6 +1042,7 @@ mod tests {
                 layers: &layers,
                 dabs: &[],
                 dab_batches: &[],
+                restore_rasters: &[],
                 reset_layers: false,
                 composite_all: true,
             })

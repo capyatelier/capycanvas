@@ -789,6 +789,7 @@ pub struct Workspace {
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
+    pub(crate) recovery: Rc<crate::recovery::Recovery>,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
     surface: DockSurface,
@@ -955,6 +956,7 @@ impl Workspace {
             window,
             area,
             gpu: RefCell::new(None),
+            recovery: Rc::new(crate::recovery::Recovery::default()),
             surface,
             palette_css,
             palette: Cell::new(None),
@@ -1032,6 +1034,7 @@ impl Workspace {
         crate::input::install(&this);
         this.install_gpu();
         this.install_document_close();
+        crate::recovery::install(&this);
         this.reconcile_layout(&DockLayout::default());
         this.install_drop_target();
         this
@@ -1862,8 +1865,19 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
+                let reattached = this.gpu.borrow_mut().as_mut().map(|gpu| gpu.reattach(area));
+                if let Some(result) = reattached {
+                    if let Err(error) = result {
+                        this.gpu_error(&error);
+                    }
+                    this.wake();
+                    return;
+                }
                 match GpuCanvas::with_project(area, this.initial_project.borrow_mut().take()) {
-                    Ok(gpu) => {
+                    Ok(mut gpu) => {
+                        if this.recovery.recovered.get() {
+                            gpu.session.mark_recovered();
+                        }
                         *this.gpu.borrow_mut() = Some(gpu);
                         this.fullscreen_changed(this.window.is_fullscreen());
                         this.refresh(regions::ALL);
@@ -1889,7 +1903,9 @@ impl Workspace {
             self,
             move |area| {
                 area.set_paintable(None::<&gdk::Texture>);
-                this.gpu.borrow_mut().take();
+                if let Some(gpu) = this.gpu.borrow_mut().as_mut() {
+                    gpu.session.renderer_mut().stop();
+                }
             }
         ));
     }

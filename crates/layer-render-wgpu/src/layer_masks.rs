@@ -22,7 +22,8 @@ impl MaskPage {
             format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
@@ -303,9 +304,9 @@ impl WgpuRasterizer {
                 if !committed.contains(&(batch.layer_id, op)) {
                     let operation = &layers
                         .iter()
-                        .find_map(|l| l.target_history(batch.layer_id))
+                        .find_map(|l| l.target_operations(batch.layer_id))
                         .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?
-                        .1[op as usize];
+                        [op as usize];
                     let mut transforms = self.transforms.take().unwrap();
                     let result = transforms.apply(
                         self,

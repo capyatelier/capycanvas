@@ -30,6 +30,10 @@ Settings follows the active tool, and Properties exposes the relevant effect
 parameters. The [Painter, Illustrator, and Photographer defaults](default-workspaces.md)
 provide initial arrangements for these tasks and remain editable workspaces.
 
+The proposed [color-management user journeys](color-management.md) describe
+creation, photo import and adjustments, color entry, export, print proofing and HDR.
+They are a design target for the color-management upgrade, not current behavior.
+
 ## Session, actions and views
 
 [`UiSession`](../../crates/layer-ui/src/session.rs) coordinates the engine and
