@@ -108,6 +108,15 @@ to verify mouse and touch through the private Mutter compositor, plus pen throug
 CDP. Some Chrome builds deliver CDP touch contacts without compatibility clicks;
 the compositor run verifies actual touch activation of the corner buttons.
 
+For clipped workspace drags and content-aware release, run
+`bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
+or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the
+running development server. The existing rendering check covers mouse/touch/pen
+at 1×/2×, compact Color, short Layers, long Filters, squashed and usable sidebar
+heights, footer anchors, established floats, cancellation and undo/redo. It also
+checks retained native pixels and placement through model updates. Run
+`--workspace-motion` separately for sustained compositor mouse/touch timing.
+
 ## Debug headless Chrome
 
 Run from the repository root with the development server in another terminal,

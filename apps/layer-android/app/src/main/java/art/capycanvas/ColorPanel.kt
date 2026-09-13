@@ -54,7 +54,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     .size(rect.getDouble(2).toFloat().dp, rect.getDouble(3).toFloat().dp)
 
 /** One square, including the corner controls. Rust owns all layout and color math. */
-@Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity) {
+@Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
     val view = host.panelContent?.objectOrNull("color_panel") ?: return
     val colors = LocalPalette.current
     val config = LocalViewConfiguration.current
@@ -66,6 +66,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     fun color(action: JSONObject) = host.dispatch(obj("type" to "color", "action" to action))
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val side = minOf(maxWidth, (availableHeight - 16.dp).coerceAtLeast(128.dp)).coerceAtLeast(128.dp)
+        SideEffect { onHeight(maxWidth.coerceAtLeast(128.dp).value, side.value) }
         val layout = remember(side) { JSONObject(Native.colorPanelLayout(side.value)) }
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.size(side).testTag("color-panel")) {

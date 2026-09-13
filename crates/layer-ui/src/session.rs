@@ -49,7 +49,7 @@ struct WorkspaceDrag {
     source_is_icon: bool,
     torn_off: bool,
     floating: Option<u32>,
-    /// GTK's retained drag presentation can overflow the workspace. Keep this
+    /// The retained drag presentation can overflow the workspace. Keep this
     /// size independent of content measurements and the fitted saved layout.
     preview: Option<Bounds>,
     offset: [f32; 2],
@@ -1319,7 +1319,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 source_is_icon: icon_source.is_some(),
                 torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
-                preview: (self.state.platform == Platform::Gtk && whole && source_floating)
+                preview: (matches!(
+                    self.state.platform,
+                    Platform::Gtk | Platform::Web | Platform::Android
+                ) && whole && source_floating)
                     .then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
@@ -1384,7 +1387,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             // than its viewport, and a drawer is wider than its collapsed source.
             // Standalone toolbars still convert to their compact grid; an icon
             // has no visible panel size, so it keeps the measured/default size.
-            let preserve_size = self.state.platform == Platform::Gtk
+            let preserve_size = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
                 && !drag.source_is_icon
                 && !(drag.panel.kind() == PanelKind::Tiles
                     && self.state.workspace.layout.group_panels(group)?.len() == 1);
@@ -1409,7 +1415,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .unwrap();
             drag.floating = Some(group);
             drag.torn_off = true;
-            drag.preview = (self.state.platform == Platform::Gtk).then_some(floated.bounds);
+            drag.preview = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
+            .then_some(floated.bounds);
             drag.item = DockItem::Group { group };
             // A ribbon becomes a compact vertical grid, with its grip at the
             // bottom. Tabbed groups keep the original header grab offset.
@@ -9081,148 +9091,34 @@ mod tests {
     }
 
     #[test]
-    fn gtk_floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
-        let viewport = [1200., 900.];
-        let mut app = session();
-        app.set_platform(Platform::Gtk);
-        app.dispatch(UiAction::MovePanel {
-            panel: Panel::Brushes,
-            viewport,
-            target: DockTarget::Float {
-                position: [600., 300.],
-            },
-        })
-        .unwrap();
-        let baseline = app.state.workspace.clone();
-        let source = app
-            .layout(viewport)
-            .groups
-            .into_iter()
-            .find(|g| g.active == Panel::Brushes)
-            .unwrap()
-            .bounds;
-        let offset = [37., 12.];
-        let press = [source.x + offset[0], source.y + offset[1]];
-        let drag = |app: &mut UiSession<_>, phase, position| {
-            app.dispatch(UiAction::DragWorkspace {
-                item: DockItem::Panel {
-                    panel: Panel::Brushes,
-                },
-                phase,
-                position,
-                viewport,
-                tabs: vec![],
-            })
-            .unwrap();
-        };
-        let preview =
-            |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
-        drag(&mut app, ContactPhase::Down, press);
-        for point in [
-            [600., 899.],
-            [1199., 400.],
-            [1., 400.],
-            [600., 1.],
-            [600., 899.],
-        ] {
-            drag(&mut app, ContactPhase::Move, point);
-            assert_eq!(
-                preview(&app),
-                Bounds {
-                    x: point[0] - offset[0],
-                    y: point[1] - offset[1],
-                    ..source
-                }
-            );
-        }
-        // A late native natural-height measurement must not move the grabbed
-        // header or resize the live preview (including its retained handles).
-        app.dispatch(UiAction::MeasurePanels {
-            measurements: vec![PanelMeasurement {
-                panel: Panel::Brushes,
-                tab_width: 120.,
-                content_height: 1800.,
-                scroll: None,
-            }],
-        })
-        .unwrap();
-        assert_eq!(preview(&app).height, source.height);
-        assert_eq!(preview(&app).y, 887.);
-        drag(&mut app, ContactPhase::Cancel, [600., 899.]);
-        assert_eq!(
-            durable_layout(&app.state.workspace.layout),
-            durable_layout(&baseline.layout)
-        );
-        app.dispatch(UiAction::MeasurePanels {
-            measurements: baseline.layout.measurements.clone(),
-        })
-        .unwrap();
-        assert_eq!(app.state.workspace, baseline);
-        assert!(app.workspace_update().drag.is_none());
-
-        drag(&mut app, ContactPhase::Down, press);
-        drag(&mut app, ContactPhase::Move, [600., 899.]);
-        assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
-        drag(&mut app, ContactPhase::Up, [600., 899.]);
-        let placed = app
-            .layout(viewport)
-            .groups
-            .into_iter()
-            .find(|g| g.active == Panel::Brushes)
-            .unwrap()
-            .bounds;
-        assert_eq!([placed.width, placed.height], [source.width, source.height]);
-        assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
-        let after = app.state.workspace.clone();
-        invoke(&mut app, CommandId::UndoWorkspace);
-        assert_eq!(app.state.workspace, baseline);
-        invoke(&mut app, CommandId::RedoWorkspace);
-        assert_eq!(app.state.workspace, after);
-    }
-
-    #[test]
-    fn gtk_tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
-        let viewport = [1200., 900.];
-        for icon in [false, true] {
+    fn floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
             let mut app = session();
-            app.set_platform(Platform::Gtk);
-            let panel = Panel::Brushes;
-            let group = app.state.workspace.layout.panel_group(panel).unwrap();
-            app.dispatch(UiAction::MeasurePanels {
-                measurements: vec![PanelMeasurement {
-                    panel,
-                    tab_width: 120.,
-                    content_height: 1800.,
-                    scroll: None,
-                }],
+            app.set_platform(platform);
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Brushes,
+                viewport,
+                target: DockTarget::Float {
+                    position: [600., 300.],
+                },
             })
             .unwrap();
-            if icon {
-                app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
-                    .unwrap();
-            }
-            let resolved = app.layout(viewport);
-            let source = if icon {
-                resolved
-                    .collapsed
-                    .iter()
-                    .flat_map(|c| &c.groups)
-                    .flat_map(|g| &g.icons)
-                    .find(|i| i.panel == panel)
-                    .unwrap()
-                    .bounds
-            } else {
-                resolved
-                    .groups
-                    .iter()
-                    .find(|g| g.id == group)
-                    .unwrap()
-                    .bounds
-            };
-            let before = app.state.workspace.clone();
+            let baseline = app.state.workspace.clone();
+            let source = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            let offset = [37., 12.];
+            let press = [source.x + offset[0], source.y + offset[1]];
             let drag = |app: &mut UiSession<_>, phase, position| {
                 app.dispatch(UiAction::DragWorkspace {
-                    item: DockItem::Panel { panel },
+                    item: DockItem::Panel {
+                        panel: Panel::Brushes,
+                    },
                     phase,
                     position,
                     viewport,
@@ -9230,26 +9126,144 @@ mod tests {
                 })
                 .unwrap();
             };
-            drag(
-                &mut app,
-                ContactPhase::Down,
-                [source.x + 18., source.y + 12.],
-            );
-            drag(&mut app, ContactPhase::Move, [600., 700.]);
-            let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
-            if icon {
-                assert!(preview.height > source.height * 3.);
-                assert!(preview.width > source.width * 3.);
-            } else {
+            let preview =
+                |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
+            drag(&mut app, ContactPhase::Down, press);
+            for point in [
+                [600., 899.],
+                [1199., 400.],
+                [1., 400.],
+                [600., 1.],
+                [600., 899.],
+            ] {
+                drag(&mut app, ContactPhase::Move, point);
                 assert_eq!(
-                    [preview.width, preview.height],
-                    [source.width, source.height]
+                    preview(&app),
+                    Bounds {
+                        x: point[0] - offset[0],
+                        y: point[1] - offset[1],
+                        ..source
+                    }
                 );
             }
-            let floating = &app.state.workspace.layout.floating[0];
-            assert_eq!(floating.height.is_some(), !icon);
-            drag(&mut app, ContactPhase::Cancel, [600., 700.]);
-            assert_eq!(app.state.workspace, before);
+            // A late native natural-height measurement must not move the grabbed
+            // header or resize the live preview (including its retained handles).
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: vec![PanelMeasurement {
+                    panel: Panel::Brushes,
+                    tab_width: 120.,
+                    content_height: 1800.,
+                    scroll: None,
+                }],
+            })
+            .unwrap();
+            assert_eq!(preview(&app).height, source.height);
+            assert_eq!(preview(&app).y, 887.);
+            drag(&mut app, ContactPhase::Cancel, [600., 899.]);
+            assert_eq!(
+                durable_layout(&app.state.workspace.layout),
+                durable_layout(&baseline.layout)
+            );
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: baseline.layout.measurements.clone(),
+            })
+            .unwrap();
+            assert_eq!(app.state.workspace, baseline);
+            assert!(app.workspace_update().drag.is_none());
+
+            drag(&mut app, ContactPhase::Down, press);
+            drag(&mut app, ContactPhase::Move, [600., 899.]);
+            assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
+            drag(&mut app, ContactPhase::Up, [600., 899.]);
+            let placed = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            assert_eq!([placed.width, placed.height], [source.width, source.height]);
+            assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
+            let after = app.state.workspace.clone();
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace, baseline);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, after);
+        }
+    }
+
+    #[test]
+    fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            for icon in [false, true] {
+                let mut app = session();
+                app.set_platform(platform);
+                let panel = Panel::Brushes;
+                let group = app.state.workspace.layout.panel_group(panel).unwrap();
+                app.dispatch(UiAction::MeasurePanels {
+                    measurements: vec![PanelMeasurement {
+                        panel,
+                        tab_width: 120.,
+                        content_height: 1800.,
+                        scroll: None,
+                    }],
+                })
+                .unwrap();
+                if icon {
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                }
+                let resolved = app.layout(viewport);
+                let source = if icon {
+                    resolved
+                        .collapsed
+                        .iter()
+                        .flat_map(|c| &c.groups)
+                        .flat_map(|g| &g.icons)
+                        .find(|i| i.panel == panel)
+                        .unwrap()
+                        .bounds
+                } else {
+                    resolved
+                        .groups
+                        .iter()
+                        .find(|g| g.id == group)
+                        .unwrap()
+                        .bounds
+                };
+                let before = app.state.workspace.clone();
+                let drag = |app: &mut UiSession<_>, phase, position| {
+                    app.dispatch(UiAction::DragWorkspace {
+                        item: DockItem::Panel { panel },
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                };
+                drag(
+                    &mut app,
+                    ContactPhase::Down,
+                    [source.x + 18., source.y + 12.],
+                );
+                drag(&mut app, ContactPhase::Move, [600., 700.]);
+                let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
+                if icon {
+                    assert!(preview.height > source.height * 3.);
+                    assert!(preview.width > source.width * 3.);
+                } else {
+                    assert_eq!(
+                        [preview.width, preview.height],
+                        [source.width, source.height]
+                    );
+                }
+                let floating = &app.state.workspace.layout.floating[0];
+                assert_eq!(floating.height.is_some(), !icon);
+                drag(&mut app, ContactPhase::Cancel, [600., 700.]);
+                assert_eq!(app.state.workspace, before);
+            }
         }
     }
 

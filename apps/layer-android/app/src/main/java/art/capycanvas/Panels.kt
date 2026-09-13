@@ -86,27 +86,39 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, onHeight: (Float) -> Unit = {}) {
+@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
     val layers = panel.getString("id") == "layers"
     val density = LocalDensity.current.density
     if (layers) {
-        LayerPanel(host, state, modifier)
+        LayerPanel(host, state, modifier) { onContent(it); onHeight(it.height) }
         return
     }
     if (panel.getString("id") == "adjustments") {
-        AdjustmentPanel(host, state, modifier)
+        AdjustmentPanel(host, state, modifier) { onContent(it); onHeight(it.height) }
         return
     }
     BoxWithConstraints(modifier) {
         val availableHeight = maxHeight
-        Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onSizeChanged { onHeight(it.height / density) }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
+        val controls = panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }
+        var contentHeight by remember { mutableFloatStateOf(0f) }
+        var colorHeightDeficit by remember { mutableFloatStateOf(0f) }
+        var navigatorHeightDeficit by remember { mutableFloatStateOf(0f) }
+        val hasNavigator = controls.any { it.getString("control") == "navigator" }
+        val hasColor = controls.any { it.getString("control") == "color_wheel" }
+        val displayedHeight = contentHeight
+        val measured = PanelContentSize(displayedHeight + (if (hasColor) colorHeightDeficit else 0f) + (if (hasNavigator) navigatorHeightDeficit else 0f),
+            fixedHeight = if (controls.size == 1 && hasColor) null else 0f)
+        SideEffect {
+            if (displayedHeight > 0f) { onHeight(displayedHeight); onContent(measured) }
+        }
+        Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onSizeChanged { contentHeight = it.height / density }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
+            controls.forEach { item ->
                 when (item.getString("control")) {
                     "brushes" -> ToolSetControls(host, state)
                     "tool_settings" -> ToolSettingsControls(host, state)
-                    "color_wheel" -> ColorPanelControls(host, availableHeight)
-                    "navigator" -> NavigatorPanel(host, availableHeight)
+                    "color_wheel" -> ColorPanelControls(host, availableHeight) { natural, displayed -> colorHeightDeficit = natural - displayed }
+                    "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> navigatorHeightDeficit = natural - displayed }
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))
                     }

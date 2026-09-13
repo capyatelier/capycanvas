@@ -55,12 +55,21 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
 
 /** Category/search decisions and preview sampling are shared Rust policy. Only
  * visible row geometry and native bitmap presentation belong to this view. */
-@Composable internal fun AdjustmentPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier) {
+@Composable internal fun AdjustmentPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, onContent: (PanelContentSize) -> Unit = {}) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val picker = state.getJSONObject("filter_picker")
     val choices = state.array("adjustments").objects()
     val categories = state.array("filter_categories").objects()
+    var headerHeight by remember { mutableFloatStateOf(0f) }
+    var rowHeight by remember { mutableFloatStateOf(64f) }
+    var categoryHeight by remember { mutableFloatStateOf(36f) }
+    var emptyHeight by remember { mutableFloatStateOf(36f) }
+    val categoryCount = choices.filterIndexed { i, choice -> i == 0 || choices[i - 1].getString("category") != choice.getString("category") }.size
+    val listHeight = if (choices.isEmpty()) emptyHeight else choices.size * rowHeight + categoryCount * categoryHeight + (choices.size + categoryCount - 1) * 2f
+    val fixedHeight = headerHeight + 18f // Native outer padding and header/list gap.
+    val measured = if (headerHeight > 0f) PanelContentSize(fixedHeight + listHeight, fixedHeight, rowHeight + 2f) else null
+    SideEffect { measured?.let(onContent) }
     val currentChoices by rememberUpdatedState(choices)
     val list = rememberLazyListState()
     val focus = remember { FocusRequester() }
@@ -111,7 +120,7 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
         }
     }
     Column(modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (search == null) SharedIcon(categories.firstOrNull { it.optString("id") == picker.optString("category") }?.getString("icon") ?: "adjustments", null)
             Box(Modifier.weight(1f)) {
                 if (search != null) CoreTextField(search, { send(obj("op" to "search", "query" to it)) },
@@ -135,14 +144,14 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
                 if(category != choice.getString("category")) {
                     category = choice.getString("category")
                     item("category-$category") {
-                        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(Modifier.onSizeChanged { categoryHeight = it.height / density }.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             SharedIcon(choice.getString("category_icon"), null, tint = colors.secondary)
                             Text(choice.getString("category_label"), color = colors.secondary, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
                 item(id) {
-                    HoverTip(choice.getString("tooltip"), Modifier.fillMaxWidth()) {
+                    HoverTip(choice.getString("tooltip"), Modifier.fillMaxWidth().onSizeChanged { rowHeight = it.height / density }) {
                         Column(Modifier.fillMaxWidth().testTag("adjustment-$id").clip(RoundedCornerShape(6.dp))
                             .clickable { host.dispatch(choice.getJSONObject("action")) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
                             val image = cache.images[id]?.image
@@ -157,7 +166,7 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
                     }
                 }
             }
-            if(choices.isEmpty()) item { Text(picker.getString("empty_label"), Modifier.padding(8.dp), color = colors.secondary) }
+            if(choices.isEmpty()) item { Text(picker.getString("empty_label"), Modifier.onSizeChanged { emptyHeight = it.height / density }.padding(8.dp), color = colors.secondary) }
         }
     }
 }

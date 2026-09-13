@@ -3083,7 +3083,7 @@ impl DockLayout {
         Ok(())
     }
 
-    /// Settle a GTK drag once, inside its existing history transaction. The host
+    /// Settle a floating drag once, inside its existing history transaction. The host
     /// measures content at the floating width; the held preview never uses this
     /// policy. Subsequent content updates do not resize the established window.
     pub(crate) fn settle_floating_drop(
