@@ -133,7 +133,7 @@ is not saved into a brush or document. The C ABI exposes the same fields through
 | platform prediction | true | Prefer native/browser future samples |
 | engine prediction | true | Confidence-limited fallback when native prediction is absent |
 | finalization lag | 8 ms | Size of the replaceable real-input suffix |
-| prediction horizon | 8 ms | Default and maximum future interval |
+| prediction horizon | 8 ms | Engine future interval; native samples have a separate 64 ms safety cap |
 | maximum prediction distance | 96 physical px | Zoom-independent runaway clamp |
 | tip lock | 1.0 | Endpoint correction strength |
 | correction easing | 1.5 | Distribution of correction behind the endpoint |
@@ -145,6 +145,40 @@ knows its expected presentation timestamp. Both values share the pen-event
 monotonic timebase. `now` alone advances time-driven paint; `presentation`
 selects the speculative endpoint. The older timed entry point uses the
 configured horizon.
+
+The native-prediction switch appears directly below **Live stroke preview** on
+every host. Android reports framework `MotionPredictor` availability for the
+connected stylus; Web checks for `getPredictedEvents`; iPadOS uses UIKit predicted
+touches. Linux, Windows and macOS currently show a disabled switch. Capability
+is transient and never overwrites the saved choice. When supported native
+prediction is selected, **Prediction time** and **Pen tip tracking** (including
+their reset actions) are disabled. Native timing comes from its sample timestamps
+and presentation time; tracking is full strength. If native samples are absent,
+the engine uses its automatic 8 ms fallback. Turning native prediction off, or
+losing support, restores the saved manual controls.
+
+## Lead stability and impending lift
+
+Each active stroke owns a small preview-only history. The predicted distance from
+the latest real position is filtered using elapsed presentation time, with 16 ms
+extension and 6 ms retreat time constants, and extension limited to 1.5 physical
+pixels per millisecond. Stops, strong deceleration, sharp turns and lift handling
+bypass that filter so it cannot retain a dangerous old lead. Native and shared
+predictions share the same limits, including bounds on intermediate native points.
+
+Up to 16 raw pen-pressure observations over 24 ms are used to fit a falling trend,
+before the user's pressure curve. At least three observations spanning 6 ms and
+a net drop of 0.04 are required, with pressure still falling. Lookahead is capped
+at half the estimated time to zero pressure. Steady light pressure, rebounds,
+mouse/finger input, predicted samples, and late sensor corrections do not qualify.
+Pen-up/cancel discards the history; no inferred lift alters document input.
+
+These are conservative heuristics, not a calibrated lift detector. Shared tests
+cover varying frame rates/zoom, jitter, stops/reversals, pressure curves and replay
+identity. `AndroidPredictionTest` checks device capability and actual Compose
+controls and pen rendering; `node apps/layer-web/test.mjs --package --prediction` checks
+browser controls and native sample ingress. Physical pen feel still needs device
+assessment; synthetic traces cannot establish that subjective result.
 
 ## Platform input mapping
 
@@ -159,8 +193,8 @@ absent, no placeholder records are synthesized by the adapter.
 | Windows | reverse `GetPointerPenInfoHistory` to chronological order | shared predictor for the custom canvas | current point only at a corner/low confidence |
 | macOS | AppKit tablet/mouse events with pressure, tilt, and rotation | none documented for tablet points | shared predictor |
 | iPadOS | `coalescedTouches(for:)` using precise locations | `predictedTouches(for:)` | shared predictor if UIKit returns none |
-| Android | `MotionEvent` history and nanosecond timestamps | AndroidX `MotionEventPredictor.predict()` at frame time | AndroidX fallback model, then shared predictor |
-| Web/Wasm | `pointerrawupdate`/`getCoalescedEvents()` | `getPredictedEvents()` | shared predictor when the list is empty |
+| Android | `MotionEvent` history and nanosecond timestamps | framework `MotionPredictor.predict()` on pen moves (API 34+) | shared predictor when unavailable/disabled or no samples arrive |
+| Web/Wasm | `pointermove`/`getCoalescedEvents()` | `getPredictedEvents()` | shared predictor when the list is empty |
 
 UIKit estimated force/altitude/azimuth updates are a separate sensor-correction
 concern. Adapters must preserve their stable sample identity; support for
@@ -201,7 +235,7 @@ brush passes the 8.33 ms gate, and every tip-gap p95/p99 is 0 px.
 - [Apple coalesced Pencil touches](https://developer.apple.com/documentation/uikit/getting-high-fidelity-input-with-coalesced-touches)
 - [Windows pen history](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getpointerpeninfohistory)
 - [Android MotionEvent history](https://developer.android.com/reference/android/view/MotionEvent.html)
-- [AndroidX MotionEventPredictor](https://developer.android.com/reference/androidx/input/motionprediction/MotionEventPredictor)
+- [Android MotionPredictor](https://developer.android.com/reference/android/view/MotionPredictor)
 - [Wayland tablet-v2](https://wayland.app/protocols/wayland-protocols/480)
 - [W3C coalesced and predicted pointer events](https://www.w3.org/TR/pointerevents/#coalesced-and-predicted-events)
 - [Krita freehand brush smoothing](https://docs.krita.org/en/reference_manual/tools/freehand_brush.html)

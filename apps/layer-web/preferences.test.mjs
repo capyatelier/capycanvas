@@ -286,6 +286,15 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await click('[data-settings-page="input"]');
   assert.equal(await evaluate("document.querySelector('#settings-search').value"), "");
   assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').checked"), true);
+  const nativeAvailable = await evaluate("typeof PointerEvent.prototype.getPredictedEvents === 'function'");
+  assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').disabled"), !nativeAvailable);
+  assert.ok(await evaluate(`(() => {
+    const rows=layerApp.app.preferences().pages.find(p=>p.id==='input').groups.flatMap(g=>g.rows);
+    return rows[rows.findIndex(r=>r.id==='feedback')+1].id==='platform_prediction';
+  })()`));
+  for (const id of ['prediction-horizon', 'tip-lock'])
+    assert.equal(await evaluate(`document.querySelector('#setting-${id}').disabled`), nativeAvailable);
+  if (nativeAvailable) await click('#setting-platform-prediction');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value"), '8 ms', 'units appear beside numeric values');
   await click('#setting-prediction-horizon .number-entry');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='4*2 ms'");

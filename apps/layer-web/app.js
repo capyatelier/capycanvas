@@ -1208,7 +1208,7 @@ function queuePen(e, stage) {
   lastPenEvent = stage === 3 || stage === 4 ? null : e;
   const records = [];
   const history = stage === 2 ? e.getCoalescedEvents?.() || [] : [];
-  for (const item of history.length ? history : [e]) {
+  const append = (item, predicted) => {
     const [x, y] = position(item),
       pen = item.pointerType === "pen";
     records.push(
@@ -1221,9 +1221,15 @@ function queuePen(e, stage) {
       ((item.tiltY || 0) * Math.PI) / 180,
       ((item.twist || 0) * Math.PI) / 180,
       item.timeStamp,
-      2,
+      predicted ? 3 : 2,
       pen ? (item.buttons & 32 ? 2 : 0) : 1,
     );
+  };
+  for (const item of history.length ? history : [e]) append(item, false);
+  if (stage === 2 && e.pointerType === "pen" && state.settings.feedback && state.settings.platform_prediction) {
+    for (const item of e.getPredictedEvents?.() || []) {
+      if (item.timeStamp > e.timeStamp) append(item, true);
+    }
   }
   const batch = {
     records: new Float64Array(records),
@@ -1411,6 +1417,7 @@ try {
   canvas.width = 800;
   canvas.height = 600;
   app = WebApp.create(canvas);
+  app.prediction_availability(typeof globalThis.PointerEvent?.prototype.getPredictedEvents === "function");
   let restoreError, workspaceRestoreError;
   try {
     const saved = localStorage.getItem(settingsKey);

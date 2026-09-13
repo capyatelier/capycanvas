@@ -776,6 +776,11 @@ impl WebApp {
         serialize(&change)
     }
 
+    /// Transient browser API capability; the preference remains persisted.
+    pub fn prediction_availability(&mut self, available: bool) {
+        self.session.set_platform_prediction_available(available);
+    }
+
     /// Packed history records: id, phase, x, y, pressure, tilt x/y, twist,
     /// timestamp milliseconds, flags, device kind (0 pen / 1 mouse / 2 eraser).
     /// Returns consumed record count if the bounded input queue fills.

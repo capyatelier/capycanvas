@@ -1,4 +1,5 @@
 import {checkDragPickup} from "./drag-pickup.test.mjs";
+import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
@@ -319,6 +320,9 @@ try {
   } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
     await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--prediction")) {
+    await checkPrediction({call, evaluate, settle});
     assert.deepEqual(errors, []);
   } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke")) {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });

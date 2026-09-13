@@ -170,6 +170,21 @@ impl Settings {
             ..Default::default()
         }
     }
+    pub(crate) fn feedback_config_for(
+        &self,
+        native_available: bool,
+    ) -> layer_engine::InstantFeedbackConfig {
+        let mut config = self.feedback_config();
+        config.use_platform_prediction &= native_available;
+        if config.use_platform_prediction {
+            // Native samples carry their own lookahead. The fallback uses
+            // automatic defaults, never the disabled, saved manual controls.
+            let defaults = layer_engine::InstantFeedbackConfig::default();
+            config.prediction_horizon_micros = defaults.prediction_horizon_micros;
+            config.tip_lock = defaults.tip_lock;
+        }
+        config
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,6 +638,22 @@ impl Settings {
                     active: self.feedback,
                 },
             ),
+            row(
+                PlatformPrediction,
+                match platform {
+                    Platform::Android => "Use Android pen prediction",
+                    Platform::Ios => "Use iPadOS pen prediction",
+                    Platform::Web => "Use browser pen prediction",
+                    Platform::Windows => "Use Windows pen prediction",
+                    Platform::Mac => "Use macOS pen prediction",
+                    Platform::Gtk => "Use Linux pen prediction",
+                    Platform::Generic => "Use native pen prediction",
+                },
+                "Use your system's estimate of the next pen position.",
+                PreferenceKind::Switch {
+                    active: self.platform_prediction,
+                },
+            ),
             number(
                 PredictionHorizon,
                 "Prediction time",
@@ -642,24 +673,6 @@ impl Settings {
                 0.05,
             ),
         ];
-        if matches!(platform, Platform::Web | Platform::Ios | Platform::Android) {
-            input.push(row(
-                PlatformPrediction,
-                if platform == Platform::Android {
-                    "Native pen prediction"
-                } else {
-                    "Device pen prediction"
-                },
-                if platform == Platform::Android {
-                    "Use Android prediction. Turn off for Capy Canvas."
-                } else {
-                    "Use your device's estimate of the next pen position."
-                },
-                PreferenceKind::Switch {
-                    active: self.platform_prediction,
-                },
-            ));
-        }
         for r in &mut input {
             if matches!(r.id, PredictionHorizon | TipLock | PlatformPrediction) {
                 r.enabled = self.feedback;
@@ -1019,19 +1032,28 @@ impl PreferencesState {
     ) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
         let mut pages = settings.pages(platform);
-        if !platform_prediction_available {
-            for row in pages
-                .iter_mut()
-                .flat_map(|p| &mut p.groups)
-                .flat_map(|g| &mut g.rows)
+        for row in pages
+            .iter_mut()
+            .flat_map(|p| &mut p.groups)
+            .flat_map(|g| &mut g.rows)
+        {
+            if row.id == PreferenceId::PlatformPrediction && !platform_prediction_available {
+                row.enabled = false;
+                row.description = "Unavailable for this system or connected pen.".into();
+            }
+            if matches!(
+                row.id,
+                PreferenceId::PredictionHorizon | PreferenceId::TipLock
+            ) && platform_prediction_available
+                && settings.platform_prediction
             {
-                if row.id == PreferenceId::PlatformPrediction {
-                    row.enabled = false;
-                    row.description = "Unavailable for this system or connected pen.".into();
-                    if let Some(reset) = &mut row.reset {
-                        reset.enabled = false;
-                    }
-                }
+                row.enabled = false;
+                row.description = "Automatic while native pen prediction is on.".into();
+            }
+            if !row.enabled
+                && let Some(reset) = &mut row.reset
+            {
+                reset.enabled = false;
             }
         }
         let mut search_results = Vec::new();
