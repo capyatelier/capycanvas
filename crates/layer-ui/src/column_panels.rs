@@ -44,6 +44,29 @@ pub struct ColumnGroupPanel {
     pub direction: Edge,
 }
 
+impl ResolvedLayout {
+    /// The adjacent dock divider and the panel's inner grip resize the same
+    /// open projection. They must not enter collapsed-column expansion logic.
+    pub fn column_panel_at_divider(&self, id: u32) -> Option<u32> {
+        let divider = self.dividers.iter().find(|d| d.id == id)?;
+        if divider.axis != Axis::Horizontal {
+            return None;
+        }
+        self.collapsed.iter().find_map(|column| {
+            let panel = column.group_panel.as_ref()?;
+            let gap = match panel.direction {
+                Edge::Right => divider.bounds.x - panel.bounds.x - panel.bounds.width,
+                Edge::Left => panel.bounds.x - divider.bounds.x - divider.bounds.width,
+                _ => return None,
+            };
+            (gap.abs() < 0.5
+                && panel.bounds.y < divider.bounds.y + divider.bounds.height
+                && divider.bounds.y < panel.bounds.y + panel.bounds.height)
+                .then_some(column.id)
+        })
+    }
+}
+
 impl DockLayout {
     pub fn column_settings(&self, column: u32) -> ColumnSettings {
         self.column_settings

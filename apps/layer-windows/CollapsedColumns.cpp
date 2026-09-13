@@ -68,7 +68,7 @@ struct Column:std::enable_shared_from_this<Column>{
                 auto found=buttons.find(key);
                 if(found==buttons.end()){
                     auto pick=button(data,str(panel,L"title"),[weak=weak_from_this(),panelId]{
-                        if(auto self=weak.lock())for(auto value:array(self->geometry,L"groups")){
+                        if(auto self=weak.lock();self&&!self->gestures->SuppressClick())for(auto value:array(self->geometry,L"groups")){
                             auto group=value.GetObject();
                             for(auto iconValue:array(group,L"icons"))if(str(iconValue.GetObject(),L"panel")==panelId){
                                 self->data->dispatch(O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"toggle_column_drawer")},
@@ -78,7 +78,7 @@ struct Column:std::enable_shared_from_this<Column>{
                     });
                     pick.Padding({0,0,0,0});pick.Content(icon(str(panel,L"icon"),data->theme()));
                     auto target=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
-                    gestures->Source(pick,J{},target);
+                    gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",target}}),target,false,{},WorkspaceGestures::Pickup::Hold);
                     AutomationProperties::SetAutomationId(pick,L"column-icon-"+panelId);
                     ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
                     icons.Children().Append(pick);found=buttons.emplace(key,pick).first;

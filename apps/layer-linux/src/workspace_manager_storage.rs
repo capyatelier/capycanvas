@@ -3,6 +3,33 @@ use layer_workspace::{ManagerAction as A, StoreRequest};
 type Result<T> = std::result::Result<T, StoreError>;
 
 impl NativeWorkspaces {
+    pub(crate) async fn maintain_storage(&self, w: &Rc<Workspace>) -> Result<()> {
+        let _operation = self.begin_operation(w).await?;
+        let manager = self.manager.as_ref().unwrap();
+        if let Some(incoming) = manager.maintain_storage(false).await? {
+            if manager.active_id().as_deref() != Some(&incoming.entity.id) {
+                return Err(StoreError::invalid(
+                    "Workspace changed during storage maintenance.",
+                ));
+            }
+            let history = incoming.entity.capture()?.history;
+            let generation = history.generation;
+            w.gpu
+                .borrow_mut()
+                .as_mut()
+                .ok_or_else(|| StoreError::invalid("Canvas unavailable."))?
+                .session
+                .refresh_workspace_history(history)
+                .map_err(StoreError::invalid)?;
+            // Refresh storage versions/fences without reloading the editor.
+            manager.activate(incoming);
+            self.captured_generation.set(Some(generation));
+            self.layout_pending.set(false);
+        }
+        self.update_status();
+        Ok(())
+    }
+
     pub(super) fn recover_close(&self, w: &Rc<Workspace>) {
         if self.close_prompt.replace(true) {
             return;

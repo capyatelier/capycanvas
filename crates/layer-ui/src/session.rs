@@ -628,6 +628,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 return None;
                             }
                             let strip = layout.collapsed.iter().find(|c| c.id == column)?;
+                            if layout.dividers.iter().any(|divider| {
+                                divider.bounds.contains(position[0], position[1])
+                                    && layout.column_panel_at_divider(divider.id) == Some(column)
+                            }) {
+                                return None;
+                            }
                             let body = strip.group_panel.as_ref().map(|p| p.bounds).or_else(|| {
                                 self.state.customization.column_drawer_bounds.iter()
                                     .find(|m| m.group == group).map(|m| m.bounds)
@@ -1725,6 +1731,31 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        // One resize contract for both sides of an attached panel's outside
+        // edge. Resolve before revision classification so either hit surface
+        // follows the retained-content path and one-step gesture history.
+        let action = match action {
+            UiAction::DragDivider {
+                id,
+                phase,
+                position,
+                viewport,
+            } => {
+                valid_viewport(viewport)?;
+                if let Some(column) = self.layout(viewport).column_panel_at_divider(id) {
+                    UiAction::ResizeColumnPanel {
+                        column,
+                        after: None,
+                        phase,
+                        position,
+                        viewport,
+                    }
+                } else {
+                    action
+                }
+            }
+            _ => action,
+        };
         if self.workspace_read_only
             && !matches!(
                 &action,
@@ -1752,6 +1783,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                         ..
                     }
                     | UiAction::ResizeFloating {
+                        phase: ContactPhase::Up | ContactPhase::Cancel,
+                        ..
+                    }
+                    | UiAction::ResizeColumnPanel {
                         phase: ContactPhase::Up | ContactPhase::Cancel,
                         ..
                     }
@@ -2662,21 +2697,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 {
                     self.state.preferences.error =
-                        Some("Native pen prediction isn't available on this device.".into());
+                        Some("Native stroke prediction isn't available on this device.".into());
                 } else if self.platform_prediction_available()
                     && self.state.settings.platform_prediction
                     && matches!(
                         action,
                         PreferenceAction::Edit {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock,
+                            id: PreferenceId::PredictionHorizon,
                             ..
                         } | PreferenceAction::Reset {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock
+                            id: PreferenceId::PredictionHorizon
                         }
                     )
                 {
                     self.state.preferences.error =
-                        Some("Turn off native pen prediction to change this setting.".into());
+                        Some("Turn off native stroke prediction to change this setting.".into());
                 } else {
                     self.state
                         .preferences
@@ -13639,7 +13674,7 @@ mod tests {
                     PreferenceValue::Text(value.into()),
                 );
                 assert!(s.preferences().unwrap().error.is_some());
-                assert_eq!(s.state.settings.prediction_ms, 8.0);
+                assert_eq!(s.state.settings.prediction_ms, 16.0);
                 assert!(
                     s.state.requests.is_empty(),
                     "invalid edits never reach storage"
@@ -14025,13 +14060,13 @@ mod tests {
     #[test]
     fn native_prediction_order_dependencies_and_runtime_follow_capability_on_every_host() {
         for (platform, title, supported) in [
-            (Platform::Generic, "Use native pen prediction", false),
-            (Platform::Gtk, "Use Linux pen prediction", false),
-            (Platform::Windows, "Use Windows pen prediction", false),
-            (Platform::Mac, "Use macOS pen prediction", false),
-            (Platform::Ios, "Use iPadOS pen prediction", true),
-            (Platform::Android, "Use Android pen prediction", true),
-            (Platform::Web, "Use browser pen prediction", true),
+            (Platform::Generic, "Use native stroke prediction", false),
+            (Platform::Gtk, "Use Linux stroke prediction", false),
+            (Platform::Windows, "Use Windows stroke prediction", false),
+            (Platform::Mac, "Use macOS stroke prediction", false),
+            (Platform::Ios, "Use iPadOS stroke prediction", true),
+            (Platform::Android, "Use Android stroke prediction", true),
+            (Platform::Web, "Use browser stroke prediction", true),
         ] {
             let mut s = session();
             s.set_platform(platform);
@@ -14064,8 +14099,33 @@ mod tests {
             assert_eq!(rows[index + 1].id, PreferenceId::PlatformPrediction);
             assert_eq!(rows[index + 1].title, title);
             assert_eq!(rows[index + 1].enabled, supported);
-            for id in [PreferenceId::PredictionHorizon, PreferenceId::TipLock] {
-                let row = rows.iter().find(|r| r.id == id).unwrap();
+            assert!(!rows.iter().any(|r| r.id == PreferenceId::TipLock));
+            // Legacy settings still load, but neither old actions nor their
+            // stored value can override automatic endpoint tracking.
+            for action in [
+                PreferenceAction::Edit {
+                    id: PreferenceId::TipLock,
+                    value: PreferenceValue::Number(0.0),
+                },
+                PreferenceAction::Reset {
+                    id: PreferenceId::TipLock,
+                },
+            ] {
+                preference(&mut s, action);
+                assert!(s.preferences().unwrap().error.is_some());
+                assert_eq!(s.state.settings, settings);
+            }
+            {
+                let id = PreferenceId::PredictionHorizon;
+                let row = &rows[index + 2];
+                assert_eq!(row.id, id);
+                let PreferenceKind::Number { control, value } = &row.kind else {
+                    panic!("Prediction amount must be numeric");
+                };
+                assert_eq!(control.kind, NumericKind::Slider);
+                assert_eq!(control.unit, "ms");
+                assert_eq!((control.min, control.max, control.step), (0.0, 64.0, 1.0));
+                assert_eq!(*value, 23.0);
                 assert_eq!(row.enabled, !supported);
                 assert_eq!(row.reset.as_ref().unwrap().enabled, !supported);
                 if supported {
@@ -14091,7 +14151,7 @@ mod tests {
                 config.prediction_horizon_micros,
                 if supported { 8_000 } else { 23_000 }
             );
-            assert_eq!(config.tip_lock, if supported { 1.0 } else { 0.3 });
+            assert_eq!(config.tip_lock, 1.0);
             if supported {
                 edit_preference(
                     &mut s,
@@ -14104,7 +14164,7 @@ mod tests {
                     .feedback_config_for(s.platform_prediction_available());
                 assert!(!config.use_platform_prediction);
                 assert_eq!(config.prediction_horizon_micros, 23_000);
-                assert_eq!(config.tip_lock, 0.3);
+                assert_eq!(config.tip_lock, 1.0);
                 edit_preference(
                     &mut s,
                     PreferenceId::PredictionHorizon,
@@ -14138,7 +14198,7 @@ mod tests {
         s.state.requests.clear();
         s.set_platform_prediction_available(true);
         assert!(row(&s).enabled);
-        assert_eq!(row(&s).title, "Use Android pen prediction");
+        assert_eq!(row(&s).title, "Use Android stroke prediction");
         assert!(
             s.state.requests.is_empty(),
             "Capability is not a saved setting"

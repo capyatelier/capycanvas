@@ -1822,3 +1822,54 @@ pressure/tilt/eraser/touch validation, mixed DPI/lifecycle/device recovery,
 distribution and sustained 120 Hz painting plus physical input-to-present
 acceptance are still required. No presentation benchmark ran during this
 milestone. Profiles, captures, diagnostics and binaries remain ignored/local.
+
+## Held workspace tiles and collapsed icons (2026-09-12)
+
+Toolbar tiles, dividers, disabled commands and collapsed-column icons now use
+native hold recognition for mouse, touch and pen. Before admission, native
+scrolling remains available. Stable workspace capture preserves the original
+contact through menus and icon tear-off. Pen/touch menus remain after held
+release and close when dragging starts; mouse holds only arm pickup. Grips and
+title/tab strips remain immediate. Shared Rust still owns drop validation,
+layout publication and one-step history, including incremental workspace motion.
+
+A native crash investigation found WinUI's deferred default context callback
+reaching an icon removed during tear-off. Registered sources now disable the
+competing XAML hold throughout their visual subtree. Owned submenu activation
+no longer cancels the workspace menu. Cancellation of a menu without a contact
+also preserves an immediately following accessibility invocation. Dividers are
+focusable buttons; disabled command buttons retain their disabled state inside
+customization hit targets. Zen assigns control IDs to the actual buttons and
+preserves pen/touch context menus without enabling toolbar movement there.
+
+The native pickup fixture passes for all three devices: source identity, short
+clicks, early-motion rejection, held menus, same-contact drag, cancellation,
+floating and drawer toolbars, divider/disabled tiles, collapsed-icon tear-off,
+nested drawer origins, Zen behavior, keyboard menus, minimize and exact Undo/Redo.
+The tab-motion regression also passes with retained controls, GPU Navigator
+motion and shared incremental publication. Drawer and full-editor regressions
+pass, including both Zen modes, theme changes, resizing and titlebar hit regions.
+The updated header/settings regression passes prediction search/toggling,
+shortcut-editor cancellation, immediate dialog reopen and fullscreen/status
+policies. Its close helper targets the ContentDialog footer explicitly, avoiding
+the shortcut row also named Close.
+These are OS-delivered synthetic input and UI Automation results, not physical
+stylus, painting cadence or latency acceptance.
+
+Integration through main 8ea4548 passes 526 unit tests (41 engine, 25 host,
+300 UI, 96 Windows and 64 workspace; four explicit hardware ignores), strict
+Windows Clippy, the Rust/WinUI build and the release web build. All four matched
+native/Chrome editor scenes pass the unchanged geometry gates: maximum header
+error 1.664063 physical pixels, Layers 1.000031 and Tool Set 0.5. Camera and
+paper-under-titlebar checks pass. Full-image zero-tolerance comparisons still
+differ in 7.51%/8.38% of dark/light initial pixels and 10.03%/9.42% of the
+under-header pixels. Complete visual parity and the GPU filter-reference failure
+remain open; reference images and tolerances were not changed.
+
+The portable development guide includes native crash triage, and the pickup
+fixture can attach an optional CDB debugger. Diagnostic profiles, screenshots,
+logs, dumps, symbol caches and binaries remain local and ignored. Layer-row
+pickup, attached column group panels and per-column preferences, starting-layout
+preview, remaining raster differences, physical pressure/tilt/eraser/touch,
+DPI/device recovery, distribution and sustained 120 Hz painting/input latency
+still require work. No presentation benchmark ran during this milestone.

@@ -895,6 +895,39 @@ clears. Keep the last valid caption geometry and retry the measurement while
 allowing the canvas to resize. The lifecycle fixture now checks restored caption
 measurements and visible error status, after normal startup messages settle.
 
+## Workspace tile and icon pickup
+
+Toolbar tiles (including dividers, disabled commands and drawer instances) and
+collapsed-column icons require a native stationary hold with mouse, touch and
+pen. Pen/touch holds can open a menu without replacing the captured contact;
+movement closes it and starts the shared drag, while release retains it. Mouse
+holds only arm pickup. Grips and title/tab strips keep immediate pickup after
+system movement slop. Before a hold wins, native scrolling remains available.
+
+~~~powershell
+foreach ($device in 'mouse','touch','pen') {
+    ./apps/layer-windows/scripts/exercise-workspace-pickup.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
+}
+~~~
+
+The fixture uses a disposable profile and OS-delivered input, checks the actual
+source/device and stable arranged bounds, then verifies early rejection, held
+release, same-contact movement, native cancellation and one-step Undo/Redo. It
+also exercises floating toolbars, divider/disabled tiles, collapsed-icon tear-off,
+toolbar drawers, nested drawer origins, native submenus, keyboard menus and
+minimization. Zen retains ordinary mouse button presses and pen/touch hold menus;
+its projected toolbars remain immovable and keep their native button identities.
+Existing `exercise-tab-drag.ps1`
+checks immediate tab movement and retained shared workspace publication.
+
+Pass `-DebuggerPath` with an installed matching-architecture `cdb.exe` to attach
+before fixture input and capture an access-violation stack/dump in the ignored run
+directory. The [Windows development guide](../../docs/development/windows.md#debugging-and-visual-checks)
+explains manual diagnosis. A failed fixture saves evidence and leaves its owned
+app available for inspection; close it before rebuilding. Captures, debugger logs,
+dumps and profiles stay local. These fixtures do not establish physical digitizer
+behavior, painting cadence or input latency. Whole-layer-row pickup remains open.
+
 ## Matched editor captures
 
 The native capture fixture requires an isolated settings directory and

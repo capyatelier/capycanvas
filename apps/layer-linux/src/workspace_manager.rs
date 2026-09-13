@@ -439,14 +439,8 @@ impl NativeWorkspaces {
                 #[weak]
                 w,
                 async move {
-                    let Ok(_operation) = w.workspaces.begin_operation(&w).await else {
-                        return;
-                    };
-                    let manager = w.workspaces.manager.as_ref().unwrap();
-                    match manager.maintain_storage(false).await {
-                        Ok(Some(incoming)) => w.workspaces.adopt(&w, Ok(incoming)).await,
-                        Ok(None) => (),
-                        Err(error) => w.workspaces.show_error(error),
+                    if let Err(error) = w.workspaces.maintain_storage(&w).await {
+                        w.workspaces.show_error(error);
                     }
                 }
             ));

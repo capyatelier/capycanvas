@@ -158,7 +158,7 @@ also legitimately refresh models and render new pixels.
 menus, mouse/touch resizing, group switching, saved sizes, auto-hide and undo/redo.
 On the private 1600×1000@120 Mutter display with the NVIDIA RTX PRO 6000 Blackwell
 Max-Q / Vulkan backend, 360 mouse moves produced **120.1 Hz dark / 120.0 Hz light**
-changing panel allocations over 1.458 seconds. Steady resizing caused **zero full
+changing outer panel widths over 1.458 seconds. Steady resizing caused **zero full
 model refreshes**; start and completion caused two in total, retaining panel widgets.
 These are short, automated desktop runs with compositor-delivered mouse/touch;
 physical pen and slower hardware were not measured. Shared tests also cover resize
@@ -168,3 +168,29 @@ The flush-join refinement also checks left/right attachments, square touching
 edges, grey closed strips and divided menus, with captures in both themes. On the
 same setup it measured **118.6 Hz dark / 118.7 Hz light** changing allocations over
 1.450–1.458 seconds, still with zero steady full refreshes and two boundary refreshes.
+
+### Child allocation and lifecycle correction
+
+The earlier width-only benchmark missed frozen vertical contents. The extended
+release benchmark observes painted child allocations with completed presentation
+feedback, using 550 reversing mouse/touch moves per case on both sides and themes.
+On the same 120 Hz setup:
+
+| Geometry | Before | After |
+| --- | --- | --- |
+| Horizontal contents | 119.1 Hz | 118.2–120.0 Hz |
+| Vertical contents | 0 Hz; up to 85.3 px behind Rust | 118.6–119.5 Hz; at most 0.5 px rounding |
+
+Steady resizing retains widgets with zero full model refreshes; dispatch p95 is
+at most 0.046 ms. Flat frames at direction reversals are excluded. This measures
+compositor presentation, not physical pen latency or performance on slower GPUs.
+
+GTK now requests child allocation when internal geometry changes. The adjacent
+dock divider uses the same group-resize contract and auto-hide hit area as the
+inner grip, avoiding accidental expansion or dismissal. Periodic SQLite cleanup
+refreshes history without adopting/reloading the workspace. The native test now
+includes real storage, cleanup with both drawer modes, cancellation, undo/redo,
+group switching and saved sizes; it no longer excludes storage from this case.
+After integrating main, all 12 cases passed with a 115 Hz floor. Ordinary dock
+and Navigator resizing retained 118.6–119.1 Hz with zero full refreshes; explicit
+workspace transitions also passed their native mouse/touch/keyboard regression.

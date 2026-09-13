@@ -33,6 +33,79 @@ fn group_fixture() -> (UiSession<Recorder>, u32, u32, Panel) {
     );
     (s, column, group, Panel::Brushes)
 }
+
+#[test]
+fn attached_outside_divider_resizes_group_without_expanding_the_strip() {
+    for panel in [Panel::Brushes, Panel::Layers] {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let viewport = [1800., 1100.];
+        let group = s.state.workspace.layout.panel_group(panel).unwrap();
+        group_edit(&mut s, CustomizationAction::SetColumnCollapsed { group, collapsed: true });
+        let column = s.state.workspace.layout.collapsed_column_for_group(group).unwrap();
+        group_edit(&mut s, CustomizationAction::SetColumnMode { column, mode: ColumnMode::GroupPanel });
+        group_edit(&mut s, CustomizationAction::ToggleColumnDrawer { group, panel });
+        group_edit(&mut s, CustomizationAction::SetColumnAutoHide { column, auto_hide: true });
+        let resolved = s.layout(viewport);
+        let divider = resolved.dividers.iter()
+            .find(|d| resolved.column_panel_at_divider(d.id) == Some(column)).unwrap();
+        let id = divider.id;
+        let start = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + 100.];
+        s.input(UiInput::Chrome {
+            event: ChromeEvent::Contact { position: start, canvas: false },
+            facts: ChromeFacts::default(),
+            viewport,
+        }).unwrap();
+        assert_eq!(s.state.workspace.layout.open_column_group(column), Some(group),
+            "resize grip must not count as outside contact");
+        let before = s.state.workspace.clone();
+        let drag = |s: &mut UiSession<Recorder>, phase, x| {
+            s.dispatch(UiAction::DragDivider { id, phase, position: [x, start[1]], viewport }).unwrap();
+        };
+        drag(&mut s, ContactPhase::Down, start[0]);
+        let content = s.workspace_content_revision();
+        for offset in [-90., 100., -40., 45.] {
+            drag(&mut s, ContactPhase::Move, start[0] + offset);
+            assert_eq!(s.workspace_content_revision(), content);
+            assert!(s.state.workspace.layout.is_collapsed(column));
+            assert_eq!(s.state.workspace.layout.open_column_group(column), Some(group));
+            assert!(s.state.customization.column_drawers[0].is_group_panel());
+        }
+        drag(&mut s, ContactPhase::Cancel, start[0]);
+        assert_eq!(s.state.workspace, before);
+        drag(&mut s, ContactPhase::Down, start[0]);
+        drag(&mut s, ContactPhase::Up, start[0] + 55.);
+        let committed = s.state.workspace.clone();
+        assert_ne!(committed, before);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace, before);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(s.state.workspace, committed);
+    }
+}
+
+#[test]
+fn storage_history_refresh_keeps_open_columns_and_rejects_layout_changes() {
+    let (mut s, column, group, panel) = group_fixture();
+    group_edit(&mut s, CustomizationAction::ToggleColumnDrawer { group, panel });
+    let mut history = s.capture_workspace().unwrap().history;
+    // An abandoned revision may be removed, but current/undo/redo must survive.
+    let mut abandoned = history.revisions[&history.current].clone();
+    abandoned.id = "abandoned".into();
+    history.revisions.insert(abandoned.id.clone(), abandoned);
+    s.refresh_workspace_history(history.clone()).unwrap();
+    history.revisions.remove("abandoned");
+    let before = serde_json::to_value(s.state()).unwrap();
+    let revisions = (s.workspace_model_revision(), s.workspace_content_revision());
+    s.refresh_workspace_history(history.clone()).unwrap();
+    assert_eq!(serde_json::to_value(s.state()).unwrap(), before);
+    assert_eq!((s.workspace_model_revision(), s.workspace_content_revision()), revisions);
+    assert_eq!(s.state.workspace.layout.open_column_group(column), Some(group));
+    assert!(!s.capture_workspace().unwrap().history.revisions.contains_key("abandoned"));
+    history.revisions.get_mut(&history.current).unwrap().layout.bands[0].extent += 40.;
+    assert!(s.refresh_workspace_history(history).is_err());
+    assert_eq!(serde_json::to_value(s.state()).unwrap(), before);
+}
 #[test]
 fn group_panel_shifts_neighbors_stacks_all_tabs_and_restores_closed_geometry() {
     let (mut s, column, group, panel) = group_fixture();

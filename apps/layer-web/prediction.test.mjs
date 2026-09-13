@@ -23,8 +23,8 @@ export async function checkPrediction({call, evaluate, settle}) {
       await action({type:'restore_settings', settings:{...saved, feedback:true, platform_prediction:true, prediction_ms:23, tip_lock:.3}});
       await action({type:'open_settings', page:'input'});
       assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').disabled"), !available);
-      for (const id of ['prediction-horizon', 'tip-lock'])
-        assert.equal(await evaluate(`document.querySelector('#setting-${id}').disabled`), available);
+      assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
+      assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), available);
       assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 23);
       assert.ok(Math.abs(await evaluate("layerApp.state().settings.tip_lock") - .3) < .000001);
     }
@@ -46,9 +46,31 @@ export async function checkPrediction({call, evaluate, settle}) {
       assert.equal(predicted.length>0, enabled, 'toggle controls browser prediction ingress');
       assert.ok(predicted.every(r=>r[1]===2 && r[10]===0), 'only provisional pen moves');
       await action({type:'open_settings', page:'input'});
-      for (const id of ['prediction-horizon', 'tip-lock'])
-        assert.equal(await evaluate(`document.querySelector('#setting-${id}').disabled`), enabled);
+      assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), enabled);
     }
+    await evaluate(`(() => {
+      const slider=document.querySelector('#setting-prediction-horizon .number-slider');
+      slider.value=.5; slider.dispatchEvent(new Event('input', {bubbles:true}));
+    })()`);
+    await settle();
+    assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 32, 'slider position sets milliseconds');
+    assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '32 ms');
+    // Keep direct, precise entry alongside the single slider.
+    await evaluate("document.querySelector('#setting-prediction-horizon .number-value').click()");
+    await evaluate(`(() => {
+      const entry=document.querySelector('#setting-prediction-horizon .number-entry');
+      entry.value='12 ms'; entry.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+    })()`);
+    await settle();
+    assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 12);
+    for (const enabled of [true, false]) {
+      await action({type:'preferences', action:{type:'edit', id:'platform_prediction', value:enabled}});
+      assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), enabled);
+      assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 12, 'native mode preserves manual time');
+    }
+    await action({type:'preferences', action:{type:'reset', id:'prediction_horizon'}});
+    assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 16, 'reset uses the new default');
+    assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '16 ms');
   } finally {
     await evaluate(`(() => {
       layerApp.app.pen=predictionTest.pen;

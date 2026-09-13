@@ -143,6 +143,25 @@ which checks successful exit. Close the diagnostic PowerShell session afterward.
 In test scripts, remove flags with `Remove-Item Env:NAME`: passing `$null` to
 `.NET SetEnvironmentVariable` can leave an empty, still-enabled flag on newer runtimes.
 
+For a native crash, reproduce with a Debug build under Visual Studio's native
+debugger, WinDbg or CDB, attached to the owned review PID. Load the PDBs from that
+exact build and Microsoft's public symbols. With CDB on `PATH`, the same review
+session can be attached from PowerShell:
+
+```powershell
+cdb -p $review.Id -logo (Join-Path $run 'debugger.log')
+```
+
+At the debugger prompt, use `.symfix` with an absolute cache directory under
+`artifacts/windows`, then `.sympath+` with the executable directory (quote paths
+containing spaces). Run `sxe av` and `g` to stop on access violations. At the
+fault, record the exception code and `kv` stack before closing or restarting;
+when inspecting a crash dump, select its exception context with `.ecxr` first.
+See Microsoft's [exception controls](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/sx--sxd--sxe--sxi--sxn--sxr--sx---set-exceptions-)
+and [symbol setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-symbol-and-source-paths-in-cdb).
+Keep debugger logs and dumps local: they can contain document contents and paths.
+Debugger runs are for diagnosis; measure presentation without an attached debugger.
+
 For a browser reference, follow the [web prerequisites](web.md#prerequisites)
 and run `bash ./apps/layer-web/build.sh` (for example, using Git Bash). Install
 Node.js and the Python dependencies in [the visual tools](../../tools/visual/requirements.txt),

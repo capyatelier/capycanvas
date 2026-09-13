@@ -130,7 +130,14 @@ void CanvasWindow::Open() {
     window.Activated([weak=weak_from_this()](auto&&, WindowActivatedEventArgs const& e) {
         if(auto self=weak.lock()){
             if(e.WindowActivationState()==WindowActivationState::Deactivated){
-                if(self->workspace)self->workspace->CancelGesture();self->heldKeys.clear();
+                // A WinUI submenu can deactivate the main HWND while focus
+                // stays inside its owned popup tree. Check after activation
+                // settles before retiring the workspace contact or menu.
+                self->dispatcher.TryEnqueue([weak]{if(auto self=weak.lock();self&&!self->closed&&self->workspace){
+                    auto owner=self->Handle();
+                    if(IsIconic(owner)||GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)!=owner)self->workspace->CancelGesture();
+                }});
+                self->heldKeys.clear();
                 self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
             }else{self->Resize();self->RefreshWorkspaceSwitcher();}
         }
@@ -811,7 +818,7 @@ void CanvasWindow::UpdatePopup() {
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
     bool open=headerPopupOpen||workspacePopupOpen||blocked;
-    auto facts=workspace?workspace->ChromeFacts(open):CapyUi::O({{L"held",CapyUi::B(false)},{L"dragging",CapyUi::B(false)}});
+    auto facts=workspace?workspace->ChromeFacts(headerPopupOpen||blocked):CapyUi::O({{L"held",CapyUi::B(false)},{L"dragging",CapyUi::B(false)}});
     if(menuOpen.exchange(open)==open)return;
     using namespace CapyUi;
     A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));

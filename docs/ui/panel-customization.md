@@ -405,6 +405,8 @@ tile group is one light vertical tab with concave shoulders; the rest of the str
 uses darker tab-bar colors. The panel joins flush on the canvas-facing side, with
 square corners along both touching edges. Panel splits and width resize immediately
 with every device, with live reflow and native-resolution text.
+Selected-group icons have no individual hover/pressed fill; their click, keyboard,
+context-menu and held-reorder behavior remains available.
 
 Widths are remembered per column; height proportions per group and panel. The first
 width is the largest drawer width anywhere in that column. Dimensions survive closing,
@@ -412,6 +414,10 @@ reopening and workspace saves. Window constraints do not overwrite saved sizes.
 Auto-hide applies to both modes, consumes an outside canvas contact, and respects
 popups and nested tool drawers. Escape closes the presentation. Resize cancellation
 and workspace undo/redo restore sizing; open/close itself is not a saved layout edit.
+Both the inner width grip and its adjacent dock divider resize the open projection,
+without expanding the strip. Resize hit areas belong to the panel for auto-hide.
+Storage maintenance refreshes durable history without reloading the workspace or
+closing transient panels; explicit workspace switching still adopts a new layout.
 
 Shared implementation: `column_panels.rs`, `drawers.rs`, and `workspace_update.rs`.
 GTK consumes the layout/content revision distinction while resizing. Other hosts
