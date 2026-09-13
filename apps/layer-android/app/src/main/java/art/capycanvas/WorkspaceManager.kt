@@ -108,16 +108,16 @@ import org.json.JSONObject
     LaunchedEffect(choices.firstOrNull()?.optString("id"), view.optString("id")) {
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
-    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(RoundedCornerShape(9.dp)).background(lerp(colors.surround, Color.Black, .2f))
-        .horizontalScroll(scroll).padding(3.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(RoundedCornerShape(18.dp)).background(lerp(colors.surround, Color.Black, .2f))
+        .horizontalScroll(scroll).padding(4.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         choices.forEach { row ->
             val id = row.getString("id")
             val selected = view.optString("id") == id
-            Box(Modifier.widthIn(max = 128.dp).height(28.dp).clip(RoundedCornerShape(6.dp))
+            Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(RoundedCornerShape(15.dp))
                 .background(if (selected) colors.active else Color.Transparent)
                 .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form"), role = Role.RadioButton) {
                     host.workspaceInput(obj("type" to "switch", "id" to id))
-                }.padding(horizontal = 10.dp, vertical = 4.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
+                }.padding(horizontal = 10.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
                 Text(row.getString("title"), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }

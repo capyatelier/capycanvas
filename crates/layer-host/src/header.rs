@@ -44,7 +44,7 @@ mod tests {
         })
         .unwrap();
         let before = host.session.durable_workspace();
-        host.dispatch(HeaderAction::Edit { editing: true }.action())
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::CustomizeWorkspaceUi })
             .unwrap();
         let model = host.session.state().workspace.layout.header.clone();
         let id = model.zones[0][0].id;

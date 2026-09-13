@@ -64,6 +64,7 @@ class AndroidTitleBarTest {
             if (ready) return
             SystemClock.sleep(20)
         } while (SystemClock.uptimeMillis() < until)
+        shot("failure-${label.replace(Regex("[^A-Za-z0-9-]"), "-")}")
         fail("Timed out: $label; ${view()}")
     }
     private fun idle() {
@@ -195,6 +196,7 @@ class AndroidTitleBarTest {
         for (theme in listOf("light", "dark")) for (size in listOf("small", "medium", "large"))
             for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
                 tool = device
+                android.util.Log.i("TitleBarAcceptance", "Case $theme $size $device")
                 action(obj("type" to "set_theme", "theme" to theme)); restore(size)
                 val baseline = model().toString()
                 val durable = capture()
@@ -223,7 +225,7 @@ class AndroidTitleBarTest {
                 waitFor("detached original grab") { node("header-item-1")!!.second.boundsInRoot.top > 200 * density }
                 assertEquals(grab.x, point.x - bounds("header-item-1").left, 2f)
                 event(MotionEvent.ACTION_MOVE, center())
-                waitFor("reentry") { node("header-item-1")!!.second.boundsInRoot.top < 30 * density }
+                waitFor("reentry") { node("header-item-1")!!.second.boundsInRoot.top < node("title-bar")!!.second.boundsInRoot.bottom }
                 event(MotionEvent.ACTION_UP); idle()
                 assertTrue(model().array("zones").getJSONArray(1).objects().any { it.getInt("id") == 1 })
                 drag("header-item-1", outside())
@@ -297,8 +299,8 @@ class AndroidTitleBarTest {
         drag("header-component-tools", center())
         waitFor("picker") { node("tool-picker-search") != null }
         action(obj("type" to "customize", "action" to obj("type" to "picker_search", "query" to "Color")))
-        waitFor("Color choice") { node("tool-picker-choice-Color") != null }
-        tap("tool-picker-choice-Color"); tap("tool-picker-confirm")
+        waitFor("Color choice") { node("tool-picker-choice-Brush color") != null }
+        tap("tool-picker-choice-Brush color"); tap("tool-picker-confirm")
         val color = entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("kind") == "color" }.getInt("id")
         drag("header-component-workspaces", Offset(bounds("title-bar").right - 150 * density, center().y))
         tap("header-size-large")
@@ -319,4 +321,56 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Restart uses committed header", committed, model().toString())
         shot("restart")
     }
+    @Test fun keyboardContextHoldAndFocusLossKeepTheirOwnership() {
+        restore(); startEditor(); tool = MotionEvent.TOOL_TYPE_MOUSE
+        tap("header-item-1")
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(1, model().array("zones").getJSONArray(0).getJSONObject(1).getInt("id"))
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(1, model().array("zones").getJSONArray(1).getJSONObject(0).getInt("id"))
+        key(KeyEvent.KEYCODE_FORWARD_DEL)
+        assertFalse(entries().any { it.getInt("id") == 1 })
+        key(KeyEvent.KEYCODE_ESCAPE)
+        assertFalse(editing()); assertTrue(entries().any { it.getInt("id") == 1 })
+        startEditor()
+        val baseline = model().toString()
+        down("header-item-1")
+        SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
+        instrumentation.runOnMainSync { assertNull("Mouse hold never opens a context menu", node("workspace-menu")) }
+        event(MotionEvent.ACTION_UP)
+        assertEquals(baseline, model().toString())
+        button = MotionEvent.BUTTON_SECONDARY
+        down("header-item-1"); event(MotionEvent.ACTION_UP)
+        waitFor("secondary context menu focus") { node("workspace-menu")?.first?.view?.hasWindowFocus() == true }
+        shot("secondary-context")
+        key(KeyEvent.KEYCODE_BACK)
+        waitFor("context closed") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
+        button = MotionEvent.BUTTON_PRIMARY
+        for (device in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = device
+            down("header-item-1")
+            SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
+            waitFor("touch or pen hold context") { node("workspace-menu") != null }
+            event(MotionEvent.ACTION_MOVE, center())
+            waitFor("drag dismisses held context") { node("workspace-menu") == null }
+            event(MotionEvent.ACTION_CANCEL)
+            assertEquals(baseline, model().toString())
+        }
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        down("header-item-1"); event(MotionEvent.ACTION_MOVE, outside())
+        var dialog: android.app.Dialog? = null
+        scenario.onActivity { activity ->
+            dialog = android.app.Dialog(activity).apply {
+                setContentView(android.widget.TextView(activity).apply { text = "Capture-loss test" })
+                show()
+            }
+        }
+        waitFor("native dialog takes focus") { dialog?.window?.decorView?.hasWindowFocus() == true }
+        event(MotionEvent.ACTION_CANCEL)
+        instrumentation.runOnMainSync { dialog!!.dismiss() }
+        waitFor("activity focus restored") { node("title-bar")?.first?.view?.hasWindowFocus() == true }
+        assertEquals("Focus loss cancels the drag", baseline, model().toString())
+        tap("header-edit-cancel")
+    }
+
 }

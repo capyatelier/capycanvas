@@ -104,7 +104,10 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         LaunchedEffect(resolved?.toString(), height, bankHeight, editing) {
             resolved?.let { host.dispatch(obj("type" to "measure_header", "height" to (height + if (editing) bankHeight + 12f else 0f), "items" to it.array("items"))) }
         }
-        val geometry = input.preview?.objectOrNull("geometry") ?: resolved
+        // Keep existing item nodes at their prior positions while the native
+        // owner resolves new metrics. Compaction changes a child's presentation,
+        // never the identity or capture lifetime of its enclosing editable item.
+        val geometry = input.preview?.objectOrNull("geometry") ?: resolved ?: input.geometry
         val heldId = input.held?.source?.takeIf { it.optString("kind") == "item" }?.getInt("value")
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
@@ -130,7 +133,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         }
         geometry?.array("overflow")?.values()?.forEachIndexed { zone, value ->
             val bounds = value as? JSONObject ?: return@forEachIndexed
-            val hidden = geometry.array("hidden").getJSONArray(zone).values().map { (it as Number).toInt() }
+            val hidden = geometry.array("hidden").getJSONArray(zone).values().map { (it as Number).toInt() }.filter { specs.containsKey(it) }
             if (hidden.isEmpty()) return@forEachIndexed
             val single = hidden.singleOrNull()
             Box(Modifier.placed(bounds, density).testTag("header-overflow-$zone")
@@ -213,7 +216,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val open = snapshot.getJSONObject("state").getJSONObject("customization").objectOrNull("drawer")?.getJSONObject("anchor")?.let {
         it.optString("kind") == "header" && it.optInt("id") == id
     } == true
-    Row(modifier.testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1)
+    Row(modifier.alpha(if (!editing && !spec.optBoolean("enabled")) .4f else 1f).testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1)
         .then(if (editing) Modifier.border(1.dp, if (input.selected == id) colors.accent else colors.divider, RoundedCornerShape(6.dp))
             .onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
@@ -231,6 +234,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                         Box {
                             HeaderButton(application.getString("label"), false, !editing, false,
                                 Modifier.fillMaxHeight().testTag("application-menu-${application.getString("id")}"),
+                                fillWidth = false,
                                 onClick = { menu = application.getJSONObject("model") }) {
                                 Text(application.getString("label"), Modifier.padding(horizontal = 6.dp), fontWeight = FontWeight.Bold, maxLines = 1)
                             }
@@ -262,19 +266,21 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
-    modifier: Modifier, onClick: () -> Unit, content: @Composable () -> Unit) {
+    modifier: Modifier, fillWidth: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val shape = drawerButtonShape(if (open) "bottom" else null)
-    Box(modifier.clip(shape).background(when {
+    HoverTip(label, modifier) {
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape).background(when {
         selected -> colors.active
         enabled && pressed -> colors.text.copy(alpha = .16f)
         open || (enabled && hovered) -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
     }).hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(), enabled = enabled,
         role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) { content() }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

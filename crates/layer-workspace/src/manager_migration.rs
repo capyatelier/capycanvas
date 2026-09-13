@@ -18,6 +18,10 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
     };
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
     let previous = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
+    let mut previous_native_settings = previous.clone();
+    previous_native_settings.header.add(
+        layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
+    ).ok()?;
     let portable = layer_ui::WorkspacePreset::legacy_painter_layout(Platform::Web);
     let mut previous_header = layout.clone();
     previous_header.header.add(
@@ -36,7 +40,8 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         || history.revisions.len() != 1
         || history.layout() != baseline.as_ref()
         || (baseline.as_ref() != &previous && baseline.as_ref() != &portable
-            && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings)
+            && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings
+            && baseline.as_ref() != &previous_native_settings)
 
     {
         return None;
@@ -81,6 +86,13 @@ fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
             &layer_ui::WorkspacePreset::Painter.layout(platform)
         );
         assert!(updated_painter_default(&updated, platform).is_none());
+        let mut settings_default = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
+        settings_default.header.add(layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings]).unwrap();
+        let mut settings_entity = entity.clone();
+        settings_entity.content = ItemContent::Workspace {
+            history: layer_ui::LayoutHistory::new(&settings_default), baseline: Box::new(settings_default), origin: None,
+        };
+        assert!(updated_painter_default(&settings_entity, platform).is_some());
         let mut copy = entity.clone();
         copy.id = "user-copy".into();
         assert!(updated_painter_default(&copy, platform).is_none());
