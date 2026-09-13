@@ -35,10 +35,10 @@ struct EditorPopupPresentation: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if !source["panel"].isNull && !source["text"].isNull {
             let palette = EditorPalette(source: source)
-            content.foregroundStyle(palette["text"]).presentationBackground(palette["panel"])
+            content.modifier(EditorPopoverHost()).foregroundStyle(palette["text"]).presentationBackground(palette["panel"])
                 .modifier(EditorPresentationAppearance())
         } else {
-            content.foregroundStyle(.primary).presentationBackground(.background)
+            content.modifier(EditorPopoverHost()).foregroundStyle(.primary).presentationBackground(.background)
         }
     }
 }

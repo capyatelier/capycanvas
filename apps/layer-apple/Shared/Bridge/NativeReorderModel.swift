@@ -7,7 +7,6 @@ import CoreGraphics
     var contact: ReorderContact { get }
     var viewport: CGRect { get set }
     var enabled: Bool { get }
-    var usesNativeRowMenus: Bool { get }
     func nativeMenu(at point: CGPoint) -> NativeReorderMenu?
     func nativeDragChanged(_ active: Bool)
     func source(at point: CGPoint) -> ReorderTarget?
@@ -19,7 +18,6 @@ import CoreGraphics
 }
 
 extension NativeReorderModel {
-    var usesNativeRowMenus: Bool { false }
     func nativeMenu(at point: CGPoint) -> NativeReorderMenu? { nil }
     func nativeDragChanged(_ active: Bool) {}
     func recognizeHold() { contact.recognizeHold() }

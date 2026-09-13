@@ -134,8 +134,9 @@ struct WorkspaceManagerView: View {
             ForEach(row["actions"].array.filter { manager.toolbarMode && $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
             let secondary = row["actions"].array.filter { !$0["primary"].bool }
             if !secondary.isEmpty {
-                Menu { ForEach(secondary, id: \.managerActionID) { button in action(button) } }
-                    label: { SharedIcon(name: "more").frame(width: 20) }
+                EditorMenuButton(menu: {
+                    AppleContextMenu(JSON(["sections": [secondary.map(\.raw)]])) { manager.activate($0) }
+                }) { SharedIcon(name: "more").frame(width: 20) }
                     .accessibilityLabel("Actions for " + row["title"].string)
             }
         }.fixedSize(horizontal: true, vertical: false)

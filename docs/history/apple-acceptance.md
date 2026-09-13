@@ -13,6 +13,12 @@ semantics, application behavior, brush dynamics, UI state/actions/layout and
 GPU rendering in the shared Rust crates used by the other ports. Maintain one
 implementation of each shared behavior and visual component; platform adapters
 handle input, windowing, lifecycle and system services.
+Keep the codebase simple: prefer established SwiftUI, UIKit and AppKit patterns
+and one shared menu/popup helper across editor surfaces. Do not compensate for
+an unsuitable component with gesture overrides, contact handoff machinery or
+presentation hacks. Productivity ergonomics are required: fast menus, readable
+opaque theme colors, minimal animation and no distracting glass shine. Retain
+native control, keyboard and accessibility conventions.
 
 Achieve visual and behavioral parity with every feature exposed by the shared
 and existing-host UI: all menus, actions, commands, tools, brushes, layers,
@@ -85,38 +91,102 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
-The user requests native Apple context menus where they preserve the confirmed
-held-contact transition into dragging. Long-press context menus, including layer
-and saved workspace rows, must remain vertical; horizontal edit bars are not
-acceptable. Each menu/preview belongs to its actual row. Arrowed popovers remain
-suitable for pickers and small forms. Apple's
-[context-menu guidance](https://developer.apple.com/design/human-interface-guidelines/context-menus/)
-and [popover guidance](https://developer.apple.com/design/human-interface-guidelines/popovers/)
-describe these presentations. Physical finger and Pencil both moved a row after
-its native menu appeared in the isolated fixture. Automated touch synthesis
-failed the same handoff; this does not establish a physical UIKit limitation.
-The user subsequently confirmed the production workspace adapter with both
-finger and Pencil, including hold/lift menu retention and immediate grips.
+Editor menus remain vertical, anchored to their source, and permit a held
+finger/Pencil contact to transition directly into dragging. Horizontal edit
+bars are not acceptable. The 2026-09-13 productivity review supersedes the
+blanket Liquid Glass request and the earlier native row-menu experiment.
+Native styling does not take precedence over readability, fast interaction or
+maintainability. Settings and the macOS system menu bar retain platform patterns.
 
-The subsequent readability review supersedes the blanket Liquid Glass request:
-text must remain readable over drawing content. App-owned popups, sheets and the
-workspace pill use opaque colors from the original shared palette while keeping
-approximately the same geometry. UIKit native menus use increased contrast in
-the editor window; AppKit native menus retain OS appearance/accessibility
-behavior. Neither host changes global accessibility preferences. Settings use
-an opaque native semantic background. Native styling does not take precedence
-over readability, and the earlier glass captures do not prove accessibility.
+## Shared flat editor menus — 2026-09-13
 
-The iPad comparison found that the public
-[accessibility contrast trait](https://developer.apple.com/documentation/uikit/uimutabletraits-13ja5/accessibilitycontrast)
-reduces native-menu translucency when set on the window. Setting it only on the
-source row did not affect the menu. App-owned presentations use SwiftUI's
-[presentation background](https://developer.apple.com/documentation/swiftui/view/presentationbackground(_:))
-with an opaque color; a content-only background would miss presentation margins.
-Do not force AppKit's high-contrast appearance names: Apple's
-[appearance documentation](https://developer.apple.com/documentation/appkit/nsappearance/name-swift.struct/accessibilityhighcontrastdarkaqua)
-reserves their selection for the system accessibility setting. These focused
-comparisons do not constitute a complete accessibility or physical-device pass.
+The shared flat menus, attached column panels and icon integration form one
+editor milestone. The main-menu trigger and dark text are fixed; the connected
+iPad and an isolated Mac editor pass the focused workflows below. The overall
+Apple goal remains incomplete; resume from the [handoff](../development/apple-handoff.md).
+
+The user confirmed a real upward-drag failure in the native iPad row menu;
+the local probe recorded UIKit reoffering/cancelling the original contact during
+menu presentation. Moving the native menu alone would not remove its lift
+animation or input ownership change. Retired the native context-menu/drag-session
+adapter and its attempted supplementary pan handoff.
+
+`EditorActionMenu` now renders the shared menu model with native SwiftUI buttons,
+vertical sections, checkmarks, disabled states, submenu navigation and keyboard
+support. `EditorMenuButton` and `editorPopover` serve main menus, layers,
+workspace rows/context menus and editor choices. A standard anchor preference
+and root overlay keep popups outside clipped panels while retaining the source
+contact. There is no extra window, presentation controller, drag-session bridge,
+preview lift or blur. The existing UIKit hold/pan recognizers and shared
+`ReorderContact` handle pickup, scrolling, cancellation and one completed drop.
+Menus open inward where space permits and use opaque shared palette colors,
+a thin border and a small shadow. Removed the editor-window contrast override.
+macOS retains its OS application menus and native secondary-click menu adapter.
+
+The main-menu buttons now give their entire padded labels an explicit hit shape.
+Tracing showed UIKit delivering the center tap while SwiftUI never activated the
+button; its state was not disappearing and no popup dismissal occurred. Removing
+`ViewThatFits` did not help, so the responsive layout is retained. The shared
+popup also inherits the editor root's environment instead of copying the source
+control's whole environment, which had overridden dark-menu text colors.
+The embedded UIKit context source transfers only appearance and enabled state;
+copying its entire environment had hidden the Zen button from the connected
+iPad's accessibility tree.
+
+Menus reuse the existing native keyboard capture component for shared arrow,
+submenu, activation and shortcut handling. UIKit returns focus to the preceding
+responder on dismissal. A Mac fixture delivers actual app-local keys for submenu
+entry/back, disabled-row skipping, Return, Escape and a shifted shortcut.
+The iPad simulator and connected-device workflow pass arrow navigation, a menu
+Undo shortcut and subsequent editor Redo after dismissal. XCTest's Escape and
+Return checks remain open: a UIKit simulator probe received a printable key but
+no Escape press or key-command callback despite owning first responder; the
+connected-device Escape check also failed, and simulator Return did not execute
+the action. No hardware-keyboard Escape/Return pass is inferred from Mac.
+
+Five focused workflows pass on the connected iPad: light/dark main menus and
+Undo; layer/mask/footer anchors and actions; upward layer dragging with exact
+Undo/Redo; submenus, shortcuts and restored keyboard routing; workspace menu
+actions and held dragging in both directions. The Zen test initially failed
+because its button was absent from accessibility. After the explicit-environment
+fix, its separate device run passes ordinary taps, hold/tap suppression, vertical
+menu presentation and the resulting Total Zen action. No test was skipped.
+Light/dark physical main-menu captures were inspected for opaque readable colors.
+The isolated Mac editor passes both blend choices and Undo/Redo. Its native
+keyboard fixture and the final UIKit touch/pen/mouse callback suite pass.
+These checks do not claim a new physical Pencil pass or drawing-performance pass.
+
+Final review also updates the existing workflow tests to the shared menu's
+identifiers and selected traits. Both physical hosts pass workspace pinning,
+reordering and persistence; toolbar styles and Zen; and toolbar creation,
+renaming, duplication and deletion. Mac's Select All menu action now forwards
+to the focused AppKit text editor before canvas dispatch, fixing Command-A
+replacement in the picker. Toolbar grip labels include the toolbar name because
+Mac does not expose a generic grip's accessibility value. The shared test uses
+native Select All before typing instead of caret-dependent backspace counts.
+The final customization checks pass separately on each host after these fixes.
+
+Both signed Debug hosts build. The current shared regression run passes 41 Apple
+bridge, 25 host and 306 UI checks; one existing hardware-only host check is ignored.
+The complete visual, feature, input/lifecycle and sustained-performance acceptance
+remains open. Local result bundles, traces, device/signing details and captures
+stay under ignored artifacts. Source and documentation are published together.
+
+## Attached column panels — 2026-09-13
+
+Both Apple presets expose the shared Group panel mode and render attached
+stacked bodies, connected column backgrounds and the published chevron icons.
+The shared engine owns nested geometry, width and panel weights, resize
+transactions and auto-hide. Apple projects the real divider rectangles and
+keeps the width grip above split grips where they intersect. Motion projection
+now includes `column_settings`, so live widths/weights agree with their geometry.
+
+Four native fixture cases pass across both presets and both column sides,
+covering geometry, immediate pen-classified resize, live publication, cancellation,
+Undo/Redo, close/reopen, auto-hide and ordinary drawer mode. The iPad simulator
+width/split resize workflow passes (one test, no skips); 306 shared UI tests,
+snapshot projection, drawer and workspace-motion regressions pass. Both signed
+Debug targets build. Physical performance acceptance remains separate.
 
 ## Shared icon integration — 2026-09-13
 
@@ -125,6 +195,9 @@ and filter mappings. Both Apple hosts retain brush stroke previews while showing
 each preset's medium icon; filter categories and choices now expose their shared
 icons. New Layer and custom close/check/more/plus controls use the canonical
 assets. Filename normalization preserves internal words such as `add-layer`.
+Tool-setting action buttons now include their command icons and match the
+browser's text wrapping beside a leading glyph. All 96 AppKit button bounds
+match Chrome exactly across both themes, two widths and enabled/selected states.
 
 Both signed Debug targets build. Six SVG conversion tests, 306 shared UI tests
 and 41 Apple bridge tests pass. Compiled AppKit/SwiftUI and isolated Chrome grids
@@ -132,12 +205,12 @@ cover all 157 icons in 18 combinations of size, theme, tint and disabled opacity
 All 216 flat paint samples pass with at most 1/255 channel error. Full unmasked
 pixel differences remain visible; the [icon audit](../ui/icon-audit.md#apple-integration--2026-09-13)
 records their bounds and distinguishes AppKit components from UIKit and whole
-editor acceptance. The isolated physical iPad editor includes the new icons.
-
-The user's physical layer check confirms downward held-menu dragging, scrolling
-and dropping, but upward movement can remain in the overlapping native menu.
-Upward pickup is an open interaction defect. A separate candidate and local
-gesture probe are under validation; icon integration does not mark it fixed.
+editor acceptance. A separate UIKit simulator capture now covers the same
+157 icons and 18 cases using the production view and compiled assets. Its
+216 flat paint samples match exactly; full-image comparisons retain residual
+rasterization differences. Both signed targets build with the action-button
+changes. The isolated physical iPad editor includes the new icon bank; its
+completed upward gesture session prompted the flat-menu replacement above.
 
 ## Presentation-capacity retry — 2026-09-13
 

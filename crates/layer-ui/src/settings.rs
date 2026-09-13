@@ -24,6 +24,9 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
+    pub fn column_group_panels(self) -> bool {
+        matches!(self, Self::Generic | Self::Gtk | Self::Mac | Self::Ios)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

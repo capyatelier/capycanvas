@@ -67,14 +67,15 @@ struct WorkspacePanels: View {
     }
 }
 
-private struct WorkspaceResizeHandle: View {
+struct WorkspaceResizeHandle: View {
     @ObservedObject var store: EditorStore
     let action: JSON
+    var label = "Resize panel"
     @State private var hovering = false
     var body: some View {
         Color.clear.contentShape(Rectangle())
             .background(hovering ? EditorPalette.sharedAccent.opacity(0.3) : Color.clear)
-            .onHover { hovering = $0 }.accessibilityElement().accessibilityLabel("Resize panel")
+            .onHover { hovering = $0 }.accessibilityElement().accessibilityLabel(label)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: action))
     }
 }
@@ -139,7 +140,7 @@ struct WorkspaceToolbar: View {
             if !geometry["grip"].isNull {
                 SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .accessibilityElement().accessibilityLabel("Toolbar options")
+                .accessibilityElement().accessibilityLabel("Toolbar options for " + panel["title"].string)
                 .accessibilityIdentifier("toolbar-options-" + panel["id"].string)
                 .accessibilityValue(panel["title"].string)
                 .accessibilityHidden(false)

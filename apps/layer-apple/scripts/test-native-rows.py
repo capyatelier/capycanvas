@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check UIKit row-menu delegates without synthesizing gestures or building Rust."""
+"""Check UIKit row scrolling and shared contacts without building Rust."""
 import argparse
 import json
 import os
@@ -44,7 +44,7 @@ def main():
                "Shared/Bridge/NativeReorderModel.swift", "Shared/Bridge/AppleContextMenu.swift",
                "Shared/Bridge/AppleContextMenuRequest.swift",
                "Shared/Editor/WorkspaceRowInteraction.swift", "iOS/Platform/NativeContextMenu.swift",
-               "iOS/Platform/NativeReorderInput.swift", "iOS/Platform/NativeRowMenus.swift",
+               "iOS/Platform/NativeReorderInput.swift",
                "tests/native-row-menus.swift"]
     run("compile", ["xcrun", "--sdk", "iphonesimulator", "swiftc", "-parse-as-library",
                     "-sdk", sdk, "-target", "arm64-apple-ios18.0-simulator",
@@ -66,7 +66,7 @@ def main():
         # Require the marker emitted only after every callback check completes.
         if "PASS: native row sessions" not in result or "Precondition failed" in result:
             raise RuntimeError(f"Callback checks failed; inspect {output / 'run.log'}")
-        print("PASS: UIKit row-menu callbacks, contact ownership, cancellation and one commit per drop")
+        print("PASS: UIKit row contacts, two-way scrolling, cancellation and one commit per drop")
     finally:
         if installed:
             run("terminate", ["xcrun", "simctl", "terminate", destination, bundle], check=False)

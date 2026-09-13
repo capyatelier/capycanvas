@@ -18,10 +18,10 @@ Popup text uses opaque shared-theme surfaces, including the workspace pill.
 margins and arrows. Settings retain an opaque native semantic background.
 Keep existing sizes and attach contextual presentations to the invoking control
 or row. Layer menus use the pressed row; the footer uses its own button.
-Native iPad menus use increased contrast within each editor window because a
-source-view-only override does not affect UIKit's separately presented menu.
-This does not change system accessibility settings. Mac system menus retain
-AppKit appearance and accessibility behavior. Long-press menus remain vertical.
+Editor menus share an opaque vertical action list and an anchor overlay at the
+editor or sheet root. The overlay inherits the root's current palette; copying
+the invoking control's whole environment can override menu text colors.
+Mac system menus retain AppKit appearance and accessibility behavior.
 
 [Performance workflows and measurements](PERFORMANCE.md) include five opt-in
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
@@ -291,6 +291,7 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/works
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-appearance.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/native-context-menu.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/native-context-source.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-menu-keyboard.swift
 ```
 
 The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
@@ -334,12 +335,31 @@ that removing a source retires its pending query; keep that fixture in the
 foreground. `testNativeZenContextAction` checks the UIKit source and resulting
 Zen layout. `testNativeWorkspaceContextAction` checks the UIKit row menu and its
 persisted move action. None of these checks uses Mac system-menu coordinates.
-For quick UIKit delegate/lifecycle checks with one booted iPad Simulator, run
+For quick UIKit contact/scroll checks with one booted iPad Simulator, run
 `python3 apps/layer-apple/scripts/test-native-rows.py` (use `--simulator` to choose
 among several). It builds a disposable callback fixture, requires its completion
 marker even if `simctl` exits successfully, and removes its own app afterward.
-The callback fixture includes real scroll-view edge movement and deferred
-teardown; it does not synthesize or prove physical menu-to-drag gestures.
+The fixture covers real scroll-view edge movement in both directions and shared
+contact policies; it does not synthesize physical finger/Pencil gestures.
+`EditorLaunchTests/testLayerMenuDragUpward` and `EditorMenuChecks` exercise the
+UIKit editor on simulator or device destinations with disposable persistence.
+The connected iPad passes upward layer dragging with exact Undo/Redo, layer
+menu anchors/actions, main menus in both themes, submenus/shortcuts and workspace
+menu actions followed by held dragging in both directions. Mac's focused
+`testBlendChoices` verifies both blend controls and Undo/Redo in an isolated app.
+Both hosts also pass `testWorkspaceSwitcher`, `testToolbarStylesAndActions` and
+`testToolbarCustomization`. Toolbar grips include their names in accessibility
+labels; Mac's Select All command respects the focused native text editor.
+The direct menu keyboard check uses native events in its own Mac window for
+arrows, Return, Escape, disabled rows and shifted shortcuts. Menus reuse
+`ShortcutKeyCapture`; UIKit restores the preceding responder when a menu closes.
+The iPad workflow verifies arrows and command shortcuts. XCTest Escape produced
+no UIKit press or key-command callback in a traced first-responder probe; Return
+also did not execute the menu action. Those device key checks remain open and
+are not inferred from Mac results. Use `EditorActionMenu` and
+`editorPopover` for editor menus; install `EditorPopoverHost` at an editor/sheet
+root outside clipped panels. Keep input on the existing native hold/pan path;
+do not add UIKit menu/drag-session handoffs or per-menu presenters.
 
 Tool Settings renders checkable and ordinary actions with the same shared
 button component on both Apple targets. Labels use the shared bold text size,

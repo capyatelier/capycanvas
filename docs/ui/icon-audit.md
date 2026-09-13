@@ -280,6 +280,10 @@ presets retain their stroke preview and also show the model's medium icon;
 filter rows, category headings and the category picker use the shared filter
 icons. New Layer uses `add-layer`, and custom close/check/more/plus controls
 use the shared bank. Native system menus retain their platform indicators.
+Tool-setting actions also show the shared command glyph, including Link for
+Keep Proportions and Close for Cancel Transform. Their leading icon, six-point
+gap and wrapping follow the browser; all 96 AppKit button bounds match Chrome
+across both themes, two panel widths and four enabled/selected combinations.
 Asset lookup strips only the filename prefix and suffix, preserving internal
 words in names such as `layer-add-layer-symbolic`.
 
@@ -293,9 +297,17 @@ error is 0.145/255, maximum 107/255, and differing-pixel fractions range from
 0.97% to 12.81%. Exact raster parity is not claimed. These are AppKit component
 captures, not physical UIKit pixel evidence or whole-editor visual acceptance.
 
+The same manifest also runs through UIKit in a disposable iPad simulator app,
+using the real compiled vectors and production `SharedIcon` view. All 216 flat
+paint samples match exactly. The full 18 comparisons retain 27,869,184 pixels:
+mean channel error 0.133/255, maximum 107/255, and exact differing fractions
+0.92–2.41%. Exact pixel parity remains open. This adds UIKit component evidence;
+it does not establish full-editor geometry, physical-device pixels or input.
+
 Use the [Apple icon capture commands](../../tools/visual/README.md#shared-icon-paints)
 for regeneration and comparison. Local evidence remains in ignored
-`artifacts/apple-icons-current-v1`. The isolated physical iPad editor also has
+`artifacts/apple-icons-current-v1`, `artifacts/apple-icons-uikit-v2` and
+`artifacts/apple-tool-actions-icons-v1`. The isolated physical iPad editor also has
 the updated icon bank; its ongoing row-input check is separate from icon parity.
 
 ## Reproduction

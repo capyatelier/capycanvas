@@ -5,13 +5,26 @@ struct ShortcutKeyCapture: UIViewRepresentable {
     let captured: (String, Bool, Bool, Bool) -> Void
     func makeUIView(context: Context) -> CaptureView { CaptureView() }
     func updateUIView(_ view: CaptureView, context: Context) { view.captured = captured }
-    static func dismantleUIView(_ view: CaptureView, coordinator: ()) { view.resignFirstResponder(); view.captured = nil }
+    static func dismantleUIView(_ view: CaptureView, coordinator: ()) { view.restoreFocus(); view.captured = nil }
     final class CaptureView: UIView {
         var captured: ((String, Bool, Bool, Bool) -> Void)?
+        private weak var previousResponder: UIView?
         override var canBecomeFirstResponder: Bool { true }
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            if window != nil { becomeFirstResponder() }
+            if let window {
+                previousResponder = Self.firstResponder(in: window)
+                becomeFirstResponder()
+            }
+        }
+        func restoreFocus() {
+            guard isFirstResponder else { return }
+            if let previousResponder, previousResponder.window === window { previousResponder.becomeFirstResponder() }
+            if isFirstResponder { resignFirstResponder() }
+        }
+        private static func firstResponder(in view: UIView) -> UIView? {
+            if view.isFirstResponder { return view }
+            return view.subviews.lazy.compactMap { firstResponder(in: $0) }.first
         }
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {

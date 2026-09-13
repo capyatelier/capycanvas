@@ -32,6 +32,7 @@ private struct WorkspaceCollapsedColumn: View {
     @ObservedObject var store: EditorStore
     let column: JSON
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var attachedPanel: JSON { column["group_panel"] }
     private var offset: CGFloat {
         store.state["workspace"]["layout"]["column_scroll"].array.first { $0[0].uint == column["id"].uint }?[1].number ?? 0
     }
@@ -41,8 +42,9 @@ private struct WorkspaceCollapsedColumn: View {
             Button {
                 store.customize(["type": "set_column_collapsed", "group": column["id"].raw, "collapsed": false])
             } label: {
-                Text(base.rect.midX < store.snapshot["layout"]["work_area"].rect.midX ? "»" : "«")
-                    .fontWeight(.bold).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                SharedIcon(name: base.rect.midX < store.snapshot["layout"]["work_area"].rect.midX
+                    ? "chevron-double-right" : "chevron-double-left")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle()).accessibilityLabel("Expand column").help("Expand column")
                 .placed(column["expand"].relative(to: base)).accessibilityIdentifier("expand-column-\(column["id"].uint)")
             ScrollView(.vertical) {
@@ -50,13 +52,18 @@ private struct WorkspaceCollapsedColumn: View {
                 ZStack(alignment: .topLeading) {
                     ForEach(column["groups"].array.indices, id: \.self) { index in
                         let group = column["groups"][index]
+                        if !attachedPanel.isNull && attachedPanel["group"].uint == group["group"].uint {
+                            DrawerBodyShape(corners: stripCorners, radius: 6).fill(palette["panel"])
+                                .placed(JSON(group["bounds"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
                         Rectangle().fill(palette["text"].opacity(0.3))
                             .placed(JSON(group["divider"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
                             .allowsHitTesting(false).accessibilityHidden(true)
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
                             let panel = store.panel(icon["panel"].string)
-                            let selected = store.state["customization"]["column_drawers"].array.contains {
+                            let selected = attachedPanel.isNull && store.state["customization"]["column_drawers"].array.contains {
                                 $0["anchor"]["column"].uint == column["id"].uint && $0["anchor"]["origin"].string == panel["id"].string
                             }
                             IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected) {
@@ -80,9 +87,16 @@ private struct WorkspaceCollapsedColumn: View {
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "column", "column": column["id"].raw])))
                 .placed(column["grip"].relative(to: base)).accessibilityIdentifier("column-grip-\(column["id"].uint)")
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(palette["panel"]).clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(palette[attachedPanel.isNull ? "panel" : "tabbar"]).clipShape(DrawerBodyShape(corners: stripCorners))
             .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
             .accessibilityElement(children: .contain).accessibilityIdentifier("collapsed-column-\(column["id"].uint)")
+    }
+    private var stripCorners: JSON {
+        switch attachedPanel["direction"].string {
+        case "right": JSON([false, true, true, false])
+        case "left": JSON([true, false, false, true])
+        default: JSON()
+        }
     }
 }
 
@@ -130,8 +144,11 @@ private struct WorkspaceContentDrawer: View {
                             }
                         }.placed(bounds)
                     }
+                    if drawer.isGroupPanel && !store.snapshot["partial_zen"].bool {
+                        WorkspaceColumnPanelHandles(store: store, column: drawer.model["anchor"]["column"], bounds: placement["bounds"])
+                    }
                 }.frame(width: placement["bounds"].rect.width, height: placement["bounds"].rect.height, alignment: .topLeading)
-                    .background(palette["panel"]).clipShape(DrawerBodyShape(corners: connection["square_corners"]))
+                    .background(palette["panel"]).clipShape(DrawerBodyShape(corners: corners(placement, connection)))
                     .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
                     .modifier(NavigatorReveal())
                     .background(GeometryReader { body in
@@ -150,6 +167,39 @@ private struct WorkspaceContentDrawer: View {
                 .allowsHitTesting(drawer.interactive)
                 .onPreferenceChange(DrawerHeights.self) { heights in for (column, height) in heights { drawer.measure(height, column: column) } }
         }
+    }
+    private func corners(_ placement: JSON, _ connection: JSON) -> JSON {
+        guard drawer.isGroupPanel && !store.snapshot["partial_zen"].bool else { return connection["square_corners"] }
+        return placement["direction"].string == "right" ? JSON([true, false, false, true]) : JSON([false, true, true, false])
+    }
+}
+
+private struct WorkspaceColumnPanelHandles: View {
+    @ObservedObject var store: EditorStore
+    let column: JSON
+    let bounds: JSON
+    @Environment(\.workspaceLayer) private var layer
+    private var panel: JSON {
+        store.snapshot["layout"]["collapsed"].array.first { $0["id"].uint == column.uint }?["group_panel"] ?? JSON()
+    }
+    var body: some View {
+        if !panel.isNull {
+            ForEach(panel["dividers"].array.indices, id: \.self) { index in
+                handle(after: panel["panels"][index]["panel"], label: "Resize panels")
+                    .background(EditorPalette(source: store.state["palette"])["tabbar"])
+                    .placed(panel["dividers"][index].relative(to: bounds))
+                    .environment(\.workspaceLayer, layer + 1).zIndex(1)
+            }
+            // The outer width grip is painted above each split's endpoint.
+            // Give the retained input source the same ordering at intersections.
+            handle(after: JSON(), label: "Resize group panel").placed(panel["resize"].relative(to: bounds))
+                .environment(\.workspaceLayer, layer + 2).zIndex(2)
+        }
+    }
+    private func handle(after: JSON, label: String) -> some View {
+        WorkspaceResizeHandle(store: store,
+            action: JSON(["type": "resize_column_panel", "column": column.raw, "after": after.raw]), label: label)
+            .accessibilityIdentifier("column-panel-resize-\(column.uint)-\(after.isNull ? "width" : after.string)")
     }
 }
 private struct DrawerPanelBody: View {
@@ -183,9 +233,10 @@ private struct DrawerHeights: PreferenceKey {
 }
 private struct DrawerBodyShape: Shape {
     let corners: JSON
+    var radius: CGFloat = 8
     func path(in rect: CGRect) -> Path {
-        UnevenRoundedRectangle(topLeadingRadius: corners[0].bool ? 0 : 8, bottomLeadingRadius: corners[3].bool ? 0 : 8,
-            bottomTrailingRadius: corners[2].bool ? 0 : 8, topTrailingRadius: corners[1].bool ? 0 : 8).path(in: rect)
+        UnevenRoundedRectangle(topLeadingRadius: corners[0].bool ? 0 : radius, bottomLeadingRadius: corners[3].bool ? 0 : radius,
+            bottomTrailingRadius: corners[2].bool ? 0 : radius, topTrailingRadius: corners[1].bool ? 0 : radius).path(in: rect)
     }
 }
 private struct DrawerBridge: Shape {
