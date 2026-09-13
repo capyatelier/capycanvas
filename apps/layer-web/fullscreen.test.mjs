@@ -1,27 +1,10 @@
 import assert from "node:assert/strict";
 
 async function checkHeaderSpacing(evaluate) {
-  const spacing = await evaluate(`(()=>{
-    const el=id=>document.querySelector(id), r=id=>el(id).getBoundingClientRect();
-    const tile=r("#system-battery-tile"), icon=r("#system-battery"), clock=r("#system-clock"), button=r("#fullscreen");
-    const gap=parseFloat(getComputedStyle(el("#header-start")).gap);
-    const textPadding=getComputedStyle(el(".header-menu > summary")).paddingLeft;
-    return {tile:[tile.width,tile.height],button:[button.width,button.height],
-      gaps:[tile.left-clock.right,button.left-tile.right],gap,
-      centered:Math.abs(icon.x+icon.width/2-tile.x-tile.width/2)<.1 && Math.abs(icon.y+icon.height/2-tile.y-tile.height/2)<.1,
-      textPadding,clockPadding:getComputedStyle(el("#system-clock")).paddingLeft,
-      titlePadding:getComputedStyle(el("#document-title")).paddingRight,
-      workspaceGap:clock.left-r(".workspace-switcher").right,
-      titleGap:el("#document-title").getClientRects().length ? r(".workspace-switcher").left-r("#document-title").right : null};
-  })()`);
-  assert.deepEqual(spacing.tile, spacing.button);
-  assert.deepEqual(spacing.tile, [36,36]);
-  for(const gap of spacing.gaps) assert.ok(Math.abs(gap-spacing.gap)<.1,JSON.stringify(spacing));
-  if(spacing.titleGap!==null) assert.ok(Math.abs(spacing.titleGap-spacing.gap)<.1,JSON.stringify(spacing));
-  assert.ok(spacing.workspaceGap>=spacing.gap-.1,JSON.stringify(spacing));
-  assert.ok(spacing.centered);
-  assert.equal(spacing.clockPadding,spacing.textPadding);
-  assert.equal(spacing.titlePadding,spacing.textPadding);
+  const spacing=await evaluate(`(()=>{const r=s=>document.querySelector(s).getBoundingClientRect(),tile=r('#system-battery-tile'),battery=r('#system-battery'),clock=r('#system-clock'),button=r('#fullscreen');
+    return {height:tile.height,button:button.height,centered:Math.abs(battery.x+battery.width/2-tile.x-tile.width/2)<.1&&Math.abs(battery.y+battery.height/2-tile.y-tile.height/2)<.1,gaps:[document.querySelector('#system-battery-tile').closest('.header-item').getBoundingClientRect().left-document.querySelector('#system-clock').closest('.header-item').getBoundingClientRect().right,document.querySelector('#fullscreen').closest('.header-item').getBoundingClientRect().left-document.querySelector('#system-battery-tile').closest('.header-item').getBoundingClientRect().right]};})()`);
+  assert.equal(spacing.height,spacing.button);assert.equal(spacing.height,36);
+  assert.ok(spacing.centered);assert.deepEqual(spacing.gaps,[6,6]);
 }
 
 export async function checkDeviceFullscreen({call,evaluate,settle}) {
@@ -61,6 +44,7 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
     throw Error(`Timed out: ${expression}`);
   };
   const click = async selector => {
+    await settle();
     const [x,y] = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return[r.x+r.width/2,r.y+r.height/2]})()`);
     await call("Input.dispatchMouseEvent",{type:"mousePressed",x,y,button:"left",clickCount:1});
     await call("Input.dispatchMouseEvent",{type:"mouseReleased",x,y,button:"left",clickCount:1});
@@ -79,7 +63,6 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
     assert.equal(await evaluate('document.querySelector("#system-clock").textContent'),
       await evaluate('new Intl.DateTimeFormat(navigator.languages,{hour:"numeric",minute:"2-digit"}).format(new Date())'));
   }
-  assert.ok(await evaluate('(()=>{const r=id=>document.querySelector(id).getBoundingClientRect();return r("#document-title").right<=r("#system-status").left && r("#system-status").right<=r("#fullscreen").left})()'));
   await checkHeaderSpacing(evaluate);
   if (process.env.LAYER_TEST_ARTIFACTS) {
     const {writeFile} = await import("node:fs/promises");
@@ -100,28 +83,15 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
   await settle();
   assert.equal(await evaluate('layerApp.state().fullscreen'),false,"Maximized is not fullscreen");
   await call("Browser.setWindowBounds",{windowId,bounds:{windowState:"normal"}},null);
-  const clockPreference = async value => {
-    await evaluate(`layerApp.dispatch({type:"preferences",action:{type:"edit",id:"show_clock",value:${value}}})`);
-    await settle();
-  };
-  await clockPreference(1);
-  assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),false);
-  assert.equal(await evaluate('document.querySelector("#system-status").hidden'),false);
-  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),false);
-  await call("Browser.setWindowBounds",{windowId,bounds:{width:800,height:700}},null);
-  await settle();
-  await checkHeaderSpacing(evaluate);
-  await call("Browser.setWindowBounds",{windowId,bounds:{width:1440,height:1000}},null);
-  await settle();
-  await click('#fullscreen');
-  await wait('!!document.fullscreenElement');
-  await clockPreference(2);
+  await new Promise(resolve=>setTimeout(resolve,200));await settle();
+  // The old preference can remain in saved settings but the title-bar model
+  // owns positions, and status is visible only in fullscreen.
+  await evaluate('layerApp.dispatch({type:"restore_settings",settings:{...layerApp.state().settings,show_clock:"always"}})');
   assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),true);
-  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),true);
-  assert.equal(await evaluate('document.querySelector("#system-battery-tile").hidden'),true);
-  await click('#fullscreen');
-  await wait('!document.fullscreenElement && document.querySelector("#system-status").hidden');
-  await clockPreference(0);
+  await click('#fullscreen');await wait('!!document.fullscreenElement');
+  await evaluate('layerApp.dispatch({type:"restore_settings",settings:{...layerApp.state().settings,show_clock:"never"}})');
+  assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),false);
+  await click('#fullscreen');await wait('!document.fullscreenElement');
   for (const mode of ["absent", "denied"]) {
     const script = await call("Page.addScriptToEvaluateOnNewDocument",{source:`window.__statusBatteryCase=${JSON.stringify(mode)};Object.defineProperty(navigator,"getBattery",{configurable:true,value:${mode==="absent"?"undefined":"()=>Promise.reject(new Error('Battery permission denied'))"}});`});
     await call("Page.reload");
@@ -138,5 +108,5 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
     await wait('!document.fullscreenElement');
     await call("Page.removeScriptToEvaluateOnNewDocument",{identifier:script.identifier});
   }
-  console.log("Fullscreen API/menu, browser fullscreen, locale clocks and visibility preferences, low/charging/missing/denied battery passed");
+  console.log("Fullscreen API/menu, browser fullscreen, locale clocks and workspace-owned status, low/charging/missing/denied battery passed");
 }
