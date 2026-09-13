@@ -75,7 +75,6 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
 .dock-panel button { border-radius: 6px; min-height: 1.66em; padding: 4px 12px; }
 .dock-panel image { -gtk-icon-size: 14px; }
-.collapsed-column .column-expand label { font-weight: 700; }
 .navigator-controls button { min-width: 24px; min-height: 28px; padding: 0; margin: 0; }
 .navigator-controls image { -gtk-icon-size: 16px; }
 .navigator-overview { color: var(--accent-color); }

@@ -26,14 +26,11 @@ pub(super) fn tile_button(
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
-    let icon = gtk::Image::from_icon_name(&format!(
-        "layer-{}-symbolic",
-        if tile.control == ToolbarControl::Color {
-            "colors"
-        } else {
-            choice.icon
-        }
-    ));
+    let icon = if tile.control == ToolbarControl::Color {
+        crate::icons::color_pair()
+    } else {
+        crate::icons::image(&format!("layer-{}-symbolic", choice.icon))
+    };
     icon.set_pixel_size(config.tile_style.icon_size() as i32);
     let label_lines = config.tile_style.label_lines();
     if label_lines > 0 {
@@ -256,7 +253,7 @@ impl ToolbarManagerUi {
                 row.set_title(&toolbar.title);
                 row.set_subtitle(&toolbar.subtitle);
                 row.set_selectable(true);
-                row.add_prefix(&gtk::Image::from_icon_name(&format!(
+                row.add_prefix(&crate::icons::image(&format!(
                     "layer-{}-symbolic",
                     toolbar.icon
                 )));
@@ -1037,7 +1034,7 @@ impl Customization {
                     row.set_use_markup(false);
                     row.set_title(&choice.label);
                     row.set_subtitle(&choice.description);
-                    row.add_prefix(&gtk::Image::from_icon_name(&format!(
+                    row.add_prefix(&crate::icons::image(&format!(
                         "layer-{}-symbolic",
                         choice.icon
                     )));

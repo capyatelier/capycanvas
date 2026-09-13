@@ -40,6 +40,9 @@ for ((attempt=0; attempt<100; attempt++)); do
     sleep .1
 done
 [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]
+if [[ ${LAYER_MOTION_SCALE:-1} != 1 ]]; then
+    gjs tools/performance/display-scale.js "$LAYER_MOTION_SCALE"
+fi
 if [[ "$motion_platform" == gtk ]]; then
     G_DEBUG=fatal-criticals gjs apps/layer-linux/bench/native-input.js "$@" 2>&1 | tee "$motion_run_dir/test.log"
 else

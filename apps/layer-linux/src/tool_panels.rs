@@ -95,12 +95,8 @@ impl ToolSet {
                         .content_fit(gtk::ContentFit::Fill)
                         .height_request(40)
                         .build();
-                    let label = gtk::Label::new(Some(item.label));
-                    label.set_halign(gtk::Align::End);
-                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                    label.set_tooltip_text(Some(item.label));
                     content.append(&preview);
-                    content.append(&label);
+                    content.append(&tool_label(item));
                     button.set_child(Some(&content));
                     preview
                 });
@@ -128,18 +124,19 @@ impl ToolSet {
     }
 }
 fn tool_label(item: &ToolSetItem) -> gtk::Box {
+    icon_label(item.label, item.icon)
+}
+
+pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.set_valign(gtk::Align::Center);
-    row.append(&gtk::Image::from_icon_name(&format!(
-        "layer-{}-symbolic",
-        item.icon
-    )));
-    let label = gtk::Label::new(Some(item.label));
+    row.append(&crate::icons::image(&format!("layer-{}-symbolic", icon)));
+    let label = gtk::Label::new(Some(text));
     label.set_hexpand(true);
     label.set_xalign(0.0);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_max_width_chars(1);
-    label.set_tooltip_text(Some(item.label));
+    label.set_tooltip_text(Some(text));
     row.append(&label);
     row
 }
@@ -247,9 +244,7 @@ impl ToolSettings {
                             command: action.command,
                         },
                     );
-                    if let Some(label) = button.child().and_downcast::<gtk::Label>() {
-                        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                    }
+                    button.set_child(Some(&icon_label(command.label, command.icon.unwrap())));
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
@@ -505,7 +500,7 @@ impl ColorPanel {
             actions.append(&button);
             swatches.push((slot, button, sample));
         }
-        let swap = gtk::Button::from_icon_name("layer-swap-symbolic");
+        let swap = crate::icons::button("layer-swap-symbolic");
         swap.add_css_class("flat");
         swap.add_css_class("color-swatch");
         swap.set_tooltip_text(Some("Swap foreground and background"));

@@ -1,4 +1,4 @@
-# Android and web icon audit
+# Android, web and GTK icon audit
 
 Audited 2026-09-12. The shared bank now contains 157 SVGs: 99 original assets and 58 additions. The first pass covered asset files and commands but missed category identities and consumers that ignored model icons. This second pass starts from the visible control models and their Android/web renderers. Every asset was inspected at 16, 24 and 32 logical pixels in light and dark palettes. The drawings are original project vectors; references inform meanings, not copied artwork.
 
@@ -307,3 +307,60 @@ Second-pass evidence lives in `artifacts/icon-audit/redo/`; first-pass evidence 
 The final native app is open on the tablet for review. The refreshed web preview is available in its Chrome browser through USB forwarding.
 
 Web coverage here is desktop graphical Chrome. Android Chrome automation remains unavailable: automatic approval review rejected DevTools forwarding because it could expose other browser sessions. The tablet preview is served through USB reverse forwarding; native tests use isolated stores and UI-only captures.
+
+## GTK migration
+
+GTK consumes the same approved bank and Rust icon identities. Categories, preset
+captions, tool action buttons, filter captions and category headings now display
+their specific glyphs. Preset/filter GPU previews remain present. New Layer,
+gradient reset, workspace actions and collapsed-column chevrons match their
+Android/web counterparts. Native dialogs keep their toolkit controls.
+
+All shared icons use cached `GtkSvg` paintables at the requested size. GTK's
+traditional symbolic loader ignores explicit fill/stroke paints; using
+[GtkSvg](https://docs.gtk.org/gtk4/class.Svg.html) with symbolic foreground paint
+servers preserves the canonical transforms, group opacity, fixed swatches and
+drawing order. The color toolbar explicitly binds its two swatches to the live
+foreground/background palette. Unknown external icon names retain GTK's native
+lookup fallback. This requires GTK 4.22, documented in the
+[Linux guide](../development/linux.md).
+
+The native audit uses a private Mutter compositor, hardware Vulkan and fresh
+settings/workspace storage. `--icons` traverses all 13 painting categories,
+24 presets, non-painting modes, 40 filters and 7 filter categories in both themes
+(280 control checks). Every preset and filter is scrolled into view; individual
+preset captures supplement the visible panel captures. Toolbar checks cover
+16/24/32-pixel glyphs, centering and live foreground/background swatches. The
+157-asset matrix adds 18 combinations of theme, size and normal/accent/disabled
+state at each monitor scale.
+
+```sh
+bash tools/performance/workspace-motion.sh gtk --icons
+LAYER_MOTION_SCALE=2 LAYER_MOTION_VIEWPORT=2400x2000 \
+  LAYER_TEST_ARTIFACTS="$PWD/artifacts/icon-audit/gtk-2x" \
+  bash tools/performance/workspace-motion.sh gtk --icons
+bash tools/performance/workspace-motion.sh gtk --drawer-style
+```
+
+The runner configures the private monitor through Mutter and the fixture asserts
+the actual GTK scale; `GDK_SCALE` alone did not establish a 2× Wayland monitor.
+Evidence is in `artifacts/icon-audit/gtk/`, `gtk-2x/`, `gtk-drawers/` and the
+`eyedropper/gtk-*.log` files. Full Chrome comparisons retain every pixel and show
+rasterization differences at edges: mean absolute channel error is 0.390/255 at
+1× and 0.258/255 at 2×. All 216 paint samples pass at 2×, with maximum channel
+error 1/255. At 1× the generic sampling utility's narrow swatch-outline point
+lands on an antialiased edge; its 10 failed samples are not flat interiors. The
+native fixture's fixed-interior paint checks pass at both scales. Exact raster
+parity is not claimed.
+
+Focused GTK workflows cover tool/color controls, toolbar sizing and grip targets,
+Zen icon selection, and applying/editing all 40 filters. The sizing test's old
+one-lane assumption was reproduced against the pre-migration commit, then
+replaced with native allocation checks against the shared wrap projection.
+Filter tests activate tabs only when needed, wait for preview readiness, and
+activate Diagnostics before asserting telemetry. Icon changes preserve the
+original grip allocations and input handlers.
+
+Final checks passed: the release build and GTK unit tests, native icon audits at
+1× and 2×, tool/color controls, toolbar sizing, Zen selection, all filter editing
+workflows, and the drawer/toolbar pointer suite in both themes.

@@ -1,6 +1,7 @@
 mod canvas;
 mod effects;
 mod files;
+mod icons;
 mod image_selector;
 mod input;
 mod layers;
