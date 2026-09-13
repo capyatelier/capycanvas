@@ -2455,3 +2455,37 @@ lease-reclamation and included-layout history fixes. The combined suite passes
 Release build. The merged Release exhausted-recovery document fixture, workspace
 manager/starting-layout/history/restart fixture and two-window actual-removal
 fixture all pass with clean shutdown.
+
+### Filter loading across GPU reconstruction
+
+Native filter loading now checks actual D3D12 removal before submitting an
+acquired package. It keeps the existing bounded source mailbox until the
+replacement renderer is available. If GPU recovery is exhausted, pending reads
+report a failure immediately, completed file results are discarded and new loads
+are rejected. The read can finish without delaying access to saving. Shared
+validation cancellation preserves the current catalog, embedded programs and
+parameter values. No production queue, pause protocol or dependency was added.
+
+Three new opt-in hardware D3D12 checks pass: removal after file transport starts,
+removal after validation submission but before publication, and cancellation after
+exhausted recovery. Deleting the original package files proves that reconstruction
+uses retained bytes. Successful replacement matches uninterrupted pixels and
+one-step Undo/Redo while preserving a live parameter value; failed recovery leaves
+the source document unchanged. Device selection/removal helpers are shared with
+the document recovery tests. An ordinary regression covers pending reads and
+acquired packages during suspension, rejected new requests and late completion.
+
+The Windows ordinary suite passes 103 tests with 11 opt-in hardware tests excluded;
+strict all-target Windows Clippy and normal Debug/Release native builds pass.
+
+The four document recovery hardware tests pass with the shared helpers. The
+Release native runtime-filter fixture passes picker/previews, live WGSL and
+metadata replacement, retained parameter values, invalid WGSL and missing-module
+rejection, retry and clean shutdown. The Release exhausted-recovery document
+fixture also passes Save/Save As, canceled pickers, close decisions, restored Zen
+preferences, durable reopen and identical exported pixels.
+
+Actual native queued pointer overlap, physical pen and mixed-display acceptance,
+sleep/driver-reset behavior, installed MSIX/clean-machine checks, remaining visual
+review and 120 Hz painting/input latency remain open. No package or performance
+measurement was regenerated for this milestone.
