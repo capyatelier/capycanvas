@@ -712,6 +712,7 @@ impl CanvasRenderer for RenderWorker {
                 .layers
                 .iter()
                 .map(|l| Layer {
+                    raster: l.raster.clone(),
                     id: l.id,
                     name: l.name.clone(),
                     kind: l.kind,

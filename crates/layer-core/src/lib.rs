@@ -5,9 +5,10 @@
 //! moves handles; late sensor corrections replace that storage without changing
 //! already captured document snapshots.
 
-mod effect_catalog;
 pub mod color;
+mod effect_catalog;
 mod effects;
+pub mod raster;
 pub use effect_catalog::*;
 mod layers;
 pub use effects::*;
@@ -21,6 +22,7 @@ mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
 mod input_corrections;
 mod project;
+mod project_storage;
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
@@ -153,6 +155,10 @@ pub struct Layer {
     pub kind: LayerKind,
     pub visible: bool,
     pub opacity: f32,
+    /// Exact committed pixels, shared with undo and in-flight save snapshots.
+    /// The indexed project container serializes backing separately from metadata.
+    #[serde(skip)]
+    pub raster: raster::RasterRevision,
     /// Front-to-back stroke order for paint layers.
     pub strokes: Vec<StrokeId>,
     pub asset: Option<AssetId>,
@@ -173,6 +179,7 @@ impl Layer {
             kind: self.kind,
             visible: self.visible,
             opacity: self.opacity,
+            raster: self.raster.clone(),
             strokes: Vec::new(),
             asset: self.asset.clone(),
             source_revision: None,
@@ -189,6 +196,7 @@ impl Layer {
             kind: LayerKind::Paint,
             visible: true,
             opacity: 1.0,
+            raster: Default::default(),
             strokes: Vec::new(),
             asset: None,
             source_revision: None,
@@ -210,6 +218,7 @@ impl Layer {
             kind,
             visible: true,
             opacity: 1.0,
+            raster: Default::default(),
             strokes: Vec::new(),
             asset: Some(asset),
             source_revision: None,
@@ -1195,6 +1204,7 @@ pub struct Document {
     pub id: Arc<str>,
     pub width: u32,
     pub height: u32,
+    pub color: color::DocumentColor,
     /// Front-to-back display order.
     pub layers: Vec<Layer>,
     pub active_layer: LayerId,
@@ -1234,6 +1244,7 @@ impl Document {
             id: id.into(),
             width,
             height,
+            color: color::DocumentColor::default(),
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),
                 Layer {
@@ -1242,6 +1253,7 @@ impl Document {
                     kind: LayerKind::Background,
                     visible: true,
                     opacity: 1.0,
+                    raster: Default::default(),
                     strokes: Vec::new(),
                     asset: None,
                     source_revision: None,
@@ -1295,6 +1307,15 @@ impl Document {
     /// Applies one reversible edit and returns its exact inverse.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
         let inverse = match edit {
+            Edit::SetRaster { target, revision } => {
+                let raster = self
+                    .target_raster_mut(target)
+                    .ok_or(DocumentError::MissingLayer(target))?;
+                Edit::SetRaster {
+                    target,
+                    revision: std::mem::replace(raster, revision),
+                }
+            }
             Edit::Batch(edits) => {
                 let before = self.clone();
                 let mut inverses = Vec::with_capacity(edits.len());
@@ -1545,20 +1566,42 @@ impl Document {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
+    SetRaster {
+        target: LayerId,
+        revision: raster::RasterRevision,
+    },
     Batch(Vec<Edit>),
     ReplaceLayer(Box<Layer>),
     SetMaskTarget(bool),
     SetSelection(Option<Selection>),
     SetReferences(BTreeSet<LayerId>),
     SetRulers(Vec<Ruler>),
-    InsertLayer { index: usize, layer: Layer },
-    RemoveLayer { id: LayerId },
-    MoveLayer { id: LayerId, to: usize },
-    SetLayerOpacity { id: LayerId, opacity: f32 },
-    SetLayerVisibility { id: LayerId, visible: bool },
-    SetActiveLayer { id: LayerId },
+    InsertLayer {
+        index: usize,
+        layer: Layer,
+    },
+    RemoveLayer {
+        id: LayerId,
+    },
+    MoveLayer {
+        id: LayerId,
+        to: usize,
+    },
+    SetLayerOpacity {
+        id: LayerId,
+        opacity: f32,
+    },
+    SetLayerVisibility {
+        id: LayerId,
+        visible: bool,
+    },
+    SetActiveLayer {
+        id: LayerId,
+    },
     InsertStroke(Box<Stroke>),
-    RemoveStroke { id: StrokeId },
+    RemoveStroke {
+        id: StrokeId,
+    },
 }
 
 impl Edit {

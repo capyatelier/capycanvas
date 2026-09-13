@@ -557,6 +557,8 @@ mod selection_tests {
 pub struct LayerMask {
     /// Unique image identity, allocated from the document layer-ID allocator.
     pub id: LayerId,
+    #[serde(skip)]
+    pub raster: raster::RasterRevision,
     pub enabled: bool,
     pub linked: bool,
     pub offset: Point,
@@ -725,6 +727,7 @@ impl LayerMask {
             initial: None,
             default_coverage: 1.0,
             inverted: false,
+            raster: Default::default(),
             strokes: Arc::default(),
             operations: Arc::default(),
             show_area: false,
@@ -1067,6 +1070,27 @@ impl Document {
             .and_then(|l| l.mask.as_ref())
             .filter(|_| self.active_mask)
             .map_or(self.active_layer, |m| m.id)
+    }
+    pub fn target_raster(&self, target: LayerId) -> Option<&raster::RasterRevision> {
+        let owner = self.target_owner(target)?;
+        if owner.id == target {
+            Some(&owner.raster)
+        } else {
+            owner.mask.as_ref().map(|m| &m.raster)
+        }
+    }
+    pub fn target_raster_mut(&mut self, target: LayerId) -> Option<&mut raster::RasterRevision> {
+        for layer in &mut self.layers {
+            if layer.id == target {
+                return Some(&mut layer.raster);
+            }
+            if let Some(mask) = &mut layer.mask
+                && mask.id == target
+            {
+                return Some(&mut mask.raster);
+            }
+        }
+        None
     }
     pub fn layer_offset(&self, id: LayerId) -> Point {
         target_offset(&self.layers, id)

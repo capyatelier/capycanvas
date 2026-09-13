@@ -1,10 +1,12 @@
 //! Native project transport. Hosts supply streams and perform atomic file I/O
 //! off the drawing thread. No filenames, GPU handles or platform state are saved.
 use crate::*;
-use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
+#[cfg(test)]
+use flate2::{Compression, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
+#[cfg(test)]
 const MAGIC: &[u8; 12] = b"CAPYPROJECT\x01";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,8 @@ pub struct Project {
 pub struct ProjectLimits {
     pub metadata_bytes: u64,
     pub asset_bytes: u64,
+    pub raster_bytes: u64,
+    pub tiles: usize,
     pub dimension: u32,
     pub layers: usize,
     pub strokes: usize,
@@ -84,6 +88,8 @@ impl Default for ProjectLimits {
         Self {
             metadata_bytes: 64 * 1024 * 1024,
             asset_bytes: 512 * 1024 * 1024,
+            raster_bytes: 1024 * 1024 * 1024,
+            tiles: 16384,
             dimension: 32768,
             layers: 4096,
             strokes: 500_000,
@@ -94,13 +100,13 @@ impl Default for ProjectLimits {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AssetRecord {
-    id: AssetId,
-    extent: [u32; 2],
-    format: ProjectAssetFormat,
+pub(super) struct AssetRecord {
+    pub(super) id: AssetId,
+    pub(super) extent: [u32; 2],
+    pub(super) format: ProjectAssetFormat,
 }
 impl AssetRecord {
-    fn size(&self, limits: ProjectLimits) -> Result<u64, String> {
+    pub(super) fn size(&self, limits: ProjectLimits) -> Result<u64, String> {
         if self.extent.iter().any(|v| *v == 0 || *v > limits.dimension)
             || self.id.0.is_empty()
             || self.id.0.len() > 1024
@@ -115,6 +121,7 @@ impl AssetRecord {
     }
 }
 
+#[cfg(test)]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest<D = Document> {
@@ -199,83 +206,18 @@ impl Project {
         Ok(())
     }
 
-    /// Versioned gzip stream: metadata length, JSON, then packed image blocks
-    /// in manifest order. No archive paths to extract, base64, or JSON byte arrays.
-    pub fn write(&self, mut output: impl Write) -> Result<(), String> {
-        let limits = ProjectLimits::default();
-        self.validate(limits)?;
-        let manifest = Manifest {
-            document: &self.document,
-            assets: self
-                .assets
-                .iter()
-                .map(|(id, a)| AssetRecord {
-                    id: id.clone(),
-                    extent: a.extent,
-                    format: a.format,
-                })
-                .collect(),
-        };
-        let json = metadata(&manifest, limits.metadata_bytes)?;
-        output.write_all(MAGIC).map_err(io_error)?;
-        let mut stream = GzEncoder::new(output, Compression::fast());
-        stream
-            .write_all(&(json.len() as u64).to_le_bytes())
-            .map_err(io_error)?;
-        stream.write_all(&json).map_err(io_error)?;
-        for a in self.assets.values() {
-            stream.write_all(&a.bytes).map_err(io_error)?;
-        }
-        stream.finish().map_err(io_error)?;
-        Ok(())
+    /// Indexed lossless raster transport. Run on a file worker: pending captures
+    /// are awaited here, never by the input owner.
+    pub fn write(&self, output: impl Write) -> Result<(), String> {
+        crate::project_storage::write(self, output)
     }
 
-    pub fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Self, String> {
-        let mut magic = [0; MAGIC.len()];
-        input.read_exact(&mut magic).map_err(io_error)?;
-        if &magic != MAGIC {
-            return Err("Unsupported Capy Canvas project version".into());
-        }
-        let mut stream = MultiGzDecoder::new(input);
-        let mut size = [0; 8];
-        stream.read_exact(&mut size).map_err(io_error)?;
-        let json = read_block(&mut stream, u64::from_le_bytes(size), limits.metadata_bytes)?;
-        let manifest: Manifest =
-            serde_json::from_slice(&json).map_err(|e| format!("Invalid project metadata: {e}"))?;
-        validate_document(&manifest.document, limits)?;
-        let mut assets = BTreeMap::new();
-        let mut remaining = limits.asset_bytes;
-        for record in manifest.assets {
-            if assets.contains_key(&record.id) {
-                return Err("Duplicate project asset".into());
-            }
-            let size = record.size(limits)?;
-            let bytes = read_block(&mut stream, size, remaining)?;
-            remaining -= size;
-            assets.insert(
-                record.id,
-                ProjectAsset {
-                    extent: record.extent,
-                    format: record.format,
-                    bytes: bytes.into(),
-                },
-            );
-        }
-        let mut extra = [0];
-        // Consume the gzip trailer too: truncated/corrupt saves are not success.
-        if stream.read(&mut extra).map_err(io_error)? != 0 {
-            return Err("Unexpected project data".into());
-        }
-        let project = Self {
-            document: manifest.document,
-            assets,
-        };
-        project.validate(limits)?;
-        Ok(project)
+    pub fn read(input: impl Read, limits: ProjectLimits) -> Result<Self, String> {
+        crate::project_storage::read(input, limits)
     }
 }
 
-fn io_error(e: std::io::Error) -> String {
+pub(super) fn io_error(e: std::io::Error) -> String {
     format!("Project I/O failed: {e}")
 }
 
@@ -284,7 +226,7 @@ fn prune_history(document: &mut Document) -> Result<(), String> {
     document.strokes.retain(|id, _| reachable.contains_key(id));
     Ok(())
 }
-fn metadata(value: &impl Serialize, limit: u64) -> Result<Vec<u8>, String> {
+pub(super) fn metadata(value: &impl Serialize, limit: u64) -> Result<Vec<u8>, String> {
     struct Bounded {
         bytes: Vec<u8>,
         limit: u64,
@@ -310,7 +252,7 @@ fn metadata(value: &impl Serialize, limit: u64) -> Result<Vec<u8>, String> {
     serde_json::to_writer(&mut output, value).map_err(|e| e.to_string())?;
     Ok(output.bytes)
 }
-fn read_block(input: &mut impl Read, size: u64, limit: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_block(input: &mut impl Read, size: u64, limit: u64) -> Result<Vec<u8>, String> {
     if size > limit {
         return Err("Project data exceeds the memory limit".into());
     }
@@ -492,7 +434,7 @@ fn history_references(
     Ok((ids, max_id))
 }
 
-fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String> {
+pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String> {
     if doc.width == 0
         || doc.height == 0
         || doc.width > limits.dimension
