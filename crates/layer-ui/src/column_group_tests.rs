@@ -258,20 +258,114 @@ fn column_auto_hide_both_modes_and_apply_all_only_copies_preferences() {
 fn group_panel_drag_cancellation_restores_open_projection_and_preferences() {
     let (mut s, column, group, panel) = group_fixture();
     let viewport = [1800., 1100.];
-    group_edit(&mut s, CustomizationAction::ToggleColumnDrawer { group, panel });
+    group_edit(
+        &mut s,
+        CustomizationAction::ToggleColumnDrawer { group, panel },
+    );
     let resolved = s.layout(viewport);
     let c = resolved.collapsed.iter().find(|c| c.id == column).unwrap();
     let icon = c.groups.iter().find(|g| g.group == group).unwrap().icons[0].bounds;
     let bounds = c.group_panel.as_ref().unwrap().bounds;
     s.dispatch(UiAction::MeasureColumnDrawers {
         measurements: vec![ColumnDrawerMeasurement { group, bounds }],
-    }).unwrap();
+    })
+    .unwrap();
     let before = s.state.workspace.clone();
     let at = [icon.x + icon.width * 0.5, icon.y + icon.height * 0.5];
-    for (phase, position) in [(ContactPhase::Down, at), (ContactPhase::Move, [750.,400.]), (ContactPhase::Cancel, [750.,400.])] {
-        s.dispatch(UiAction::DragWorkspace { item: DockItem::Panel { panel }, phase, position, viewport, tabs: vec![] }).unwrap();
+    for (phase, position) in [
+        (ContactPhase::Down, at),
+        (ContactPhase::Move, [750., 400.]),
+        (ContactPhase::Cancel, [750., 400.]),
+    ] {
+        s.dispatch(UiAction::DragWorkspace {
+            item: DockItem::Panel { panel },
+            phase,
+            position,
+            viewport,
+            tabs: vec![],
+        })
+        .unwrap();
     }
     assert_eq!(s.state.workspace, before);
-    assert!(s.state.customization.column_drawers.iter().any(ContentDrawer::is_group_panel));
-    assert!(s.layout(viewport).collapsed.iter().find(|c| c.id == column).unwrap().group_panel.is_some());
+    assert!(
+        s.state
+            .customization
+            .column_drawers
+            .iter()
+            .any(ContentDrawer::is_group_panel)
+    );
+    assert!(
+        s.layout(viewport)
+            .collapsed
+            .iter()
+            .find(|c| c.id == column)
+            .unwrap()
+            .group_panel
+            .is_some()
+    );
+}
+
+#[test]
+fn apply_column_settings_includes_columns_hidden_inside_a_collapsed_parent() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let group = s.state.workspace.layout.panel_group(Panel::Brushes).unwrap();
+    s.dispatch(UiAction::MovePanel {
+        panel: Panel::Sizes,
+        target: DockTarget::Split {
+            group,
+            edge: Edge::Right,
+        },
+        viewport: [1800., 1100.],
+    })
+    .unwrap();
+    group_edit(&mut s, CustomizationAction::SetColumnCollapsed { group, collapsed: true });
+    let inner = s
+        .state
+        .workspace
+        .layout
+        .collapsed_column_for_group(group)
+        .unwrap();
+    group_edit(&mut s, CustomizationAction::SetColumnMode { column: inner, mode: ColumnMode::GroupPanel });
+    s.state.workspace.layout.column_settings_mut(inner).width = Some(380.);
+    let outer = s
+        .state
+        .workspace
+        .layout
+        .bands
+        .iter()
+        .find(|b| b.edge == Edge::Left)
+        .unwrap()
+        .root
+        .id();
+    assert_ne!(inner, outer);
+    group_edit(
+        &mut s,
+        CustomizationAction::SetColumnCollapsed {
+            group: outer,
+            collapsed: true,
+        },
+    );
+    group_edit(
+        &mut s,
+        CustomizationAction::SetColumnMode {
+            column: outer,
+            mode: ColumnMode::Drawers,
+        },
+    );
+    group_edit(
+        &mut s,
+        CustomizationAction::SetColumnAutoHide {
+            column: outer,
+            auto_hide: true,
+        },
+    );
+    group_edit(
+        &mut s,
+        CustomizationAction::ApplyColumnSettings { column: outer },
+    );
+    let setting = s.state.workspace.layout.column_settings(inner);
+    assert_eq!(setting.mode, ColumnMode::Drawers);
+    assert!(setting.auto_hide);
+    assert_eq!(setting.width, Some(380.));
 }

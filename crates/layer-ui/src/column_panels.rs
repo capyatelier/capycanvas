@@ -74,11 +74,11 @@ impl DockLayout {
             .panels
             .iter()
             .filter_map(|p| self.panel_group(p.id))
-            .filter_map(|g| {
-                self.collapsed_column_for_group(g)
-                    .or_else(|| self.column_for_group(g))
-            })
+            .filter_map(|g| self.column_for_group(g))
             .collect();
+        // Include outer collapsed projections and the columns hidden inside
+        // them: "all columns" must still apply after the parent expands.
+        roots.extend(self.collapsed.iter().map(|c| c.root));
         roots.sort_unstable();
         roots.dedup();
         roots
