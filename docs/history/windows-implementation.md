@@ -2682,3 +2682,12 @@ pass; the normal Windows Release rebuild also passes. Windows does not yet invok
 the shared HeaderDrag path, so the native editor/manager/multiwindow acceptance
 above continues to cover the unchanged native interaction paths. The additional
 header regression brings the ordinary test coverage across these suites to 671.
+
+
+The final integration through `6aee96d` adds the Web column-stack projection and
+shared stack geometry/history metadata. Host/UI/Windows/workspace suites pass
+again (25/366/103/85 tests); unchanged core/engine suites retain their 45/48 passes,
+for 672 ordinary tests across the validated suites. Strict Clippy and a normal
+Release rebuild pass. The native manager rerun passes preview, starting-layout
+history, Undo/Redo, creation, switching, rename/delete, brush reset, restart and
+clean exit. Windows still uses tabbed drawers pending the full-column port.
