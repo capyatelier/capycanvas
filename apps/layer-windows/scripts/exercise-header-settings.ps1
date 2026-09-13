@@ -114,12 +114,12 @@ Wait-Until {Find-Control 'Prediction time' ([System.Windows.Automation.ControlTy
 Invoke-Control 'Prediction time'
 Wait-Until {Find-Control 'Prediction time' ([System.Windows.Automation.ControlType]::Edit)} 'Search result did not reveal the numeric preference'
 $feedback=(Read-Model).state.settings.feedback
-Toggle-Control 'Live stroke preview'
+Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -ne $feedback} 'Preview toggle did not reach shared settings'
 foreach($name in @('Prediction time','Pen tip tracking')){
     Wait-Until {(Control $name ([System.Windows.Automation.ControlType]::Edit)).Current.IsEnabled -eq !$feedback} 'Dependent numeric editor has the wrong enabled state'
 }
-Toggle-Control 'Live stroke preview'
+Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -eq $feedback} 'Preview restoration failed'
 Close-Preferences
 
