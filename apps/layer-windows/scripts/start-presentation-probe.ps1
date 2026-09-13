@@ -8,14 +8,17 @@ $names=@('CAPY_PRESENT_PROBE','CAPY_TEST_DISPLAY','CAPY_SMOKE_TEST','CAPY_TRACE_
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try {
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_PRESENT_PROBE='1'
     $env:CAPY_TEST_DISPLAY='1'
     # This is an interactive drawing window. Keep the app at normal privilege;
     # only the separate ETW capture tool may need administrator rights.
     $app=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError (Join-Path $directory 'probe-runtime.stderr.log')
 } finally {
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $names){
+        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }
 $watch=[Diagnostics.Stopwatch]::StartNew()
 $metadata=Join-Path $directory 'presentation-probe.json'

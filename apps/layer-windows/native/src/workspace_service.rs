@@ -14,6 +14,8 @@ use std::{
 
 #[path = "workspace_manager.rs"]
 mod manager_ui;
+#[path = "workspace_switcher.rs"]
+mod switcher;
 pub(crate) use manager_ui::{ManagerInput, ManagerView};
 
 type Result<T> = std::result::Result<T, StoreError>;
@@ -43,6 +45,12 @@ pub(crate) struct WorkspaceStatus {
     pub ready: bool,
     pub id: Option<String>,
     pub defaults: Vec<WorkspaceShortcut>,
+    pub switcher: Vec<WorkspaceShortcut>,
+    pub switcher_display: Vec<WorkspaceShortcut>,
+    pub order: Vec<String>,
+    pub switcher_busy: bool,
+    pub switcher_error: Option<String>,
+    pub switcher_revision: u64,
     pub can_switch: bool,
     pub owner: Option<String>,
     pub busy: bool,
@@ -62,6 +70,9 @@ pub(crate) struct WorkspaceService<S: WorkspaceStore + 'static> {
     directory: std::path::PathBuf,
     operation: AsyncTask<Completion>,
     ownership: AsyncTask<Result<()>>,
+    preferences: AsyncTask<Result<()>>,
+    preferences_edited: bool,
+    refresh_preferences: bool,
     incoming: Option<StoredEntity>,
     ui: manager_ui::ManagerUi,
     status: WorkspaceStatus,
@@ -85,6 +96,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             directory,
             operation: AsyncTask::new(wake.clone()),
             ownership: AsyncTask::new(wake.clone()),
+            preferences: AsyncTask::new(wake.clone()),
+            preferences_edited: false,
+            refresh_preferences: false,
             ui: manager_ui::ManagerUi::new(wake),
             incoming: None,
             status: WorkspaceStatus {
@@ -115,6 +129,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         let _ = self.operation.start(async move {
             let result = async {
                 manager.store.execute(StoreRequest::Reopen).await?;
+                manager.refresh_switcher().await?;
                 manager.initialize(wall_ms).await
             }
             .await;
@@ -194,6 +209,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     /// This never waits for a reply or repeatedly polls an unwoken future.
     pub(crate) fn poll(&mut self, native: &mut NativeHost, now: Instant, wall_ms: u64) {
         let previous = self.status.clone();
+        self.poll_switcher(native, wall_ms);
         if self.status.ready
             && !self.ui.active()
             && !self.status.busy
@@ -248,6 +264,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             && self.status.error.is_none()
             && !self.operation.busy()
             && !self.ownership.busy()
+            && !self.preferences.busy()
         {
             // No editor edits have been accepted before startup adoption.
             // Release this incoming claim without waiting for a canvas that
@@ -321,7 +338,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 });
                 self.last_renew = now;
             }
-            if !self.ui.active() && !self.operation.busy() && !self.ownership.busy() {
+            if !self.ui.active()
+                && !self.operation.busy()
+                && !self.ownership.busy()
+                && !self.preferences.busy()
+            {
                 if self.status.close_requested && self.status.error.is_none() {
                     // Stop accepting editor mutations before taking this final
                     // snapshot. A prior immutable save may have newer edits.
@@ -353,8 +374,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         }
         self.poll_manager(native, now, wall_ms);
         if self.status.close_requested && !self.status.close_ready {
-            self.status.busy =
-                self.operation.busy() || self.ownership.busy() || self.incoming.is_some();
+            self.status.busy = self.operation.busy()
+                || self.ownership.busy()
+                || self.preferences.busy()
+                || self.incoming.is_some();
         }
         self.status.can_switch =
             self.accepts_input(wall_ms) && native.session.require_workspace_idle().is_ok();
@@ -371,6 +394,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             && self.manager.lease_valid(wall_ms)
     }
     pub(crate) fn request_close(&mut self, native: &mut NativeHost) {
+        self.refresh_preferences = false;
+        if !self.preferences_edited {
+            self.preferences.cancel_read();
+            self.status.switcher_busy = false;
+        }
         if self.ui.active() && !self.ui.has_accepted_write() {
             self.close_manager(native);
         }
@@ -438,6 +466,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     pub(crate) fn stop(&mut self) {
         self.operation.close();
         self.ownership.close();
+        self.preferences.close();
         self.ui.stop();
     }
 }
@@ -446,6 +475,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkspaceAction {
     Manager { dialog: u64, command: ManagerInput },
+    RefreshSwitcher,
     Retry,
     KeepOpen,
     DiscardClose,
@@ -494,7 +524,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         Ok(())
     }
     fn require_available(&self) -> Result<()> {
-        if self.operation.busy() || self.ownership.busy() {
+        if self.operation.busy() || self.ownership.busy() || self.preferences.busy() {
             Err(StoreError::new(
                 ErrorKind::Conflict,
                 "Wait for the current workspace operation.",

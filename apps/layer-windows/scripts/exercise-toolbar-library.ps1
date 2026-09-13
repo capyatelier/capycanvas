@@ -125,7 +125,7 @@ function Check-Copy($Source,$Copy) {
     if(!$Copy -or $Source.id -eq $Copy.id -or (Controls-Of $Source) -ne (Controls-Of $Copy) -or $Source.tile_style -ne $Copy.tile_style -or $Source.hide_tab -ne $Copy.hide_tab){throw 'Saved toolbar copy lost contents/options or independent identity'}
 }
 try {
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+    foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch 'save'
@@ -195,5 +195,8 @@ try {
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $names){
+        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }

@@ -285,5 +285,8 @@ if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reporte
     scope='isolated native controls and pickers; controlled stroke replay, not physical pen or cadence acceptance'
 }|ConvertTo-Json
 } finally {
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    foreach($name in $names){
+        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }

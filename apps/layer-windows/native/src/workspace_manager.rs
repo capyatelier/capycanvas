@@ -4,7 +4,7 @@ use super::*;
 use layer_ui::{
     CustomizationAction, DockLayout, HostRequestKind, Panel, UiAction, WorkspaceCommand,
 };
-use layer_workspace::{ManagerAction, ManagerPage};
+use layer_workspace::{ManagerAction, ManagerPage, SwitcherEdit};
 use serde::Deserialize;
 
 #[path = "toolbar_library.rs"]
@@ -132,6 +132,9 @@ impl ManagerUi {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ManagerInput {
+    EditSwitcher {
+        edit: SwitcherEdit,
+    },
     Select {
         id: Option<String>,
     },
@@ -179,6 +182,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         }
         self.status.name = self.manager.active_name();
         self.status.id = self.manager.active_id();
+        self.sync_switcher(true);
         let items = self.manager.items();
         self.status.defaults = layer_workspace::DEFAULT_WORKSPACES
             .iter()
@@ -317,6 +321,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             self.preview_begin(native)?;
             let manager = self.manager.clone();
             self.ui.view.as_mut().unwrap().loading = true;
+            self.refresh_switcher();
             let _ = self.ui.read.start(async move {
                 manager.refresh().await?;
                 Ok(ReadReply::Refresh)
@@ -331,46 +336,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             .current()
             .ok_or_else(|| StoreError::invalid("Open a workspace first."))?
             .capture()?;
-        let mut versions: Vec<_> = capture.history.revisions.values().cloned().collect();
-        let chain: Vec<_> = capture
-            .history
-            .undo
-            .iter()
-            .chain(std::iter::once(&capture.history.current))
-            .chain(capture.history.redo.iter().rev())
-            .collect();
-        for version in &mut versions {
-            if let Some(name) = version
-                .description
-                .strip_prefix("Applied ")
-                .and_then(|n| n.strip_suffix(" Workspace Template"))
-            {
-                version.description = format!("Loaded “{name}” layout");
-            } else if version.description == "Reset to starting layout" {
-                version.description = "Restored starting layout".into();
-            } else if version.description == "Arrange panels and toolbars" {
-                version.description = chain
-                    .windows(2)
-                    .find(|p| p[1] == &version.id)
-                    .map(|p| {
-                        layer_ui::layout_change_description(
-                            &capture.history.revisions[p[0]].layout,
-                            &version.layout,
-                        )
-                    })
-                    .unwrap_or_else(|| "Earlier layout".into());
-            }
-        }
-        versions.sort_by(|a, b| {
-            b.timestamp_ms.cmp(&a.timestamp_ms).then_with(|| {
-                let ordinal = |id: &str| {
-                    id.strip_prefix('r')
-                        .and_then(|n| n.parse::<u64>().ok())
-                        .unwrap_or(0)
-                };
-                ordinal(&b.id).cmp(&ordinal(&a.id))
-            })
-        });
+        let versions = layer_workspace::layout_history_versions(&capture.history);
         self.ui.layouts.clear();
         let view = self.ui.view.as_mut().unwrap();
         view.rows = versions
@@ -401,10 +367,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         view.selected = Some(capture.history.current);
         Ok(())
     }
-    fn rows(&mut self, native: &mut NativeHost, initial: bool, wall_ms: u64) -> Result<()> {
+    fn populate_rows(&mut self, wall_ms: u64) {
         let view = self.ui.view.as_mut().unwrap();
         if matches!(view.page, Page::History | Page::Prompt) {
-            return Ok(());
+            return;
         }
         let page = match view.page {
             Page::ThisWorkspace => ManagerPage::ThisWorkspace,
@@ -434,8 +400,40 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 }
             })
             .collect();
+    }
+    pub(super) fn refresh_switcher_rows(&mut self, native: &mut NativeHost, wall_ms: u64) {
+        if !self
+            .ui
+            .view
+            .as_ref()
+            .is_some_and(|v| v.page == Page::Workspaces && v.prompt.is_none())
+        {
+            return;
+        }
+        self.populate_rows(wall_ms);
+        let view = self.ui.view.as_ref().unwrap();
+        if view
+            .selected
+            .as_ref()
+            .is_some_and(|id| !view.rows.iter().any(|r| &r.id == id))
+        {
+            let _ = self.select(native, None, wall_ms);
+        }
+        // Keep the current preview/read, selection and draft when only preferences change.
+    }
+    fn rows(&mut self, native: &mut NativeHost, initial: bool, wall_ms: u64) -> Result<()> {
+        if self
+            .ui
+            .view
+            .as_ref()
+            .is_some_and(|v| matches!(v.page, Page::History | Page::Prompt))
+        {
+            return Ok(());
+        }
+        self.populate_rows(wall_ms);
+        let view = self.ui.view.as_ref().unwrap();
         let selected = if initial && view.page == Page::Workspaces {
-            active
+            self.manager.active_id()
         } else {
             view.selected.clone()
         }
@@ -697,6 +695,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             return Ok(());
         }
         match input {
+            ManagerInput::EditSwitcher { edit } => {
+                if view.page == Page::Workspaces && view.prompt.is_none() && !view.loading {
+                    self.edit_switcher(native, edit);
+                }
+            }
             ManagerInput::FocusResult { error } => {
                 if view.focus_owner.is_none() {
                     return Ok(());
@@ -893,6 +896,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             && !self.ui.submitted
             && !self.operation.busy()
             && !self.ownership.busy()
+            && !self.preferences.busy()
             && let Some((operation, name, choice)) = self.ui.pending.clone()
         {
             // Reset on the canvas owner once; storage retries preserve this accepted capture.

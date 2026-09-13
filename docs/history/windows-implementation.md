@@ -1754,3 +1754,63 @@ Review artifacts stay ignored and local; the implementation goal remains active.
 Publication also integrates concurrent main 76b4dd5, which adjusts shared divider
 targets and toolbar group creation. All 284 shared UI tests, strict Windows
 Clippy and the Wasm check pass after that merge.
+
+## Configurable workspace switcher and native row gestures (2026-09-12)
+
+The titlebar switcher now follows shared saved order and visibility, including
+custom workspaces. New workspaces start pinned; an unpinned current workspace
+appears first temporarily. The pill scrolls within its available header width.
+Manage Workspaces exposes left grips, pins, a separate active-workspace check,
+and Show in top bar / Move Up / Move Down menu actions. Reconciliation retains
+row and header controls while preference updates preserve selection and preview.
+
+Preference writes have their own asynchronous lifetime. Cancel restores the
+workspace preview without undoing accepted preferences, and closing the app
+waits for accepted writes. A pending focus refresh can be superseded by an
+enabled menu action, but a submitted write cannot. Same-process windows refresh
+without activation; independent processes refresh on focus. Shared Rust owns
+validation, persistence and ordering. Windows also uses the shared history
+formatter for layout captions and ordering.
+
+Mouse row bodies and every device's grips drag after system movement slop.
+Touch and pen bodies preserve native scrolling until a native hold wins. Held
+menus retain the original contact for dragging, remain open after a held release,
+and close on cancellation. Stable surface capture, insertion hints, edge
+scrolling and source invalidation preserve the preview and saved order.
+Releases after focus loss or minimization are rejected immediately.
+
+The input fixture checks the actual source and device, arranged row bounds and
+atomic per-window snapshots. Cancellation checks inspect native terminal
+decisions before asynchronous persistence can hide a submitted move. Touch
+injection and synthetic pen device removal produce PointerCanceled; mouse uses
+Escape. The pen driver uses the same removal path for focus-loss cleanup.
+These checks exercise OS routing, not physical digitizers or input latency.
+The multiwindow fixture waits for a Preferences dialog before querying its
+Close button after a theme update. Test launchers remove absent environment
+flags explicitly so an empty value cannot accidentally enable probe controls.
+
+Integration through main 907c632 includes shared startup reuse, column settings,
+and the updated Illustrator preset. Startup validation compares the adopted
+layout with that full shipped preset. The 481 unit tests pass (25 host, 296 UI,
+96 Windows and 64 workspace; four explicitly ignored hardware tests), together
+with strict Windows Clippy, the production Rust/WinUI build and release Wasm.
+The Windows development guide now includes a portable debugging and visual-test
+starter without machine-specific paths or private data.
+
+Native manager/restart, switcher, owner-focus and multiwindow checks pass,
+including preference updates in inactive windows. Full row fixtures pass for
+mouse, touch and pen, with native cancellation and minimize evidence. The latest
+integration rechecks the manager, switcher, multiwindow workflow and pen gestures.
+All four native/Chrome editor scenes pass the unchanged geometry checks: maximum
+header error 1.664063 physical pixels, Layers 1.000031 and Tool Set 0.5. Camera
+and titlebar-underlay checks pass. Unmasked zero-tolerance raster comparisons
+still differ in 7.54%/8.38% of dark/light initial pixels and 10.05%/9.42% of
+under-header pixels; these are not accepted whole-editor raster parity results.
+
+Other workspace drag families, attached column group panels and per-column
+preferences, the shared starting-layout preview, remaining editor raster
+differences and the strict GPU filter-reference failure remain open. Physical
+pressure/tilt/eraser/touch validation, mixed DPI/lifecycle/device recovery,
+distribution and sustained 120 Hz painting plus physical input-to-present
+acceptance are still required. No presentation benchmark ran during this
+milestone. Profiles, captures, diagnostics and binaries remain ignored/local.

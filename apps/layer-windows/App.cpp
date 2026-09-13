@@ -34,7 +34,9 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
         auto next=std::make_shared<CanvasWindow>(
             [weak=get_weak()]{if(auto self=weak.get())self->AddWindow();},
             [weak=get_weak()](uint64_t id){if(auto self=weak.get()){self->windows.erase(id);self->TraceWindows();}},
-            !launchedWindow);
+            !launchedWindow,
+            [weak=get_weak()](uint64_t source){if(auto self=weak.get())for(auto const& [id,window]:self->windows)
+                if(id!=source)window->RefreshWorkspaceSwitcher();});
         windows.emplace(next->Id(),next);
         launchedWindow=true;
         TraceWindows();

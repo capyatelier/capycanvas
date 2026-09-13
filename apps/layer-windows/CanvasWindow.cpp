@@ -42,9 +42,10 @@ void CapyLifecycle(char const* event) {
     std::ofstream("lifecycle.log",std::ios::app)
         << GetCurrentProcessId() << " " << Now() << " " << event << "\n";
 }
-CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,bool primary)
+CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,bool primary,
+    std::function<void(uint64_t)> preferencesChanged)
     :windowId(window.AppWindow().Id().Value),primaryWindow(primary),
-     createWindow(std::move(create)),onClosed(std::move(close)) {
+     createWindow(std::move(create)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)) {
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))TraceState("ui-state","{}");
@@ -131,7 +132,7 @@ void CanvasWindow::Open() {
             if(e.WindowActivationState()==WindowActivationState::Deactivated){
                 if(self->workspace)self->workspace->CancelGesture();self->heldKeys.clear();
                 self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
-            }else self->Resize();
+            }else{self->Resize();self->RefreshWorkspaceSwitcher();}
         }
     });
     window.AppWindow().Closing([weak=weak_from_this()](auto&&,AppWindowClosingEventArgs const& e) {
@@ -838,12 +839,21 @@ void CanvasWindow::Fullscreen() {
         AppWindowPresenterKind::Overlapped:AppWindowPresenterKind::FullScreen);
     Resize();
 }
+void CanvasWindow::RefreshWorkspaceSwitcher() {
+    if(!closing&&!closed)Send(R"({"operation":"refresh_switcher"})",CanvasCommandKind::Workspace);
+}
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
     if(!workspace->Apply(model))return;
     lastModel=model;
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
     auto storage=object(model,L"windows_workspace");
+    if(flag(storage,L"ready")){
+        auto next=uint64_t(num(storage,L"switcher_revision"));
+        bool changed=workspacePreferencesRevision&&*workspacePreferencesRevision!=next;
+        workspacePreferencesRevision=next;
+        if(changed&&workspacePreferencesChanged)workspacePreferencesChanged(windowId);
+    }
     auto owner=str(storage,L"owner");
     if(!owner.empty()){
         std::wstring property=L"CapyCanvas.WorkspaceOwner."+std::wstring(owner);

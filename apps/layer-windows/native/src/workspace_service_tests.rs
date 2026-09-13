@@ -17,6 +17,9 @@ struct Faults {
     hold: Cell<bool>,
     hold_reads: Cell<bool>,
     read_waiting: Cell<bool>,
+    hold_switcher_reads: Cell<bool>,
+    switcher_read_waiting: Cell<bool>,
+    switcher_read_waker: RefCell<Option<Waker>>,
     read_waker: RefCell<Option<Waker>>,
     waiting: Cell<bool>,
     waker: RefCell<Option<Waker>>,
@@ -27,8 +30,17 @@ struct TestStore {
 }
 impl WorkspaceStore for TestStore {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
-        let commit = matches!(request, StoreRequest::Commit { .. });
+        let commit = matches!(
+            request,
+            StoreRequest::Commit { .. }
+                | StoreRequest::UpdateSwitcher { .. }
+                | StoreRequest::UpdateWorkspaceOrder { .. }
+        );
         let read = matches!(request, StoreRequest::Load { .. });
+        let switcher_read = matches!(
+            request,
+            StoreRequest::Switcher | StoreRequest::WorkspaceOrder
+        );
         if commit && self.faults.fail.get() {
             return Err(StoreError::new(
                 layer_workspace::ErrorKind::FailedWrite,
@@ -36,6 +48,19 @@ impl WorkspaceStore for TestStore {
             ));
         }
         let response = self.worker.request(request).await?;
+        if switcher_read && self.faults.hold_switcher_reads.get() {
+            self.faults.switcher_read_waiting.set(true);
+            poll_fn(|cx| {
+                if self.faults.hold_switcher_reads.get() {
+                    *self.faults.switcher_read_waker.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            })
+            .await;
+            self.faults.switcher_read_waiting.set(false);
+        }
         if read && self.faults.hold_reads.get() {
             self.faults.read_waiting.set(true);
             poll_fn(|cx| {
@@ -180,7 +205,7 @@ fn startup_waits_for_canvas_idle_then_close_restores_layout_and_working_values()
     assert!(f.service.accepts_input(wall()));
     assert_eq!(
         f.native.session.state().workspace.layout,
-        DockLayout::for_platform(Platform::Windows)
+        layer_ui::WorkspacePreset::Illustrator.layout(Platform::Windows)
     );
     f.native
         .dispatch(UiAction::SetBrushSize { value: 47. })

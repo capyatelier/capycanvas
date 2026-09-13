@@ -704,10 +704,26 @@ the legacy ui-state.json path for existing single-window fixtures.
 The WinUI workspace manager follows the current
 [host handoff](../../docs/ui/workspace-manager-host-handoff.md) and
 [task workspace definitions](../../docs/ui/default-workspaces.md). The titlebar
-pill switches the stable Painter, Illustrator and Photographer identities through
-the shared ownership/save path. Names and edits follow each workspace; included
-workspaces can be renamed but not deleted. Custom workspaces leave all three
-segments unselected. The shared upgrade preserves customized Photographer layouts.
+pill uses shared saved visibility and order, including custom workspaces. Names
+and edits follow each workspace; included workspaces can be renamed but not
+deleted. New workspaces start pinned. An unpinned current workspace temporarily
+appears first, and the pill scrolls when its choices exceed the available width.
+The shared upgrade preserves customized Photographer layouts.
+
+Every manager row has a narrow left grip, a pin when shown in the top bar, and a
+separate current-workspace checkmark. Show in top bar and Move Up/Down save app
+preferences immediately, independently of preview/Cancel and workspace history.
+Other windows in the same process refresh without activation; independent
+processes refresh on focus. Accepted preference writes drain before close.
+
+Mouse row bodies and every device's grips drag after system movement slop.
+Touch/pen bodies preserve native scrolling until WinUI recognizes a stationary
+hold. A hold opens the native menu; the same contact can continue into a drag.
+Release retains the menu, and Escape dismisses it before closing the manager.
+Insertion previews and edge scrolling remain native; one completed drop submits
+a shared order edit. Cancellation, filtering away a source, and losing the window
+preserve saved order and the workspace preview. Keyboard navigation previews,
+and the grip exposes the same accessible Move Up/Down commands.
 
 Manage Workspaces and Layout History preview arrangements in the editor behind
 the dialog. Selection, double-click and Enter do not commit the preview. Explicit
@@ -727,6 +743,10 @@ transient HWND property without taking its claim.
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-manager.ps1 -Executable <native-exe>
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable <native-exe>
+./apps/layer-windows/scripts/exercise-switcher.ps1 -Executable <native-exe>
+foreach ($device in 'mouse','touch','pen') {
+    ./apps/layer-windows/scripts/exercise-switcher-drag.ps1 -Executable <native-exe> -Device $device -Overflow
+}
 ~~~
 
 The first fixture checks native lists, previews, name-only creation, history,
@@ -734,6 +754,11 @@ baseline restoration, included/custom workspace policies, brush reset, header
 switching and restart. The second checks independent app instances and owner
 window activation. Both enforce the existing five-second close gate. The manager
 fixture passes after the material-shader specialization described below.
+The switcher fixtures cover saved pins/order, restart and header overflow, then
+OS-delivered mouse/touch/pen pickup, menus, preview preservation, keyboard access,
+scrolling, and cancellation. Run UI fixtures sequentially on an unlocked desktop.
+Their input driver is restricted to the owned process; physical digitizers and
+presentation/input latency still require separate validation.
 Profiles and captures stay local. New Window and runtime filter transport are implemented.
 Full visual/gesture parity, lifecycle/device/DPI validation, distribution and
 final physical-input/presentation acceptance remain open.
