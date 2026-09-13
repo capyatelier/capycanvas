@@ -152,3 +152,26 @@ real drawing, project save/open/new, PNG export, unsaved cancellation and
 workspace restoration. Headed Chrome `--title-bar-feedback` also passed against
 the integrated renderer. Evidence remains under
 `artifacts/title-bar/review/`.
+
+## Collapsed menu-region dragging
+
+The menu-label overflow review exposed two independent failures: the component
+bank covered the overflow popup, and hidden rows had neither Web drag pickup nor
+a shared Rust drag source. A pointer over a covered row could pick up a bank
+chip instead. The editor now keeps overflow above the bank and retains its rows
+through updates. Whole rows drag immediately after slop; a collapsed button
+representing exactly one hidden item also drags directly. Multiple hidden items
+remain individually accessible through the chooser.
+
+Shared Rust accepts identified overflow sources without inventing a visible tab
+slot and resolves drops before/after the collapsed tail. It retains stable IDs,
+grab offsets, detach/re-entry and one committed workspace edit. Web preserves
+chooser taps and selection, closes the popup on pickup, and captures on the
+stable workspace.
+
+`--title-bar-overflow` exercises expanded-to-collapsed menu labels and their
+neighbors, real hit testing, mouse/touch/pen pickup, cross-region placement,
+outside removal, bank drops and all three sizes in headed hardware-WebGPU
+Chrome. It checks Cancel and workspace undo/redo through visible controls and
+shared commands; CDP contacts do not establish physical-stylus coverage.
+Captures are under `artifacts/title-bar/review/title-bar-overflow/`.
