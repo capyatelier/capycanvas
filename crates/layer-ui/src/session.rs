@@ -1645,6 +1645,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn renderer_stats(&self) -> crate::StatsView {
         crate::stats::view(self.engine.backend().telemetry())
     }
+    /// Live execution availability, including temporary canvas locks. Retained
+    /// controls use `state.commands`; dispatch always rechecks this live state.
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
@@ -3956,6 +3958,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_commands(&mut self) -> bool {
+        let canvas_idle = self.require_idle().is_ok();
         let mut changed = false;
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
@@ -3966,6 +3969,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 id.label()
             };
             if let Some(previous) = self.state.commands.get_mut(index) {
+                // A canvas contact must not flash disabled styling across the
+                // editor. Keep the published availability until it finishes;
+                // selection, icons and labels still follow live state. This is
+                // presentation only: command()/dispatch retain the stroke lock.
+                let enabled = if !canvas_idle {
+                    previous.enabled
+                        && id.available_on(self.state.platform)
+                        && !self.state.document_file.close_ready
+                } else {
+                    enabled
+                };
                 if previous.enabled != enabled
                     || previous.selected != selected
                     || previous.icon != icon
@@ -6427,9 +6441,31 @@ mod tests {
     fn tool_switch_keeps_active_stroke_snapshot_and_restores_next_stroke_settings() {
         let mut s = session();
         let original = s.engine.configured_brush().clone();
+        let enabled: Vec<_> = s.state.commands.iter().map(|c| c.enabled).collect();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
         invoke(&mut s, CommandId::Liquify);
+        assert_eq!(
+            s.state
+                .commands
+                .iter()
+                .map(|c| c.enabled)
+                .collect::<Vec<_>>(),
+            enabled,
+            "stroke protection does not restyle commands"
+        );
+        assert!(
+            s.state
+                .commands
+                .iter()
+                .any(|c| c.id == CommandId::Liquify && c.selected)
+        );
+        assert!(
+            !s.state
+                .commands
+                .iter()
+                .any(|c| c.id == CommandId::Pen && c.selected)
+        );
         assert_eq!(s.engine.brush(), &original);
         assert_eq!(
             s.engine.configured_brush().execution_class(),
@@ -9590,6 +9626,12 @@ mod tests {
         .unwrap();
         assert!(!app.command(CommandId::ClearLayer).enabled);
         assert!(!app.command(CommandId::FillSelection).enabled);
+        for id in [CommandId::ClearLayer, CommandId::FillSelection] {
+            assert!(
+                !app.state.commands.iter().find(|c| c.id == id).unwrap().enabled,
+                "locked-layer actions remain visibly unavailable"
+            );
+        }
         app.dispatch(UiAction::Layer {
             action: LayerAction::Lock {
                 id: mask_layer,
@@ -15217,42 +15259,140 @@ mod tests {
     }
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {
-        let mut app = session();
-        app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
-        assert!(!app.command(CommandId::AddLayer).enabled);
-        assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
-        assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
-        app.frame(10_000_000, 18_000_000).unwrap();
-        app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
-        let change = app.frame(20_000_000, 28_000_000).unwrap();
-        assert_eq!(change.regions, 0);
-        assert!(change.canvas_wake);
-        app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
-        let change = app.frame(30_000_000, 38_000_000).unwrap();
-        assert_ne!(change.regions & regions::DOCUMENT, 0);
-        assert!(app.command(CommandId::Undo).enabled);
-        let stroke = app.engine.document().strokes().next().unwrap();
-        assert_eq!(stroke.points[0].pressure, 0.2);
-        assert_eq!(stroke.points[1].pressure, 0.8);
-        let expected = app
-            .state
-            .camera
-            .input_transform()
-            .map(Point { x: 225.0, y: 300.0 });
-        assert!((stroke.points[0].position.x - expected.x).abs() < 0.001);
-        assert!(app.engine.backend().dabs > 0);
-        invoke(&mut app, CommandId::Undo);
-        assert_eq!(app.engine.document().strokes().count(), 0);
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            let mut app = session();
+            app.set_platform(platform);
+            app.state
+                .workspace
+                .layout
+                .insert_tools(
+                    Panel::Toolbar,
+                    None,
+                    &[ToolbarControl::Command {
+                        command: CommandId::Hand,
+                    }],
+                )
+                .unwrap();
+            let commands = app.state.commands.clone();
+            let tiles = serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap();
+            assert!(
+                !commands
+                    .iter()
+                    .find(|c| c.id == CommandId::Undo)
+                    .unwrap()
+                    .enabled
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .find(|c| c.id == CommandId::FillSelection)
+                    .unwrap()
+                    .enabled
+            );
+            app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
+            assert!(!app.command(CommandId::AddLayer).enabled);
+            assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
+            assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
+            let change = app.frame(10_000_000, 18_000_000).unwrap();
+            assert_eq!(
+                change.regions & regions::COMMANDS,
+                0,
+                "{platform:?}: pen-down must not restyle commands"
+            );
+            assert_eq!(app.state.commands, commands);
+            assert_eq!(
+                serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap(),
+                tiles
+            );
+            let hand = app
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| {
+                    t.control
+                        == ToolbarControl::Command {
+                            command: CommandId::Hand,
+                        }
+                })
+                .unwrap()
+                .id;
+            assert!(
+                app.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: hand
+                })
+                .is_err()
+            );
+            assert!(
+                app.dispatch(UiAction::Invoke {
+                    command: CommandId::Undo
+                })
+                .is_err()
+            );
+            assert!(
+                app.engine.has_active_stroke(),
+                "blocked actions preserve the stroke"
+            );
+            app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
+            let change = app.frame(20_000_000, 28_000_000).unwrap();
+            assert_eq!(change.regions, 0);
+            assert!(change.canvas_wake);
+            assert_eq!(app.state.commands, commands);
+            app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
+            let change = app.frame(30_000_000, 38_000_000).unwrap();
+            assert_ne!(change.regions & regions::DOCUMENT, 0);
+            assert!(app.command(CommandId::Undo).enabled);
+            for command in &app.state.commands {
+                assert_eq!(
+                    *command,
+                    app.command(command.id),
+                    "availability refreshes after release"
+                );
+            }
+            let stroke = app.engine.document().strokes().next().unwrap();
+            assert_eq!(stroke.points[0].pressure, 0.2);
+            assert_eq!(stroke.points[1].pressure, 0.8);
+            let expected = app
+                .state
+                .camera
+                .input_transform()
+                .map(Point { x: 225.0, y: 300.0 });
+            assert!((stroke.points[0].position.x - expected.x).abs() < 0.001);
+            assert!(app.engine.backend().dabs > 0);
+            invoke(&mut app, CommandId::Undo);
+            assert_eq!(app.engine.document().strokes().count(), 0);
+        }
     }
     #[test]
     fn cancel_removes_provisional_stroke_and_binding_actions_roundtrip() {
         let mut app = session();
+        invoke(&mut app, CommandId::AddLayer);
+        invoke(&mut app, CommandId::Undo);
+        assert!(app.command(CommandId::Redo).enabled);
+        let commands = app.state.commands.clone();
         app.pen(event(&app, 1, PenPhase::Down, 0.5)).unwrap();
         app.frame(10_000_000, 18_000_000).unwrap();
+        assert_eq!(app.state.commands, commands);
         app.pen(event(&app, 2, PenPhase::Cancel, 0.0)).unwrap();
         app.frame(20_000_000, 28_000_000).unwrap();
         assert_eq!(app.engine.document().strokes().count(), 0);
         assert!(!app.command(CommandId::Undo).enabled);
+        assert_eq!(
+            app.state.commands, commands,
+            "cancellation restores live availability"
+        );
         let action: UiAction = serde_json::from_str(r#"{"type":"move_panel","panel":"sizes","target":{"kind":"edge","edge":"right","outer":false},"viewport":[1200,900]}"#).unwrap();
         let value = serde_json::to_string(&action).unwrap();
         app.dispatch(serde_json::from_str(&value).unwrap()).unwrap();

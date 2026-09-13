@@ -856,6 +856,8 @@ pub struct UiState {
     pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
     pub document_file: DocumentFileState,
+    /// Retained control presentation. Enabled states stay steady during canvas
+    /// input; use `UiSession::command` for live execution availability.
     pub commands: Vec<CommandState>,
     pub settings: Settings,
     /// Resolved appearance for widgets, previews and GPU canvas surround.

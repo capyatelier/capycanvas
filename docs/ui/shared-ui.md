@@ -329,6 +329,16 @@ selection and formatted shortcut hints. Typed actions carry values for brush siz
 identity/properties/order, panel moves, split sizes, themes, and settings.
 There is no stringly typed event bus or generic patch language.
 
+Retained controls use `UiState.commands`. Its enabled states stay at their
+pre-contact values while canvas input is pending or active, so drawing does not
+dim the toolbar on every stroke. Previously unavailable commands remain dim;
+release or cancellation refreshes availability. Selection, icons, labels and
+brush/color feedback continue updating during the contact. Unsupported platform
+commands and a closed document still disable immediately. `UiSession::command`
+and dispatch use live availability, including the temporary canvas lock, so a
+shortcut or second contact cannot execute an unsafe action during a stroke.
+Menus requested during a stroke also use live availability.
+
 Brush picker labels, preset identities, and size choices have one Rust source.
 Picker colors are display-encoded sRGB; Rust converts them to linear brush
 color. Tool selection and brush parameters apply to subsequent strokes. Layer
