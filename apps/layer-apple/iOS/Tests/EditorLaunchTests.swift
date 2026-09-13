@@ -40,6 +40,51 @@ final class EditorLaunchTests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    @MainActor func testLayerListScrolling() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
+        let actions = (0..<22).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let list = app.descendants(matching: .any)["layer-rows"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 20))
+        func order() -> [String] { (list.value as? String ?? "").split(separator: ",").map(String.init) }
+        expectation(for: NSPredicate { _, _ in order().count == 24 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let initial = order(), movedID = initial[0]
+        let first = app.descendants(matching: .any)["layer-grip-" + movedID].firstMatch
+        let initialFrame = first.frame
+        list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.8)).press(forDuration: 0.01,
+            thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.2)))
+        XCTAssertTrue(!first.exists || first.frame.maxY < initialFrame.maxY - 20,
+            "Early touch movement must scroll the rows")
+        XCTAssertEqual(order(), initial, "Early touch scrolling must preserve document order")
+        list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.15)).press(forDuration: 0.01,
+            thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.9)))
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(first.isHittable, "The source grip must be back inside the viewport")
+        let edge = list.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 1)).withOffset(CGVector(dx: 0, dy: -10))
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.01,
+            thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 1.2)
+        expectation(for: NSPredicate { _, _ in order() != initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let moved = order()
+        XCTAssertEqual(moved.filter { $0 != movedID }, initial.filter { $0 != movedID })
+        XCTAssertGreaterThan(moved.firstIndex(of: movedID) ?? -1, Int(list.frame.height / 40),
+            "Holding at the edge must move the source beyond the initial visible rows")
+        func command(_ label: String) {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch.tap()
+        }
+        command("Undo")
+        expectation(for: NSPredicate { _, _ in order() == initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        command("Redo")
+        expectation(for: NSPredicate { _, _ in order() == moved }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
     @MainActor func testLayerContextMenuAnchors() {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()

@@ -144,6 +144,11 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         }
     }
     func closeMenu() { menuRequest = UUID(); if menuSource != nil { menuSource = nil }; if !menu.isNull { menu = JSON() } }
+    func validate() {
+        // A document edit can remove the source while the pointer is stationary.
+        // Retire it on publication, without waiting for a native move or release.
+        if contact.target != nil, !contact.validate() { cancel() }
+    }
     func cancel() {
         contact.cancel(); if drag != nil { drag = nil }; nativeDragChanged(false); closeMenu()
     }

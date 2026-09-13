@@ -36,13 +36,16 @@ struct LayerPanel: View {
                             .onPreferenceChange(LayerRowFrames.self) { interaction.frames = $0 }
                             .overlay(alignment: .topLeading) { dragPreview }
                             .modifier(PanelBodyMeasurement(panel: "layers", part: "rows"))
-                    }.accessibilityIdentifier("layer-rows")
+                    }.accessibilityIdentifier("layer-rows").modifier(LayerInputCheckOrder(layers: layers))
                 } else { Spacer(minLength: 0) }
                 if visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }
             }
         }
             .onAppear { interaction.store = store }
-            .onChange(of: store.state["revision"].uint) { _, _ in store.layerThumbnails.refresh() }
+            .onChange(of: store.state["revision"].uint) { _, _ in
+                interaction.validate(); store.layerThumbnails.refresh()
+            }
+            .onChange(of: store.state["layer_tools"]["rename_layer"].uint) { _, _ in interaction.validate() }
             .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in interaction.cancel() }
             .onDisappear { interaction.cancel() }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.image]) { result in
@@ -128,6 +131,21 @@ struct LayerPanel: View {
                 }.allowsHitTesting(false)
             }
         }
+    }
+}
+
+/// The isolated UI workflow reads complete order, including unmounted rows.
+/// Ordinary builds keep the native scroll view's accessibility value unchanged.
+private struct LayerInputCheckOrder: ViewModifier {
+    let layers: [JSON]
+    @ViewBuilder func body(content: Content) -> some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CAPY_LAYER_INPUT_PROBE"] == "1" {
+            content.accessibilityValue(layers.map { String($0["id"].uint) }.joined(separator: ","))
+        } else { content }
+        #else
+        content
+        #endif
     }
 }
 

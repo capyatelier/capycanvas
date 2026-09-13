@@ -118,6 +118,39 @@ Do not force AppKit's high-contrast appearance names: Apple's
 reserves their selection for the system accessibility setting. These focused
 comparisons do not constitute a complete accessibility or physical-device pass.
 
+## Layer scrolling and interruption validation — 2026-09-12
+
+A native 24-layer fixture exposed a stationary-capture bug: deleting the dragged
+layer left its contact active until another pointer event arrived. Both hosts
+now validate layer contacts when the document revision or active name editor
+changes, cancelling an invalid source immediately. The native fixture fails
+before this change and passes afterwards on both Apple presets.
+
+Actual AppKit pen events retain the menu contact through edge scrolling after
+the source leaves view; the completed drop matches its measured indicator and
+one Undo/Redo restores it. Mouse checks cover source deletion, entering rename,
+late release, list removal/remount and new-document replacement. The latter
+uses the real Metal document owner and verifies cancellation of both capture
+and deferred menus even when the replacement document reuses the layer ID.
+Native group drops cover both group-interval boundaries and shared rejection of
+locked sources/destinations or descendant cycles without changing document
+revision or adding a history entry.
+
+The iPad simulator independently passes ordinary touch scrolling before a hold,
+immediate grip pickup, edge scrolling past the initially visible rows, preservation
+of every other layer's order and actual toolbar Undo/Redo. A Debug-only opt-in
+probe exposes complete order to this isolated test; normal scroll accessibility
+values are unchanged. Both final signed builds pass. The isolated physical iPad
+contains the cancellation fix and a disposable long layer list; its physical
+finger/Pencil menu-to-drag and edge-scrolling check is still awaiting feedback.
+
+Reproduce with `tests/layer-row-lifecycle.swift` through the existing Swift fixture
+script and `EditorLaunchTests/testLayerListScrolling` in the iPad scheme. The
+command-coverage references now include these layer workflows; the audit passes
+against the retained schema-4 inventory and remains an inventory check. Complete
+native workflow, visual, physical-input and sustained-performance gates remain
+open. Raw fixtures, logs, captures, devices and signing details remain ignored.
+
 ## Whole-layer-row pickup and workspace footer — 2026-09-12
 
 Both Apple hosts now route layer-row bodies and their grips through the retained
