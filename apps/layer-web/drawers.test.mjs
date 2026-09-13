@@ -177,18 +177,17 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       await customize({type:'set_column_collapsed',group:46,collapsed:true});
       const a=await rect('.column-tab[data-panel="brushes"]'),b=await rect('.column-tab[data-panel="sizes"]');
       const strip=await rect('.collapsed-column[data-column="46"]');
-      assert.ok(Math.abs(a.top-strip.top-6)<.01,'Leading divider retains the space below its line');
-      assert.ok(Math.abs((await rect('.column-divider')).top-strip.top)<.01,'Leading line touches the strip top');
+      assert.ok(Math.abs(a.top-strip.top-6)<.01,'First tile retains the standard top padding');
+      assert.equal(await evaluate('document.querySelectorAll(".collapsed-column .column-divider").length'),1,'Only the divider between groups is painted');
       assert.ok(Math.abs(b.top-a.bottom-12)<.01,'Collapsed groups use the toolbar divider plus its two gaps');
       const line=async(selector,horizontal,name)=>{
         const r=await rect(selector),p=[r.x+r.width/2,r.y+r.height/2];
-        assert.ok(Math.abs((horizontal?r.height:r.width)-(name==='column-divider'?1:8))<.01,'Only the leading divider omits its top padding');
+        assert.ok(Math.abs((horizontal?r.height:r.width)-8)<.01,'Dividers retain their standard slot');
         const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${theme}-${name}.png`,Buffer.from(shot.data,'base64'));
         const colors=await sample(shot.data,[p,horizontal?[p[0],p[1]+2]:[p[0]+2,p[1]]]);
         assert.notDeepEqual(colors[0],colors[1],`${theme} ${name}: separator line is visible`);
       };
       await line('.column-divider',true,'column-divider');
-      await line('.column-divider ~ .column-divider',true,'column-group-divider');
       await line('.toolbar-controls .tile-divider',false,'toolbar-divider-horizontal');
       await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge:'right',outer:true}});
       await line('.toolbar-controls .tile-divider',true,'toolbar-divider-vertical');

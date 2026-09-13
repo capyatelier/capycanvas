@@ -68,10 +68,12 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       const content=element("div","collapsed-content");place(content,local(column.content,column.bounds));root.append(content);
       content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};
       for(const [index,group] of column.groups.entries()) {
-        const b=group.bounds,divider=element('div','tile-divider column-divider');
-        divider.setAttribute('role','separator');divider.setAttribute('aria-orientation','horizontal');
-        place(divider,{x:0,y:b.y-column.content.y-(index===0?6:10),width:column.content.width,height:index===0?1:8});
-        content.append(divider);
+        if(index>0) {
+          const divider=element('div','tile-divider column-divider');
+          divider.setAttribute('role','separator');divider.setAttribute('aria-orientation','horizontal');
+          place(divider,{x:0,y:group.bounds.y-column.content.y-10,width:column.content.width,height:8});
+          content.append(divider);
+        }
         for(const item of group.icons) {
           const view=customization.view(item.panel),b=button("",()=>send({type:"toggle_column_drawer",group:group.group,panel:item.panel}),"dock-tab column-tab");
           b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));

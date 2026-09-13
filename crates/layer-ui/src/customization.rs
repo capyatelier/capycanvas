@@ -685,7 +685,7 @@ impl DockLayout {
         )]];
         if let Some(column) = column.filter(|_| platform.stacked_columns()) {
             let settings = self.column_stack(column);
-            let mut item = ContextMenuItem::edit("Drawers",
+            let mut item = ContextMenuItem::edit("Open individual panels",
                 CustomizationAction::SetColumnDrawers { column, drawers: !settings.drawers });
             item.selected = Some(settings.drawers);
             sections.push(vec![item]);

@@ -120,7 +120,8 @@ fn native_column_stack_input() {
                 .unwrap()
                 .downcast::<gtk::PopoverMenu>()
                 .unwrap();
-            let action = menu_action(&menu.menu_model().unwrap(), "Drawers").unwrap();
+            let action =
+                menu_action(&menu.menu_model().unwrap(), "Open individual panels").unwrap();
             assert!(menu_action(&menu.menu_model().unwrap(), "Group panel").is_none());
             menu.activate_action(&action, None).unwrap();
             menu.popdown();
@@ -140,6 +141,48 @@ fn native_column_stack_input() {
             let r = w.resolved();
             let member = r.collapsed.iter().find(|c| c.id == 4).unwrap();
             let open = member.open.as_ref().unwrap();
+            let second = r.collapsed.iter().find(|c| c.id == 8).unwrap();
+            assert_eq!(open.bounds.y, member.bounds.y);
+            assert_eq!(
+                open.bounds.y + open.bounds.height,
+                second.bounds.y + second.bounds.height
+            );
+            assert_eq!(
+                second.bounds.y - member.bounds.y - member.bounds.height,
+                WORKSPACE_SPACING
+            );
+            for column in [member, second] {
+                let root = find_named(
+                    w.surface.upcast_ref(),
+                    &format!("collapsed-column-{}", column.id),
+                )
+                .unwrap();
+                let bounds = root.compute_bounds(&w.surface).unwrap();
+                assert!((bounds.y() - column.bounds.y).abs() <= 1.);
+                assert!((bounds.height() - column.bounds.height).abs() <= 1.);
+                fn separators(root: &gtk::Widget) -> usize {
+                    let mut count = usize::from(root.is::<gtk::Separator>());
+                    let mut child = root.first_child();
+                    while let Some(widget) = child {
+                        count += separators(&widget);
+                        child = widget.next_sibling();
+                    }
+                    count
+                }
+                assert_eq!(separators(&root), column.groups.len().saturating_sub(1));
+                for icon in column.groups.iter().flat_map(|g| &g.icons) {
+                    let tile = w
+                        .columns
+                        .button(column.id, icon.panel)
+                        .unwrap()
+                        .compute_bounds(&w.surface)
+                        .unwrap();
+                    assert!(
+                        (tile.y() - icon.bounds.y).abs() <= 1.,
+                        "tile geometry follows shared top padding"
+                    );
+                }
+            }
             for group in &member.groups {
                 let shared = r.groups.iter().find(|g| g.id == group.group).unwrap();
                 let views = w.groups.borrow();

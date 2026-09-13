@@ -44,8 +44,8 @@ pub struct CollapsedColumnPlacement {
 }
 impl CollapsedColumnPlacement {
     fn divider_bounds(bounds: Bounds, leading: bool) -> Bounds {
-        // The leading line is flush with the strip top. Later dividers retain the
-        // toolbar's centered 8px slot and 2px tile gaps.
+        // Top padding keeps its prepend drop target, without a painted line.
+        // Dividers between groups retain the toolbar's centered 8px slot.
         let center = bounds.y
             - if leading {
                 5.5
@@ -56,7 +56,7 @@ impl CollapsedColumnPlacement {
             x: bounds.x + 4.,
             y: center - 0.5,
             width: (bounds.width - 8.).max(0.),
-            height: 1.,
+            height: if leading { 0. } else { 1. },
         }
     }
     fn divider_y(&self, group: &CollapsedGroup) -> f32 {
@@ -462,6 +462,36 @@ impl DockLayout {
                 return Some(DropHint {
                     target: DockTarget::StackColumn { column: member.id, before },
                     bounds: edge_line(member.bounds, if before { Edge::Top } else { Edge::Bottom }),
+                });
+            }
+        }
+        // The spacing between members is also an insertion target. Dropping
+        // there must not pull the column out beside its own stack.
+        for pair in resolved.collapsed.windows(2) {
+            let (above, below) = (&pair[0], &pair[1]);
+            if above.stack != below.stack {
+                continue;
+            }
+            let gap = Bounds {
+                x: above.bounds.x,
+                y: above.bounds.y + above.bounds.height,
+                width: above.bounds.width,
+                height: below.bounds.y - above.bounds.y - above.bounds.height,
+            };
+            if gap.contains(point[0], point[1]) {
+                let (column, before) = if above.id == source {
+                    (below.id, true)
+                } else {
+                    (above.id, false)
+                };
+                let height = gap.height.min(3.);
+                return Some(DropHint {
+                    target: DockTarget::StackColumn { column, before },
+                    bounds: Bounds {
+                        y: gap.y + (gap.height - height) * 0.5,
+                        height,
+                        ..gap
+                    },
                 });
             }
         }
@@ -1036,7 +1066,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
             }
         }
     }
-    // No padding above the first divider; retain the space below its line.
+    // Keep top padding for rounded tiles and the prepend drop target.
     let mut y = content.y + 6.;
     visit(node, content, &mut y, &mut groups);
     let empty = Bounds {
@@ -1724,8 +1754,8 @@ mod tests {
             );
             assert_eq!(c.groups[0].divider.y, c.expand.y + c.expand.height);
             c.scroll(offset);
-            for group in &c.groups {
-                assert_eq!(group.divider.height, 1.);
+            for (index, group) in c.groups.iter().enumerate() {
+                assert_eq!(group.divider.height, if index == 0 { 0. } else { 1. });
                 assert_eq!(group.divider.y + 0.5, c.divider_y(group));
                 assert_eq!(group.divider.x, c.content.x + 4.);
                 assert_eq!(group.divider.width, c.content.width - 8.);

@@ -313,12 +313,15 @@ impl DockLayout {
             })
             .collect();
         let total: f32 = natural.iter().sum();
+        let gaps = members.len().saturating_sub(1) as f32;
+        let gap = WORKSPACE_SPACING.min(strip.height / gaps.max(1.));
+        let available = (strip.height - gap * gaps).max(0.);
         for (index, member) in members.iter().enumerate() {
             let last = index + 1 == members.len();
             let h = if last {
                 strip.y + strip.height - y
             } else {
-                natural[index] * (strip.height / total.max(1.)).min(1.)
+                natural[index] * (available / total.max(1.)).min(1.)
             };
             let mut c = columns::resolve_column(
                 member,
@@ -342,9 +345,9 @@ impl DockLayout {
                     } else {
                         bounds.x + WORKSPACE_SPACING
                     },
-                    y: WORKSPACE_SPACING,
+                    y: 0.,
                     width: (bounds.width - strip.width - WORKSPACE_SPACING * 2.).max(0.),
-                    height: (result.viewport[1] - WORKSPACE_SPACING * 2.).max(0.),
+                    height: result.viewport[1],
                 };
                 let mut expanded = self.clone();
                 expanded.collapsed.retain(|c| c.root != member.id());
@@ -373,7 +376,7 @@ impl DockLayout {
                 });
             }
             result.collapsed.push(c);
-            y += h;
+            y += h + gap;
         }
     }
 }

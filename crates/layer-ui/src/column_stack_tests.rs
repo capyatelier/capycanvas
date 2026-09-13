@@ -57,7 +57,19 @@ fn stacking_and_unstacking_preserve_member_trees_and_widths() {
         .collect();
     assert_eq!(members.len(), 2);
     assert_eq!(members[0].bounds.x, members[1].bounds.x);
-    assert!(members[0].bounds.y + members[0].bounds.height <= members[1].bounds.y + 0.01);
+    assert_eq!(
+        members[0].bounds.y + members[0].bounds.height + WORKSPACE_SPACING,
+        members[1].bounds.y
+    );
+    assert!(members.iter().all(|c| c.groups[0].divider.height == 0.));
+    let gap = [
+        members[0].bounds.x + TILE_SIZE * 0.5,
+        members[1].bounds.y - WORKSPACE_SPACING * 0.5,
+    ];
+    assert!(
+        matches!(s.state.workspace.layout.column_drop_hint(&resolved, right, gap).unwrap().target,
+        DockTarget::StackColumn { column, before: false } if column == left)
+    );
     assert!(
         members
             .iter()
@@ -156,10 +168,10 @@ fn opening_a_member_uses_all_ordinary_groups_and_switches_within_the_stack() {
     let c = resolved.collapsed.iter().find(|c| c.id == left).unwrap();
     let open = c.open.as_ref().unwrap();
     assert!((open.bounds.x - c.bounds.x - c.bounds.width - WORKSPACE_SPACING).abs() < 0.01);
-    assert_eq!(open.bounds.y, HEADER_HEIGHT + WORKSPACE_SPACING);
+    assert_eq!(open.bounds.y, HEADER_HEIGHT);
     assert_eq!(
         open.bounds.y + open.bounds.height,
-        STACK_VIEW[1] - WORKSPACE_SPACING * 2.
+        STACK_VIEW[1] - WORKSPACE_SPACING
     );
     for group in &c.groups {
         let expanded = resolved

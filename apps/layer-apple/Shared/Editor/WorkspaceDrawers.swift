@@ -44,9 +44,11 @@ private struct WorkspaceCollapsedColumn: View {
                     ForEach(column["groups"].array.indices, id: \.self) { index in
                         let group = column["groups"][index]
 
-                        Rectangle().fill(palette["text"].opacity(0.3))
-                            .placed(JSON(group["divider"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
-                            .allowsHitTesting(false).accessibilityHidden(true)
+                        if index > 0 {
+                            Rectangle().fill(palette["text"].opacity(0.3))
+                                .placed(JSON(group["divider"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
                             let panel = store.panel(icon["panel"].string)

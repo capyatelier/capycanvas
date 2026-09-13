@@ -119,11 +119,12 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                     Box(Modifier.placed(content.relativeTo(bounds), dock.density).clipToBounds().scrollable(scroll, Orientation.Vertical)) {
                         val groups = column.array("groups").objects()
                         groups.forEachIndexed { index, group ->
-                            // Follow the shared leading line's new flush placement.
-                            val top = group.getJSONObject("bounds").number("y") - if (index == 0) 6f else 10f
-                            ToolbarDivider(Modifier.placed(obj("x" to 0f, "y" to (top - content.number("y")),
-                                "width" to content.number("width"), "height" to if (index == 0) 1f else 8f), dock.density)
-                                .testTag("column-divider-$id-$index"), horizontal = true)
+                            if (index > 0) {
+                                val top = group.getJSONObject("bounds").number("y") - 10f
+                                ToolbarDivider(Modifier.placed(obj("x" to 0f, "y" to (top - content.number("y")),
+                                    "width" to content.number("width"), "height" to 8f), dock.density)
+                                    .testTag("column-divider-$id-$index"), horizontal = true)
+                            }
                             group.array("icons").objects().forEach { icon ->
                                 val panel = icon.getString("panel")
                                 val view = panels[panel] ?: return@forEach

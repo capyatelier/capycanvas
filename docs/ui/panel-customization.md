@@ -393,11 +393,13 @@ remain ignored and no third-party code or assets are added.
 
 The former Group panel mode is retired. See [stacked columns](stacked-columns.md)
 for the replacement: each stack contains complete collapsed columns and owns
-Drawers and Auto-hide. GTK opens a member using the ordinary dock views when
-Drawers is disabled. Other hosts preserve the portable preferences and use
-ordinary drawers until their new presentation is implemented.
+“Open individual panels” and Auto-hide. GTK opens a member using the ordinary
+dock views when “Open individual panels” is disabled. Other hosts preserve the
+portable preferences and use ordinary drawers until their new presentation is
+implemented.
 
 The double-caret Expand button is removed. Member footer handles stack and
 unstack columns with immediate pickup; sidebar tiles still require hold then
 drag. All active tabs in the open member highlight their sidebar tiles and use
-shared drawer connectors. The expanded column has surrounding workspace spacing.
+shared drawer connectors. Members have 6 px gaps. The expanded column aligns
+with the stack’s top and bottom and has horizontal workspace spacing.

@@ -88,9 +88,12 @@ impl Columns {
                 root.set_overflow(gtk::Overflow::Hidden);
                 w.install_context(&root, ContextTarget::Column { column: c.id });
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                content.set_margin_top(WORKSPACE_SPACING as i32);
                 let mut buttons = Vec::new();
                 for (index, group) in c.groups.iter().enumerate() {
-                    content.append(&column_separator(index == 0));
+                    if index > 0 {
+                        content.append(&column_separator());
+                    }
                     let mini = gtk::Box::new(gtk::Orientation::Vertical, 2);
                     mini.set_valign(gtk::Align::Start);
                     mini.add_css_class("collapsed-group");
@@ -336,20 +339,16 @@ impl Columns {
     }
 }
 
-fn column_separator(leading: bool) -> gtk::Box {
-    // The leading line sits at the top; later dividers keep toolbar spacing.
+fn column_separator() -> gtk::Box {
+    // Only tab groups within a member have a separator.
     let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
     slot.add_css_class("toolbar-divider");
     slot.add_css_class("column-divider");
-    slot.set_height_request(if leading { 4 } else { 8 });
+    slot.set_height_request(8);
     slot.set_vexpand(false);
     let line = gtk::Separator::new(gtk::Orientation::Horizontal);
     line.set_halign(gtk::Align::Center);
-    line.set_valign(if leading {
-        gtk::Align::Start
-    } else {
-        gtk::Align::Center
-    });
+    line.set_valign(gtk::Align::Center);
     line.set_vexpand(true);
     slot.append(&line);
     slot
