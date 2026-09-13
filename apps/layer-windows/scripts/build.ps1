@@ -3,6 +3,7 @@ param(
     [string]$PackagesDirectory,
     [string]$OutputDirectory,
     [switch]$SkipRust,
+    [ValidateSet('None','Number','Color')][string]$ControlFixture = 'None',
     [switch]$SkipRestore
 )
 $ErrorActionPreference = 'Stop'
@@ -32,7 +33,8 @@ try {
         & cargo @cargoArgs
         if ($LASTEXITCODE -ne 0) { throw 'Rust build failed.' }
     }
-    & msbuild apps/layer-windows/CapyCanvas.vcxproj /m "/p:Configuration=$Configuration" /p:Platform=x64 "/p:PlatformToolset=$toolset" "/p:CapyPackages=$PackagesDirectory" "/p:OutDir=$OutputDirectory/" /v:minimal /nologo
+    $fixture = switch ($ControlFixture) { Number {'true'} Color {'Color'} default {'false'} }
+    & msbuild apps/layer-windows/CapyCanvas.vcxproj /m "/p:Configuration=$Configuration" /p:Platform=x64 "/p:CapyControlFixture=$fixture" "/p:PlatformToolset=$toolset" "/p:CapyPackages=$PackagesDirectory" "/p:OutDir=$OutputDirectory/" /v:minimal /nologo
     if ($LASTEXITCODE -ne 0) { throw 'WinUI build failed.' }
     Write-Output (Join-Path $OutputDirectory 'CapyCanvas.exe')
 } finally { Pop-Location }

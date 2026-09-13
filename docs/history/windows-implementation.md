@@ -2014,3 +2014,48 @@ archive files also pass; invalid packages never launch. This checkpoint does not
 establish clean-machine deployment,
 MSIX/signing, full-image parity, physical pen/touch features, mixed-DPI/device
 recovery or sustained 120 Hz painting/input latency. No performance benchmark ran.
+
+### Compact Windows Color picker milestone
+
+Windows now projects the compact shared ColorPanelView introduced on main:
+Okhsv circle, HSV square, HLS triangle, paint-pair/transparent swatches,
+shape switches, swap and curved shape/RGB readouts. The native view fits a
+solo docked panel to its available height. Shared Rust supplies logical layout,
+projection-aware hit tests, display hue guides and field pixels. WinUI retains
+the buttons and capture owner; unhandled wheel contacts are classified against
+shared geometry before capture, independently of the image's hit-test surface.
+Native swatch menus support secondary click, pen/touch holds and the keyboard.
+
+The four shared SVG color icons are staged as native path geometry so rotation
+does not resample a bitmap. The hue mesh uses a continuous annulus clip.
+Painted wheel-image edges follow the browser canvas's logical-pixel snapping,
+while shared edit geometry remains unchanged. Chromium's
+[canvas painter](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/core/paint/html_canvas_painter.cc)
+and the actual composed reference establish this distinction from DOM bounds.
+
+Validation: 523 shared/native unit tests and strict Windows Clippy pass.
+Documented Debug and Release builds pass. Release checks pass the full editor,
+titlebar hit regions, native measurements, both Zen modes, retained resize,
+workspace restoration, themes and zero exit. The dedicated compact picker
+fixture passes all three projections with synthetic mouse, pen and touch,
+field/hue contacts beneath the curved readout, cancellation, keyboard activation,
+unchanged paint on shape/readout toggles, retained buttons, slots/swap, native
+context menus, the mouse-hold negative case and retained Color drawer input.
+Picker edits leave the document unchanged and every accepted fixture exits zero.
+
+Matched production native/browser fixtures cover 128, 160, 226 and 360 logical
+pixels, dark/light themes and both readouts (48 pickers on eight complete
+surfaces) at the available 150% display scale. Other native scales are not
+accepted. Reported bounds agree except the intentionally snapped wheel image
+at size160, whose paint width differs from the fractional DOM box by at most
+0.672 logical pixels.
+
+**Exact raster parity is not accepted.** The unchanged whole-image,
+zero-tolerance comparison fails all eight surfaces: 22.84–26.23% of pixels
+differ, with mean absolute channel error 0.465–1.399 on the 0–255 scale and
+maximum channel error 137–146. Curved text and edge rasterization remain
+visible in the difference images. References were not masked, rescaled or
+replaced and tolerances were not changed. Capture commands and evidence
+boundaries are in the Windows README; machine captures and reports stay
+ignored. Physical digitizer and final painting/performance acceptance remain
+separate, and the 120 Hz display is currently unavailable.

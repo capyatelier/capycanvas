@@ -139,6 +139,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             double inset=panelId==L"stats"||panelId==L"properties"?6:8;
             contentHeight=[content]{return content.ActualHeight();};
             content.Padding(Thickness{inset,inset,inset,inset});
+            FrameworkElement fittedColor{nullptr};size_t visibleControls=0;
+            for(auto value:array(panel,L"controls"))if(flag(value.GetObject(),L"visible_in_panel"))visibleControls++;
             auto brushValue=[data=data](wchar_t const* key){return num(object(data->state,L"brush"),key);};
             for(auto value:array(panel,L"controls")){
                 auto control=value.GetObject();if(!flag(control,L"visible_in_panel"))continue;
@@ -146,7 +148,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 if(kind==L"brushes")content.Children().Append(ToolSetPanel(data,bindings));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
-                else if(kind==L"color_wheel")content.Children().Append(ColorPanel(data,bindings));
+                else if(kind==L"color_wheel"){
+                    auto picker=ColorPanel(data,bindings,visibleControls==1);
+                    if(visibleControls==1)fittedColor=picker;else content.Children().Append(picker);
+                }
                 else if(kind==L"properties")content.Children().Append(PropertiesPanel(data,bindings));
                 else if(kind==L"stats")content.Children().Append(StatsPanel(data,bindings));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
@@ -171,7 +176,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     }content.Children().Append(actions);
                 }
             }
-            if(!scrollable)root=content;
+            if(fittedColor){
+                Grid fitted;fitted.Padding({inset,inset,inset,inset});fitted.Children().Append(fittedColor);root=fitted;
+                contentHeight=[fittedColor,inset]{return fittedColor.ActualHeight()+2*inset;};
+            }else if(!scrollable)root=content;
             else if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);

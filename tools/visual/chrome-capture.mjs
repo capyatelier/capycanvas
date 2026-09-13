@@ -80,7 +80,7 @@ try {
   if (component) {
     if (scenario==='color-panel'||scenario==='icons'||scenario==='choices'||scenario==='inline-numbers') {
       const capture={'icons':captureIcons,'color-panel':captureColorPanels,'choices':captureChoices,'inline-numbers':captureInlineNumbers}[scenario];
-      await capture({manifest:JSON.parse(await readFile(fixturePath,'utf8')),output,evaluate,call});
+      await capture({manifest:JSON.parse(await readFile(fixturePath,'utf8')),fixturePath,output,evaluate,call});
     } else {
       const capture = {'toolbar-tiles':captureToolbarFixture,'control-colors':captureControlColors,'tool-actions':captureToolActions,'number-controls':captureNumberControls}[scenario];
       await capture({fixture:JSON.parse(await readFile(fixturePath,'utf8')),width,height,scale,output,theme,evaluate,call});

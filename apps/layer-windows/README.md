@@ -227,26 +227,55 @@ to keep formatting updates distinct from edits before close.
 
 ## Color panel checks
 
-The Window menu's Color panel and the toolbar's Brush color popup project the shared
-HSV/HLS model with native controls and GPU gradients. Pointer-region selection
-and all color edits go through Rust. The image uses Windows'
-[Direct2D gradient meshes](https://learn.microsoft.com/en-us/windows/win32/api/d2d1_3/ns-d2d1_3-d2d1_gradient_mesh_patch)
-through WinUI image-surface interop; the main canvas retains its independent
-D3D12 presentation path.
+The native Color panel and Brush color drawer use the shared compact picker:
+Okhsv circle, HSV square, HLS triangle, overlapping paint swatches, shape
+buttons, swap, and curved shape/RGB readouts. Rust owns layout, projection,
+hue guides, field pixels and edits. WinUI owns buttons, native context menus
+and mouse/pen/touch capture. A solo docked Color panel fits the available
+height. Shared SVG color icons remain vectors when rotated.
 
-Build the shared pixel oracle and run against a fresh, isolated review instance
-with CAPY_TRACE_UI=1. Pass a Python interpreter with Pillow installed:
+Run the isolated input fixture after a normal build:
 
 ~~~powershell
-cargo build --locked -p layer-ui --example color_wheel_reference
-./apps/layer-windows/scripts/exercise-color.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json -Python <python-executable>
+./apps/layer-windows/scripts/exercise-compact-color.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
 ~~~
 
-The fixture opens Color, checks native actions and popup synchronization, then
-captures the entire app window. Rust classifies sampled wheel pixels and computes
-expected colors. Four HSV/HLS cases include remembered hue with black paint.
-Reports remain under ignored artifacts/windows/color. This does not validate
-physical pointer capture, full-window visual parity or presentation performance.
+It checks all three shapes with synthetic mouse, pen and touch, the curved
+readout's hue-ring hit area, cancellation, native keyboard activation,
+retained buttons, paint selection/swap, native swatch menus, and the negative
+mouse-hold menu case. Picker edits must leave the document unchanged. A failed
+live instance is retained for inspection; successful instances must exit zero.
+
+For a complete native/browser component comparison, generate synthetic models
+at the actual display scale (1.5 below), then build the separate review app:
+
+~~~powershell
+cargo run --locked -p layer-ui --example compact_color_fixture -- artifacts/windows/compact-color-parity 1.5
+./apps/layer-windows/scripts/build.ps1 -Configuration Debug -ControlFixture Color -OutputDirectory artifacts/windows/ColorFixture
+foreach ($theme in @('dark','light')) {
+    foreach ($size in @(128,160,226,360)) {
+        ./apps/layer-windows/scripts/capture-compact-color.ps1 -Executable artifacts/windows/ColorFixture/CapyCanvas.exe -FixtureFile "artifacts/windows/compact-color-parity/$theme-$size.json"
+    }
+}
+~~~
+
+Each surface contains all three projections and both readouts. The review
+rejects a mismatched display scale or an incomplete surface and retains the raw
+client image. The production browser capture uses the same Rust models and
+CPU field bytes. Assemble its manifest from the native geometry reports:
+
+~~~powershell
+node -e "const fs=require('fs'),p='artifacts/windows/compact-color-parity',m=JSON.parse(fs.readFileSync(p+'/manifest.json'));m.fixtures=m.fixtures.map(f=>JSON.parse(fs.readFileSync(p+'/native-'+f.name+'.json')));fs.writeFileSync(p+'/capture-manifest.json',JSON.stringify(m));"
+$env:CAPY_CHROME='<absolute-path-to-chrome.exe>'
+node tools/visual/chrome-capture.mjs 512 344 1.5 artifacts/windows/compact-color-parity dark color-panel artifacts/windows/compact-color-parity/capture-manifest.json
+python tools/visual/compare.py artifacts/windows/compact-color-parity/web-dark-160.png artifacts/windows/compact-color-parity/native-dark-160.png --output artifacts/windows/compact-color-parity/diff-dark-160
+~~~
+
+Compare every captured surface with the same unchanged whole-image comparator.
+Geometry, input and pixel results are separate evidence. Passing the first two
+does not establish an exact pixel match, physical digitizer behavior, or painting
+performance. Artifacts remain local and ignored. Build normally again for the
+editor; the Color fixture contains no document or painting surface.
 
 ## Tool controls checks
 
