@@ -1,6 +1,7 @@
 package art.capycanvas
 
 import android.content.Context
+import android.hardware.input.InputManager
 import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -20,6 +21,16 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
     private var attached = false
     private var predictor: MotionPredictor? = null
     private var predictionDevice: Int? = null
+    private var predictionProbe: MotionPredictor? = null
+    private val inputManager = context.getSystemService(InputManager::class.java)
+    private val inputDevices = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) = refreshPredictionAvailability()
+        override fun onInputDeviceChanged(deviceId: Int) = refreshPredictionAvailability()
+        override fun onInputDeviceRemoved(deviceId: Int) {
+            if (predictionDevice == deviceId) { predictor = null; predictionDevice = null }
+            refreshPredictionAvailability()
+        }
+    }
     init {
         holder.addCallback(this)
         isFocusable = true
@@ -27,6 +38,31 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         isLongClickable = false
         pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
         contentDescription = "Drawing canvas"
+    }
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        inputManager.registerInputDeviceListener(inputDevices, handler)
+        refreshPredictionAvailability()
+    }
+    override fun onDetachedFromWindow() {
+        inputManager.unregisterInputDeviceListener(inputDevices)
+        predictor = null; predictionDevice = null; predictionProbe = null
+        super.onDetachedFromWindow()
+    }
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (hasWindowFocus) refreshPredictionAvailability()
+    }
+    internal fun refreshPredictionAvailability() {
+        val available = if (Build.VERSION.SDK_INT >= 34) {
+            val probe = predictionProbe ?: MotionPredictor(context).also { predictionProbe = it }
+            inputManager.inputDeviceIds.any { id ->
+                val device = inputManager.getInputDevice(id)
+                device != null && device.supportsSource(InputDevice.SOURCE_STYLUS) &&
+                    probe.isPredictionAvailable(id, InputDevice.SOURCE_STYLUS)
+            }
+        } else false
+        host.updatePredictionAvailability(available)
     }
     override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
         // Compose controls are virtual siblings above this full-window native
@@ -68,9 +104,14 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
             }
             send(event, i, phase, action == MotionEvent.ACTION_MOVE)
         }
-        if (Build.VERSION.SDK_INT >= 34 && event.isFromSource(InputDevice.SOURCE_STYLUS)) {
+        if (!host.nativePredictionEnabled) {
+            predictor = null; predictionDevice = null
+        } else if (Build.VERSION.SDK_INT >= 34 && event.isFromSource(InputDevice.SOURCE_STYLUS)) {
             if (action == MotionEvent.ACTION_DOWN && (predictor == null || predictionDevice != event.deviceId)) {
-                predictor = MotionPredictor(context); predictionDevice = event.deviceId
+                val native = MotionPredictor(context)
+                predictor = native.takeIf { it.isPredictionAvailable(event.deviceId, event.source) }
+                predictionDevice = event.deviceId
+                refreshPredictionAvailability()
             }
             predictor?.let { native ->
                 try {

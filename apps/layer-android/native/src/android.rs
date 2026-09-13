@@ -437,6 +437,18 @@ pub extern "system" fn Java_art_capycanvas_Native_input(
     string(&mut env, result)
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_predictionAvailability(
+    _: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    available: jboolean,
+) {
+    unsafe { app(handle) }
+        .host
+        .session
+        .set_platform_prediction_available(available != 0);
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_pointer(
     mut env: JNIEnv,
     _: JClass,

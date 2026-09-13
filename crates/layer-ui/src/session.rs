@@ -76,6 +76,7 @@ pub struct UiSession<R: CanvasRenderer> {
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
+    platform_prediction_available: Option<bool>,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
     column_panel_drag: Option<(u32, Option<Panel>, ResizeDrag)>,
@@ -133,6 +134,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
+            platform_prediction_available: None,
             logical_viewport: None,
             initial_fit: true,
             column_panel_drag: None,
@@ -249,10 +251,24 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn preferences(&self) -> Option<PreferencesView> {
         self.state.settings_open.then(|| {
-            self.state
-                .preferences
-                .view(&self.state.settings, self.state.platform)
+            self.state.preferences.view(
+                &self.state.settings,
+                self.state.platform,
+                self.platform_prediction_available(),
+            )
         })
+    }
+    fn platform_prediction_available(&self) -> bool {
+        self.platform_prediction_available
+            .unwrap_or(self.state.platform != Platform::Android)
+    }
+    /// Transient host capability, independent of the user's saved preference.
+    pub fn set_platform_prediction_available(&mut self, available: bool) -> UiChange {
+        if self.platform_prediction_available == Some(available) {
+            return self.changed(0, false);
+        }
+        self.platform_prediction_available = Some(available);
+        self.changed(regions::SETTINGS, false)
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let mut menu = match target {
@@ -2615,9 +2631,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // change only view state and never trigger storage or rendering.
                 let reveal = matches!(action, PreferenceAction::Reveal { .. });
                 let mut settings = self.state.settings.clone();
-                self.state
-                    .preferences
-                    .edit(&mut settings, action, self.state.platform);
+                if !self.platform_prediction_available()
+                    && matches!(
+                        action,
+                        PreferenceAction::Edit {
+                            id: PreferenceId::PlatformPrediction,
+                            ..
+                        } | PreferenceAction::Reset {
+                            id: PreferenceId::PlatformPrediction
+                        }
+                    )
+                {
+                    self.state.preferences.error = Some(
+                        "Native pen prediction isn't available on this device.".into(),
+                    );
+                } else {
+                    self.state
+                        .preferences
+                        .edit(&mut settings, action, self.state.platform);
+                }
                 if reveal && self.state.preferences.error.is_none() {
                     self.state.settings_open = true;
                 }
@@ -13928,6 +13960,82 @@ mod tests {
                 .any(|r| r.id == PreferenceId::PlatformPrediction)
         );
     }
+    #[test]
+    fn native_prediction_capability_disables_controls_without_changing_saved_choice() {
+        let mut s = session();
+        s.set_platform(Platform::Android);
+        invoke(&mut s, CommandId::Settings);
+        let row = |s: &UiSession<Recorder>| {
+            s.preferences()
+                .unwrap()
+                .pages
+                .into_iter()
+                .flat_map(|p| p.groups)
+                .flat_map(|g| g.rows)
+                .find(|r| r.id == PreferenceId::PlatformPrediction)
+                .unwrap()
+        };
+        assert!(
+            !row(&s).enabled,
+            "Android waits for a host capability report"
+        );
+        assert!(s.state.settings.platform_prediction);
+        s.state.requests.clear();
+        s.set_platform_prediction_available(true);
+        assert!(row(&s).enabled);
+        assert_eq!(row(&s).title, "Native pen prediction");
+        assert!(
+            s.state.requests.is_empty(),
+            "Capability is not a saved setting"
+        );
+
+        edit_preference(
+            &mut s,
+            PreferenceId::PlatformPrediction,
+            PreferenceValue::Bool(false),
+        );
+        assert!(!s.state.settings.feedback_config().use_platform_prediction);
+        assert!(s.state.settings.feedback_config().use_engine_prediction);
+        let saved = s.state.settings.clone();
+        s.state.requests.clear();
+        s.set_platform_prediction_available(false);
+        assert!(!row(&s).enabled);
+        assert!(!row(&s).reset.unwrap().enabled);
+        assert_eq!(s.state.settings, saved);
+        assert!(s.state.requests.is_empty());
+        for action in [
+            PreferenceAction::Edit {
+                id: PreferenceId::PlatformPrediction,
+                value: PreferenceValue::Bool(true),
+            },
+            PreferenceAction::Reset {
+                id: PreferenceId::PlatformPrediction,
+            },
+        ] {
+            preference(&mut s, action);
+            assert!(s.preferences().unwrap().error.is_some());
+            assert_eq!(s.state.settings, saved);
+            assert!(s.state.requests.is_empty());
+        }
+        s.dispatch(UiAction::CloseSettings).unwrap();
+        invoke(&mut s, CommandId::Settings);
+        assert!(
+            !row(&s).enabled,
+            "Reopening settings retains device capability"
+        );
+        s.set_platform_prediction_available(true);
+        assert!(row(&s).enabled);
+        assert_eq!(s.state.settings, saved);
+        edit_preference(
+            &mut s,
+            PreferenceId::PlatformPrediction,
+            PreferenceValue::Bool(true),
+        );
+        assert!(s.state.settings.feedback_config().use_platform_prediction);
+        edit_preference(&mut s, PreferenceId::Feedback, PreferenceValue::Bool(false));
+        assert!(!row(&s).enabled, "Live preview remains the parent switch");
+    }
+
     #[test]
     fn settings_json_is_versioned_validated_and_backwards_compatible() {
         let old: Settings =

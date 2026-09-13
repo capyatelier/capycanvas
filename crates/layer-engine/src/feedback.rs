@@ -360,6 +360,40 @@ mod tests {
     }
 
     #[test]
+    fn disabling_platform_prediction_uses_engine_even_when_platform_samples_exist() {
+        let real = [point(0.0, 0.0, 0), point(10.0, 0.0, 10_000)];
+        let predicted = [point(14.0, 8.0, 14_000), point(18.0, 16.0, 18_000)];
+        for enabled in [true, false] {
+            let estimate = estimate_tip(
+                &real,
+                &predicted,
+                18_000,
+                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                InstantFeedbackConfig {
+                    use_platform_prediction: enabled,
+                    ..InstantFeedbackConfig::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                estimate.source,
+                if enabled {
+                    TipSource::Platform
+                } else {
+                    TipSource::Engine
+                }
+            );
+            assert_eq!(
+                estimate.point.position,
+                Point {
+                    x: 18.0,
+                    y: if enabled { 16.0 } else { 0.0 }
+                }
+            );
+        }
+    }
+
+    #[test]
     fn engine_prediction_stops_at_a_reversal() {
         let real = [
             point(0.0, 0.0, 0),

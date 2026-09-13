@@ -645,8 +645,16 @@ impl Settings {
         if matches!(platform, Platform::Web | Platform::Ios | Platform::Android) {
             input.push(row(
                 PlatformPrediction,
-                "Device pen prediction",
-                "Use your device's estimate of the next pen position.",
+                if platform == Platform::Android {
+                    "Native pen prediction"
+                } else {
+                    "Device pen prediction"
+                },
+                if platform == Platform::Android {
+                    "Use Android prediction. Turn off for Capy Canvas."
+                } else {
+                    "Use your device's estimate of the next pen position."
+                },
                 PreferenceKind::Switch {
                     active: self.platform_prediction,
                 },
@@ -1003,9 +1011,29 @@ impl Settings {
     }
 }
 impl PreferencesState {
-    pub(crate) fn view(&self, settings: &Settings, platform: Platform) -> PreferencesView {
+    pub(crate) fn view(
+        &self,
+        settings: &Settings,
+        platform: Platform,
+        platform_prediction_available: bool,
+    ) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
-        let pages = settings.pages(platform);
+        let mut pages = settings.pages(platform);
+        if !platform_prediction_available {
+            for row in pages
+                .iter_mut()
+                .flat_map(|p| &mut p.groups)
+                .flat_map(|g| &mut g.rows)
+            {
+                if row.id == PreferenceId::PlatformPrediction {
+                    row.enabled = false;
+                    row.description = "Unavailable for this system or connected pen.".into();
+                    if let Some(reset) = &mut row.reset {
+                        reset.enabled = false;
+                    }
+                }
+            }
+        }
         let mut search_results = Vec::new();
         for page in &pages {
             for group in &page.groups {
@@ -1614,10 +1642,20 @@ mod copy_tests {
                 );
                 check(&state.capture.as_ref().unwrap().shortcut);
                 state.capture.as_mut().unwrap().conflict = Some(definition.label);
-                check(&state.view(&settings, platform).capture.unwrap().notice);
+                check(
+                    &state
+                        .view(&settings, platform, true)
+                        .capture
+                        .unwrap()
+                        .notice,
+                );
                 state.error = Some("Choose another key for this shortcut.".into());
                 assert_eq!(
-                    state.view(&settings, platform).capture.unwrap().notice,
+                    state
+                        .view(&settings, platform, true)
+                        .capture
+                        .unwrap()
+                        .notice,
                     state.error.unwrap()
                 );
             }

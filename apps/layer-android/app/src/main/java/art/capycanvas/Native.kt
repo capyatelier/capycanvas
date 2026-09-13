@@ -14,6 +14,7 @@ internal object Native {
     @JvmStatic external fun scroll(handle: Long, x: Float, y: Float, dx: Float, dy: Float, zoom: Boolean, horizontal: Boolean)
     @JvmStatic external fun dispatch(handle: Long, action: String)
     @JvmStatic external fun input(handle: Long, input: String): String
+    @JvmStatic external fun predictionAvailability(handle: Long, available: Boolean)
     @JvmStatic external fun pointer(handle: Long, id: Long, tool: Int, button: Int, records: DoubleArray, count: Int, predicted: Boolean)
     @JvmStatic external fun frame(handle: Long, now: Long, presentation: Long): Boolean
     /** First buffer on the current surface has completed GPU work. */

@@ -116,6 +116,16 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     // Native focus, not application state; prevents typing from invoking tools.
     var editingText = false
+    private var platformPredictionAvailable: Boolean? = null
+    internal val nativePredictionEnabled: Boolean
+        get() = platformPredictionAvailable == true && (snapshot?.objectOrNull("state")?.objectOrNull("settings")?.let {
+            it.optBoolean("feedback", true) && it.optBoolean("platform_prediction", true)
+        } ?: true)
+    internal fun updatePredictionAvailability(available: Boolean) {
+        if (platformPredictionAvailable == available) return
+        platformPredictionAvailable = available
+        post { Native.predictionAvailability(handle, available); publish(true) }
+    }
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
