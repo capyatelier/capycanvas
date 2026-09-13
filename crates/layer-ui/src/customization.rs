@@ -360,6 +360,7 @@ impl ToolbarControl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextTarget {
+    Header { id: Option<u32> },
     Column { column: u32 },
     ZenMode,
     Panel { panel: Panel },
@@ -371,6 +372,12 @@ pub enum ContextTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CustomizationAction {
+    ToggleHeaderDrawer {
+        id: u32,
+    },
+    Header {
+        action: HeaderAction,
+    },
     SetPanelVisible {
         panel: Panel,
         visible: bool,
@@ -558,6 +565,9 @@ impl DockLayout {
     ) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
+            ContextTarget::Header { id } => {
+                return self.header.projected_for(platform).context_menu(id, false);
+            }
             ContextTarget::Column { column } => {
                 if !self.is_collapsed(column) {
                     return Err("The column is not collapsed".into());
@@ -576,10 +586,7 @@ impl DockLayout {
                 (p.menu_name(), sections)
             }
             ContextTarget::Group { group } => {
-                let mut sections = vec![
-                    self.tab_style_items(group)?,
-                    self.hide_tab_items(target)?,
-                ];
+                let mut sections = vec![self.tab_style_items(group)?, self.hide_tab_items(target)?];
                 sections.extend(self.column_sections(Some(group), platform));
                 sections.extend([
                     if let [panel] = self.group_panels(group)?
@@ -967,6 +974,9 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::LowerLayer => "Move the active layer down",
                 CommandId::ResetLayout => "Restore panel docking positions",
                 CommandId::ZenMode => "Hide or show the editor controls",
+                CommandId::CustomizeWorkspaceUi => {
+                    "Arrange the title bar and footer inline"
+                }
                 CommandId::Fullscreen => "Enter or leave full screen",
                 CommandId::NewWindow => "Open another drawing window",
                 CommandId::NewDocument => "Create a drawing",
@@ -1040,7 +1050,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         selected: false,
     }
 }
-fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
+pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
     CommandId::ALL
         .into_iter()
         .filter(|id| id.available_on(platform))
@@ -1089,8 +1099,18 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolDestination {
-    NewToolbar { group: Option<u32>, name: String },
-    Insert { panel: Panel, before: Option<u32> },
+    NewToolbar {
+        group: Option<u32>,
+        name: String,
+    },
+    Insert {
+        panel: Panel,
+        before: Option<u32>,
+    },
+    Header {
+        zone: HeaderZone,
+        before: Option<u32>,
+    },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolPicker {
@@ -1261,6 +1281,12 @@ impl ToolPicker {
                     return Err("The target tool no longer exists".into());
                 }
             }
+            ToolDestination::Header { zone, before } => {
+                layout.header.insertion(*zone, *before)?;
+                if layout.header.entries().count() + self.selected.len() > 128 {
+                    return Err("Too many title-bar items".into());
+                }
+            }
         }
         if self.selected.is_empty() {
             return Err("Select at least one tool".into());
@@ -1285,7 +1311,9 @@ impl ToolPicker {
             })
             .collect();
         ToolPickerView {
-            title: if name.is_some() {
+            title: if matches!(self.destination, ToolDestination::Header { .. }) {
+                "Add Tools to Title Bar"
+            } else if name.is_some() {
                 "New Toolbar"
             } else {
                 "Add Tools"
@@ -1306,6 +1334,7 @@ impl ToolPicker {
                 ToolDestination::NewToolbar { name, .. } => {
                     layout.validate_toolbar_name(name).err()
                 }
+                _ if !self.selected.is_empty() => self.validate(layout).err(),
                 _ => None,
             }),
         }
@@ -1447,6 +1476,10 @@ impl ToolbarManager {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CustomizationState {
+    pub header_editing: bool,
+    /// A single preview baseline, not an editor undo stack. Never persisted.
+    #[serde(skip)]
+    pub(crate) header_original: Option<(HeaderLayout, CanvasInfoLayout)>,
     pub expanded: Option<Panel>,
     pub drawer: Option<ContentDrawer>,
     pub column_drawers: Vec<ContentDrawer>,
@@ -1460,6 +1493,37 @@ pub struct CustomizationState {
     pub toolbar_manager: Option<ToolbarManager>,
 }
 impl CustomizationState {
+    pub(crate) fn begin_header(&mut self, layout: &DockLayout) {
+        if !self.header_editing {
+            self.header_original = Some((layout.header.clone(), layout.canvas_info.clone()));
+        }
+        self.header_editing = true;
+        self.drawer = None;
+        self.picker = None;
+    }
+    pub(crate) fn committed_header(&self, layout: &mut DockLayout) {
+        if let Some((header, info)) = &self.header_original {
+            layout.header = header.clone();
+            layout.canvas_info = info.clone();
+        }
+    }
+    pub(crate) fn cancel_header(&mut self, layout: &mut DockLayout) -> bool {
+        let editing = self.header_editing;
+        self.committed_header(layout);
+        self.header_original = None;
+        self.header_editing = false;
+        self.close_header_picker();
+        editing
+    }
+    fn close_header_picker(&mut self) {
+        if self
+            .picker
+            .as_ref()
+            .is_some_and(|p| matches!(p.destination, ToolDestination::Header { .. }))
+        {
+            self.picker = None;
+        }
+    }
     pub fn has_drawer(&self) -> bool {
         self.expanded.is_some() || self.drawer.is_some() || !self.column_drawers.is_empty()
     }
@@ -1479,7 +1543,6 @@ impl CustomizationState {
         action: CustomizationAction,
         platform: Platform,
         viewport: [f32; 2],
-        partial_zen: bool,
     ) -> Result<u32, String> {
         use CustomizationAction::*;
         if let SetPanelVisible {
@@ -1494,6 +1557,17 @@ impl CustomizationState {
             return Err("This panel is not available on this platform yet".into());
         }
         let mut changed = regions::CUSTOMIZATION;
+        let header_picker_action = self
+            .picker
+            .as_ref()
+            .is_some_and(|p| matches!(p.destination, ToolDestination::Header { .. }))
+            && matches!(
+                action,
+                PickerSearch { .. } | PickerSelect { .. } | ConfirmTools | CancelTools
+            );
+        if !matches!(action, Header { .. }) && !header_picker_action && self.cancel_header(layout) {
+            changed |= regions::LAYOUT;
+        }
         if matches!(
             action,
             NewToolbar { .. }
@@ -1506,6 +1580,60 @@ impl CustomizationState {
             self.drawer = None;
         }
         match action {
+            Header { action } => {
+                use HeaderAction as H;
+                match action {
+                    H::Edit { editing } => {
+                        if editing {
+                            self.begin_header(layout);
+                        } else {
+                            self.header_editing = false;
+                            self.header_original = None;
+                            self.close_header_picker();
+                            changed |= regions::LAYOUT;
+                        }
+                    }
+                    H::Cancel => {
+                        self.cancel_header(layout);
+                        self.drawer = None;
+                        changed |= regions::LAYOUT;
+                    }
+                    H::InsertTools { zone, before } => {
+                        if !self.header_editing {
+                            return Err("Open title-bar customization first".into());
+                        }
+                        layout.header.insertion(zone, before)?;
+                        self.picker = Some(ToolPicker {
+                            destination: ToolDestination::Header { zone, before },
+                            query: String::new(),
+                            selected: Vec::new(),
+                            error: None,
+                        });
+                    }
+                    action => {
+                        match action {
+                            H::SetSize { size } => layout.header.size = size,
+                            H::Add { zone, before, item } => {
+                                if let HeaderItem::Tool { control } = item
+                                    && !tool_catalog(platform).iter().any(|c| c.control == control)
+                                {
+                                    return Err("This tool is not available".into());
+                                }
+                                layout.header.add(zone, before, &[item])?;
+                            }
+                            H::Move { id, zone, before } => {
+                                layout.header.move_item(id, zone, before)?
+                            }
+                            H::Remove { id } => layout.header.remove(id)?,
+                            H::CanvasInfo { visible } => {
+                                layout.canvas_info = CanvasInfoLayout { visible }
+                            }
+                            _ => unreachable!(),
+                        }
+                        changed |= regions::LAYOUT;
+                    }
+                }
+            }
             ManageToolbars => {
                 *self = Self {
                     toolbar_manager: Some(ToolbarManager::default()),
@@ -1643,7 +1771,7 @@ impl CustomizationState {
                 self.drawer = None;
                 changed |= regions::LAYOUT;
             }
-            ToggleToolDrawer { anchor } => {
+            ToggleToolDrawer { .. } | ToggleHeaderDrawer { .. } => {
                 if !matches!(
                     platform,
                     Platform::Gtk
@@ -1656,15 +1784,13 @@ impl CustomizationState {
                 ) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
-                let drawer = ContentDrawer::for_tile(layout, anchor)?;
+                let drawer = match action {
+                    ToggleToolDrawer { anchor } => ContentDrawer::for_tile(layout, anchor)?,
+                    ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
+                    _ => unreachable!(),
+                };
                 if self
-                    .drawer_placement(
-                        &drawer,
-                        layout,
-                        viewport,
-                        &vec![0.0; drawer.columns.len()],
-                        partial_zen,
-                    )
+                    .drawer_placement(&drawer, layout, viewport, &vec![0.0; drawer.columns.len()])
                     .is_none()
                 {
                     return Err("The originating tile is not visible".into());
@@ -1672,7 +1798,7 @@ impl CustomizationState {
                 let close = self
                     .drawer
                     .as_ref()
-                    .is_some_and(|d| d.anchor.tile() == Some(anchor));
+                    .is_some_and(|d| d.anchor == drawer.anchor);
                 self.expanded = None;
                 self.picker = None;
                 self.control = None;
@@ -1902,6 +2028,15 @@ impl CustomizationState {
                         ToolDestination::Insert { panel, before } => {
                             layout.insert_tools(*panel, *before, &picker.selected)
                         }
+                        ToolDestination::Header { zone, before } => layout.header.add(
+                            *zone,
+                            *before,
+                            &picker
+                                .selected
+                                .iter()
+                                .map(|control| HeaderItem::Tool { control: *control })
+                                .collect::<Vec<_>>(),
+                        ),
                     });
                 if let Err(error) = result {
                     picker.error = Some(error);
@@ -2031,8 +2166,7 @@ mod tests {
                                 style
                             },
                             platform,
-                            VIEWPORT,
-                            false
+                            VIEWPORT
                         )
                         .is_ok(),
                     supported
@@ -2259,7 +2393,7 @@ mod tests {
         let mut state = CustomizationState::default();
         let edit = |state: &mut CustomizationState, layout: &mut DockLayout, action| {
             state
-                .edit(layout, action, Platform::Gtk, [1200.0, 900.0], false)
+                .edit(layout, action, Platform::Gtk, [1200.0, 900.0])
                 .unwrap()
         };
         let original = layout.clone();
@@ -2408,7 +2542,7 @@ mod tests {
                     panic!("Missing group style action")
                 };
                 state
-                    .edit(&mut layout, action, platform, [1200.0, 900.0], false)
+                    .edit(&mut layout, action, platform, [1200.0, 900.0])
                     .unwrap();
                 let encoded = serde_json::to_string(&layout).unwrap();
                 layout = serde_json::from_str(&encoded).unwrap();
@@ -2450,7 +2584,6 @@ mod tests {
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
-                false,
             )
             .unwrap();
         assert_eq!(layout.group_tab_style(8).unwrap(), TabStyle::Icon);
@@ -2472,7 +2605,6 @@ mod tests {
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
-                false,
             )
             .unwrap();
         assert!(

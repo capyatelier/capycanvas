@@ -1358,13 +1358,13 @@ mod tests {
         assert_eq!(geometry(&layout).collapsed.len(), 1);
         assert_eq!(layout.collapsed_column_for_group(child), Some(4));
         let drawer = crate::ContentDrawer::for_column(&layout, child, Panel::Properties).unwrap();
-        assert!(drawer.placement(&layout, VIEW, &[200.], false).is_some());
+        assert!(drawer.placement(&layout, VIEW, &[200.]).is_some());
         layout.set_column_collapsed(4, false, VIEW).unwrap();
         assert_eq!(layout.collapsed_column_for_group(child), Some(child));
         assert!(
             crate::ContentDrawer::for_column(&layout, child, Panel::Properties)
                 .unwrap()
-                .placement(&layout, VIEW, &[200.], false)
+                .placement(&layout, VIEW, &[200.])
                 .is_some()
         );
     }

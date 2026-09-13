@@ -125,7 +125,10 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
   for (const mode of ["absent", "denied"]) {
     const script = await call("Page.addScriptToEvaluateOnNewDocument",{source:`window.__statusBatteryCase=${JSON.stringify(mode)};Object.defineProperty(navigator,"getBattery",{configurable:true,value:${mode==="absent"?"undefined":"()=>Promise.reject(new Error('Battery permission denied'))"}});`});
     await call("Page.reload");
-    await wait(`window.__statusBatteryCase===${JSON.stringify(mode)} && !!window.layerApp && !!document.querySelector("#system-status")`);
+    await wait(`window.__statusBatteryCase===${JSON.stringify(mode)} && !!window.layerApp && document.body.dataset.gpu==='ready'
+      && JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy
+      && !!document.querySelector("#system-status") && !document.querySelector('#fullscreen').disabled`);
+    await settle();
     await click('#fullscreen');
     await wait('!!document.fullscreenElement && !document.querySelector("#system-status").hidden');
     assert.equal(await evaluate('document.querySelector("#system-battery").hidden'), true);

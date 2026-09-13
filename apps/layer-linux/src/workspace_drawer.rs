@@ -219,6 +219,7 @@ impl View {
         });
         let root: Columns = glib::Object::new();
         root.set_widget_name(&match drawer.anchor {
+            DrawerAnchor::Header { .. } => "tool-drawer".into(),
             DrawerAnchor::Tile { .. } => "tool-drawer".into(),
             DrawerAnchor::Column { column, .. } => format!("column-drawer-{column}"),
         });
@@ -585,17 +586,15 @@ impl Drawer {
     fn source_button(&self, w: &Workspace) -> Option<gtk::Button> {
         let anchor = self.state.borrow().as_ref()?.anchor;
         match anchor {
-            DrawerAnchor::Tile { panel, tile } => w
-                .zen
-                .drawer_button(TileAnchor { panel, tile })
-                .or_else(|| {
-                    w.columns
-                        .drawers
-                        .borrow()
-                        .iter()
-                        .find_map(|d| d.tile_button(TileAnchor { panel, tile }))
-                })
-                .or_else(|| w.customization.drawer_button(TileAnchor { panel, tile })),
+            DrawerAnchor::Header { id } => w.header.drawer_button(id),
+            DrawerAnchor::Tile { panel, tile } => {
+                w.columns
+                    .drawers
+                    .borrow()
+                    .iter()
+                    .find_map(|d| d.tile_button(TileAnchor { panel, tile }))
+            }
+            .or_else(|| w.customization.drawer_button(TileAnchor { panel, tile })),
             DrawerAnchor::Column { column, origin, .. } => w.columns.button(column, origin),
         }
     }
@@ -620,7 +619,7 @@ impl Drawer {
             let gpu = w.gpu.borrow();
             let ui = gpu.as_ref()?.session.state();
             ui.customization
-                .drawer_placement(state, &layout, viewport, heights, ui.partial_zen())
+                .drawer_placement(state, &layout, viewport, heights)
         };
         let sizing = place(&vec![0.0; view.columns.len()])?;
 
@@ -716,7 +715,6 @@ impl Drawer {
         for parent in w.columns.drawers.borrow().iter() {
             parent.mark_tile_origin(origin.map(|(a, p)| (a, p.direction)));
         }
-        w.zen.mark_drawer_origin(origin);
     }
     fn mark_source_corners(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
         let mut next = Vec::new();

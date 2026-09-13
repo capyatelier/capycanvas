@@ -86,6 +86,97 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn included_name_write_failure_is_atomic_and_retryable_without_claims() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        m.close().await.unwrap();
+        let id = DEFAULT_WORKSPACES[0].0;
+        let before = m.load(id).await.unwrap();
+        let mut metadata = before.entity.metadata.clone();
+        metadata.name = "Painter".into();
+        rusqlite::Connection::open(f.directory.join("workspaces.sqlite3"))
+            .unwrap()
+            .execute(
+                "UPDATE items SET metadata=?1,name=?2,name_key=?3 WHERE id=?4",
+                rusqlite::params![
+                    serde_json::to_string(&metadata).unwrap(),
+                    metadata.name,
+                    name_key(&metadata.name),
+                    id
+                ],
+            )
+            .unwrap();
+        let db = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        db.execute_batch("CREATE TRIGGER fail_catalog_name BEFORE UPDATE OF name ON items BEGIN SELECT RAISE(ABORT, 'Test catalog write failure'); END;").unwrap();
+        assert!(m.initialize_catalog(2_000).await.is_err());
+        assert!(!m.has_failed_operation());
+        assert!(m.load(id).await.unwrap().claim.is_none());
+        assert_eq!(m.load(id).await.unwrap().entity.metadata.name, "Painter");
+        db.execute_batch("DROP TRIGGER fail_catalog_name;").unwrap();
+        m.initialize_catalog(3_000).await.unwrap();
+        let saved = m.load(id).await.unwrap();
+        assert_eq!(saved.entity.metadata.name, "Sketch");
+        assert_eq!(saved.entity.content, before.entity.content);
+        assert_eq!(saved.entity.working, before.entity.working);
+        assert!(
+            saved.claim.is_none(),
+            "catalog name maintenance never acquires a claim"
+        );
+    });
+}
+
+#[test]
+fn included_names_refresh_without_resetting_workspaces_or_rewriting_on_reopen() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        f.manager.close().await.unwrap();
+        let connection =
+            rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        let mut before = Vec::new();
+        for (id, preset) in DEFAULT_WORKSPACES {
+            let mut saved = f.manager.load(id).await.unwrap();
+            // Older builds persisted longer labels. Contents and working state
+            // must be preserved even when the included workspace was customized.
+            let old_name = format!("Old {}", preset.name());
+            saved.entity.metadata.name = old_name.clone();
+            saved.entity.working.as_mut().unwrap().zen_mode = true;
+            connection
+                .execute(
+                    "UPDATE items SET metadata=?1,name=?2,name_key=?3,working=?4 WHERE id=?5",
+                    rusqlite::params![
+                        serde_json::to_string(&saved.entity.metadata).unwrap(),
+                        old_name,
+                        name_key(&old_name),
+                        serde_json::to_string(&saved.entity.working).unwrap(),
+                        id
+                    ],
+                )
+                .unwrap();
+            before.push(saved);
+        }
+        let m = WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+        m.initialize_catalog(3_000).await.unwrap();
+        let mut renamed = Vec::new();
+        for (old, (id, preset)) in before.iter().zip(DEFAULT_WORKSPACES) {
+            let saved = m.load(id).await.unwrap();
+            assert_eq!(saved.entity.metadata.name, preset.name());
+            assert_eq!(saved.entity.content, old.entity.content);
+            assert_eq!(saved.entity.working, old.entity.working);
+            assert_eq!(saved.generations.layout, old.generations.layout);
+            assert_eq!(saved.generations.working, old.generations.working);
+            assert!(saved.generations.metadata > old.generations.metadata);
+            assert!(saved.claim.is_none());
+            renamed.push(saved);
+        }
+        m.initialize_catalog(4_000).await.unwrap();
+        for saved in renamed {
+            assert_eq!(m.load(&saved.entity.id).await.unwrap(), saved);
+        }
+    });
+}
+
+#[test]
 fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
     struct RacingStore {
         worker: StoreWorker,
@@ -314,8 +405,8 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         m.release(&outgoing).await;
         let mut capture = m.current().unwrap().capture().unwrap();
         let mut layout = capture.history.layout().clone();
-        layout.bands[0].extent += 60.;
-        capture.history.append(&layout, "Resize Tools toolbar");
+        layout.header.size = layer_ui::HeaderSize::Large;
+        capture.history.append(&layout, "Resize Window Bar");
         capture
             .working
             .tools
@@ -330,7 +421,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         let outgoing = m.activate(incoming).unwrap();
         m.release(&outgoing).await;
         let restored = m.prepare_switch(painter, 7_000).await.unwrap();
-        assert_eq!(restored.entity.metadata.name, "Painter");
+        assert_eq!(restored.entity.metadata.name, "Sketch");
         assert_eq!(
             restored.entity.capture().unwrap(),
             m.load(painter).await.unwrap().entity.capture().unwrap()
@@ -344,7 +435,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
         let incoming = reopened.initialize(8_000).await.unwrap();
         assert_eq!(incoming.entity.id, painter);
-        assert_eq!(incoming.entity.metadata.name, "Painter");
+        assert_eq!(incoming.entity.metadata.name, "Sketch");
         assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
         assert_eq!(incoming.entity.capture().unwrap().working, capture.working);
         assert_eq!(reopened.items().len(), 3);
@@ -510,7 +601,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
         let mut layout = DockLayout::for_platform(Platform::Gtk);
         layout.bands[0].extent += 80.;
         let user = Entity::workspace(
-            "Painter",
+            "Sketch",
             WorkspaceCapture::from_template(&layout).unwrap(),
             layout.clone(),
             None,
@@ -551,7 +642,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
         let manager = WorkspaceManager::new(worker, Platform::Gtk);
         let incoming = manager.initialize(1_000).await.unwrap();
         assert_eq!(incoming.entity.id, user_id);
-        assert_eq!(incoming.entity.metadata.name, "Painter");
+        assert_eq!(incoming.entity.metadata.name, "Sketch");
         assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
         assert_eq!(manager.items().len(), 4);
         assert_eq!(manager.rows(ManagerPage::Workspaces, "", 1_000).len(), 4);
@@ -567,7 +658,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
                 .entity
                 .metadata
                 .name,
-            "Painter (2)"
+            "Sketch (2)"
         );
         manager.activate(incoming);
         manager.close().await.unwrap();
@@ -748,9 +839,23 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
         m.revalidate_owner(1).await.unwrap();
         assert!(m.dirty());
         assert_eq!(m.current().unwrap().working, Some(capture.working.clone()));
-        assert!(m.current_record().unwrap().claim.unwrap().fence > 1);
+        assert_eq!(
+            m.current_record().unwrap().claim.unwrap().fence,
+            1,
+            "a suspended native window retains its kernel lock and fence"
+        );
         m.flush().await.unwrap();
         expire();
+        let held = m.current_record().unwrap().claim.unwrap();
+        m.store
+            .worker
+            .request(StoreRequest::Release {
+                id: id.clone(),
+                owner: held.owner,
+                fence: held.fence.to_string(),
+            })
+            .await
+            .unwrap();
         let other = Owner::fresh();
         let StoreResponse::Entity(successor) = m
             .store
@@ -758,6 +863,7 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
             .request(StoreRequest::Claim {
                 id: id.clone(),
                 owner: other.clone(),
+                reset_invalid_default: None,
             })
             .await
             .unwrap()
@@ -1291,7 +1397,7 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
         m.store.fail.set(false);
         m.refresh().await.unwrap();
         assert_eq!(m.items().len(), before);
-        assert_eq!(m.active_name().as_deref(), Some("Illustrator"));
+        assert_eq!(m.active_name().as_deref(), Some("Paint"));
         assert!(m.import_workspace_package(&bytes, 2_000).await.is_ok());
     });
 }
@@ -1301,7 +1407,7 @@ fn template_creation_duplication_switching_and_original_baselines_are_independen
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
-        assert_eq!(m.active_name().as_deref(), Some("Illustrator"));
+        assert_eq!(m.active_name().as_deref(), Some("Paint"));
         let initial = m.current().unwrap();
         let mut capture = initial.capture().unwrap();
         let mut layout = capture.history.layout().clone();
@@ -1583,18 +1689,33 @@ fn illustrator_column_upgrade_only_changes_untouched_builtin_layouts() {
         }
         let mut entity = Entity::workspace(
             "My Illustration",
-            WorkspaceCapture { history, working: layer_ui::WorkspacePreset::Illustrator.working_state() },
-            previous.clone(), None, 1000,
+            WorkspaceCapture {
+                history,
+                working: layer_ui::WorkspacePreset::Illustrator.working_state(),
+            },
+            previous.clone(),
+            None,
+            1000,
         );
         entity.id = DEFAULT_WORKSPACES[1].0.into();
         entity.metadata.builtin = true;
         let updated = migration::updated_illustrator_default(&entity, Platform::Gtk);
-        if customized { assert!(updated.is_none()); }
-        else {
-            let ItemContent::Workspace { history, baseline, .. } = updated.unwrap() else { panic!("workspace") };
+        if customized {
+            assert!(updated.is_none());
+        } else {
+            let ItemContent::Workspace {
+                history, baseline, ..
+            } = updated.unwrap()
+            else {
+                panic!("workspace")
+            };
             assert_eq!(baseline, layout);
             assert_eq!(history.layout(), &layout);
-            entity.content = ItemContent::Workspace { history, baseline, origin: None };
+            entity.content = ItemContent::Workspace {
+                history,
+                baseline,
+                origin: None,
+            };
             assert!(migration::updated_illustrator_default(&entity, Platform::Gtk).is_none());
         }
     }

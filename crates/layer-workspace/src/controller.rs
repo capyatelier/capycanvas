@@ -783,30 +783,32 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         change = self.stop_preview(session);
                         self.start_transition(session)?;
                         let m = self.manager.clone();
-                        self.task =
-                            Some(Task::new(async move {
-                                if page != "history" {
-                                    let stored = m.load(&id).await?;
-                                    if stored.claim.as_ref().is_some_and(|c| {
-                                        c.owner != m.owner && c.expires_at_ms > now
-                                    }) {
-                                        return Ok(Outcome::Focus(id));
-                                    }
+                        self.task = Some(Task::new(async move {
+                            if page != "history" {
+                                m.refresh().await?;
+                                if m.items().iter().any(|item| {
+                                    item.id == id
+                                        && item.claim.as_ref().is_some_and(|c| {
+                                            c.owner != m.owner && c.expires_at_ms > now
+                                        })
+                                }) {
+                                    return Ok(Outcome::Focus(id));
                                 }
-                                Ok(Outcome::adopt(match page.as_str() {
-                                    "history" => {
-                                        m.change_layout(
-                                            &m.active_id().ok_or_else(|| {
-                                                StoreError::invalid("Open a workspace.")
-                                            })?,
-                                            Some(&id),
-                                            now,
-                                        )
-                                        .await?
-                                    }
-                                    _ => m.prepare_switch(&id, now).await?,
-                                }))
-                            }));
+                            }
+                            Ok(Outcome::adopt(match page.as_str() {
+                                "history" => {
+                                    m.change_layout(
+                                        &m.active_id().ok_or_else(|| {
+                                            StoreError::invalid("Open a workspace.")
+                                        })?,
+                                        Some(&id),
+                                        now,
+                                    )
+                                    .await?
+                                }
+                                _ => m.prepare_switch(&id, now).await?,
+                            }))
+                        }));
                     }
                     WorkspaceInput::Retry => {
                         if self.incoming.is_some() {

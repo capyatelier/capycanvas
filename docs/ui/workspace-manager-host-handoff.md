@@ -112,6 +112,9 @@ window focus. Keep workspace decisions in shared Rust. In particular:
 - Use fenced writes and immutable operation receipts. Retry the original operation
   without duplicating history/items; never overwrite another window's workspace
   after suspension or ownership loss. Preserve pending edits on save failures.
+  Native liveness now uses [kernel ownership locks](../development/workspace-ownership.md),
+  not lease expiry alone. Wrapper transports must forward `retire_owner` to the
+  native worker on final manager teardown; normal close still flushes first.
 - Preserve the existing retained-control rendering and resize behavior. Workspace
   integration should not introduce database I/O or widget rebuilding on pointer
   motion paths, or disturb document strokes, transforms, undo, or rendering.

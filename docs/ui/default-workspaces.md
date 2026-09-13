@@ -1,6 +1,8 @@
 # Default workspaces
 
-2026-09-12: first GTK implementation of Painter, Illustrator, and Photographer.
+The included profiles are **Sketch**, **Paint** and **Photo** (formerly
+Painter, Illustrator and Photographer). Sketch is the minimal drawing workspace;
+Paint is the panel-heavy workspace. Their stable internal IDs are unchanged.
 **Workspaces are the only saved product item**.
 There is no Save Layout or Load Layout UI. Workspace changes save automatically.
 
@@ -11,9 +13,9 @@ puts paint, smudge, eraser, layers, and color together, with size, opacity, and
 undo/redo on the side. Selection and transform remain readily accessible.
 [Clip Studio Paint's Simple Mode](https://help.clip-studio.com/en-us/manual_en/090_tablet/Tablet_interface.htm)
 similarly emphasizes drawing tools, color, layers, brush size/opacity, and undo/redo.
-Our Painter arrangement uses those common essentials, with Fill as a frequently
-used painting operation. Drawers replace persistent panels; file operations
-remain in the existing menu.
+The GTK Painter arrangement uses those common essentials as individual
+[window-bar items](window-bar.md). Drawers replace persistent panels; file
+operations remain in the menu button.
 
 [Affinity Photo's interface reference](https://affinity.help/photo2/English.lproj/pages/Workspace/interface.html)
 separates editing tools from the settings panels in its right Studio.
@@ -31,11 +33,14 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Painter | Brush, Eraser, Blend, Fill; Eyedropper, Color, Brush size drawer, Opacity | Undo, Redo; Lasso selection, Scale/rotate; Tool Set and Layers drawers | None |
-| Illustrator | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
-| Photographer | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
+| Sketch (GTK title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color, Settings |
+| Paint | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
+| Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
-Painter uses Medium toolbar tiles; Photographer uses Small. Painter starts with Brush
+GTK Painter uses Medium window-bar icons, a transparent canvas overlay, no menu
+labels and no zoom/rotation bubble. Other hosts retain the earlier two-toolbar
+Painter arrangement until their window-bar projection is implemented.
+Photographer uses Small toolbar tiles. Painter starts with Brush
 selected and no docked content panels. Photographer starts with Operation selected,
 devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
 the illustration Tool Set/Brush size columns and Diagnostics. Illustrator retains
@@ -43,6 +48,16 @@ the existing default arrangement and tool selection.
 
 ## Workspace behavior
 
+- Common title-bar defaults include Settings at the right, with a Full Screen
+  button only on Web. Native fullscreen commands/shortcuts remain available.
+  GTK status components show only in fullscreen; the builder retains editable
+  Clock/Battery placeholders when their values are hidden. Workspace-specific
+  tools and panels remain distinct; this does not port GTK's builder to Web.
+- Startup refreshes included names to Sketch, Paint and Photo, retaining normal
+  collision suffixes and preserving saved contents, working tools and history.
+  A name swap is atomic, so the two included names do not collide with each
+  other. If either participant is open elsewhere, both names wait for release.
+  Custom names and workspaces owned by another live window are not modified.
 - Seed exactly three default workspaces with stable IDs:
   `builtin:workspace:painter`, `builtin:workspace:illustrator`, and
   `builtin:workspace:photographer`. Fresh installations open Illustrator.
@@ -56,13 +71,24 @@ the existing default arrangement and tool selection.
 - All three save tool and layout edits normally. They cannot be renamed or deleted.
   The header initially shows these three, follows workspace identities, and
   displays their current names. Its entries can be changed in Manage Workspaces.
-- The pill sits to the right of the document title and left of the clock. It uses
+- The pill defaults to the right of the document title and left of the clock;
+  GTK Painter centers it, and the window-bar builder can reposition it. It uses
   normal workspace switching, including outgoing saves and ownership checks.
   Selecting a workspace restores its latest settings and arrangement. It never
-  reapplies the shipped preset. An unpinned active workspace is temporarily
+  reapplies the shipped preset to a healthy workspace. An unpinned active workspace is temporarily
   prepended and selected until the user switches away.
 - If another window owns a default workspace, focus that window through the normal
   ownership path. Do not take it over or reset its contents just to switch modes.
+- If an included workspace cannot decode or validate, restore only that workspace
+  from its current platform default. This covers startup, header switching and
+  manager previews, including incompatible development fields such as
+  `colors.shape`. Its layout history and working settings are reset; its stable ID,
+  pins, ordering, document and all other workspaces remain unchanged. Healthy
+  customized defaults and user-created workspaces are never reset this way.
+  Repair checks the live owner and advances generations/fencing in the same
+  transaction as the replacement. A preview releases its temporary claim.
+  Disk errors, newer database schemas and damaged ownership/counter records are
+  errors, not reasons to reset. Low-level storage reads remain non-mutating.
 - New Workspace copies the current settings and arrangement, asks only for a
   name, and pins the new workspace. Manage Workspaces retains selection preview, explicit Switch to Workspace,
   and Cancel. Layout History remains a history of arrangements within a workspace.
@@ -76,6 +102,9 @@ the existing default arrangement and tool selection.
 - The first Photographer arrangement used Medium tiles. On switching to an
   untouched copy of that arrangement, update it and its starting layout to Small.
   Keep renamed workspaces and brush edits; leave customized layout histories alone.
+- Untouched GTK Painter workspaces upgrade from the shipped two-toolbar layout
+  to the window bar. Working brush/color values remain intact. Any edited
+  history, custom baseline or independent copy is left alone.
 
 ## Configurable switcher
 
@@ -123,6 +152,12 @@ records and storage APIs remain compatible with existing data, without UI routes
 Reusable items with this flag are read-only. Included workspaces still allow
 layout, working-state, and lifecycle metadata updates. SQLite and the browser
 store both enforce the distinction, including direct metadata writes.
+
+Included-workspace repair and initial seeding share one definition. SQLite replaces
+the failed row with self-contained content, without editing shared resources.
+The browser stores the same entity JSON shape but decodes entities individually,
+so an incompatible item cannot prevent opening the catalog. Neither backend adds
+support for obsolete workspace fields.
 
 The shared manager exposes `workspace_ids` (complete dialog order), `switcher_ids`
 (visible subset), `refresh_switcher`, and `edit_switcher(SwitcherEdit::{Show, Move})`.
@@ -219,3 +254,27 @@ Other platforms can use the [minimal implementation handoff](workspace-switcher-
 
 ![Web workspace switcher configuration](default-workspaces/web-switcher.png)
 ![Web workspace row menu](default-workspaces/web-switcher-menu.png)
+
+## Invalid-default recovery acceptance (September 13)
+
+- 396 shared tests pass (`layer-ui`, `layer-host`, and 72 `layer-workspace` tests).
+  Recovery fixtures corrupt actual stored JSON for all three included workspaces
+  on SQLite and the browser reducer. They cover unknown fields, invalid working
+  versions, absent working state, invalid metadata/content, missing resources,
+  healthy/custom preservation, live leases, stale writes, rollback and reopen.
+- GTK's `native_default_workspace_recovery_input` passes with private SQLite
+  storage and real pointer input. It covers header switching, broken resumed
+  startup, manager preview/Cancel, claim release, preservation of another
+  workspace's edited brush settings, and using the recovered Painter color
+  drawer. Evidence: `/tmp/capy-workspace-motion.FbGJD2`.
+- Chrome passes 49 SQLite/IndexedDB contract cases plus default recovery,
+  transaction abort after replacement, ownership rejection and durable reopen:
+  `/tmp/capy-workspace-motion.OKMFPg`. The existing complete workspace-manager
+  interaction regression also passes: `/tmp/capy-workspace-motion.W0b1pp`.
+
+Run the recovery journey with
+`bash tools/performance/workspace-motion.sh gtk --native-test=native_default_workspace_recovery_input --native-storage`.
+For the browser contract, first generate its fixture with
+`CAPY_STORE_CONTRACT_FIXTURE=/tmp/capy-workspace-store-contract.json cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,
+then run `bash tools/performance/workspace-motion.sh web --workspace-store`.
+These tests use isolated stores; they do not wipe normal app workspaces.

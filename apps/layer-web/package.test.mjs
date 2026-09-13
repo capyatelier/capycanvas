@@ -8,11 +8,13 @@ import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, fingerprintAssets, writeWorker } from "./package.mjs";
 import { gpuEnvironment, gpuProblem } from "./gpu.js";
 
-test("outlined filter icons work without GTK's symbolic CSS", () => {
+test("filter icons declare theme paint without GTK's symbolic CSS", () => {
   for (const name of ["exposure", "vibrance", "black_white", "gradient_map", "posterize"]) {
     const svg = readFileSync(new URL(`./icons/layer-${name}-symbolic.svg`, import.meta.url), "utf8");
-    assert.match(svg, /<svg\b[^>]*fill="none"/);
-    if (name === "black_white") assert.match(svg, /<path\b[^>]*fill="currentColor"/);
+    // The shared icon audit replaced several outlines with filled silhouettes.
+    // Either geometry is valid; browsers must not depend on GTK's CSS to paint it.
+    assert.match(svg, /<svg\b[^>]*fill="(?:none|currentColor)"/);
+    assert.match(svg, /(?:fill|stroke)="currentColor"/);
   }
 });
 

@@ -1,6 +1,72 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// Migrate only the untouched shipped Painter, while holding its lease. An
+/// edited history (even after Undo), a custom baseline or a copy is never reset.
+pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Option<ItemContent> {
+    if platform != Platform::Gtk || entity.id != DEFAULT_WORKSPACES[0].0 || !entity.metadata.builtin
+    {
+        return None;
+    }
+    let ItemContent::Workspace {
+        history, baseline, ..
+    } = &entity.content
+    else {
+        return None;
+    };
+    let previous = layer_ui::WorkspacePreset::Painter.layout(Platform::Web);
+    if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
+        return None;
+    }
+    let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
+    let mut content = entity.content.clone();
+    if let ItemContent::Workspace {
+        history, baseline, ..
+    } = &mut content
+    {
+        history.revisions.values_mut().next()?.layout = layout.clone();
+        *baseline = layout;
+    }
+    Some(content)
+}
+
+#[cfg(test)]
+#[test]
+fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
+    let old = layer_ui::WorkspacePreset::Painter.layout(Platform::Web);
+    let mut working = layer_ui::WorkspacePreset::Painter.working_state();
+    working.colors.foreground = [0.2, 0.4, 0.6, 1.];
+    let mut entity = Entity::workspace(
+        "My Painter",
+        WorkspaceCapture {
+            history: layer_ui::LayoutHistory::new(&old),
+            working: working.clone(),
+        },
+        old,
+        None,
+        1,
+    );
+    entity.id = DEFAULT_WORKSPACES[0].0.into();
+    entity.metadata.builtin = true;
+    let content = updated_painter_default(&entity, Platform::Gtk).unwrap();
+    let mut updated = entity.clone();
+    updated.content = content;
+    let capture = updated.capture().unwrap();
+    assert_eq!(capture.working, working);
+    assert_eq!(
+        capture.history.layout(),
+        &layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk)
+    );
+    assert!(updated_painter_default(&updated, Platform::Gtk).is_none());
+    assert!(updated_painter_default(&entity, Platform::Web).is_none());
+    if let ItemContent::Workspace { history, .. } = &mut entity.content {
+        let mut layout = history.layout().clone();
+        layout.header.size = layer_ui::HeaderSize::Large;
+        history.append(&layout, "User customization");
+    }
+    assert!(updated_painter_default(&entity, Platform::Gtk).is_none());
+}
+
 /// Existing, untouched Illustrator workspaces receive the new column default.
 /// Customized arrangements and working brush values remain the user's own.
 pub(super) fn updated_illustrator_default(
@@ -10,7 +76,10 @@ pub(super) fn updated_illustrator_default(
     if entity.id != DEFAULT_WORKSPACES[1].0 || !entity.metadata.builtin {
         return None;
     }
-    let ItemContent::Workspace { history, baseline, .. } = &entity.content else {
+    let ItemContent::Workspace {
+        history, baseline, ..
+    } = &entity.content
+    else {
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
@@ -20,7 +89,10 @@ pub(super) fn updated_illustrator_default(
         return None;
     }
     let mut content = entity.content.clone();
-    if let ItemContent::Workspace { history, baseline, .. } = &mut content {
+    if let ItemContent::Workspace {
+        history, baseline, ..
+    } = &mut content
+    {
         history.revisions.values_mut().next()?.layout = layout.clone();
         *baseline = layout;
     }

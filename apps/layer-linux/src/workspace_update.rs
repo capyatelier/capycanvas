@@ -22,12 +22,13 @@ pub(super) struct Publication {
 }
 
 impl Workspace {
-    pub(super) fn reset_workspace_publication(&self) {
-        self.publication.layout_pending.set(false);
+    pub(super) fn reset_workspace_publication(&self) -> bool {
+        let pending_layout = self.publication.layout_pending.replace(false);
         self.publication.pending.borrow_mut().take();
         self.publication.current.borrow_mut().take();
         self.publication.placement.borrow_mut().take();
         self.publication.hits.borrow_mut().take();
+        pending_layout
     }
 
     pub(super) fn publish_workspace_layout(self: &Rc<Self>, update: WorkspaceUpdate) {

@@ -47,7 +47,9 @@ impl NativeWorkspaces {
                 let suffix = DEFAULT_WORKSPACES
                     .iter()
                     .find(|(key, _)| *key == id)
-                    .map(|(_, p)| p.name().to_lowercase())
+                    // Test/accessibility identity follows the stable workspace
+                    // ID, not a display label that can be shortened or renamed.
+                    .map(|(key, _)| key.rsplit(':').next().unwrap().to_string())
                     .unwrap_or_else(|| id.clone());
                 button.set_widget_name(&format!("workspace-switch-{suffix}"));
                 button.set_group(buttons.first().map(|(_, b)| b));
@@ -115,24 +117,8 @@ fn bind_button(w: &Rc<Workspace>, button: &gtk::ToggleButton, id: String) {
                 w,
                 async move {
                     let native = &w.workspaces;
-                    let manager = native.manager.as_ref().unwrap();
-                    let result = async {
-                        let stored = manager.load(&id).await?;
-                        let elsewhere = stored.claim.as_ref().is_some_and(|c| {
-                            c.owner != manager.owner && c.expires_at_ms > now_ms()
-                        });
-                        native
-                            .perform(
-                                &w,
-                                if elsewhere {
-                                    ManagerAction::SwitchToWindow(id.into())
-                                } else {
-                                    ManagerAction::Switch(id.into())
-                                },
-                            )
-                            .await
-                    }
-                    .await;
+                    let result =
+                        async { native.perform(&w, ManagerAction::Switch(id.into())).await }.await;
                     if let Err(error) = result {
                         w.status.set_text(&error.to_string());
                         w.status.set_visible(true);

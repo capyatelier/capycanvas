@@ -1,6 +1,6 @@
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use layer_ui::{ApplicationMenu, CommandId};
+use layer_ui::{ApplicationMenu, CommandId, HeaderAction, HeaderItem, HeaderZone};
 use std::time::{Duration, Instant};
 
 fn pump() {
@@ -64,12 +64,17 @@ fn native_fullscreen_header_clock_and_battery() {
     let w = crate::workspace::Workspace::new(&app);
     w.window.present();
     until(|| w.gpu.borrow().is_some());
-    let status = named(w.window.upcast_ref(), "system-status").unwrap();
-    let clock = named(&status, "system-clock")
+    let clock = named(w.window.upcast_ref(), "system-clock")
         .unwrap()
         .downcast::<gtk::Label>()
         .unwrap();
-    assert!(!status.is_visible());
+    until(|| {
+        named(w.window.upcast_ref(), "workspace-window-bar").is_some_and(|bar| bar.is_mapped())
+    });
+    assert!(
+        !clock.is_mapped(),
+        "windowed status does not occupy title-bar space"
+    );
     let menu = w
         .gpu
         .borrow()
@@ -87,7 +92,7 @@ fn native_fullscreen_header_clock_and_battery() {
     w.dispatch(item.action.clone().unwrap());
     until(|| {
         w.window.is_fullscreen()
-            && status.is_mapped()
+            && clock.is_mapped()
             && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
     });
     assert!(!clock.text().is_empty());
@@ -106,11 +111,9 @@ fn native_fullscreen_header_clock_and_battery() {
         crate::capture(&w, &format!("{directory}/gtk-fullscreen.png"));
     }
     assert!(
-        named(w.window.upcast_ref(), "header-status")
+        named(w.window.upcast_ref(), "workspace-window-bar")
             .unwrap()
-            .first_child()
-            .unwrap()
-            .has_css_class("document-title")
+            .is_mapped()
     );
     // Native window-manager changes must update the command checkmark too.
     assert!(
@@ -158,12 +161,12 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap();
     assert!(reply.handled);
     w.changed(Ok(reply.change));
-    until(|| !w.window.is_fullscreen() && !status.is_visible());
+    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     w.window.fullscreen();
     until(|| {
         w.window.is_fullscreen() && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
     });
-    let native = crate::system_status::SystemStatus::new();
+    let native = crate::system_status::SystemStatus::simulated_power();
     let probe = gtk::Window::builder()
         .application(&app)
         .child(&native.root)
@@ -204,6 +207,13 @@ fn native_fullscreen_header_clock_and_battery() {
     );
     assert_eq!(battery.width(), layer_ui::TILE_SIZE as i32);
     assert_eq!(battery.height(), layer_ui::TILE_SIZE as i32);
+    for size in layer_ui::HeaderSize::ALL {
+        native.set_header_size(size);
+        until(|| {
+            assert!(battery.is_visible());
+            battery.width() >= size.tile() as i32 && battery.height() >= size.tile() as i32
+        });
+    }
     native.set_visibility(false, layer_ui::ClockVisibility::Always);
     assert!(battery.is_visible());
     native.set_visibility(true, layer_ui::ClockVisibility::Never);
@@ -219,7 +229,7 @@ fn native_fullscreen_header_clock_and_battery() {
     assert!(!battery.is_visible());
     probe.destroy();
     w.window.unfullscreen();
-    until(|| !w.window.is_fullscreen() && !status.is_visible());
+    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     assert!(
         !w.gpu
             .borrow()
@@ -229,26 +239,38 @@ fn native_fullscreen_header_clock_and_battery() {
             .command(CommandId::Fullscreen)
             .selected
     );
-    let clock_preference = |value| {
-        w.dispatch(layer_ui::UiAction::Preferences {
-            action: layer_ui::PreferenceAction::Edit {
-                id: layer_ui::PreferenceId::ShowClock,
-                value: layer_ui::PreferenceValue::Choice(value),
-            },
-        })
-    };
-    clock_preference(1);
-    until(|| clock.is_mapped() && status.is_visible());
-    assert!(!named(&status, "system-battery").unwrap().is_visible());
-    clock_preference(2);
-    until(|| !clock.is_visible() && !status.is_visible());
+    // GTK visibility requires both a workspace component and fullscreen.
+    // Removing/readding retains the live observer.
+    let id = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .state()
+        .workspace
+        .layout
+        .header
+        .entries()
+        .find(|e| e.item == HeaderItem::Clock)
+        .unwrap()
+        .id;
+    w.dispatch(HeaderAction::Remove { id }.action());
+    until(|| !clock.is_mapped());
     w.window.fullscreen();
     until(|| w.window.is_fullscreen());
-    assert!(!clock.is_visible());
-    clock_preference(0);
+    assert!(!clock.is_mapped());
+    w.dispatch(
+        HeaderAction::Add {
+            zone: HeaderZone::Right,
+            before: None,
+            item: HeaderItem::Clock,
+        }
+        .action(),
+    );
     until(|| clock.is_mapped());
     w.window.unfullscreen();
-    until(|| !w.window.is_fullscreen() && !status.is_visible());
+    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     w.window.destroy();
     assert!(w.gpu.borrow().is_none());
     // Finish compositor releases before libtest tears down the GTK owner thread.

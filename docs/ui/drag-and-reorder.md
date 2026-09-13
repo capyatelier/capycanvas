@@ -12,6 +12,7 @@ floating, collapsed-column, and drawer presentations. The convention was set on
 | Surface under the contact | Mouse | Touch | Pen |
 | --- | --- | --- | --- |
 | Reorderable button or tile body | Hold, then drag | Hold, then drag | Hold, then drag |
+| Customize Title Bar: entire editable item or component-bank chip | Drag without a hold | Drag without a hold | Drag without a hold |
 | Grab handle, including a handle inside a tile or list row | Drag without a hold | Drag without a hold | Drag without a hold |
 | Title bar, panel/tab strip, individual workspace tab, unused draggable header space | Drag without a hold | Drag without a hold | Drag without a hold |
 | Reorderable list-row body, such as a layer row | Drag without a hold | Hold, then drag | Hold, then drag |
@@ -28,6 +29,14 @@ claims the contact. Title/tab bars use the immediate rule even when a tab looks
 like an icon button. A collapsed-column icon outside a tab bar uses the tile rule
 if it supports dragging. Classify by the visible hit surface, not only by the
 Rust drag payload: `DockItem::Panel` can originate at a tab, grip, or icon tile.
+
+In **Customize Title Bar**, the whole item is a placement surface, not an active
+tool button. Its body and decorative grip both drag immediately after slop.
+The component bank has no click, tap or keyboard activation: a component must
+be dropped into the bar, and Add Tools opens its picker only on a valid drop.
+Selecting an existing bar item still supports keyboard move/remove and context
+menus. Outside this editor, ordinary tile holds and native window movement keep
+their existing rules. This explicit exception was requested on 2026-09-13.
 
 Pen includes stylus contacts such as Apple Pencil. Do not infer mouse behavior
 from “not touch,” the absence of a touch sequence, or synthesized mouse events

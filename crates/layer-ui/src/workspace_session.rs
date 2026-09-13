@@ -240,12 +240,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_history.gesture_start().is_some() {
             return Err("Finish arranging the workspace first".into());
         }
+        let mut committed = self
+            .workspace_preview
+            .as_ref()
+            .unwrap_or(&self.state.workspace)
+            .clone();
+        self.state
+            .customization
+            .committed_header(&mut committed.layout);
         Ok(WorkspaceCapture {
-            history: self.workspace_history.capture(
-                self.workspace_preview
-                    .as_ref()
-                    .unwrap_or(&self.state.workspace),
-            ),
+            history: self.workspace_history.capture(&committed),
             working: self.workspace_working_state(),
         })
     }
@@ -290,10 +294,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         layout.validate()?;
         let insets = self.state.workspace.layout.titlebar_insets;
         let bottom_inset = self.state.workspace.layout.bottom_inset;
+        let header_presentation = self.state.workspace.layout.header_presentation.clone();
         self.state.workspace.layout = durable_layout(layout);
         self.state.workspace.zen_mode = false;
         self.state.workspace.layout.titlebar_insets = insets;
         self.state.workspace.layout.bottom_inset = bottom_inset;
+        self.state.workspace.layout.header_presentation = header_presentation;
         self.state.customization = CustomizationState::default();
         self.sync_work_area();
         self.refresh_commands();
@@ -306,9 +312,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(original) = self.workspace_preview.take() {
             let insets = self.state.workspace.layout.titlebar_insets;
             let bottom_inset = self.state.workspace.layout.bottom_inset;
+            let header_presentation = self.state.workspace.layout.header_presentation.clone();
             self.state.workspace = original;
             self.state.workspace.layout.titlebar_insets = insets;
             self.state.workspace.layout.bottom_inset = bottom_inset;
+            self.state.workspace.layout.header_presentation = header_presentation;
             self.state.customization = CustomizationState::default();
             self.sync_work_area();
             self.refresh_commands();
@@ -335,6 +343,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let working = capture.working;
         let titlebar_insets = self.state.workspace.layout.titlebar_insets;
         let bottom_inset = self.state.workspace.layout.bottom_inset;
+        let header_presentation = self.state.workspace.layout.header_presentation.clone();
         self.state.workspace = WorkspaceState {
             version: 1,
             layout: capture.history.layout().clone(),
@@ -342,6 +351,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.state.workspace.layout.titlebar_insets = titlebar_insets;
         self.state.workspace.layout.bottom_inset = bottom_inset;
+        self.state.workspace.layout.header_presentation = header_presentation;
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
         let before = self.state.workspace.clone();
         if self.state.workspace.layout.collapse_empty_toolbar_groups() {
@@ -403,6 +413,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.workspace.layout = durable_layout(&layout);
         self.state.workspace.layout.titlebar_insets = before.layout.titlebar_insets;
         self.state.workspace.layout.bottom_inset = before.layout.bottom_inset;
+        self.state.workspace.layout.header_presentation = before.layout.header_presentation.clone();
         self.workspace_history
             .record_named(before, &self.state.workspace, description);
         self.state.customization = CustomizationState::default();

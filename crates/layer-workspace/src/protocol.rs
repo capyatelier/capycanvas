@@ -8,6 +8,10 @@ use std::collections::BTreeMap;
 /// transport without duplicating application decisions or workspace semantics.
 #[allow(async_fn_in_trait)]
 pub trait WorkspaceStore {
+    /// Native transports retire a window's locks after accepted requests drain.
+    /// Browser transports may leave cleanup to their expiring leases. This is
+    /// teardown only, never a replacement for close() and its acknowledged save.
+    fn retire_owner(&self, _owner: &Owner) {}
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError>;
 }
 
@@ -325,6 +329,10 @@ pub enum StoreRequest {
     Claim {
         id: String,
         owner: Owner,
+        /// Reset an unreadable included workspace while acquiring ownership.
+        /// Plain loads remain read-only; custom items never get this fallback.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reset_invalid_default: Option<layer_ui::Platform>,
     },
     Renew {
         id: String,
