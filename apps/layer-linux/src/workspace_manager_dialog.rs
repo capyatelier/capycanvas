@@ -368,16 +368,16 @@ impl ManagerUi {
                 handle.set_tooltip_text(Some("Drag to reorder"));
                 handle.update_property(&[gtk::accessible::Property::Label("Drag to reorder")]);
                 row.add_prefix(&handle);
+                let active = manager.active_id().as_deref() == Some(&item.id);
+                if active {
+                    row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
+                }
                 if pinned.contains(&item.id) {
                     let pin = gtk::Image::from_icon_name("layer-pin-symbolic");
                     pin.add_css_class("dim-label");
                     pin.set_tooltip_text(Some("Shown in top bar"));
                     pin.update_property(&[gtk::accessible::Property::Label("Shown in top bar")]);
                     row.add_suffix(&pin);
-                }
-                let active = manager.active_id().as_deref() == Some(&item.id);
-                if active {
-                    row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
                 }
                 let elsewhere = manager.items().iter().any(|i| {
                     i.id == item.id

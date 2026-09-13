@@ -50,8 +50,8 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     handle.title = "Drag to reorder"; handle.setAttribute("aria-label", handle.title);
     row.prepend(handle);
     for (const [visible, glyph, label] of [
-      [view.switcher.some(entry => entry.id === item.id), "pin", "Shown in top bar"],
       [view.id === item.id, "check", "Current workspace"],
+      [view.switcher.some(entry => entry.id === item.id), "pin", "Shown in top bar"],
     ]) if (visible) {
       const mark = element("span", `workspace-row-mark workspace-${glyph}`); mark.append(icon(glyph));
       mark.title = label; mark.setAttribute("aria-label", label); mark.setAttribute("role", "img"); row.append(mark);
