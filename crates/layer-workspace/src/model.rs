@@ -379,6 +379,28 @@ pub struct Entity {
     pub working: Option<WorkspaceWorkingState>,
 }
 impl Entity {
+    /// The same platform-specific definition seeds and repairs included workspaces.
+    pub(crate) fn included_workspace(
+        id: &str,
+        platform: layer_ui::Platform,
+        now: u64,
+    ) -> Option<Self> {
+        let (_, preset) = DEFAULT_WORKSPACES.iter().find(|(key, _)| *key == id)?;
+        let layout = preset.layout(platform);
+        let mut entity = Self::workspace(
+            preset.name(),
+            WorkspaceCapture {
+                history: LayoutHistory::new(&layout),
+                working: preset.working_state(),
+            },
+            layout,
+            None,
+            now,
+        );
+        entity.id = id.into();
+        entity.metadata.builtin = true;
+        Some(entity)
+    }
     pub fn workspace(
         name: &str,
         mut capture: WorkspaceCapture,

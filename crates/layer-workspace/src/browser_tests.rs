@@ -219,6 +219,7 @@ fn browser_transactions_match_sqlite_contract() {
         StoreRequest::Claim {
             id: first.id.clone(),
             owner: other.clone(),
+            reset_invalid_default: None,
         },
         1002,
     );
@@ -300,6 +301,7 @@ fn browser_transactions_match_sqlite_contract() {
         StoreRequest::Claim {
             id: first.id.clone(),
             owner: other.clone(),
+            reset_invalid_default: None,
         },
         32000,
     );
@@ -439,7 +441,14 @@ fn browser_preserves_newer_schemas_and_exact_large_counters() {
     encoded["items"][&id]["claim"]["fence"] = serde_json::json!("9007199254740993");
     let mut db = BrowserDatabase::decode(&encoded.to_string()).unwrap();
     let StoreResponse::Entity(s) = db
-        .execute(StoreRequest::Claim { id, owner }, 100000)
+        .execute(
+            StoreRequest::Claim {
+                id,
+                owner,
+                reset_invalid_default: None,
+            },
+            100000,
+        )
         .unwrap()
     else {
         panic!()

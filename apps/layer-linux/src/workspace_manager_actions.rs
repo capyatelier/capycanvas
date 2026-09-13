@@ -291,15 +291,20 @@ impl NativeWorkspaces {
                 history::show(w, &id).await?;
             }
             A::SwitchToWindow(id) => {
-                let stored = self.selected(&id).await?;
-                let target = stored.claim.and_then(|claim| {
-                    WINDOWS.with(|windows| {
-                        windows
-                            .borrow()
-                            .get(&claim.owner.id)
-                            .and_then(std::rc::Weak::upgrade)
-                    })
-                });
+                manager.refresh().await?;
+                let target = manager
+                    .items()
+                    .into_iter()
+                    .find(|item| item.id == id)
+                    .and_then(|item| item.claim)
+                    .and_then(|claim| {
+                        WINDOWS.with(|windows| {
+                            windows
+                                .borrow()
+                                .get(&claim.owner.id)
+                                .and_then(std::rc::Weak::upgrade)
+                        })
+                    });
                 if let Some(target) = target {
                     target.window.present();
                     self.ui.close();

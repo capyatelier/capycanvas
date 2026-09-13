@@ -275,11 +275,27 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(())
     }
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
-        match self
+        let loaded = self
             .store
             .execute(StoreRequest::Load { id: id.into() })
-            .await?
+            .await;
+        if model::is_default_item(id)
+            && loaded
+                .as_ref()
+                .is_err_and(|e| e.kind == ErrorKind::InvalidData)
         {
+            // Previews/details also load workspaces before a switch. Repair at
+            // this boundary too, using the same atomic, ownership-checked claim.
+            // Never leave a preview holding an inactive workspace's lease.
+            let mut incoming = self.claim(id).await?;
+            if self.active_id().as_deref() != Some(id) {
+                self.release_checked(&incoming).await?;
+                incoming.claim = None;
+            }
+            self.refresh().await?;
+            return Ok(incoming);
+        }
+        match loaded? {
             StoreResponse::Entity(entity) => Ok(*entity),
             _ => Err(StoreError::invalid("Unexpected workspace load reply.")),
         }
@@ -290,6 +306,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .execute(StoreRequest::Claim {
                 id: id.into(),
                 owner: self.owner.clone(),
+                reset_invalid_default: Some(self.platform),
             })
             .await?
         {
@@ -409,21 +426,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
-        for (workspace_id, preset) in DEFAULT_WORKSPACES {
-            let layout = preset.layout(self.platform);
-            let mut workspace = Entity::workspace(
-                preset.name(),
-                WorkspaceCapture {
-                    history: layer_ui::LayoutHistory::new(&layout),
-                    working: preset.working_state(),
-                },
-                layout,
-                None,
-                now,
-            );
-            workspace.id = workspace_id.into();
-            workspace.metadata.builtin = true;
-            self.ensure_default(workspace).await?;
+        for (workspace_id, _) in DEFAULT_WORKSPACES {
+            self.ensure_default(
+                Entity::included_workspace(workspace_id, self.platform, now).unwrap(),
+            )
+            .await?;
         }
         Ok(())
     }

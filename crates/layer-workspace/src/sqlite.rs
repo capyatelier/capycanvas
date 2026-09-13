@@ -160,8 +160,12 @@ impl SqliteStore {
                 Ok(StoreResponse::Done)
             }
             StoreRequest::Load { id } => self.load(&id).map(Box::new).map(StoreResponse::Entity),
-            StoreRequest::Claim { id, owner } => self
-                .claim(&id, owner)
+            StoreRequest::Claim {
+                id,
+                owner,
+                reset_invalid_default,
+            } => self
+                .claim_with_recovery(&id, owner, reset_invalid_default)
                 .map(Box::new)
                 .map(StoreResponse::Entity),
             StoreRequest::Renew { id, owner, fence } => self
@@ -344,11 +348,14 @@ impl SqliteStore {
                             "toolbar" => ItemKind::Toolbar,
                             _ => ItemKind::Workspace,
                         };
+                        let row = header(&tx, &id).ok();
+                        let mut metadata = Metadata::new(kind, &name, 0);
+                        metadata.builtin = row.as_ref().is_some_and(|r| r.builtin);
                         Ok(ItemSummary {
                             id,
-                            metadata: Metadata::new(kind, &name, 0),
-                            generations: Generations::default(),
-                            claim: None,
+                            metadata,
+                            generations: row.as_ref().map(|r| r.generations).unwrap_or_default(),
+                            claim: row.and_then(|r| r.claim),
                             error: Some(error.to_string()),
                         })
                     }
@@ -359,6 +366,14 @@ impl SqliteStore {
         Ok(values)
     }
     pub fn claim(&mut self, id: &str, owner: Owner) -> Result<StoredEntity> {
+        self.claim_with_recovery(id, owner, None)
+    }
+    fn claim_with_recovery(
+        &mut self,
+        id: &str,
+        owner: Owner,
+        reset_invalid_default: Option<layer_ui::Platform>,
+    ) -> Result<StoredEntity> {
         let now = self.clock.now_ms();
         let tx = self
             .connection
@@ -374,10 +389,43 @@ impl SqliteStore {
                 "This workspace is open in another window. Switch to that window or duplicate it.",
             ));
         }
-        let fence = if row
-            .claim
-            .as_ref()
-            .is_some_and(|c| c.owner == owner && c.expires_at_ms > now)
+        // Recheck decoding under the write lock. Never reset a healthy record
+        // that another window has repaired, or bypass a live owner's lease.
+        let reset = match load(&tx, id) {
+            Ok(_) => false,
+            Err(error) => {
+                let replacement = reset_invalid_default
+                    .filter(|_| {
+                        error.kind == ErrorKind::InvalidData
+                            && row.builtin
+                            && row.kind == "workspace"
+                            && !row.deleted
+                    })
+                    .and_then(|platform| Entity::included_workspace(id, platform, now));
+                let Some(mut entity) = replacement else {
+                    return Err(error);
+                };
+                entity.metadata = resolve_name(&tx, entity.metadata, id, NamePolicy::Unique)?;
+                entity.validate()?;
+                // A self-contained replacement cannot inherit a missing or
+                // corrupt shared component, and does not modify other records.
+                tx.execute(
+                    "UPDATE items SET name=?2,name_key=?3,metadata=?4,content=?5,working=?6,metadata_generation=?7,layout_generation=?8,working_generation=?9 WHERE id=?1",
+                    params![id, entity.metadata.name, name_key(&entity.metadata.name),
+                        serde_json::to_string(&entity.metadata)?, serde_json::to_string(&entity.content)?,
+                        serde_json::to_string(&entity.working)?,
+                        advance(row.generations.metadata)?.to_string(),
+                        advance(row.generations.layout)?.to_string(),
+                        advance(row.generations.working)?.to_string()],
+                )?;
+                true
+            }
+        };
+        let fence = if !reset
+            && row
+                .claim
+                .as_ref()
+                .is_some_and(|c| c.owner == owner && c.expires_at_ms > now)
         {
             row.fence
         } else {

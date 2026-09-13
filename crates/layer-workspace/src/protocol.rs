@@ -325,6 +325,10 @@ pub enum StoreRequest {
     Claim {
         id: String,
         owner: Owner,
+        /// Reset an unreadable included workspace while acquiring ownership.
+        /// Plain loads remain read-only; custom items never get this fallback.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reset_invalid_default: Option<layer_ui::Platform>,
     },
     Renew {
         id: String,

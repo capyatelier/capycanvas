@@ -241,6 +241,146 @@ fn native_header_managed_input() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_default_workspace_recovery_input --native-storage"]
+fn native_default_workspace_recovery_input() {
+    let mut d = Driver::managed("art.capycanvas.DefaultWorkspaceRecovery");
+    let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap())
+        .join("workspaces.sqlite3");
+    let sql = |query: &str| {
+        let output = std::process::Command::new("sqlite3")
+            .arg(&database)
+            .arg(query)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    d.w.dispatch(UiAction::SetBrushSize { value: 77. });
+    pump(200);
+    let illustrator =
+        d.w.gpu
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .session
+            .capture_workspace()
+            .unwrap()
+            .working;
+    // The failing workspace is inactive, so its saved bytes cannot be autosaved
+    // over by the live editor. This is the exact incompatible ColorState field.
+    sql(
+        "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id='builtin:workspace:painter'",
+    );
+    d.click_name("workspace-switch-painter");
+    Driver::wait_ready(&d.w);
+    pump(400);
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
+    assert_eq!(
+        sql(
+            "SELECT json_type(working,'$.colors.shape') IS NULL FROM items WHERE id='builtin:workspace:painter'"
+        ),
+        "1"
+    );
+    d.click_name(&d.header_tool(ToolbarControl::Color));
+    assert!(state(&d.w).customization.drawer.is_some());
+    d.w.dispatch(UiAction::Customize {
+        action: CustomizationAction::CloseExpanded,
+    });
+    d.w.window.close();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while d.w.window.is_visible() {
+        assert!(Instant::now() < deadline, "workspace close");
+        pump(20);
+    }
+    // Startup repairs only the resumed Painter, not every included workspace.
+    sql(
+        "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id IN ('builtin:workspace:painter','builtin:workspace:photographer')",
+    );
+    d.w = Workspace::new(&d._app);
+    d.w.window.maximize();
+    d.w.window.present();
+    Driver::wait_ready(&d.w);
+    pump(500);
+    assert_eq!(
+        d.w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_name()
+            .as_deref(),
+        Some("Painter")
+    );
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert!(d.w.area.is_mapped());
+    assert_eq!(
+        sql(
+            "SELECT json_extract(working,'$.colors.shape') FROM items WHERE id='builtin:workspace:photographer'"
+        ),
+        "wheel"
+    );
+    d.w.workspaces
+        .ui
+        .show(&d.w, layer_workspace::ManagerPage::Workspaces);
+    pump(500);
+    d.click_name("workspace-row-builtin:workspace:photographer");
+    pump(300);
+    assert!(d.named("workspace-manager-apply").is_sensitive());
+    assert_eq!(
+        durable_layout(&state(&d.w).workspace.layout),
+        WorkspacePreset::Photographer.layout(Platform::Gtk)
+    );
+    assert_eq!(
+        d.w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_name()
+            .as_deref(),
+        Some("Painter")
+    );
+    assert_eq!(
+        sql("SELECT owner IS NULL FROM items WHERE id='builtin:workspace:photographer'"),
+        "1"
+    );
+    let cancel = find_button(d.w.workspaces.ui.dialog.upcast_ref(), "Cancel").unwrap();
+    d.click(cancel.upcast_ref());
+    pump(250);
+    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    for name in ["illustrator", "photographer", "painter"] {
+        d.click_name(&format!("workspace-switch-{name}"));
+        Driver::wait_ready(&d.w);
+        pump(300);
+        if name == "illustrator" {
+            assert_eq!(
+                d.w.gpu
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .session
+                    .capture_workspace()
+                    .unwrap()
+                    .working,
+                illustrator
+            );
+        }
+    }
+    assert_eq!(
+        sql("SELECT count(*) FROM items WHERE json_type(working,'$.colors.shape') IS NOT NULL"),
+        "0"
+    );
+    assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
+    d.click_name(&d.header_tool(ToolbarControl::Color));
+    assert!(state(&d.w).customization.drawer.is_some());
+    crate::capture(&d.w, d.dir.join("recovered-painter.png").to_str().unwrap());
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_header_catalog_preview_input"]
 fn native_header_catalog_preview_input() {
     let mut d = Driver::new("art.capycanvas.HeaderCatalog");

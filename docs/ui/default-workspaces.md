@@ -63,10 +63,20 @@ the existing default arrangement and tool selection.
   GTK Painter centers it, and the window-bar builder can reposition it. It uses
   normal workspace switching, including outgoing saves and ownership checks.
   Selecting a workspace restores its latest settings and arrangement. It never
-  reapplies the shipped preset. An unpinned active workspace is temporarily
+  reapplies the shipped preset to a healthy workspace. An unpinned active workspace is temporarily
   prepended and selected until the user switches away.
 - If another window owns a default workspace, focus that window through the normal
   ownership path. Do not take it over or reset its contents just to switch modes.
+- If an included workspace cannot decode or validate, restore only that workspace
+  from its current platform default. This covers startup, header switching and
+  manager previews, including incompatible development fields such as
+  `colors.shape`. Its layout history and working settings are reset; its stable ID,
+  pins, ordering, document and all other workspaces remain unchanged. Healthy
+  customized defaults and user-created workspaces are never reset this way.
+  Repair checks the live owner and advances generations/fencing in the same
+  transaction as the replacement. A preview releases its temporary claim.
+  Disk errors, newer database schemas and damaged ownership/counter records are
+  errors, not reasons to reset. Low-level storage reads remain non-mutating.
 - New Workspace copies the current settings and arrangement, asks only for a
   name, and pins the new workspace. Manage Workspaces retains selection preview, explicit Switch to Workspace,
   and Cancel. Layout History remains a history of arrangements within a workspace.
@@ -130,6 +140,12 @@ records and storage APIs remain compatible with existing data, without UI routes
 Reusable items with this flag are read-only. Included workspaces still allow
 layout, working-state, and lifecycle metadata updates. SQLite and the browser
 store both enforce the distinction, including direct metadata writes.
+
+Included-workspace repair and initial seeding share one definition. SQLite replaces
+the failed row with self-contained content, without editing shared resources.
+The browser stores the same entity JSON shape but decodes entities individually,
+so an incompatible item cannot prevent opening the catalog. Neither backend adds
+support for obsolete workspace fields.
 
 The shared manager exposes `workspace_ids` (complete dialog order), `switcher_ids`
 (visible subset), `refresh_switcher`, and `edit_switcher(SwitcherEdit::{Show, Move})`.
@@ -226,3 +242,27 @@ Other platforms can use the [minimal implementation handoff](workspace-switcher-
 
 ![Web workspace switcher configuration](default-workspaces/web-switcher.png)
 ![Web workspace row menu](default-workspaces/web-switcher-menu.png)
+
+## Invalid-default recovery acceptance (September 13)
+
+- 396 shared tests pass (`layer-ui`, `layer-host`, and 72 `layer-workspace` tests).
+  Recovery fixtures corrupt actual stored JSON for all three included workspaces
+  on SQLite and the browser reducer. They cover unknown fields, invalid working
+  versions, absent working state, invalid metadata/content, missing resources,
+  healthy/custom preservation, live leases, stale writes, rollback and reopen.
+- GTK's `native_default_workspace_recovery_input` passes with private SQLite
+  storage and real pointer input. It covers header switching, broken resumed
+  startup, manager preview/Cancel, claim release, preservation of another
+  workspace's edited brush settings, and using the recovered Painter color
+  drawer. Evidence: `/tmp/capy-workspace-motion.FbGJD2`.
+- Chrome passes 49 SQLite/IndexedDB contract cases plus default recovery,
+  transaction abort after replacement, ownership rejection and durable reopen:
+  `/tmp/capy-workspace-motion.OKMFPg`. The existing complete workspace-manager
+  interaction regression also passes: `/tmp/capy-workspace-motion.W0b1pp`.
+
+Run the recovery journey with
+`bash tools/performance/workspace-motion.sh gtk --native-test=native_default_workspace_recovery_input --native-storage`.
+For the browser contract, first generate its fixture with
+`CAPY_STORE_CONTRACT_FIXTURE=/tmp/capy-workspace-store-contract.json cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,
+then run `bash tools/performance/workspace-motion.sh web --workspace-store`.
+These tests use isolated stores; they do not wipe normal app workspaces.

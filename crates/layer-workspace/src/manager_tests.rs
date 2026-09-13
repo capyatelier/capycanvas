@@ -714,6 +714,7 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
             .request(StoreRequest::Claim {
                 id: id.clone(),
                 owner: other.clone(),
+                reset_invalid_default: None,
             })
             .await
             .unwrap()

@@ -134,6 +134,50 @@ fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
 }
 
 #[test]
+fn invalid_defaults_recover_through_controller_switch_and_preview() {
+    let mut f = Fixture::new();
+    let original = f.controller.view.id.clone().unwrap();
+    let capture = f.host.session.capture_workspace().unwrap();
+    let corrupt = |id: &str| {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
+        value["items"][id]["entity"]["working"]["colors"]["shape"] = serde_json::json!("wheel");
+        *f.backend.database.borrow_mut() = BrowserDatabase::decode(&value.to_string()).unwrap();
+    };
+    for (id, _) in DEFAULT_WORKSPACES {
+        corrupt(id);
+    }
+    let painter = DEFAULT_WORKSPACES[0].0;
+    f.input(serde_json::json!({"type":"switch","id":painter}));
+    assert_eq!(f.controller.view.id.as_deref(), Some(painter));
+    assert!(
+        f.controller.view.error.is_none(),
+        "{:?}",
+        f.controller.view.error
+    );
+    assert_eq!(
+        f.host.session.capture_workspace().unwrap().working,
+        layer_ui::WorkspacePreset::Painter.working_state()
+    );
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    f.input(serde_json::json!({"type":"select","id":DEFAULT_WORKSPACES[2].0}));
+    assert!(f.controller.view.enabled);
+    assert!(
+        f.controller.view.error.is_none(),
+        "{:?}",
+        f.controller.view.error
+    );
+    assert_eq!(
+        f.controller.view.id.as_deref(),
+        Some(painter),
+        "Preview never activates its workspace"
+    );
+    f.input(serde_json::json!({"type":"cancel"}));
+    f.input(serde_json::json!({"type":"switch","id":original}));
+    assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+}
+
+#[test]
 fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
     let defaults = [
         DEFAULT_WORKSPACES[1].0,
@@ -155,6 +199,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
             pollster::block_on(Store(f.backend.clone()).execute(StoreRequest::Claim {
                 id: (*id).into(),
                 owner: owner.clone(),
+                reset_invalid_default: None,
             }))
             .unwrap();
         }
