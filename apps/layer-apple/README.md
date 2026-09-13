@@ -175,13 +175,29 @@ text adapters use tabular digits. The
 includes both Apple presets/themes, width and endpoint cases, plus mounted-field
 checks of actual editor actions. Full UIKit and editor pixel parity remain open.
 
-The Color panel provides the shared HSV square / HLS triangle,
-foreground/background/transparent paint slots, swap and component expressions.
-Rust owns color conversion, hue memory, normalized geometry, hit regions and
-drag clamping. Both native hosts share the gradient drawing and controls; their
-small input views latch the starting region for each mouse, Pencil or touch
-contact. Picking a color exits transparent paint using the previous paint slot.
-Channel edits update the current Rust state, preserving other queued changes.
+The compact Color panel follows the shared layout down to 128 logical points:
+an Okhsv circle, HSV square or HLS triangle; overlapping foreground/background
+swatches; transparent paint; Swap; two alternate shape buttons; and a curved
+OKLCH/HSB/HLS readout that toggles to RGB. Rust owns the layout, conversion,
+readout text, hue memory, hit regions and drag clamping. Both hosts use shared
+RGBA8 fields and hue-guide stops, retaining separate field/guide images across
+marker changes. Native clips, markers and controls remain at display resolution.
+Wheel painting follows Web's rounded destination edges, with the field/guide
+raster sized to those physical bounds to avoid extra interpolation. Swatch
+selection borders sit behind their paint interiors. Each styled swatch has a
+circular hit region so the foreground's empty corners do not intercept taps on
+the overlapping background swatch. Native button styles match
+the shared swatch, shape and Swap hover/press feedback while retaining ordinary
+activation and cancellation. The readout uses the shared accent and label outline
+when its native focus binding is active.
+Curved text uses the shared native font metrics and fractional CoreText glyph
+positions, retaining normal font smoothing instead of rounding each rotated glyph.
+The two Mac shape icons composite before rotation to keep their outlines smooth.
+This standard SwiftUI drawing step is limited to macOS, where complete-panel
+captures show an improvement; UIKit uses its validated existing rendering.
+The input views latch the starting region for each mouse, Pencil or touch contact.
+Picking exits transparent paint through the previous paint slot; changing shape
+or paint slot cancels the old contact.
 
 For reproducible Debug editor fixtures, `CAPY_INITIAL_ACTIONS` accepts a JSON
 array of shared actions at launch. For example, this opens the Tool panel without
@@ -208,17 +224,18 @@ cargo test -p layer-apple apple_transform_settings
 cargo test -p layer-apple apple_color_
 ```
 
-The focused `testColorControls` test checks native wheel contacts, color-space
-and paint-slot controls and expression entry on both targets. It retains full
+The focused `testColorControls` test checks native wheel contacts, shapes,
+readout switching, paint slots, Swap and continuous dragging. It retains full
 captures plus measured wheel geometry for the shared
 [color sampling check](../../tools/visual/README.md). The headless ABI tests
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
-The Color panel shares the web layout on both Apple targets: three paint slots
-with a checkerboard/selected background, labeled Swap and color-space buttons,
-and three full numeric slider controls. Its fast
+The Color panel shares the Web layout, vector icons and readout spacing on both
+Apple targets. Its
 [complete-panel fixture](../../tools/visual/README.md#complete-color-panels)
-compares 48 native/Chrome cases without visible native windows. The focused UI
+compares 216 cases per host: both presets/themes, three shapes, two readouts,
+three paint slots and three widths. The same source has AppKit and UIKit capture
+entry points. The focused UI
 workflow records the actual accepted Rust color through opt-in debug metadata,
 so its color oracle does not assume ideal touch coordinates.
 

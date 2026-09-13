@@ -2,16 +2,18 @@ import SwiftUI
 import UIKit
 
 struct ColorWheelInput: UIViewRepresentable {
-    let space: UInt32
+    let shape: UInt32
     let context: String
+    let value: String
     let pick: (UInt32, CGPoint, CGFloat) -> Void
     func makeUIView(context: Context) -> ContactView { ContactView() }
     func updateUIView(_ view: ContactView, context: Context) {
         if view.colorContext != self.context { view.contact.cancel() }
-        view.space = space; view.colorContext = self.context; view.pick = pick
+        view.shape = shape; view.colorContext = self.context; view.pick = pick
+        view.accessibilityValue = value
     }
     final class ContactView: UIView {
-        var space: UInt32 = 0
+        var shape: UInt32 = 0
         var colorContext = ""
         var pick: (UInt32, CGPoint, CGFloat) -> Void = { _, _, _ in }
         let contact = Contact()
@@ -25,7 +27,7 @@ struct ColorWheelInput: UIViewRepresentable {
         required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { hit(point) != 0 }
         func hit(_ point: CGPoint) -> UInt32 {
-            capy_apple_color_hit(Float(point.x), Float(point.y), Float(size), space)
+            capy_apple_color_hit(Float(point.x), Float(point.y), Float(size), shape)
         }
         override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { contact.cancel() } }
     }

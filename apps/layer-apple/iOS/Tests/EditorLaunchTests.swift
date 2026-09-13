@@ -291,9 +291,12 @@ final class EditorLaunchTests: XCTestCase {
         let app = editorCaptureApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"preferences","action":{"type":"edit","id":"theme","value":1}},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"set_color","rgba":[1,0,0,1]}]"#
         app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
-        app.launch()
+        // A device fixture may launch this same isolated app through devicectl
+        // when Xcode's debugger cannot return its PID. All UI assertions remain.
+        if ProcessInfo.processInfo.environment["CAPY_COLOR_ATTACH"] == "1" { app.activate() }
+        else { app.launch() }
         checkColorControls(in: app) { mode, wheel, state in
-            attachColorFixture(name: "ipad-color-" + mode, space: mode, state: state,
+            attachColorFixture(name: "ipad-color-" + mode, state: state,
                 screenshot: XCUIScreen.main.screenshot(), viewport: app.frame, wheel: wheel)
         }
     }
