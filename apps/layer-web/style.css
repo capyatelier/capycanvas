@@ -89,8 +89,8 @@ body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input, select, summary { font: inherit; accent-color: var(--accent); }
 button, select, input[type="color"], summary { min-height: 34px; border: 0; border-radius: 6px; background: transparent; color: var(--text); padding: 5px 17px; }
 button, summary { cursor: default; font-weight: 700; line-height: 24px; }
-:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
+:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
 button:disabled { opacity: .36; cursor: default; }
 button[aria-pressed="true"], button[aria-selected="true"] { background: var(--selected); }
 :focus-visible { outline: none; }
@@ -569,34 +569,25 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .tool-subtools .brush-preview { width:82px; height:32px; object-fit:contain; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
 .tool-settings-control h3 { margin:4px 0; font-size:inherit; }
-/* Four corner targets follow the wheel's silhouette; exact values use one row. */
-.color-wheel-control { display:flex; flex-direction:column; gap:6px; min-width:176px; max-height:100%; }
+/* Shared square allocations keep the curved controls clear at four tiles. */
+.color-wheel-control { display:flex; flex-direction:column; min-width:128px; max-height:100%; }
 .color-wheel-stage { position:relative; flex:0 1 auto; min-height:128px; width:100%; aspect-ratio:1; container-type:size; }
-.color-wheel-square { position:absolute; width:min(100cqw,100cqh); height:min(100cqw,100cqh); left:50%; top:50%; transform:translate(-50%,-50%); container-type:inline-size; }
-.color-wheel { display:block; width:100%; height:100%; touch-action:none; }
-.color-swatches { position:absolute; inset:0; pointer-events:none; }
-.color-wheel-control .color-swatch, .color-wheel-control .color-utility { touch-action:manipulation; display:grid; place-items:center; min-width:0; min-height:0; padding:3px; border-radius:50%; background:color-mix(in srgb,var(--text) 5%,transparent); }
-.color-wheel-stage .color-swatch, .color-wheel-stage .color-space { position:absolute; width:clamp(24px,14cqw,36px); height:clamp(24px,14cqw,36px); }
-.color-swatch[data-color-slot="foreground"] { left:0; top:0; }
-.color-swatch[data-color-slot="background"] { right:0; top:0; }
-.color-swatch[data-color-slot="transparent"] { left:0; bottom:0; }
-.color-wheel-control .color-space { right:0; bottom:0; }
-.color-wheel-control .color-swatch > span { pointer-events:none; display:block; width:100%; height:100%; border-radius:50%; box-shadow:inset 0 0 0 1px #0002; }
-.color-wheel-control .color-swatch { pointer-events:auto; box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 20%,transparent); }
+.color-wheel-square { position:absolute; width:min(100cqw,100cqh); height:min(100cqw,100cqh); left:50%; top:50%; transform:translate(-50%,-50%); }
+.color-wheel { position:absolute; display:block; touch-action:none; }
+.color-wheel-control :is(.color-swatch,.color-utility,.color-shape,.color-readout) { position:absolute; touch-action:manipulation; display:grid; place-items:center; min-width:0; min-height:0; padding:3px; border-radius:50%; clip-path:circle(50%); }
+.color-wheel-control .color-swatch { background:var(--panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 25%,transparent); }
+.color-wheel-control .color-swatch > span { pointer-events:none; display:block; width:100%; height:100%; border-radius:50%; }
 .color-wheel-control .color-swatch[aria-pressed="true"] { box-shadow:inset 0 0 0 2px var(--text); }
-:where(:root:not([data-touch])) .color-wheel-control .color-utility:hover { background:color-mix(in srgb,var(--text) 12%,transparent); }
 :where(:root:not([data-touch])) .color-wheel-control .color-swatch:hover { box-shadow:inset 0 0 0 2px var(--text); }
-.color-wheel-control .color-utility svg { pointer-events:none; width:16px; height:16px; }
-.color-footer { display:flex; flex:none; align-items:center; gap:4px; }
-.color-components { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px; flex:1; min-width:0; }
-.color-component { display:flex; align-items:center; justify-content:center; gap:2px; border-radius:9px; background:color-mix(in srgb,var(--text) 5%,transparent); padding-left:3px; }
-.color-component-label { opacity:.55; }
-.color-component .number-control { width:auto; flex:1; gap:0; }
-.color-component .number-track { display:none; }
-.color-component .number-value-box { width:100%; border-radius:9px; background:transparent; }
-.color-component .number-control .number-entry, .color-component .number-control .number-value { background:transparent; padding:2px 2px; min-height:28px; height:28px; text-align:center; }
-.color-component:focus-within { box-shadow:inset 0 0 0 2px var(--accent); }
-.color-wheel-control .color-swap { flex:none; width:28px; height:28px; padding:0; }
+.color-wheel-control .color-utility { padding:2px; background:color-mix(in srgb,var(--text) 6%,transparent); }
+:where(:root:not([data-touch])) .color-wheel-control .color-utility:hover { background:color-mix(in srgb,var(--text) 12%,transparent); }
+.color-wheel-control :is(.color-shape,.color-utility) svg { pointer-events:none; width:16px; height:16px; }
+.color-wheel-control button.color-shape, .color-wheel-control button.color-readout { background:transparent; box-shadow:none; }
+:where(:root:not([data-touch])) .color-wheel-control button.color-shape:hover { color:var(--accent); }
+.color-wheel-control button.color-readout { padding:0; border-radius:0; }
+.color-wheel-control .color-readout canvas { width:100%; height:100%; pointer-events:none; }
+.color-wheel-control :is(.color-shape,.color-swatch,.color-utility):focus-visible { outline-offset:-2px; }
+.color-wheel-control .color-readout:focus-visible { color:var(--accent); outline:none; }
 .navigator-control { display:flex; flex-direction:column; gap:2px; height:100%; min-height:0; }
 .navigator-overview { position:relative; width:100%; height:164px; flex:1 1 164px; min-height:0; touch-action:none; background:var(--bg); }
 .navigator-clip { position:absolute; inset:0; overflow:hidden; pointer-events:none; }

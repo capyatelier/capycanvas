@@ -78,8 +78,13 @@ check that zoomed paper appears through empty header space. These checks do not
 establish complete editor parity or hardware performance.
 
 For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
-for mouse/pen input, expressions, cancellation and both-theme captures at three
-panel widths. On Linux, use
+for mouse/pen input, readout and shape buttons, swap, keyboard activation,
+cancellation, and both-theme captures at 144/160/200/280/360 px panel widths.
+All three shapes and HSB (HLS for the triangle)/Lab/RGB readouts fit one square;
+the four-tile minimum and short docks retain every control. GTK and Web use the
+same Rust allocations, coordinate memory and circle raster. Regression cases
+include dragging through different black positions and then changing hue.
+On Linux, use
 `LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/web" bash tools/performance/workspace-motion.sh web --color-panel`
 to verify mouse and touch through the private Mutter compositor, plus pen through
 CDP. Some Chrome builds deliver CDP touch contacts without compatibility clicks;

@@ -244,7 +244,7 @@ fn native_default_workspace() {
             .downcast::<crate::tool_panels::ColorWheel>()
             .unwrap()
             .drawing_bounds();
-        assert!(size >= 100.);
+        assert!(size >= 92.);
         let point = layer_ui::ColorWheelGeometry::new(size)
             .unwrap()
             .hue_marker(210.);
@@ -4241,8 +4241,9 @@ fn native_tool_and_color_panels() {
         layer_ui::ColorShape::Triangle,
         layer_ui::ColorShape::Circle,
     ] {
+        let index = state(&w).colors.other_shapes().iter().position(|shape| *shape == expected).unwrap();
         click(
-            &find_named(&color, "color-space").unwrap().downcast().unwrap(),
+            &find_named(&color, &format!("color-shape-{index}")).unwrap().downcast().unwrap(),
         );
         assert_eq!(state(&w).colors.wheel_shape(), expected);
     }

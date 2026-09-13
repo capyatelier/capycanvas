@@ -66,79 +66,101 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     };
   }
   function colorWheel(root) {
-    const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage"); frame.append(stage);root.append(frame);
-    const wheel=element("canvas","color-wheel"); wheel.setAttribute("aria-label","Color wheel"); stage.append(wheel);
-    const swatches=element("div","color-swatches"), choices=[]; stage.append(swatches);
-    for(const slot of ["foreground","background","transparent"]) {
-      const node=button("",()=>color({op:"select",slot}),"color-swatch"); node.dataset.colorSlot=slot;
-      const paint=element("span"); node.append(paint);swatches.append(node);choices.push([node,paint]);
-    }
-    const space=button("",()=>color({op:"toggle_space"}),"color-space color-utility"); stage.append(space);
-    const footer=element("div","color-footer"); root.append(footer);
-    const components=element("div","color-components");footer.append(components);
+    const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage");frame.append(stage);root.append(frame);
+    const wheel=element("canvas","color-wheel");wheel.setAttribute("aria-label","Color wheel");stage.append(wheel);
+    // Paint order also controls hit testing in the intentional swatch overlap.
+    const choices=["background","foreground","transparent"].map(slot=>{
+      const node=button("",()=>color({op:"select",slot}),"color-swatch");node.dataset.colorSlot=slot;
+      const paint=element("span");node.append(paint);stage.append(node);return{slot,node,paint};
+    });
+    const shapes=[0,1].map(i=>{const node=button("",()=>color({op:"shape",shape:view.other_shapes[i]}),"color-shape");stage.append(node);return node;});
     const swap=button("",()=>color({op:"swap"}),"color-swap color-utility");
-    swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);
-    swap.append(icon("color-swap"));footer.append(swap);
-    let view, fields=[], fieldsKey="", paintKey="";
+    swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);swap.append(icon("color-swap"));stage.append(swap);
+    const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
+    numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
+    let view,layout,paintKey="",fieldKey="",field=null;
+    const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
     function draw() {
-      if(!view)return;
-      const side=wheel.clientWidth;if(!side)return;
-      const scale=Math.min(devicePixelRatio||1,2), pixels=Math.round(side*scale);
-      const next=JSON.stringify([view,pixels]);if(next===paintKey)return;paintKey=next;
+      if(!view||stage.clientWidth<128)return;
+      layout=app.color_panel_layout(stage.clientWidth);
+      place(wheel,layout.wheel);
+      choices.forEach(({slot,node})=>place(node,layout[slot]));
+      shapes.forEach((node,i)=>{place(node,layout.shapes[i]);node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
+      place(swap,layout.swap);place(readout,layout.readout);
+      const half=layout.readout[2],r=layout.wheel[2]*view.geometry.outer+2;
+      // The readout's curved hit area cannot intercept hue picking underneath.
+      readout.style.clipPath=`path("M0 0H${half}V${half-r}A${r} ${r} 0 0 0 ${half-r} ${half}H0Z")`;
+      const side=layout.wheel[2],scale=Math.min(devicePixelRatio||1,2),pixels=Math.ceil(side*scale);
+      const ink=getComputedStyle(readout).color,focus=readout.matches(":focus-visible");
+      const next=JSON.stringify([view,pixels,stage.clientWidth,ink,focus]);if(next===paintKey)return;paintKey=next;
       wheel.width=wheel.height=pixels;const ctx=wheel.getContext("2d",{willReadFrequently:true});ctx.scale(pixels/side,pixels/side);
       const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
-      const hue=ctx.createConicGradient(view.hue_start_degrees*Math.PI/180,cx,cy);
-      view.hue_stops.forEach((c,i)=>hue.addColorStop(i/(view.hue_stops.length-1),rgba(c)));
-      if(view.space==="hsv") {
+      if(view.shape==="square") {
         const [x,y,w]=g.square.map(v=>v*side);
         ctx.save();ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();
         const saturation=ctx.createLinearGradient(x,y,x+w,y);saturation.addColorStop(0,"white");saturation.addColorStop(1,rgba(view.hue_color));ctx.fillStyle=saturation;ctx.fillRect(x,y,w,w);
         const value=ctx.createLinearGradient(x,y,x,y+w);value.addColorStop(0,"transparent");value.addColorStop(1,"black");ctx.fillStyle=value;ctx.fillRect(x,y,w,w);ctx.restore();
       } else {
-        // Rasterize the shared white/black/hue triangle as a vertex gradient.
-        const [a,b,c]=g.triangle.map(p=>p.map(v=>v*pixels));
-        const minX=Math.max(0,Math.floor(Math.min(a[0],b[0],c[0]))),minY=Math.max(0,Math.floor(Math.min(a[1],b[1],c[1])));
-        const width=Math.ceil(Math.max(a[0],b[0],c[0]))-minX,height=Math.ceil(Math.max(a[1],b[1],c[1]))-minY;
-        const image=ctx.createImageData(width,height),d=(b[1]-c[1])*(a[0]-c[0])+(c[0]-b[0])*(a[1]-c[1]);
-        for(let y=0;y<height;y++)for(let x=0;x<width;x++) {
-          const px=minX+x+.5,py=minY+y+.5;
-          const white=((b[1]-c[1])*(px-c[0])+(c[0]-b[0])*(py-c[1]))/d;
-          const black=((c[1]-a[1])*(px-c[0])+(a[0]-c[0])*(py-c[1]))/d,h=1-white-black;
-          if(Math.min(white,black,h)>=0){const i=(y*width+x)*4;for(let j=0;j<3;j++)image.data[i+j]=255*(white+h*view.hue_color[j]);image.data[i+3]=255;}
+        const key=JSON.stringify([view.shape,view.components[0].value,pixels]);
+        if(key!==fieldKey) {
+          // Rust produces CPU pixels. Keep this staging canvas in CPU memory;
+          // drawing through an extra GPU Canvas 2D surface adds an upload/readback.
+          fieldKey=key;field=document.createElement("canvas");field.width=field.height=pixels;
+          field.getContext("2d",{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(app.color_field_pixels(pixels)),pixels,pixels),0,0);
         }
-        ctx.putImageData(image,minX,minY);
+        ctx.save();
+        if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,inner*.94,0,2*Math.PI);ctx.clip();}
+        ctx.drawImage(field,0,0,side,side);ctx.restore();
       }
+      const hue=ctx.createConicGradient(view.hue_start_degrees*Math.PI/180,cx,cy);
+      view.hue_stops.forEach((c,i)=>hue.addColorStop(i/(view.hue_stops.length-1),rgba(c)));
       ctx.strokeStyle=hue;ctx.lineWidth=outer-inner;ctx.beginPath();ctx.arc(cx,cy,(inner+outer)/2,0,Math.PI*2);ctx.stroke();
       const radius=Math.min(10,Math.max(6,side*.04));
-      for(const [p,fill] of [[view.hue_marker,rgba(view.hue_color)],[view.field_marker,rgba(view.marker_color)]]) {
+      for(const [p,fill] of [[view.hue_marker,rgba(view.hue_color)],[view.wheel_marker,rgba(view.marker_color)]]) {
         ctx.beginPath();ctx.arc(p[0]*side,p[1]*side,radius,0,2*Math.PI);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle="rgba(0,0,0,.5)";ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle="white";ctx.lineWidth=2;ctx.stroke();
       }
+      drawReadout(half,scale,ink,focus);
+    }
+    function drawReadout(half,scale,ink,focus) {
+      numbers.width=numbers.height=Math.ceil(half*scale);
+      const ctx=numbers.getContext("2d",{willReadFrequently:true});ctx.scale(numbers.width/half,numbers.height/half);
+      const radius=layout.readout_radius,family='"Adwaita Sans",system-ui,sans-serif';
+      let font=Math.min(12,Math.max(9,half*2*.044));
+      ctx.font=`bold ${font}px ${family}`;ctx.fillStyle=ink;ctx.globalAlpha=.9;ctx.fillText(view.readout_label,2,font+1);
+      if(focus){ctx.strokeStyle=ink;ctx.lineWidth=1.5;ctx.beginPath();ctx.roundRect(1,1,ctx.measureText(view.readout_label).width+5,font+4,5);ctx.stroke();}
+      const labels=view.readout==="lab"?["L","a","b"]:["","",""],rgb=view.readout==="rgb";
+      const texts=view.readout_text.map((text,i)=>labels[i]+text),available=radius*Math.PI/2-4;
+      let widths,total;
+      for(;;font-=.25) {
+        ctx.font=`${font}px ${family}`;
+        widths=texts.map(text=>[...text].reduce((n,c)=>n+ctx.measureText(c).width,0)+(rgb?font*.8+2:0));total=widths.reduce((a,b)=>a+b,0);
+        if(total+6<=available||font<=8)break;
+      }
+      const chip=font*.8,gap=Math.min(radius*.24,Math.max(3,(available-total)*.5));
+      let cursor=-(total+gap*2)*.5;
+      const at=(angle,paint)=>{ctx.save();ctx.translate(half+radius*Math.cos(angle),half+radius*Math.sin(angle));ctx.rotate(angle+Math.PI/2);paint();ctx.restore();};
+      texts.forEach((text,i)=>{
+        const width=widths[i],mid=-135*Math.PI/180+(cursor+width*.5)/radius;cursor+=width+gap;
+        let along=-width*.5;
+        if(rgb){at(mid+(along+chip*.5)/radius,()=>{ctx.globalAlpha=1;ctx.fillStyle=["rgb(93% 31% 36%)","rgb(25% 73% 43%)","rgb(29% 56% 98%)"][i];ctx.beginPath();ctx.roundRect(-chip*.5,-font*.76,chip,chip,2);ctx.fill();});along+=chip+2;}
+        for(const glyph of text){const advance=ctx.measureText(glyph).width;at(mid+(along+advance*.5)/radius,()=>{ctx.globalAlpha=.8;ctx.fillStyle=ink;ctx.fillText(glyph,-advance*.5,0);});along+=advance;}
+      });
     }
     let contact=null;
-    const pick=e=>{const r=wheel.getBoundingClientRect();color({op:"pick",part:contact.part,size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});};
+    const pick=e=>{const r=wheel.getBoundingClientRect();color({op:"pick_wheel",part:contact.part,size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});};
     wheel.addEventListener("pointerdown",e=>{if(e.button!==0)return;const r=wheel.getBoundingClientRect(),part=app.color_wheel_hit(r.width,e.clientX-r.x,e.clientY-r.y);if(!part)return;contact={id:e.pointerId,part};wheel.setPointerCapture(e.pointerId);e.preventDefault();pick(e);});
     wheel.addEventListener("pointermove",e=>{if(contact?.id===e.pointerId)pick(e);});
     for(const name of ["pointerup","pointercancel","lostpointercapture"])wheel.addEventListener(name,e=>{if(contact?.id===e.pointerId)contact=null;});
-    const resize=new ResizeObserver(draw);resize.observe(wheel);
+    // Preserve native button activation instead of treating Space as canvas pan.
+    for(const name of ["keydown","keyup"])root.addEventListener(name,e=>{if(e.target.closest("button")&&(e.key===" "||e.key==="Enter"))e.stopPropagation();});
+    for(const name of ["focus","blur"])readout.addEventListener(name,draw);
+    const resize=new ResizeObserver(draw);resize.observe(stage);
     root.navigatorDispose=()=>resize.disconnect();
     return ()=>{
       view=app.color_panel();
-      choices.forEach(([node,paint],i)=>{const swatch=view.swatches[i];node.setAttribute("aria-label",swatch.label);node.title=swatch.label;node.setAttribute("aria-pressed",String(swatch.selected));paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#8c8c8c 0 25%,#ccc 0 50%) center / 10px 10px`;});
-      const mode=view.space==="hsv"?"triangle":"square";
-      if(space.dataset.mode!==mode){space.dataset.mode=mode;space.replaceChildren(icon(`color-${mode}`));}
-      space.title=view.space==="hsv"?"HSV square · Switch to HLS triangle":"HLS triangle · Switch to HSV square";
-      space.setAttribute("aria-label",space.title);
-      const key=JSON.stringify(view.components.map(({value,...c})=>c));
-      if(key!==fieldsKey){
-        fieldsKey=key;components.replaceChildren();
-        fields=view.components.map((c,index)=>{
-          const group=element("div","color-component"),label=element("span","color-component-label",c.label);
-          label.setAttribute("aria-hidden","true");
-          const node=numberField(c.numeric,c.name,value=>color({op:"component",index,value}),true);
-          node.dataset.colorComponent=index;group.append(label,node);components.append(group);return node;
-        });
-      }
-      fields.forEach((node,i)=>node.update(view.components[i].value));draw();
+      choices.forEach(({slot,node,paint})=>{const swatch=view.swatches.find(s=>s.slot===slot);node.setAttribute("aria-label",swatch.label);node.title=swatch.label;node.setAttribute("aria-pressed",String(swatch.selected));paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`;});
+      shapes.forEach((node,i)=>{const shape=view.other_shapes[i];if(node.dataset.colorShape!==shape){node.dataset.colorShape=shape;node.replaceChildren(icon(`color-${shape}`));}node.title=`Use ${shape==="triangle"?"HLS":"HSV"} ${shape}`;node.setAttribute("aria-label",node.title);});
+      readout.setAttribute("aria-label",view.readout_description);draw();
     };
   }
   function navigatorPanel(root) {

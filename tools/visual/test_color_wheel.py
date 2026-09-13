@@ -75,6 +75,26 @@ print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(report["passed"])
 
+    def test_rounded_corners_exclude_only_the_painted_boundary(self):
+        self.image.putpixel((66,0), (0,0,0,0))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["pixels_above_tolerance"], 1)
+        fixture = json.loads(self.fixture.read_text())
+        fixture["field_corner_radius"] = 6
+        self.fixture.write_text(json.dumps(fixture))
+        self.oracle.write_text(self.oracle.read_text().replace('"model": {',
+            '"model": {"geometry": {"square": [0.5,0,1]},'))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(report["passed"])
+        self.assertGreaterEqual(report["sampled_pixels"]["field"], 20)
+        self.image.putpixel((88,33), (0,64,137,255))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["pixels_above_tolerance"], 1)
+        self.assertEqual(report["worst_samples"][0]["pixel"], [88,33])
+
     def test_mismatched_orientation_is_rejected(self):
         self.image = Image.new("RGB", (128,256))
         result, _ = self.check_image()

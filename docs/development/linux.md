@@ -105,15 +105,20 @@ Persistence cases should verify reopening as well as the visible rows.
 
 For the compact Color panel, run
 `LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/gtk" bash tools/performance/workspace-motion.sh gtk --color-panel`.
-This exercises native mouse/touch picking, overlapping paint swatches, the swap
-context menu, shape/readout cycles and keyboard activation. It checks
-144/160/200/280/360 px panels in both themes, all three shapes and HSB/Lab/RGB
-readouts, retaining screenshots and geometry. The entire control occupies one
+This exercises native mouse/touch picking, overlapping paint swatches, the
+visible swap button and its context menu, both shape alternatives, readout
+cycles and keyboard activation. It checks 144/160/200/280/360 px panels in both
+themes, all three shapes and HSB (HLS for the triangle)/Lab/RGB readouts,
+retaining screenshots and geometry. The entire control occupies one
 square and compresses in short docks; `native_default_workspace` covers that
 shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
 is the design minimum. Values are read-only; tap the HSB/Lab/RGB label to cycle
-the readout independently of the circle/square/triangle field. Right-click or
-hold either paint swatch (or use Shift+F10 while focused) to swap the paints.
+the readout independently of the circle/square/triangle field. Two bare shape
+buttons follow the upper-right arc; the swap button sits beside the overlapping
+paints. Right-click or hold either paint swatch (or use Shift+F10 while focused)
+also opens the swap action. The readout has no tooltip or hover decoration.
+Picker coordinates are retained per paint so hue changes, drags through black,
+alpha edits, swaps and saved-state reloads do not lose powerless components.
 The circle is a concentric projection of the full HSV square; Lab readouts use
 CIE Lab with a D50 reference white ([conversion reference](https://www.w3.org/TR/css-color-4/#color-conversion-code)).
 

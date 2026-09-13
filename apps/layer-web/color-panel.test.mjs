@@ -34,84 +34,111 @@ export async function checkColorPanel({call,evaluate,settle}) {
     await settle();
     if(native)await evaluate('new Promise(r=>setTimeout(r,100))');
   };
-  const tap=async selector=>gesture('mouse',await point(`${root} ${selector}`));
   await send({type:'invoke',command:'reset_layout'});
   if(await evaluate('layerApp.state().workspace.zen_mode'))await send({type:'invoke',command:'zen_mode'});
   await send({type:'move_panel',panel:'color',target:{kind:'float',position:[480,120]}});
+  const resizePanel=async(width,height=width+36)=>{await evaluate(`(()=>{const workspace=layerApp.app.workspace_persistence(),f=workspace.layout.floating.find(f=>f.root.panels?.includes('color'));f.width=${width};f.height=${height};layerApp.dispatch({type:'restore_workspace',workspace});})()`);await settle();};
+  const setShape=shape=>send({type:'color',action:{op:'shape',shape}});
   const reports=[];
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:2,mobile:false});
   await settle();
-  for(const theme of ['dark','light'])for(const width of [200,280,360]) {
-    await send({type:'set_theme',theme});
-    await evaluate(`(()=>{const workspace=layerApp.app.workspace_persistence();const floating=workspace.layout.floating.find(f=>f.root.panels?.includes('color'));floating.width=${width};floating.height=${width+70};layerApp.dispatch({type:'restore_workspace',workspace});})()`);
-    await settle();
+  for(const theme of ['dark','light'])for(const width of [144,160,200,280,360]) {
+    await send({type:'set_theme',theme});await resizePanel(width);
     await send({type:'set_color',rgba:[.2,.72,.58,1]});
-    for(const space of ['hsv','hls']) {
-      await send({type:'color',action:{op:'space',space}});
+    for(const shape of ['circle','square','triangle']) {
+      await setShape(shape);
       const frames=await evaluate(`(()=>{
-        const root=document.querySelector(${JSON.stringify(root)}),rect=n=>n.getBoundingClientRect().toJSON();
-        return {root:rect(root),wheel:rect(root.querySelector('.color-wheel')),controls:[...root.querySelectorAll('.color-swatch,.color-utility')].map(n=>({label:n.getAttribute('aria-label'),...rect(n),hit:n.contains(document.elementFromPoint(rect(n).x+rect(n).width/2,rect(n).y+rect(n).height/2))})),entries:[...root.querySelectorAll('.number-value:not([hidden]),.number-entry:not([hidden])')].map(rect)};
+        const root=document.querySelector(${JSON.stringify(root)}),rect=n=>n.getBoundingClientRect().toJSON(),wheel=root.querySelector('.color-wheel'),g=layerApp.app.color_panel().geometry,w=rect(wheel);
+        return {root:rect(root),stage:rect(root.querySelector('.color-wheel-square')),wheel:w,
+          controls:[...root.querySelectorAll('.color-swatch,.color-utility,.color-shape')].map(n=>({slot:n.dataset.colorSlot,label:n.getAttribute('aria-label'),...rect(n),hit:n.contains(document.elementFromPoint(rect(n).x+rect(n).width/2,rect(n).y+rect(n).height/2))})),
+          ringClear:Array.from({length:72},(_,i)=>{const a=i*5*Math.PI/180,r=(g.inner+g.outer)/2*w.width;return document.elementFromPoint(w.x+w.width/2+r*Math.cos(a),w.y+w.height/2+r*Math.sin(a))===wheel;}).every(Boolean),
+          readoutInk:[...root.querySelector('.color-readout canvas').getContext('2d').getImageData(0,0,root.querySelector('.color-readout canvas').width,32).data].some((v,i)=>i%4===3&&v>0),pixels:[...wheel.getContext('2d').getImageData(Math.floor(wheel.width*.5),Math.floor(wheel.height*.5),1,1).data],inputs:root.querySelectorAll('input').length,shapeButtons:[...root.querySelectorAll('.color-shape')].map(n=>n.dataset.colorShape)};
       })()`);
-      assert.ok(frames.root.height<=frames.wheel.width+36,'Only one compact row below the square');
+      assert.ok(Math.abs(frames.root.height-frames.stage.width)<1,'All controls fit one square');
       assert.ok(Math.abs(frames.wheel.width-frames.wheel.height)<1,'Square wheel');
-      for(const c of frames.controls){assert.ok(c.hit,`Unobscured ${c.label}`);assert.ok(c.width>=24&&c.height>=24);assert.ok(c.x>=frames.root.x-1&&c.x+c.width<=frames.root.right+1);}
-      assert.ok(frames.entries.every(e=>Math.abs(e.y-frames.entries[0].y)<1),'Values share a row');
-      const name=`${theme}-${width}-${space}`;reports.push({name,...frames});
-      const shot=await call('Page.captureScreenshot',{format:'png',clip:{x:frames.root.x-8,y:frames.root.y-8,width:frames.root.width+16,height:frames.root.height+16,scale:1}});
-      await writeFile(`${output}/${name}.png`,Buffer.from(shot.data,'base64'));
-      const physical=await call('Page.captureScreenshot',{format:'png',clip:{x:frames.root.x-8,y:frames.root.y-8,width:frames.root.width+16,height:frames.root.height+16,scale:.5}});
-      await writeFile(`${output}/${name}-1x.png`,Buffer.from(physical.data,'base64'));
+      assert.ok(frames.readoutInk,'Curved readout is actually rendered');
+      assert.equal(frames.pixels[3],255,`${shape}: field pixels are actually rendered`);
+      assert.equal(frames.inputs,0,'Readouts are compact, read-only values');
+      assert.ok(frames.ringClear,`${width}px ${shape}: unobscured hue ring`);
+      assert.equal(frames.shapeButtons.length,2);assert.ok(!frames.shapeButtons.includes(shape));
+      for(const c of frames.controls){assert.ok(c.hit,`Unobscured ${c.label}`);assert.ok(c.width>=20&&c.height>=20);assert.ok(c.x>=frames.root.x-1&&c.right<=frames.root.right+1&&c.y>=frames.root.y-1&&c.bottom<=frames.root.bottom+1,`${c.label} fits`);}
+      const fg=frames.controls.find(c=>c.slot==='foreground'),bg=frames.controls.find(c=>c.slot==='background'),transparent=frames.controls.find(c=>c.slot==='transparent');
+      assert.ok(fg.width>bg.width&&fg.x<bg.x&&fg.y<bg.y&&fg.right>bg.x&&fg.bottom>bg.y,'Overlapping foreground sits above and left of background');
+      assert.equal(bg.width,transparent.width);
+      for(const model of ['hsb','lab','rgb']) {
+        while((await read()).readout!==model)await send({type:'color',action:{op:'toggle_readout'}});
+        assert.equal(await evaluate('layerApp.app.color_panel().readout_label'),model==='hsb'?(shape==='triangle'?'HLS':'HSB'):model==='lab'?'Lab':'RGB');
+        const name=`${theme}-${width}-${shape}-${model}`;reports.push({name,shape,model,...frames});
+        const clip={x:frames.root.x-8,y:frames.root.y-44,width:frames.root.width+16,height:frames.root.height+52};
+        for(const [suffix,scale] of [['',1],['-1x',.5]]) {
+          const shot=await call('Page.captureScreenshot',{format:'png',clip:{...clip,scale}});
+          await writeFile(`${output}/${name}${suffix}.png`,Buffer.from(shot.data,'base64'));
+        }
+      }
     }
   }
-  await call('Emulation.clearDeviceMetricsOverride');
-  await settle();
-  await evaluate(`(()=>{const workspace=layerApp.app.workspace_persistence(),f=workspace.layout.floating.find(f=>f.root.panels?.includes('color'));f.width=280;f.height=230;layerApp.dispatch({type:'restore_workspace',workspace});})()`);
-  await settle();
-  assert.ok(await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(root)}),panel=root.closest('.panel').getBoundingClientRect(),footer=root.querySelector('.color-footer').getBoundingClientRect(),wheel=root.querySelector('.color-wheel').getBoundingClientRect();return footer.bottom<=panel.bottom&&wheel.height>=128&&Math.abs(wheel.width-wheel.height)<1;})()`),'Short dock retains the values and a square wheel');
+  await writeFile(`${output}/geometry.json`,JSON.stringify(reports,null,2));
+  await call('Emulation.clearDeviceMetricsOverride');await settle();
+  await resizePanel(280,230);
+  assert.ok(await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(root)}),panel=root.closest('.panel').getBoundingClientRect(),stage=root.querySelector('.color-wheel-square').getBoundingClientRect();return stage.bottom<=panel.bottom&&stage.width>=128&&Math.abs(stage.width-stage.height)<1;})()`),'Short dock retains the entire square');
+  await resizePanel(100,180);
+  assert.equal(Math.round((await bounds(`${root}`)).width),128,'Four-tile width is enforced');
   if(native)await writeFile(`${inputDir}/ready`,'ready');
-  // Native compositor delivery verifies touch taps. CDP touch sequences still
-  // exercise cancellation below; some Chrome builds omit compatibility clicks.
   for(const device of native?['mouse','touch','pen']:['mouse','pen']) {
     console.log('Color panel input:',device);
-
-    await tap('[data-color-slot="foreground"]');
+    await gesture(device,await point(`${root} [data-color-slot="foreground"]`));
     await send({type:'set_color',rgba:[.2,.72,.58,1]});
     const before=await read();
-    await gesture(device,await point(`${root} .color-wheel`,.94,.5),await point(`${root} .color-wheel`,.5,.94));
+    await gesture(device,await point(`${root} .color-wheel`,.935,.5),await point(`${root} .color-wheel`,.5,.935));
     assert.notDeepEqual((await read()).foreground,before.foreground,`${device}: hue drag`);
-    for(const space of ['hsv','hls']) {
-      await send({type:'color',action:{op:'space',space}});
+    for(const shape of ['circle','square','triangle']) {
+      await setShape(shape);await send({type:'set_color',rgba:[.2,.72,.58,1]});
       const color=(await read()).foreground;
       await gesture(device,await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,.58,.42));
-      assert.notDeepEqual((await read()).foreground,color,`${device}: ${space} field drag`);
+      assert.notDeepEqual((await read()).foreground,color,`${device}: ${shape} field drag`);
     }
     await gesture(device,await point(`${root} [data-color-slot="background"]`));assert.equal((await read()).slot,'background');
     await gesture(device,await point(`${root} [data-color-slot="transparent"]`));assert.equal((await read()).slot,'transparent');
-    await gesture(device,await point(`${root} .color-space`));assert.equal((await read()).space,'hsv');
+    await gesture(device,await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,.55,.45));assert.equal((await read()).slot,'background','Picking resumes the remembered paint');
+    for(const shape of ['circle','square','triangle','circle']) {
+      await gesture(device,await point(`${root} [data-color-shape="${shape}"]`));assert.equal((await read()).shape,shape);
+    }
     const swatches=await read();await gesture(device,await point(`${root} .color-swap`));
-    assert.deepEqual((await read()).foreground,swatches.background);
-    assert.deepEqual((await read()).background,swatches.foreground);
+    assert.deepEqual((await read()).foreground,swatches.background);assert.deepEqual((await read()).background,swatches.foreground);
+    for(let i=0;i<3;i++) {
+      const before=await read(),expected={hsb:'lab',lab:'rgb',rgb:'hsb'}[before.readout];
+      await gesture(device,await point(`${root} .color-readout`,.12,.07));
+      assert.equal((await read()).readout,expected);assert.deepEqual((await read()).background,before.background);
+    }
+    for(const shape of ['circle','square'])for(const saturation of [20,80]) {
+      await setShape(shape);
+      for(const [index,value] of [[1,saturation],[2,0]])await send({type:'color',action:{op:'component',index,value}});
+      const target=await evaluate('layerApp.app.color_panel().wheel_marker');
+      await send({type:'set_color',rgba:[.2,.72,.58,1]});
+      await gesture(device,await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,...target));
+      const values=await evaluate('layerApp.app.color_panel().components.map(c=>c.value)');
+      assert.ok(Math.abs(values[1]-saturation)<2&&values[2]<2,`${device}: ${shape} retains black position: ${values}`);
+      await gesture(device,await point(`${root} .color-wheel`,.935,.5),await point(`${root} .color-wheel`,.5,.935));
+      assert.ok(Math.abs((await evaluate('layerApp.app.color_panel().components[1].value'))-values[1])<.001,'Hue at black preserves saturation');
+    }
   }
-  const entry=`${root} [data-color-component="0"] .number-entry`;
-  const editPoint=await point(`${root} [data-color-component="0"] .number-value`);
-  for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...editPoint,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
-  assert.equal(await evaluate(`document.activeElement===document.querySelector(${JSON.stringify(entry)})`),true,'Numeric entry receives focus');
-  await call('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2,commands:['selectAll']});
-  await call('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',modifiers:2});
-  await call('Input.insertText',{text:'180/2'});
-  await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
-  await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
-  await settle();
-  assert.equal(await evaluate('Math.round(layerApp.app.color_panel().components[0].value)'),90,'Exact expression entry');
-  assert.equal((await read()).slot,'background','Numeric edit restores remembered paint slot');
+  // The readout has neither a tooltip nor hover decoration; native key activation remains.
+  const readout=`${root} .color-readout`,p=await point(readout,.12,.07);
+  await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:20,y:80,buttons:0});await settle();
+  const style=()=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(readout)}),s=getComputedStyle(n);return [n.title,s.backgroundColor,s.color,s.boxShadow];})()`);
+  const idleStyle=await style();await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0});await settle();assert.deepEqual(await style(),idleStyle,'Readout has no hover action');assert.equal(idleStyle[0],'');
+  await evaluate(`document.querySelector(${JSON.stringify(readout)}).focus()`);
+  for(const [key,code,windowsVirtualKeyCode] of [[' ','Space',32],['Enter','Enter',13]]) {
+    const before=await read();
+    if(native)await performNative([{key:key===' '?32:65293,down:true},{key:key===' '?32:65293,down:false}]);
+    else for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode,...(key==='Enter'&&type==='keyDown'?{text:'\r'}:{})});
+    await settle();assert.equal((await read()).readout,{hsb:'lab',lab:'rgb',rgb:'hsb'}[before.readout]);
+  }
   await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
   await gesture('touch',await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,.55,.45),true);
-  const cancelled=await read();
-  await call('Emulation.setTouchEmulationEnabled',{enabled:false});
-  const p=await point(`${root} .color-wheel`,.9,.5);
-  await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0,pointerType:'pen'});await settle();
-  assert.deepEqual(await read(),cancelled,'Cancellation releases color contact');
-  await writeFile(`${output}/geometry.json`,JSON.stringify(reports,null,2));
+  const cancelled=await read();await call('Emulation.setTouchEmulationEnabled',{enabled:false});
+  const hover=await point(`${root} .color-wheel`,.9,.5);
+  await call('Input.dispatchMouseEvent',{type:'mouseMoved',...hover,buttons:0,pointerType:'pen'});await settle();assert.deepEqual(await read(),cancelled,'Cancellation releases color contact');
   if(native)await writeFile(`${inputDir}/finished`,'done');
-  console.log(`Color panel: 12 captures; compact layout; ${native?'native mouse/touch + CDP pen':'CDP mouse/pen'}; slots, mode, swap, expression entry and touch cancellation passed`);
+  console.log(`Color panel: ${reports.length} layouts and both-resolution captures; ${native?'native mouse/touch + CDP pen':'CDP mouse/pen'}; shape/readout buttons, swap, black position, keyboard, and cancellation passed`);
 }

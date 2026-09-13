@@ -5,8 +5,9 @@ use crate::{
 };
 use gtk::{cairo, glib, prelude::*, subclass::prelude::*};
 use layer_ui::{
-    ColorAction, ColorReadout, ColorShape, ColorSlot, ColorState, ColorWheelGeometry, Theme,
-    ToolSetItem, ToolSetView, ToolSetting, ToolSettingAction, UiAction, UiState,
+    ColorAction, ColorPanelLayout, ColorReadout, ColorShape, ColorSlot, ColorState,
+    ColorWheelGeometry, Theme, ToolSetItem, ToolSetView, ToolSetting, ToolSettingAction, UiAction,
+    UiState,
 };
 
 /// A body can be projected in a dock or a tool drawer without reparenting the
@@ -366,13 +367,14 @@ fn body() -> gtk::Box {
     root
 }
 
-// All controls share one square; the 14px inset reserves a curved readout band.
+// All controls share one square; shared allocations reserve the curved readout band.
 // Four 36px tiles (144px panel, 128px content) is the smallest supported width.
 mod wheel_button {
     use super::*;
     #[derive(Default)]
     pub struct WheelButton {
         pub readout: Cell<bool>,
+        pub rotation: Cell<f32>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for WheelButton {
@@ -382,6 +384,16 @@ mod wheel_button {
     }
     impl ObjectImpl for WheelButton {}
     impl WidgetImpl for WheelButton {
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let o = self.obj();
+            let center = gtk::graphene::Point::new(o.width() as f32 * 0.5, o.height() as f32 * 0.5);
+            snapshot.save();
+            snapshot.translate(&center);
+            snapshot.rotate(self.rotation.get());
+            snapshot.translate(&gtk::graphene::Point::new(-center.x(), -center.y()));
+            self.parent_snapshot(snapshot);
+            snapshot.restore();
+        }
         fn contains(&self, x: f64, y: f64) -> bool {
             let o = self.obj();
             let (w, h) = (o.width() as f64, o.height() as f64);
@@ -389,7 +401,9 @@ mod wheel_button {
                 return false;
             }
             if self.readout.get() {
-                let r = ((w * 2. - 28.) * 0.49 + 2.).max(1.);
+                let r = ColorPanelLayout::new((w * 2.) as f32)
+                    .map(|layout| layout.wheel[2] as f64 * 0.49 + 2.)
+                    .unwrap_or(1.);
                 (x - w).hypot(y - h) >= r
             } else {
                 (x - w * 0.5).hypot(y - h * 0.5) <= w.min(h) * 0.5
@@ -446,16 +460,27 @@ mod wheel {
         }
         fn size_allocate(&self, _width: i32, _height: i32, baseline: i32) {
             let (size, [x, y]) = self.obj().stage_bounds();
-            let fg = (size * 0.17).round().clamp(30., 44.);
-            let bg = (fg * 0.8).round();
-            let mode = (size * 0.13).round().clamp(26., 34.);
+            let Some(layout) = ColorPanelLayout::new(size) else {
+                return;
+            };
             let boxes = [
-                [fg * 0.54, size - bg, bg, bg],
-                [0., size - fg - bg * 0.26, fg, fg],
-                [size - bg, size - bg, bg, bg],
-                [size - mode, 0., mode, mode],
-                [0., 0., size * 0.5, size * 0.5],
+                layout.background,
+                layout.foreground,
+                layout.transparent,
+                layout.shapes[0],
+                layout.shapes[1],
+                layout.swap,
+                layout.readout,
             ];
+            for (button, rotation) in self
+                .corners
+                .borrow()
+                .iter()
+                .skip(3)
+                .zip(layout.shape_rotations)
+            {
+                button.imp().rotation.set(rotation);
+            }
             for (button, [bx, by, w, h]) in self.corners.borrow().iter().zip(boxes) {
                 button.allocate(
                     w.round() as i32,
@@ -561,7 +586,10 @@ impl ColorWheel {
     }
     pub(crate) fn drawing_bounds(&self) -> (f32, [f32; 2]) {
         let (size, [x, y]) = self.stage_bounds();
-        (size - 28., [x + 14., y + 14.])
+        let Some(layout) = ColorPanelLayout::new(size) else {
+            return (0., [x, y]);
+        };
+        (layout.wheel[2], [x + layout.wheel[0], y + layout.wheel[1]])
     }
 }
 pub struct ColorPanel {
@@ -569,10 +597,11 @@ pub struct ColorPanel {
     initialized: Cell<bool>,
     wheel: ColorWheel,
     swatches: Vec<(ColorSlot, WheelButton, gtk::DrawingArea)>,
-    mode_button: WheelButton,
+    shape_buttons: [WheelButton; 2],
     readout: WheelButton,
     readout_drawing: gtk::DrawingArea,
-    swap: gtk::Button,
+    swap: WheelButton,
+    menu_swap: gtk::Button,
 }
 impl ColorPanel {
     pub fn new() -> Self {
@@ -645,13 +674,27 @@ impl ColorPanel {
             wheel.imp().corners.borrow_mut().push(button.clone());
             swatches.push((slot, button, sample));
         }
-        let mode_button: WheelButton = glib::Object::new();
-        mode_button.set_icon_name("layer-color-circle-symbolic");
-        mode_button.add_css_class("flat");
-        mode_button.add_css_class("color-utility");
-        mode_button.set_widget_name("color-space");
-        mode_button.set_parent(&wheel);
-        wheel.imp().corners.borrow_mut().push(mode_button.clone());
+        let shape_buttons = std::array::from_fn(|i| {
+            let button: WheelButton = glib::Object::new();
+            button.add_css_class("flat");
+            button.add_css_class("color-shape");
+            button.set_widget_name(&format!("color-shape-{i}"));
+            button.set_parent(&wheel);
+            wheel.imp().corners.borrow_mut().push(button.clone());
+            button
+        });
+        let swap: WheelButton = glib::Object::new();
+        swap.set_icon_name("layer-color-swap-symbolic");
+        swap.add_css_class("flat");
+        swap.add_css_class("color-utility");
+        swap.add_css_class("color-swap");
+        swap.set_widget_name("color-swap");
+        swap.set_tooltip_text(Some("Swap foreground and background"));
+        swap.update_property(&[gtk::accessible::Property::Label(
+            "Swap foreground and background",
+        )]);
+        swap.set_parent(&wheel);
+        wheel.imp().corners.borrow_mut().push(swap.clone());
         let readout: WheelButton = glib::Object::new();
         readout.imp().readout.set(true);
         readout.add_css_class("flat");
@@ -677,27 +720,28 @@ impl ColorPanel {
         let menu = gtk::Popover::new();
         menu.set_parent(&wheel);
 
-        let swap = gtk::Button::new();
-        swap.add_css_class("flat");
-        swap.set_widget_name("color-swap");
+        let menu_swap = gtk::Button::new();
+        menu_swap.add_css_class("flat");
+        menu_swap.set_widget_name("color-swap-menu");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.append(&gtk::Image::from_icon_name("layer-color-swap-symbolic"));
         row.append(&gtk::Label::new(Some("Swap foreground and background")));
-        swap.set_child(Some(&row));
-        swap.update_property(&[gtk::accessible::Property::Label(
+        menu_swap.set_child(Some(&row));
+        menu_swap.update_property(&[gtk::accessible::Property::Label(
             "Swap foreground and background",
         )]);
-        menu.set_child(Some(&swap));
+        menu.set_child(Some(&menu_swap));
         *wheel.imp().menu.borrow_mut() = Some(menu);
         Self {
             root,
             wheel,
             initialized: Cell::new(false),
             swatches,
-            mode_button,
+            shape_buttons,
             readout,
             readout_drawing,
             swap,
+            menu_swap,
         }
     }
     pub fn bind(&self, workspace: &Rc<Workspace>) {
@@ -774,13 +818,20 @@ impl ColorPanel {
             });
             button.add_controller(key);
         }
-        self.mode_button.connect_clicked(glib::clone!(
-            #[weak]
-            workspace,
-            move |_| workspace.dispatch(UiAction::Color {
-                action: ColorAction::ToggleShape
-            })
-        ));
+        for (i, button) in self.shape_buttons.iter().enumerate() {
+            button.connect_clicked(glib::clone!(
+                #[weak]
+                workspace,
+                #[weak(rename_to = wheel)]
+                self.wheel,
+                move |_| {
+                    let shape = wheel.imp().color.borrow().other_shapes()[i];
+                    workspace.dispatch(UiAction::Color {
+                        action: ColorAction::Shape { shape },
+                    });
+                }
+            ));
+        }
         self.readout.connect_clicked(glib::clone!(
             #[weak]
             workspace,
@@ -788,18 +839,23 @@ impl ColorPanel {
                 action: ColorAction::ToggleReadout
             })
         ));
-        self.swap.connect_clicked(glib::clone!(
+        let swap = glib::clone!(
             #[weak]
             workspace,
             #[weak(rename_to = wheel)]
             self.wheel,
-            move |_| {
+            move || {
                 wheel.imp().menu.borrow().as_ref().unwrap().popdown();
                 workspace.dispatch(UiAction::Color {
                     action: ColorAction::Swap,
                 });
             }
-        ));
+        );
+        self.swap.connect_clicked({
+            let swap = swap.clone();
+            move |_| swap()
+        });
+        self.menu_swap.connect_clicked(move |_| swap());
         let part = Rc::new(Cell::new(None));
         let drag = gtk::GestureDrag::new();
         drag.set_button(1);
@@ -873,26 +929,17 @@ impl ColorPanel {
         }
         *self.wheel.imp().color.borrow_mut() = state.clone();
         self.wheel.queue_draw();
-        let (icon, description) = match state.wheel_shape() {
-            ColorShape::Circle => (
-                "layer-color-circle-symbolic",
-                "HSV circle · Switch to square",
-            ),
-            ColorShape::Square => (
-                "layer-color-square-symbolic",
-                "HSV square · Switch to triangle",
-            ),
-            ColorShape::Triangle => (
-                "layer-color-triangle-symbolic",
-                "HLS triangle · Switch to circle",
-            ),
-        };
-        self.mode_button.set_icon_name(icon);
-        self.mode_button.set_tooltip_text(Some(description));
-        self.mode_button
-            .update_property(&[gtk::accessible::Property::Label(description)]);
+        for (button, shape) in self.shape_buttons.iter().zip(state.other_shapes()) {
+            let (icon, description) = match shape {
+                ColorShape::Circle => ("layer-color-circle-symbolic", "Use HSV circle"),
+                ColorShape::Square => ("layer-color-square-symbolic", "Use HSV square"),
+                ColorShape::Triangle => ("layer-color-triangle-symbolic", "Use HLS triangle"),
+            };
+            button.set_icon_name(icon);
+            button.set_tooltip_text(Some(description));
+            button.update_property(&[gtk::accessible::Property::Label(description)]);
+        }
         let description = state.readout_description();
-        self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
         self.readout_drawing.queue_draw();
@@ -909,7 +956,9 @@ impl ColorPanel {
 
 fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: &ColorState) {
     let mut font = (half * 2. * 0.044).clamp(9., 12.);
-    let radius = (half * 2. - 28.) * 0.49 + 6.;
+    let radius = ColorPanelLayout::new((half * 2.) as f32)
+        .unwrap()
+        .readout_radius as f64;
     let color = area.color();
     let ink = |alpha| {
         cr.set_source_rgba(
@@ -927,20 +976,14 @@ fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: 
     cr.set_font_size(font);
     ink(0.9);
     cr.move_to(2., font + 1.);
-    let _ = cr.show_text(state.readout.label());
-    let label_width = cr.text_extents(state.readout.label()).unwrap().x_advance();
-    cr.set_line_width(1.2);
-    cr.set_line_cap(cairo::LineCap::Round);
-    cr.move_to(label_width + 7., font * 0.52);
-    cr.line_to(label_width + 9., font * 0.72);
-    cr.line_to(label_width + 11., font * 0.52);
-    let _ = cr.stroke();
+    let _ = cr.show_text(state.readout_label());
+    let label_width = cr.text_extents(state.readout_label()).unwrap().x_advance();
     if area
         .parent()
         .is_some_and(|button| button.has_visible_focus())
     {
         // Keep the focus outline in the corner, clear of the picking field.
-        rounded_rect(cr, 1., 1., label_width + 14., font + 4., 5.);
+        rounded_rect(cr, 1., 1., label_width + 5., font + 4., 5.);
         cr.set_line_width(1.5);
         let _ = cr.stroke();
     }

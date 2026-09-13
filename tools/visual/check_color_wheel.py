@@ -69,6 +69,18 @@ for index, (x, y) in enumerate(positions):
     if part is None or any(n["part"] != part for n in neighbors):
         continue
     point = points[index*5]
+    # Square picking covers its full rectangle; hosts round the painted corners.
+    # Test the host's actual silhouette, including the same AA neighbors used above.
+    corner = fixture.get("field_corner_radius", 0)
+    if part == "field" and corner > 0:
+        sx, sy, side = [v * wheel_width for v in reference["model"]["geometry"]["square"]]
+        def inside_rounded_field(p):
+            px, py = p[0] * wheel_width - sx, p[1] * wheel_width - sy
+            dx = px - min(max(px, corner), side - corner)
+            dy = py - min(max(py, corner), side - corner)
+            return math.hypot(dx, dy) <= corner
+        if not all(inside_rounded_field(p) for p in points[index*5:index*5+5]):
+            continue
     # Hosts may use larger preview markers; exclude their outline and AA fringe.
     marker_exclusion = fixture.get("marker_radius", 3.5) + 3.5
     if any(math.hypot(point[0]-m[0], point[1]-m[1])*wheel_width < marker_exclusion for m in markers):

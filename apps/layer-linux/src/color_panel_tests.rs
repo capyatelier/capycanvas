@@ -85,12 +85,14 @@ fn native_color_panel_input() {
                     "color-Foreground",
                     "color-Background",
                     "color-Transparent",
-                    "color-space",
+                    "color-shape-0",
+                    "color-shape-1",
+                    "color-swap",
                 ] {
                     let button = find_named(root.upcast_ref(), name).unwrap();
                     let b = button.compute_bounds(root).unwrap();
                     assert!(
-                        b.width() >= 24. && b.height() >= 24.,
+                        b.width() >= 20. && b.height() >= 20.,
                         "{name} usable target"
                     );
                     assert!(
@@ -310,16 +312,58 @@ fn native_color_panel_input() {
             locate("color-wheel", 0.55, 0.45),
         );
         assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
-        let p = locate("color-space", 0.5, 0.5);
-        gesture(p, p);
-        assert_eq!(state(&w).colors.wheel_shape(), layer_ui::ColorShape::Circle);
         for expected in [
+            layer_ui::ColorShape::Circle,
             layer_ui::ColorShape::Square,
             layer_ui::ColorShape::Triangle,
             layer_ui::ColorShape::Circle,
         ] {
+            let index = state(&w)
+                .colors
+                .other_shapes()
+                .iter()
+                .position(|shape| *shape == expected)
+                .unwrap();
+            let p = locate(&format!("color-shape-{index}"), 0.5, 0.5);
             gesture(p, p);
             assert_eq!(state(&w).colors.wheel_shape(), expected);
+        }
+        let before = state(&w).colors;
+        let p = locate("color-swap", 0.5, 0.5);
+        gesture(p, p);
+        assert_eq!(state(&w).colors.foreground, before.background);
+        assert_eq!(state(&w).colors.background, before.foreground);
+        // Black has many valid field positions. Retain the actual drag position.
+        let wheel = find_named(root.upcast_ref(), "color-wheel")
+            .unwrap()
+            .downcast::<crate::tool_panels::ColorWheel>()
+            .unwrap();
+        let (size, origin) = wheel.drawing_bounds();
+        let bounds = wheel.compute_bounds(&w.window).unwrap();
+        let g = layer_ui::ColorWheelGeometry::new(size).unwrap();
+        for shape in [layer_ui::ColorShape::Circle, layer_ui::ColorShape::Square] {
+            w.dispatch(UiAction::Color {
+                action: layer_ui::ColorAction::Shape { shape },
+            });
+            for s in [0.2, 0.8] {
+                let point = if shape == layer_ui::ColorShape::Circle {
+                    g.disc_marker([s, 0.])
+                } else {
+                    [g.square[0] + s * g.square[2], g.square[1] + g.square[2]]
+                };
+                let p = [
+                    bounds.x() + origin[0] + point[0],
+                    bounds.y() + origin[1] + point[1],
+                ];
+                gesture(locate("color-wheel", 0.5, 0.5), p);
+                let values = state(&w).colors.components();
+                assert!(
+                    (values[1] - s * 100.).abs() < 2. && values[2] < 2.,
+                    "touch={touch}: {shape:?} {values:?}"
+                );
+                gesture(on_ring(90.), on_ring(270.));
+                assert!((state(&w).colors.components()[1] - values[1]).abs() < 0.001);
+            }
         }
         let before = state(&w).colors.rgba();
         for _ in 0..3 {
@@ -338,7 +382,7 @@ fn native_color_panel_input() {
         if touch {
             perform(serde_json::json!([{ "touch":"down", "point":p }]));
             pump(900);
-            let menu = find_named(root.upcast_ref(), "color-swap")
+            let menu = find_named(root.upcast_ref(), "color-swap-menu")
                 .unwrap()
                 .native()
                 .and_downcast::<gtk::Popover>()
@@ -363,7 +407,7 @@ fn native_color_panel_input() {
                 .unwrap(),
             1.,
         );
-        let p = locate("color-swap", 0.5, 0.5);
+        let p = locate("color-swap-menu", 0.5, 0.5);
         if touch {
             perform(serde_json::json!([{ "touch":"down", "point":p }]));
             assert_eq!(
@@ -386,7 +430,7 @@ fn native_color_panel_input() {
     let p = locate("color-Foreground", 0.5, 0.5);
     perform(serde_json::json!([{ "point":p, "down":true }]));
     pump(900);
-    let swap = find_named(root.upcast_ref(), "color-swap").unwrap();
+    let swap = find_named(root.upcast_ref(), "color-swap-menu").unwrap();
     let menu = swap.native().and_downcast::<gtk::Popover>().unwrap();
     assert!(!menu.is_visible());
     perform(serde_json::json!([{ "down":false }]));

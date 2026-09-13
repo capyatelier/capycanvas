@@ -36,7 +36,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await pointer(".dock-group .color-wheel",.95,.5);
   await pointer(".dock-group .color-wheel",.6,.4);
   assert.notDeepEqual(await evaluate('layerApp.state().brush.color'),before,"Color wheel changes paint");
-  await click(".dock-group .color-space");
+  await click('.dock-group [data-color-shape="triangle"]');
   assert.equal(await evaluate('layerApp.state().colors.space'),"hls");
   await pointer(".dock-group .color-wheel",.6,.5);
   await click('.dock-group [data-color-slot="transparent"]');
@@ -129,7 +129,8 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('layerApp.state().tabs[0].width>320'));
   await evaluate('layerApp.dispatch({type:"select_layer",id:layerApp.state().layers.find(l=>l.label==="Current ink").id})');
   await settle();
-  await pointer("#canvas",.5,.5,[30,0]);
+  // Use untouched paper: painting the same opaque stroke again can be a no-op.
+  await pointer("#canvas",.4,.65,[30,0]);
   await wait('layerApp.state().document_file.modified');
   await invoke("new_document");
   await wait('!![...document.querySelectorAll(".document-dialog h2")].find(n=>n.textContent.includes("Save changes"))');

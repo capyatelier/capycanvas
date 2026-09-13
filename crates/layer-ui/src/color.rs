@@ -107,6 +107,17 @@ pub struct ColorState {
     pub readout: ColorReadout,
     paint_slot: ColorSlot,
     hues: [f32; 2],
+    // RGB cannot identify a unique point at black, white, or an achromatic hue.
+    // Retain both projections, independently for each paint, including across saves.
+    #[serde(default)]
+    coordinates: [Option<ColorCoordinates>; 2],
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ColorCoordinates {
+    rgb: [f32; 3],
+    hsv: [f32; 3],
+    hls: [f32; 3],
 }
 
 /// Derived presentation data for native hosts. Geometry is normalized to a
@@ -114,6 +125,13 @@ pub struct ColorState {
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorPanelView {
     pub space: ColorSpace,
+    pub shape: ColorShape,
+    pub other_shapes: [ColorShape; 2],
+    pub readout: ColorReadout,
+    pub readout_label: &'static str,
+    pub readout_text: [String; 3],
+    pub readout_description: String,
+    pub wheel_marker: [f32; 2],
     pub geometry: ColorWheelGeometry,
     pub hue_color: [f32; 3],
     pub hue_stops: [[f32; 3]; 7],
@@ -150,6 +168,7 @@ impl Default for ColorState {
             readout: ColorReadout::Hsb,
             paint_slot: ColorSlot::Foreground,
             hues: [60., 0.],
+            coordinates: [None; 2],
         }
     }
 }
@@ -168,6 +187,23 @@ impl ColorState {
         {
             return Err("Invalid workspace colors".into());
         }
+        for c in self.coordinates.iter().flatten() {
+            for (v, space) in [(c.hsv, ColorSpace::Hsv), (c.hls, ColorSpace::Hls)] {
+                if v.iter().enumerate().any(|(i, v)| {
+                    !v.is_finite() || !(0.0..=if i == 0 { 360. } else { 100. }).contains(v)
+                }) || c
+                    .rgb
+                    .iter()
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                    || from_components(v, space, 1.)[..3]
+                        .iter()
+                        .zip(c.rgb)
+                        .any(|(a, b)| (a - b).abs() > 0.00002)
+                {
+                    return Err("Invalid color picker coordinates".into());
+                }
+            }
+        }
         Ok(())
     }
     pub fn view(&self) -> ColorPanelView {
@@ -179,6 +215,13 @@ impl ColorState {
         };
         ColorPanelView {
             space: self.space,
+            shape: self.wheel_shape(),
+            other_shapes: self.other_shapes(),
+            readout: self.readout,
+            readout_label: self.readout_label(),
+            readout_text: self.readout_text(),
+            readout_description: self.readout_description(),
+            wheel_marker: self.wheel_marker(&geometry),
             geometry,
             hue_color: hue_color(components[0]),
             hue_stops: std::array::from_fn(|i| hue_color(i as f32 * 60.)),
@@ -219,7 +262,19 @@ impl ColorState {
         usize::from(self.paint_slot == ColorSlot::Background)
     }
     pub fn components(&self) -> [f32; 3] {
-        components(self.rgba(), self.space, self.hues[self.index()])
+        self.components_in(self.space)
+    }
+    fn components_in(&self, space: ColorSpace) -> [f32; 3] {
+        if let Some(c) = self.coordinates[self.index()]
+            && c.rgb == self.rgba()[..3]
+        {
+            return if space == ColorSpace::Hsv {
+                c.hsv
+            } else {
+                c.hls
+            };
+        }
+        components(self.rgba(), space, self.hues[self.index()])
     }
     pub fn labels(&self) -> [&'static str; 3] {
         match self.space {
@@ -240,13 +295,53 @@ impl ColorState {
             return Err("Color components must be between 0 and 1".into());
         }
         let index = self.index();
-        self.hues[index] = components(rgba, ColorSpace::Hsv, self.hues[index])[0];
+        let old_hsv = self.components_in(ColorSpace::Hsv);
+        let old_hls = self.components_in(ColorSpace::Hls);
+        let same_rgb = rgba[..3] == self.rgba()[..3];
+        let mut hsv = if same_rgb {
+            old_hsv
+        } else {
+            components(rgba, ColorSpace::Hsv, old_hsv[0])
+        };
+        let mut hls = if same_rgb {
+            old_hls
+        } else {
+            components(rgba, ColorSpace::Hls, old_hls[0])
+        };
+        if hsv[2] == 0. {
+            hsv[1] = old_hsv[1];
+        }
+        if hls[1] == 0. || hls[1] == 100. {
+            hls[2] = old_hls[2];
+        }
+        self.hues[index] = hsv[0];
+        self.coordinates[index] = Some(ColorCoordinates {
+            rgb: rgba[..3].try_into().unwrap(),
+            hsv,
+            hls,
+        });
         if self.paint_slot == ColorSlot::Background {
             self.background = rgba;
         } else {
             self.foreground = rgba;
         }
         self.slot = self.paint_slot;
+        Ok(())
+    }
+    fn set_components(&mut self, mut values: [f32; 3]) -> Result<(), String> {
+        values[0] = values[0].rem_euclid(360.);
+        self.set_rgba(from_components(values, self.space, self.rgba()[3]))?;
+        let index = self.index();
+        let c = self.coordinates[index].as_mut().unwrap();
+        if self.space == ColorSpace::Hsv {
+            c.hsv = values;
+        } else {
+            c.hls = values;
+        }
+        // Conversion noise and powerless hues must not move the hue marker.
+        c.hsv[0] = values[0];
+        c.hls[0] = values[0];
+        self.hues[index] = values[0];
         Ok(())
     }
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
@@ -299,6 +394,7 @@ impl ColorState {
             ColorAction::Swap => {
                 std::mem::swap(&mut self.foreground, &mut self.background);
                 self.hues.swap(0, 1);
+                self.coordinates.swap(0, 1);
             }
             ColorAction::Space { space } => self.space = space,
             ColorAction::RgbaComponent { index, value } => {
@@ -318,8 +414,7 @@ impl ColorState {
                 }
                 let mut values = self.components();
                 values[index] = value;
-                self.hues[self.index()] = values[0].rem_euclid(360.);
-                self.set_rgba(from_components(values, self.space, self.rgba()[3]))?;
+                self.set_components(values)?;
             }
             ColorAction::Pick { part, point, size } => {
                 let geometry = ColorWheelGeometry::new(size).ok_or("Invalid color wheel size")?;
@@ -342,7 +437,7 @@ impl ColorState {
                                 let [x, y, side] = geometry.square;
                                 values[1] = ((point[0] - x) / side).clamp(0., 1.) * 100.;
                                 values[2] = (1. - (point[1] - y) / side).clamp(0., 1.) * 100.;
-                                self.set_rgba(from_components(values, self.space, self.rgba()[3]))?;
+                                self.set_components(values)?;
                             }
                             ColorSpace::Hls => {
                                 let weights = triangle_weights(geometry.triangle, point);
@@ -371,6 +466,20 @@ impl ColorState {
             ColorShape::Circle
         }
     }
+    pub fn other_shapes(&self) -> [ColorShape; 2] {
+        match self.wheel_shape() {
+            ColorShape::Circle => [ColorShape::Square, ColorShape::Triangle],
+            ColorShape::Square => [ColorShape::Circle, ColorShape::Triangle],
+            ColorShape::Triangle => [ColorShape::Circle, ColorShape::Square],
+        }
+    }
+    pub fn readout_label(&self) -> &'static str {
+        if self.readout == ColorReadout::Hsb && self.wheel_shape() == ColorShape::Triangle {
+            "HLS"
+        } else {
+            self.readout.label()
+        }
+    }
     pub fn wheel_marker(&self, g: &ColorWheelGeometry) -> [f32; 2] {
         if self.wheel_shape() == ColorShape::Circle {
             let [_, s, v] = self.components();
@@ -381,7 +490,7 @@ impl ColorState {
     }
     pub fn readout_values(&self) -> [f32; 3] {
         match self.readout {
-            ColorReadout::Hsb => components(self.rgba(), ColorSpace::Hsv, self.hues[self.index()]),
+            ColorReadout::Hsb => self.components(),
             ColorReadout::Rgb => self.rgba()[..3]
                 .try_into()
                 .map(|c: [f32; 3]| c.map(|v| v * 255.))
@@ -408,20 +517,29 @@ impl ColorState {
     pub fn readout_description(&self) -> String {
         let v = self.readout_text();
         let names = match self.readout {
+            ColorReadout::Hsb if self.wheel_shape() == ColorShape::Triangle => {
+                ["Hue", "Lightness", "Saturation"]
+            }
             ColorReadout::Hsb => ["Hue", "Saturation", "Brightness"],
             ColorReadout::Lab => ["Lightness", "a", "b"],
             ColorReadout::Rgb => ["Red", "Green", "Blue"],
         };
         format!(
             "{}: {} {}, {} {}, {} {}. Switch to {}",
-            self.readout.label(),
+            self.readout_label(),
             names[0],
             v[0],
             names[1],
             v[1],
             names[2],
             v[2],
-            self.readout.next().label()
+            if self.readout.next() == ColorReadout::Hsb
+                && self.wheel_shape() == ColorShape::Triangle
+            {
+                "HLS"
+            } else {
+                self.readout.next().label()
+            }
         )
     }
     pub fn marker(&self, geometry: &ColorWheelGeometry) -> [f32; 2] {
@@ -604,6 +722,60 @@ pub fn render_hsv_disc(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
     true
 }
 
+/// A square color panel, down to four tiles (128px after content insets).
+/// Arrays are x/y/width/height in host logical pixels. Only the paint pair overlaps.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ColorPanelLayout {
+    pub wheel: [f32; 4],
+    pub foreground: [f32; 4],
+    pub background: [f32; 4],
+    pub transparent: [f32; 4],
+    pub swap: [f32; 4],
+    pub shapes: [[f32; 4]; 2],
+    pub shape_rotations: [f32; 2],
+    pub readout: [f32; 4],
+    pub readout_radius: f32,
+}
+impl ColorPanelLayout {
+    pub fn new(size: f32) -> Option<Self> {
+        if !size.is_finite() || size < 128. {
+            return None;
+        }
+        let inset = 14. + ((176. - size) / 12.).clamp(0., 4.);
+        let wheel = [inset, inset, size - 2. * inset, size - 2. * inset];
+        let outer = wheel[2] * 0.49;
+        let fg = (size * 0.17).round().clamp(30., 44.);
+        let bg = (fg * 0.8).round();
+        let background = [(fg * 0.54).round(), size - bg, bg, bg];
+        let c = size * 0.5;
+        let distance = (background[0] + bg * 0.5 - c).hypot(background[1] + bg * 0.5 - c);
+        let transparent = c + distance / std::f32::consts::SQRT_2 - bg * 0.5;
+        let swap = (size * 0.085).round().clamp(20., 24.);
+        let shape = (size * 0.1).round().clamp(24., 28.);
+        let angles = [-57_f32, -33.];
+        Some(Self {
+            wheel,
+            foreground: [0., (size - fg - bg * 0.26).round(), fg, fg],
+            background,
+            transparent: [transparent.round(), transparent.round(), bg, bg],
+            swap: [background[0] + bg + 2., size - swap, swap, swap],
+            shapes: angles.map(|angle| {
+                let r = outer + shape * 0.5 + 0.5;
+                let a = angle.to_radians();
+                [
+                    (c + r * a.cos() - shape * 0.5).round(),
+                    (c + r * a.sin() - shape * 0.5).round(),
+                    shape,
+                    shape,
+                ]
+            }),
+            shape_rotations: angles.map(|a| a + 90.),
+            readout: [0., 0., c.round(), c.round()],
+            readout_radius: (size - 28.) * 0.49 + 6.,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ColorWheelGeometry {
     pub center: [f32; 2],
@@ -620,12 +792,12 @@ impl ColorWheelGeometry {
             return None;
         }
         let c = size * 0.5;
-        let r = size * 0.405 * 0.94;
+        let r = size * 0.38 * 0.94;
         let half = r / std::f32::consts::SQRT_2;
         Some(Self {
             center: [c; 2],
             outer: size * 0.49,
-            inner: size * 0.405,
+            inner: size * 0.38,
             square: [c - half, c - half, half * 2.],
             triangle: [
                 [c - r * 0.5, c - r * 3_f32.sqrt() * 0.5],
@@ -766,6 +938,174 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn powerless_coordinates_survive_picking_hue_alpha_slots_and_persistence() {
+        for shape in [ColorShape::Circle, ColorShape::Square] {
+            let mut state = ColorState::default();
+            state.apply(ColorAction::Shape { shape }).unwrap();
+            let g = ColorWheelGeometry::new(236.).unwrap();
+            for saturation in [0.15, 0.85, 0.4] {
+                let point = if shape == ColorShape::Circle {
+                    g.disc_marker([saturation, 0.])
+                } else {
+                    [
+                        g.square[0] + saturation * g.square[2],
+                        g.square[1] + g.square[2],
+                    ]
+                };
+                state
+                    .apply(ColorAction::PickWheel {
+                        part: ColorWheelPart::Field,
+                        point,
+                        size: 236.,
+                    })
+                    .unwrap();
+                assert!(state.rgba()[..3].iter().all(|v| *v < 1e-6));
+                assert!((state.components()[1] - saturation * 100.).abs() < 0.001);
+                let marker = state.wheel_marker(&g);
+                assert!((point[0] - marker[0]).hypot(point[1] - marker[1]) < 0.001);
+                state
+                    .apply(ColorAction::Component {
+                        index: 0,
+                        value: 237.,
+                    })
+                    .unwrap();
+                state
+                    .apply(ColorAction::RgbaComponent {
+                        index: 3,
+                        value: 0.4,
+                    })
+                    .unwrap();
+                assert!((state.components()[1] - saturation * 100.).abs() < 0.001);
+                assert_eq!(state.components()[0], 237.);
+                state.validate().unwrap();
+            }
+            let before = state.components();
+            state = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+            state
+                .apply(ColorAction::Select {
+                    slot: ColorSlot::Background,
+                })
+                .unwrap();
+            state
+                .apply(ColorAction::Component {
+                    index: 0,
+                    value: 120.,
+                })
+                .unwrap();
+            state.apply(ColorAction::Swap).unwrap();
+            assert_eq!(state.components(), before);
+            state
+                .apply(ColorAction::Component {
+                    index: 2,
+                    value: 75.,
+                })
+                .unwrap();
+            assert!((state.components()[1] - 40.).abs() < 0.001);
+            let expected = from_components([237., 40., 75.], ColorSpace::Hsv, 0.4);
+            for (a, b) in state.rgba().into_iter().zip(expected) {
+                assert!((a - b).abs() < 1e-6);
+            }
+        }
+    }
+    #[test]
+    fn hls_readout_and_powerless_saturation_follow_triangle() {
+        let mut state = ColorState::default();
+        state
+            .apply(ColorAction::Shape {
+                shape: ColorShape::Triangle,
+            })
+            .unwrap();
+        for lightness in [0., 100.] {
+            for (index, value) in [(0, 275.), (1, lightness), (2, 73.)] {
+                state
+                    .apply(ColorAction::Component { index, value })
+                    .unwrap();
+            }
+            assert_eq!(state.readout_label(), "HLS");
+            assert_eq!(state.readout_values(), [275., lightness, 73.]);
+            assert!(state.readout_description().contains("Lightness"));
+            state.validate().unwrap();
+            state
+                .apply(ColorAction::Component {
+                    index: 1,
+                    value: 50.,
+                })
+                .unwrap();
+            assert_eq!(state.components(), [275., 50., 73.]);
+        }
+        state
+            .apply(ColorAction::Shape {
+                shape: ColorShape::Circle,
+            })
+            .unwrap();
+        assert_eq!(state.readout_label(), "HSB");
+        // Public color replacements must never expose stale coordinates.
+        state.foreground = [1., 0., 0., 1.];
+        assert_eq!(state.components(), [0., 100., 100.]);
+        state.validate().unwrap();
+    }
+    #[test]
+    fn saved_coordinates_are_validated_and_legacy_colors_still_load() {
+        let mut state = ColorState::default();
+        state
+            .apply(ColorAction::Component {
+                index: 1,
+                value: 80.,
+            })
+            .unwrap();
+        let mut json = serde_json::to_value(&state).unwrap();
+        json["coordinates"][0]["hsv"][1] = 101.into();
+        assert!(
+            serde_json::from_value::<ColorState>(json.clone())
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+        json["coordinates"][0]["hsv"][1] = 0.into();
+        assert!(
+            serde_json::from_value::<ColorState>(json.clone())
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+        json.as_object_mut().unwrap().remove("coordinates");
+        serde_json::from_value::<ColorState>(json)
+            .unwrap()
+            .validate()
+            .unwrap();
+    }
+    #[test]
+    fn curved_controls_fit_four_tiles_without_covering_the_hue_ring() {
+        for size in 128..=600 {
+            let l = ColorPanelLayout::new(size as f32).unwrap();
+            let c = size as f32 * 0.5;
+            let outer = l.wheel[2] * 0.49;
+            for b in [
+                l.foreground,
+                l.background,
+                l.transparent,
+                l.swap,
+                l.shapes[0],
+                l.shapes[1],
+            ] {
+                assert!(
+                    b[0] >= 0.
+                        && b[1] >= 0.
+                        && b[0] + b[2] <= size as f32
+                        && b[1] + b[3] <= size as f32,
+                    "{size}: {b:?}"
+                );
+                let d = (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c);
+                assert!(d - b[2] * 0.5 >= outer - 0.5, "{size}: {b:?} covers ring");
+            }
+            let [a, b] = l.shapes;
+            assert!((a[0] - b[0]).hypot(a[1] - b[1]) >= a[2] - 0.5);
+            assert_eq!(l.background[2], l.transparent[2]);
+            assert!(l.foreground[2] > l.background[2]);
+        }
+    }
+
     #[test]
     fn disc_projection_is_reversible_at_edges_center_and_interior() {
         for size in [1., 100., 236., 472.] {

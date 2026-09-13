@@ -15,7 +15,7 @@ mod color;
 mod tool_settings;
 mod tools;
 pub use color::{
-    ColorAction, ColorComponentView, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
+    ColorAction, ColorComponentView, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_hls_field, render_hsv_disc,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};
