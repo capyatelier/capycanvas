@@ -64,23 +64,3 @@ struct WorkspaceMenu: View {
             identifier: "workspace-context-menu", dismiss: dismiss)
     }
 }
-
-/// Local drafts keep text/caret stable while the serial owner publishes edits.
-struct WorkspaceTextField: View {
-    let label: String
-    let value: String
-    let edit: (String) -> Void
-    @State private var text: String
-    @State private var pending: String?
-    init(_ label: String, value: String, edit: @escaping (String) -> Void) {
-        self.label = label; self.value = value; self.edit = edit
-        _text = State(initialValue: value)
-    }
-    var body: some View {
-        TextField(label, text: Binding(get: { text }, set: { text = $0; pending = $0; edit($0) }))
-            .textFieldStyle(.roundedBorder)
-            .onChange(of: value) { _, next in
-                if pending == nil || pending == next { text = next; pending = nil }
-            }
-    }
-}

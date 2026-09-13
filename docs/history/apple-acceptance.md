@@ -105,6 +105,48 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Workspace recovery and editor workflows — 2026-09-13
+
+Fast native restarts now reclaim abandoned workspace ownership once every prior
+client has exited. A shared OS file lock protects live clients; the first new
+opener clears abandoned claims transactionally without shortening leases or
+adding a platform retry. A real killed-process regression covers saved contents,
+concurrent owners and stale fencing. The lock sidecar is protected from backup
+overwrite. Built-in Layout History now enables restoration while retaining
+name/deletion protections and owner/current/busy checks.
+
+Mac and the connected iPad pass settings/workspace restart, completed artwork
+recovery and independent windows. Mac also passes New/Export cancellation;
+the iPad export check awaits user input at the system Files prompt. Interrupted
+background/expiration and provider-delivery acceptance remain open.
+
+Both hosts pass Navigator/Diagnostics, numeric tool controls, system status,
+Layout History, filters and shortcut editing. Native curve/gradient labels now
+include point/stop counts; ineffective separate value attributes are removed.
+Shortcut search initially lost a character while typing. Settings, shortcut and
+filter search now reuse the existing local-draft text helper; the old
+workspace-only helper is removed. The full shortcut workflow now captures an
+existing accelerator, replaces its binding and executes the new action in the
+editor. Toolbar search, creation, rename, duplication and deletion also pass.
+
+After integrating main through `b56bca3`, both signed builds pass and each host
+passes six focused workflows with no failures or skips: Color, filters,
+shortcuts, toolbar editing, restart and history. The shared regression passes
+476 tests, with one existing hardware-only host check ignored. Six live Color
+captures pass the unchanged oracle, with guide error at most one channel level
+and field error zero. A final pull through `65a9855` retains steady command styling
+while drawing; the 410 Apple/host/UI regressions and both signed builds pass.
+Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers also pass their
+focused native follow-ups. This retains the accepted Color appearance; full-editor
+visual and physical-input/performance acceptance remain open.
+
+Installed-device XCTest now uses the documented destination-artifact setup;
+normal launch/relaunch works and the obsolete Color attach branch is removed.
+The latest review app and runner are installed on the iPad, its saved namespace
+is restored, and artist app data remains intact. Private evidence and earlier
+failures remain under `artifacts/apple-lifecycle-workflows-v1/` and
+`artifacts/apple-feature-workflows-v1/`.
+
 ## Compact Color panel — 2026-09-13
 
 Both Apple editors now project the shared compact Color layout: Okhsv circle,

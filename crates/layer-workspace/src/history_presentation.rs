@@ -81,7 +81,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Result<ManagerHistoryView, StoreError> {
         let entity = self.presentation_entity(id).await?;
         let stored = self.load(id).await?;
-        let editable = !entity.metadata.builtin
+        // Included workspaces protect their names, not their layout history.
+        let editable = (!entity.metadata.builtin || mode == ManagerHistoryMode::Layout)
             && entity.metadata.deleted_at_ms.is_none()
             && !stored
                 .claim
