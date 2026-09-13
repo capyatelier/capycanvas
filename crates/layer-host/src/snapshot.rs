@@ -519,6 +519,7 @@ mod tests {
                 panel: layer_ui::Panel::Brushes,
                 tab_width: 80.,
                 content_height: 500.,
+                scroll: None,
             }],
         })
         .unwrap();
@@ -630,10 +631,12 @@ mod tests {
                     .into_iter()
                     .find(|g| Some(g.id as u64) == group["id"].as_u64())
                     .unwrap();
-                assert_eq!(
-                    group["bounds"],
-                    serde_json::to_value(actual.bounds).unwrap()
-                );
+                let expected = if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) {
+                    layer_ui::Bounds { x: x - 10., y: 400., ..bounds }
+                } else {
+                    actual.bounds
+                };
+                assert_eq!(group["bounds"], serde_json::to_value(expected).unwrap());
                 assert!(next.get("workspace_persistence").is_none());
             }
             drag(&mut host, Cancel, [510., 410.]);

@@ -14,8 +14,9 @@ struct AdjustmentPanel: View {
         VStack(spacing: 6) {
             HStack(spacing: 6) {
                 if !picker["search"].isNull {
-                    TextField(picker["search_label"].string, text: Binding(get: { picker["search"].string },
-                        set: { send(["op": "search", "query": $0]) }))
+                    EditorTextField(picker["search_label"].string, value: picker["search"].string) {
+                        send(["op": "search", "query": $0])
+                    }
                         .textFieldStyle(.plain).padding(6).background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
                         .focused($searching).accessibilityIdentifier("filter-search")
                 } else {

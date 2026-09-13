@@ -55,6 +55,35 @@ enum Field {
     Gradient(GradientEditor),
 }
 impl EffectPanels {
+    pub fn picker_content_measurement(
+        &self,
+        width: i32,
+    ) -> (f32, layer_ui::PanelScrollMeasurement) {
+        let fixed_height = (self
+            .adjustments
+            .measure(gtk::Orientation::Vertical, width)
+            .1
+            - self
+                .picker_scroller
+                .measure(gtk::Orientation::Vertical, width)
+                .1)
+            .max(0) as f32;
+        let unit_height = self.picker_body.first_child().map_or(0, |row| {
+            row.measure(gtk::Orientation::Vertical, width).1 + self.picker_body.spacing()
+        }) as f32;
+        (
+            fixed_height
+                + self
+                    .picker_body
+                    .measure(gtk::Orientation::Vertical, width)
+                    .1 as f32,
+            layer_ui::PanelScrollMeasurement {
+                fixed_height,
+                unit_height,
+            },
+        )
+    }
+
     #[cfg(test)]
     pub fn preview_requests(&self) -> u64 {
         self.preview_request.get()

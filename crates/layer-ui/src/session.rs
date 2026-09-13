@@ -31,6 +31,8 @@ mod effects;
 mod filter_loading;
 #[path = "project_files.rs"]
 mod project_files;
+#[path = "renderer_lifecycle.rs"]
+mod renderer_lifecycle;
 pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
@@ -46,7 +48,12 @@ struct WorkspaceDrag {
     item: DockItem,
     panel: Panel,
     source: Bounds,
+    source_is_icon: bool,
+    torn_off: bool,
     floating: Option<u32>,
+    /// The retained drag presentation can overflow the workspace. Keep this
+    /// size independent of content measurements and the fitted saved layout.
+    preview: Option<Bounds>,
     offset: [f32; 2],
     press: [f32; 2],
     chrome_revealed: bool,
@@ -70,6 +77,7 @@ pub struct UiSession<R: CanvasRenderer> {
     state: UiState,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
+    rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     navigator_preview: crate::navigator::Preview,
@@ -128,6 +136,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             engine,
             pen,
             input_pending: false,
+            rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
             navigator_preview: Default::default(),
@@ -1143,7 +1152,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .find(|g| g.id == id)
                         .map(|g| WorkspaceGroupPosition {
                             id,
-                            bounds: g.bounds,
+                            bounds: drag.preview.unwrap_or(g.bounds),
                         })
                 }),
                 tab: self.workspace_tab_drag.as_ref().and_then(|tab| {
@@ -1237,7 +1246,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     item,
                     panel: source.groups[0].active,
                     source: source.bounds,
+                    source_is_icon: false,
+                    torn_off: false,
                     floating: None,
+                    preview: None,
                     offset: [0.; 2],
                     press: position,
                     chrome_revealed: true,
@@ -1312,7 +1324,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => source_active,
                 },
                 source: source_bounds,
+                source_is_icon: icon_source.is_some(),
+                torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
+                preview: (matches!(
+                    self.state.platform,
+                    Platform::Gtk | Platform::Web | Platform::Android
+                ) && whole && source_floating)
+                    .then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
                 chrome_revealed: !source_floating || !self.interaction.hidden,
@@ -1371,6 +1390,31 @@ impl<R: CanvasRenderer> UiSession<R> {
                 DockTarget::Float { position },
             )?;
             let group = self.state.workspace.layout.panel_group(drag.panel).unwrap();
+            // Preserve the visible size for pickup; release selects a separate
+            // content-aware height. A list's natural height can be much larger
+            // than its viewport, and a drawer is wider than its collapsed source.
+            // Standalone toolbars still convert to their compact grid; an icon
+            // has no visible panel size, so it keeps the measured/default size.
+            let preserve_size = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
+                && !drag.source_is_icon
+                && !(drag.panel.kind() == PanelKind::Tiles
+                    && self.state.workspace.layout.group_panels(group)?.len() == 1);
+            if preserve_size {
+                let floating = self
+                    .state
+                    .workspace
+                    .layout
+                    .floating
+                    .iter_mut()
+                    .find(|f| f.root.id() == group)
+                    .unwrap();
+                floating.width = drag.source.width;
+                floating.default_width = Some(drag.source.width);
+                floating.height = Some(drag.source.height);
+            }
             let floated = self
                 .layout(viewport)
                 .groups
@@ -1378,6 +1422,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .find(|g| g.id == group)
                 .unwrap();
             drag.floating = Some(group);
+            drag.torn_off = true;
+            drag.preview = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
+            .then_some(floated.bounds);
             drag.item = DockItem::Group { group };
             // A ribbon becomes a compact vertical grid, with its grip at the
             // bottom. Tabbed groups keep the original header grab offset.
@@ -1390,11 +1440,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .max(0.0),
                     drag.offset[1].min(TAB_BAR_HEIGHT),
                 ]
+            } else if preserve_size {
+                [
+                    drag.offset[0].min(floated.bounds.width),
+                    floated.bounds.height - (drag.source.height - drag.offset[1]),
+                ]
             } else {
                 [floated.bounds.width * 0.5, floated.bounds.height - 10.0]
             };
         }
         if let Some(group) = drag.floating {
+            if let Some(preview) = &mut drag.preview {
+                preview.x = position[0] - drag.offset[0];
+                preview.y = position[1] - drag.offset[1];
+            }
+            // Fit the eventual floating placement, independently of the live
+            // preview. Release over a dock uses the contact's validated target;
+            // release elsewhere exposes this fitted layout in the same undo.
             self.state.workspace.layout.move_floating(
                 group,
                 [position[0] - drag.offset[0], position[1] - drag.offset[1]],
@@ -1410,6 +1472,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .workspace
                     .layout
                     .move_item(viewport, drag.item, hint.target)?;
+            } else if drag.moved
+                && let (Some(group), Some(preview)) = (drag.floating, drag.preview)
+            {
+                self.state.workspace.layout.settle_floating_drop(
+                    group,
+                    viewport,
+                    preview,
+                    (!drag.source_is_icon).then_some(drag.source.height),
+                    drag.torn_off,
+                )?;
             }
             self.workspace_drag = None;
             self.workspace_tab_drag = None;
@@ -1578,6 +1650,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn renderer_stats(&self) -> crate::StatsView {
         crate::stats::view(self.engine.backend().telemetry())
     }
+    /// Live execution availability, including temporary canvas locks. Retained
+    /// controls use `state.commands`; dispatch always rechecks this live state.
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
@@ -1614,6 +1688,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
+        if self.rendering_suspended && !Self::command_without_renderer(id) {
+            return (false, false);
+        }
         if !id.available_on(self.state.platform) || self.state.document_file.close_ready {
             return (false, false);
         }
@@ -1742,6 +1819,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.rendering_suspended && !Self::action_without_renderer(&action) {
+            return Err("Painting is unavailable. Save the drawing and reopen it.".into());
+        }
         // One resize contract for both sides of an attached panel's outside
         // edge. Resolve before revision classification so either hit surface
         // follows the retained-content path and one-step gesture history.
@@ -2081,6 +2161,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
                     {
                         return Err("Invalid panel measurement".into());
+                    }
+                    if measurement.scroll.is_some_and(|m| {
+                        ![m.fixed_height, m.unit_height]
+                            .into_iter()
+                            .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                            || m.fixed_height > measurement.content_height
+                    }) {
+                        return Err("Invalid panel scroll measurement".into());
                     }
                     if accepted
                         .iter()
@@ -2925,7 +3013,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
-        if self.workspace_transition || (self.workspace_read_only && event.phase == PenPhase::Down)
+        if self.rendering_suspended
+            || self.workspace_transition
+            || (self.workspace_read_only && event.phase == PenPhase::Down)
         {
             return Ok(());
         }
@@ -3896,6 +3986,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_commands(&mut self) -> bool {
+        let canvas_idle = self.require_idle().is_ok();
         let mut changed = false;
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
@@ -3906,6 +3997,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 id.label()
             };
             if let Some(previous) = self.state.commands.get_mut(index) {
+                // A canvas contact must not flash disabled styling across the
+                // editor. Keep the published availability until it finishes;
+                // selection, icons and labels still follow live state. This is
+                // presentation only: command()/dispatch retain the stroke lock.
+                let enabled = if !canvas_idle {
+                    previous.enabled
+                        && id.available_on(self.state.platform)
+                        && !self.state.document_file.close_ready
+                } else {
+                    enabled
+                };
                 if previous.enabled != enabled
                     || previous.selected != selected
                     || previous.icon != icon
@@ -6703,9 +6805,31 @@ mod tests {
     fn tool_switch_keeps_active_stroke_snapshot_and_restores_next_stroke_settings() {
         let mut s = session();
         let original = s.engine.configured_brush().clone();
+        let enabled: Vec<_> = s.state.commands.iter().map(|c| c.enabled).collect();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
         invoke(&mut s, CommandId::Liquify);
+        assert_eq!(
+            s.state
+                .commands
+                .iter()
+                .map(|c| c.enabled)
+                .collect::<Vec<_>>(),
+            enabled,
+            "stroke protection does not restyle commands"
+        );
+        assert!(
+            s.state
+                .commands
+                .iter()
+                .any(|c| c.id == CommandId::Liquify && c.selected)
+        );
+        assert!(
+            !s.state
+                .commands
+                .iter()
+                .any(|c| c.id == CommandId::Pen && c.selected)
+        );
         assert_eq!(s.engine.brush(), &original);
         assert_eq!(
             s.engine.configured_brush().execution_class(),
@@ -9177,6 +9301,183 @@ mod tests {
     }
 
     #[test]
+    fn floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            let mut app = session();
+            app.set_platform(platform);
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Brushes,
+                viewport,
+                target: DockTarget::Float {
+                    position: [600., 300.],
+                },
+            })
+            .unwrap();
+            let baseline = app.state.workspace.clone();
+            let source = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            let offset = [37., 12.];
+            let press = [source.x + offset[0], source.y + offset[1]];
+            let drag = |app: &mut UiSession<_>, phase, position| {
+                app.dispatch(UiAction::DragWorkspace {
+                    item: DockItem::Panel {
+                        panel: Panel::Brushes,
+                    },
+                    phase,
+                    position,
+                    viewport,
+                    tabs: vec![],
+                })
+                .unwrap();
+            };
+            let preview =
+                |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
+            drag(&mut app, ContactPhase::Down, press);
+            for point in [
+                [600., 899.],
+                [1199., 400.],
+                [1., 400.],
+                [600., 1.],
+                [600., 899.],
+            ] {
+                drag(&mut app, ContactPhase::Move, point);
+                assert_eq!(
+                    preview(&app),
+                    Bounds {
+                        x: point[0] - offset[0],
+                        y: point[1] - offset[1],
+                        ..source
+                    }
+                );
+            }
+            // A late native natural-height measurement must not move the grabbed
+            // header or resize the live preview (including its retained handles).
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: vec![PanelMeasurement {
+                    panel: Panel::Brushes,
+                    tab_width: 120.,
+                    content_height: 1800.,
+                    scroll: None,
+                }],
+            })
+            .unwrap();
+            assert_eq!(preview(&app).height, source.height);
+            assert_eq!(preview(&app).y, 887.);
+            drag(&mut app, ContactPhase::Cancel, [600., 899.]);
+            assert_eq!(
+                durable_layout(&app.state.workspace.layout),
+                durable_layout(&baseline.layout)
+            );
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: baseline.layout.measurements.clone(),
+            })
+            .unwrap();
+            assert_eq!(app.state.workspace, baseline);
+            assert!(app.workspace_update().drag.is_none());
+
+            drag(&mut app, ContactPhase::Down, press);
+            drag(&mut app, ContactPhase::Move, [600., 899.]);
+            assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
+            drag(&mut app, ContactPhase::Up, [600., 899.]);
+            let placed = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            assert_eq!([placed.width, placed.height], [source.width, source.height]);
+            assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
+            let after = app.state.workspace.clone();
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace, baseline);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, after);
+        }
+    }
+
+    #[test]
+    fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            for icon in [false, true] {
+                let mut app = session();
+                app.set_platform(platform);
+                let panel = Panel::Brushes;
+                let group = app.state.workspace.layout.panel_group(panel).unwrap();
+                app.dispatch(UiAction::MeasurePanels {
+                    measurements: vec![PanelMeasurement {
+                        panel,
+                        tab_width: 120.,
+                        content_height: 1800.,
+                        scroll: None,
+                    }],
+                })
+                .unwrap();
+                if icon {
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                }
+                let resolved = app.layout(viewport);
+                let source = if icon {
+                    resolved
+                        .collapsed
+                        .iter()
+                        .flat_map(|c| &c.groups)
+                        .flat_map(|g| &g.icons)
+                        .find(|i| i.panel == panel)
+                        .unwrap()
+                        .bounds
+                } else {
+                    resolved
+                        .groups
+                        .iter()
+                        .find(|g| g.id == group)
+                        .unwrap()
+                        .bounds
+                };
+                let before = app.state.workspace.clone();
+                let drag = |app: &mut UiSession<_>, phase, position| {
+                    app.dispatch(UiAction::DragWorkspace {
+                        item: DockItem::Panel { panel },
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                };
+                drag(
+                    &mut app,
+                    ContactPhase::Down,
+                    [source.x + 18., source.y + 12.],
+                );
+                drag(&mut app, ContactPhase::Move, [600., 700.]);
+                let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
+                if icon {
+                    assert!(preview.height > source.height * 3.);
+                    assert!(preview.width > source.width * 3.);
+                } else {
+                    assert_eq!(
+                        [preview.width, preview.height],
+                        [source.width, source.height]
+                    );
+                }
+                let floating = &app.state.workspace.layout.floating[0];
+                assert_eq!(floating.height.is_some(), !icon);
+                drag(&mut app, ContactPhase::Cancel, [600., 700.]);
+                assert_eq!(app.state.workspace, before);
+            }
+        }
+    }
+
+    #[test]
     fn floating_gestures_update_live_preserve_grab_offset_and_coalesce_history() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
@@ -9499,6 +9800,12 @@ mod tests {
         .unwrap();
         assert!(!app.command(CommandId::ClearLayer).enabled);
         assert!(!app.command(CommandId::FillSelection).enabled);
+        for id in [CommandId::ClearLayer, CommandId::FillSelection] {
+            assert!(
+                !app.state.commands.iter().find(|c| c.id == id).unwrap().enabled,
+                "locked-layer actions remain visibly unavailable"
+            );
+        }
         app.dispatch(UiAction::Layer {
             action: LayerAction::Lock {
                 id: mask_layer,
@@ -10992,6 +11299,7 @@ mod tests {
                                 panel: Panel::Brushes,
                                 tab_width: 120.,
                                 content_height: 200.,
+                                scroll: None,
                             });
                             before.layout.column_scroll.push((t.root, 12.));
                             t.session
@@ -15165,42 +15473,140 @@ mod tests {
     }
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {
-        let mut app = session();
-        app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
-        assert!(!app.command(CommandId::AddLayer).enabled);
-        assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
-        assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
-        app.frame(10_000_000, 18_000_000).unwrap();
-        app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
-        let change = app.frame(20_000_000, 28_000_000).unwrap();
-        assert_eq!(change.regions, 0);
-        assert!(change.canvas_wake);
-        app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
-        let change = app.frame(30_000_000, 38_000_000).unwrap();
-        assert_ne!(change.regions & regions::DOCUMENT, 0);
-        assert!(app.command(CommandId::Undo).enabled);
-        let stroke = app.engine.document().strokes().next().unwrap();
-        assert_eq!(stroke.points[0].pressure, 0.2);
-        assert_eq!(stroke.points[1].pressure, 0.8);
-        let expected = app
-            .state
-            .camera
-            .input_transform()
-            .map(Point { x: 225.0, y: 300.0 });
-        assert!((stroke.points[0].position.x - expected.x).abs() < 0.001);
-        assert!(app.engine.backend().dabs > 0);
-        invoke(&mut app, CommandId::Undo);
-        assert_eq!(app.engine.document().strokes().count(), 0);
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            let mut app = session();
+            app.set_platform(platform);
+            app.state
+                .workspace
+                .layout
+                .insert_tools(
+                    Panel::Toolbar,
+                    None,
+                    &[ToolbarControl::Command {
+                        command: CommandId::Hand,
+                    }],
+                )
+                .unwrap();
+            let commands = app.state.commands.clone();
+            let tiles = serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap();
+            assert!(
+                !commands
+                    .iter()
+                    .find(|c| c.id == CommandId::Undo)
+                    .unwrap()
+                    .enabled
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .find(|c| c.id == CommandId::FillSelection)
+                    .unwrap()
+                    .enabled
+            );
+            app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
+            assert!(!app.command(CommandId::AddLayer).enabled);
+            assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
+            assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
+            let change = app.frame(10_000_000, 18_000_000).unwrap();
+            assert_eq!(
+                change.regions & regions::COMMANDS,
+                0,
+                "{platform:?}: pen-down must not restyle commands"
+            );
+            assert_eq!(app.state.commands, commands);
+            assert_eq!(
+                serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap(),
+                tiles
+            );
+            let hand = app
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| {
+                    t.control
+                        == ToolbarControl::Command {
+                            command: CommandId::Hand,
+                        }
+                })
+                .unwrap()
+                .id;
+            assert!(
+                app.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: hand
+                })
+                .is_err()
+            );
+            assert!(
+                app.dispatch(UiAction::Invoke {
+                    command: CommandId::Undo
+                })
+                .is_err()
+            );
+            assert!(
+                app.engine.has_active_stroke(),
+                "blocked actions preserve the stroke"
+            );
+            app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
+            let change = app.frame(20_000_000, 28_000_000).unwrap();
+            assert_eq!(change.regions, 0);
+            assert!(change.canvas_wake);
+            assert_eq!(app.state.commands, commands);
+            app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
+            let change = app.frame(30_000_000, 38_000_000).unwrap();
+            assert_ne!(change.regions & regions::DOCUMENT, 0);
+            assert!(app.command(CommandId::Undo).enabled);
+            for command in &app.state.commands {
+                assert_eq!(
+                    *command,
+                    app.command(command.id),
+                    "availability refreshes after release"
+                );
+            }
+            let stroke = app.engine.document().strokes().next().unwrap();
+            assert_eq!(stroke.points[0].pressure, 0.2);
+            assert_eq!(stroke.points[1].pressure, 0.8);
+            let expected = app
+                .state
+                .camera
+                .input_transform()
+                .map(Point { x: 225.0, y: 300.0 });
+            assert!((stroke.points[0].position.x - expected.x).abs() < 0.001);
+            assert!(app.engine.backend().dabs > 0);
+            invoke(&mut app, CommandId::Undo);
+            assert_eq!(app.engine.document().strokes().count(), 0);
+        }
     }
     #[test]
     fn cancel_removes_provisional_stroke_and_binding_actions_roundtrip() {
         let mut app = session();
+        invoke(&mut app, CommandId::AddLayer);
+        invoke(&mut app, CommandId::Undo);
+        assert!(app.command(CommandId::Redo).enabled);
+        let commands = app.state.commands.clone();
         app.pen(event(&app, 1, PenPhase::Down, 0.5)).unwrap();
         app.frame(10_000_000, 18_000_000).unwrap();
+        assert_eq!(app.state.commands, commands);
         app.pen(event(&app, 2, PenPhase::Cancel, 0.0)).unwrap();
         app.frame(20_000_000, 28_000_000).unwrap();
         assert_eq!(app.engine.document().strokes().count(), 0);
         assert!(!app.command(CommandId::Undo).enabled);
+        assert_eq!(
+            app.state.commands, commands,
+            "cancellation restores live availability"
+        );
         let action: UiAction = serde_json::from_str(r#"{"type":"move_panel","panel":"sizes","target":{"kind":"edge","edge":"right","outer":false},"viewport":[1200,900]}"#).unwrap();
         let value = serde_json::to_string(&action).unwrap();
         app.dispatch(serde_json::from_str(&value).unwrap()).unwrap();

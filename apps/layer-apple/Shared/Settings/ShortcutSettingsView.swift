@@ -7,8 +7,9 @@ struct ShortcutSettingsView: View {
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
     var body: some View {
         VStack(spacing: 12) {
-            TextField("Search shortcuts", text: Binding(get: { model["shortcut_query"].string },
-                set: { action(["type": "search_shortcuts", "query": $0]) }))
+            EditorTextField("Search shortcuts", value: model["shortcut_query"].string) {
+                action(["type": "search_shortcuts", "query": $0])
+            }
                 .textFieldStyle(.roundedBorder).accessibilityIdentifier("shortcut-search")
             List {
                 ForEach(model["shortcuts"].array.filter { $0["visible"].bool }, id: \.shortcutID) { row in

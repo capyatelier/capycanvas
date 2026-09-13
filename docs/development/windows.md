@@ -73,9 +73,68 @@ inspection. Captures and diagnostics stay outside the payload.
 Deployment follows Microsoft's
 [self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
 and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
-Clean-machine installation, signing/MSIX delivery, full visual and physical-input
+Clean-machine installation, distribution signing, full visual and physical-input
 acceptance, device recovery and sustained painting performance remain separate
 acceptance work.
+
+## MSIX package
+
+Convert an existing portable build into an unsigned MSIX, using its result.json:
+
+~~~powershell
+./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json> -Version 1.0.0.0
+./apps/layer-windows/scripts/test-msix.ps1 -ResultFile <msix-result.json>
+~~~
+
+Run from an STA PowerShell session on Windows. Both Windows PowerShell 5.1 and
+PowerShell 7 are supported. The packager verifies the portable inventory before
+copying it, retains the app-local runtimes and notices, and generates package
+logos from the shared symbolic brand asset. The application runs as a
+`packagedClassicApp` at `mediumIL`, with the `runFullTrust` capability.
+Output stays under ignored artifacts/windows/msix.
+
+The manifest records the application source commit separately from the packager
+source commit, along with hashes of the packaging scripts and brand asset.
+Uncommitted sources require -AllowDirty and mark the result and filename as a
+development package. The four-part package version requires a nonzero major
+component and components no greater than 65535.
+
+MakeAppx performs its normal semantic validation. It writes wall-clock ZIP
+timestamps even when source timestamps are fixed, so normalize-msix.ps1 checks
+the ZIP32/ZIP64 headers and replaces only their date/time fields before signing.
+Compressed blocks, file contents and block maps are preserved. It refuses signed
+packages and validates all headers before changing any bytes. Two assemblies
+must produce the same SHA-256. This establishes repeatable archive assembly for
+identical inputs, rather than bit-identical compiler output across machines.
+
+The test verifies the complete inventory, URI-encoded license paths, extracted
+hashes using MakeAppx, activation metadata, repeat logo generation and
+normalization idempotence. Independent ZIP32 fixtures check content preservation
+and refusal to modify a signed archive. Invalid payload hashes, duplicate and
+escaping paths, undeclared files, versions and identity lengths are rejected.
+These checks do not establish installed application behavior.
+
+For local Windows 11 installation testing, create a separate test identity:
+
+~~~powershell
+./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json> -UnsignedTestIdentity
+~~~
+
+This adds .Test to the identity and Microsoft's unsigned-test publisher OID.
+[Microsoft requires administrator privilege for unsigned packages containing executable activations](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package).
+From Administrator PowerShell, install the exact reviewed test artifact with
+`Add-AppxPackage -Path <test.msix> -AllowUnsigned`. Check for an existing test
+installation before replacing it, and remove the test package after acceptance.
+The test identity is for local testing, not distribution.
+
+The standard output uses identity CapyAtelier.CapyCanvas and publisher
+CN=Capy Atelier. Pass -Publisher to match the distribution certificate's exact
+subject. It must be
+[signed before distribution](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview);
+never normalize the archive after signing. Installed identity, launch, update,
+uninstall, clean-machine behavior and distribution signing remain acceptance
+gates. The first ordinary-user install attempt was rejected by Windows because
+the unsigned package contains an executable.
 
 ## How the host works
 
@@ -243,3 +302,39 @@ separately, with diagnostic tracing off and no competing builds or GPU tests.
 Probe the actual display configuration first. Elevate only the capture script
 if Windows denies ETW access. UI Automation and replay do not establish physical
 pen/touch behavior, painting cadence or input latency.
+
+## GPU reconstruction checks
+
+Run the document and lifecycle fixtures with actual D3D12 device removal enabled:
+
+```powershell
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailGpu
+./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+cargo test --locked -p layer-windows --lib device::tests::validation_error_releases_pipeline_and_allows_device_replacement -- --ignored --exact --nocapture
+```
+
+The native fixtures create isolated profiles. The document check removes the
+process-owned device twice, then compares exported PNG bytes and verifies
+history, state, thumbnails and subsequent saving. The lifecycle check overlaps
+removal with startup, minimized windows and close decisions. The Rust regression
+checks failed-pipeline cleanup and replacement of a removed hardware device.
+The multiwindow fixture removes the shared device from each of two open windows,
+checking reconstruction in the idle sibling and independent document Undo/Redo.
+The `-FailGpu` variant removes the device and prevents reconstruction in its
+isolated test profile until the normal retry deadline expires. It checks Save,
+Save As, canceled pickers, Cancel/Discard close decisions, retained preferences,
+and durable reopen with identical exported pixels. It also checks failure in Zen
+mode: File remains accessible without changing the saved Zen preference.
+
+When reconstruction fails, painting stops and the existing drawing remains
+saveable. Completed admitted strokes are retained; an unfinished stroke is
+canceled. Document/settings services stay alive until an approved close, and
+GPU-dependent commands are disabled. An accepted save can finish; a PNG export
+that has not captured its image is canceled. Reopen the saved drawing in a new
+window to resume painting.
+
+Run these separately from performance measurements. They do not establish
+physical driver-reset or suspend behavior, or acceptance of every concurrent
+New/Open/import/filter/export operation.

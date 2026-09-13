@@ -19,6 +19,10 @@ mod tooltip;
 mod workspace_drawer_style;
 #[path = "workspace_header_tests.rs"]
 mod workspace_header;
+#[path = "workspace_drag_edge_tests.rs"]
+mod workspace_drag_edge;
+#[path = "workspace_drop_size_tests.rs"]
+mod workspace_drop_size;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
@@ -10681,7 +10685,14 @@ fn native_window_drag_input() {
     w.window.add_controller(motion);
     w.window.present();
     pump(1200);
-    let original = state(&w).workspace;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        assert!(Instant::now() < deadline, "workspace startup timed out");
+        pump(20);
+    }
+    // Storage adopts the shipped preset asynchronously after realization.
+    // This geometry test uses the fixed tab IDs, not that startup layout.
+    let original = layer_ui::WorkspaceState::default();
     let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
     let mut step = 0;
     std::fs::write(dir.join("ready"), "ready").unwrap();
@@ -10794,9 +10805,43 @@ fn native_window_drag_input() {
             .bounds;
         let start = global([tab.x + tab.width * 0.5, tab.y + tab.height * 0.5]);
         let away = global([viewport[0] * 0.5, viewport[1] * 0.55]);
-        perform(
-            serde_json::json!([{ "point": start }, { "down": true }, { "point": away }, { "down": false }]),
+        perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
+        let bottom = global([viewport[0] * 0.5, viewport[1] - 2.]);
+        perform(serde_json::json!([{ "point": bottom }]));
+        let preview = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .workspace_update()
+            .drag
+            .unwrap()
+            .group
+            .unwrap();
+        let native = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == preview.id)
+            .unwrap()
+            .root
+            .compute_bounds(&w.surface)
+            .unwrap();
+        assert!(
+            preview.bounds.y + preview.bounds.height > viewport[1],
+            "{mode}: panel must follow the contact beyond the workspace bottom"
         );
+        assert!((native.y() - preview.bounds.y).abs() < 1.);
+        perform(serde_json::json!([{ "down": false }]));
+        let fitted = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.id == preview.id)
+            .unwrap()
+            .bounds;
+        assert!(fitted.y + fitted.height <= viewport[1] - WORKSPACE_SPACING + 1.);
         assert_eq!(
             state(&w).workspace.layout.floating.len(),
             1,

@@ -304,7 +304,9 @@ impl NativeHost {
         if let Err(event) = self.session.pen(event) {
             // The sole render owner may drain a full input queue. The platform
             // UI thread never waits here, and a stroke boundary is never dropped.
-            self.session.frame(event.timestamp_ns, event.timestamp_ns)?;
+            let previous = self.session.state().revision;
+            let change = self.session.flush_input()?;
+            self.apply_change(previous, change);
             self.session
                 .pen(event)
                 .map_err(|_| "Pen queue remained full")?;
@@ -453,6 +455,7 @@ impl NativeHost {
                     _ => PointerButton::Other,
                 },
                 update[0] != 0,
+                false,
             )?;
         }
         Ok(())
@@ -464,13 +467,35 @@ impl NativeHost {
         if !self.accepts_pointer_input(event.view_revision) {
             return Ok(());
         }
-        self.pointer_event_inner(event, button, false)
+        self.pointer_event_inner(event, button, false, false)
+    }
+    /// Deliver a sample admitted before the host stopped canvas input. This
+    /// bypasses GPU startup gating, not shared pointer ownership or document epochs.
+    pub fn retire_pointer_event(
+        &mut self,
+        event: PenEvent,
+        button: PointerButton,
+    ) -> Result<(), String> {
+        if !self.accepts_pointer_input(event.view_revision) {
+            return Ok(());
+        }
+        self.pointer_event_inner(event, button, false, true)
+    }
+    pub fn suspend_renderer(&mut self) -> Result<(), String> {
+        self.last_pen = None;
+        self.deferred_contacts.clear();
+        let previous = self.session.state().revision;
+        let change = self.session.suspend_renderer()?;
+        self.apply_change(previous, change);
+        self.startup = Default::default();
+        Ok(())
     }
     fn pointer_event_inner(
         &mut self,
         mut event: PenEvent,
         button: PointerButton,
         preserve_token: bool,
+        retiring: bool,
     ) -> Result<(), String> {
         let id = event.device_id;
         let phase = event.phase;
@@ -515,7 +540,7 @@ impl NativeHost {
             self.dirty = true;
         }
         if !predicted && phase == PenPhase::Down {
-            if self.paint_ready() {
+            if retiring || self.paint_ready() {
                 self.deferred_contacts.remove(&id);
             } else {
                 self.deferred_contacts.insert(id);
@@ -525,7 +550,7 @@ impl NativeHost {
         if !predicted && matches!(phase, PenPhase::Up | PenPhase::Cancel) {
             self.deferred_contacts.remove(&id);
         }
-        if paint && !preparing && self.session.engine().backend().0.is_some() {
+        if paint && !preparing && (retiring || self.session.engine().backend().0.is_some()) {
             self.sequence += 1;
             self.enqueue(event)?;
             if !predicted {
@@ -1050,6 +1075,7 @@ mod tests {
                     panel: layer_ui::Panel::Brushes,
                     tab_width: 100.,
                     content_height: 900.,
+                    scroll: None,
                 }],
             })
             .unwrap();
@@ -1173,6 +1199,7 @@ mod tests {
                 panel: layer_ui::Panel::Brushes,
                 tab_width: 76.0,
                 content_height: 480.0,
+                scroll: None,
             }],
         })
         .unwrap();

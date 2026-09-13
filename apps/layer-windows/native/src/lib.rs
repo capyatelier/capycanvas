@@ -30,6 +30,8 @@ pub use navigator::capy_navigator_image;
 mod settings;
 pub use events::CapyPointer;
 #[cfg(target_os = "windows")]
+mod device;
+#[cfg(target_os = "windows")]
 mod host;
 #[cfg(target_os = "windows")]
 pub use host::*;

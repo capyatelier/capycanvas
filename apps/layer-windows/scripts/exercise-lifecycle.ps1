@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -64,6 +64,10 @@ function Wait-Canvas {
     } 'Modal input gate did not clear'
     Check-Caption
 }
+function Lose-Gpu {
+    if(!$RecoverGpu){return}
+    (Button 'Test GPU loss').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
 function Minimize {
     [CapyWindowLifecycle]::ShowWindowAsync($handle,6)|Out-Null
     Wait-Until {[CapyWindowLifecycle]::IsIconic($handle)} 'Review did not minimize'
@@ -110,11 +114,13 @@ try {
         $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
         if($scenario -eq 'warming'){
             Start-Sleep -Milliseconds 1250 # Exercise close during speculative shader warmup.
+            Lose-Gpu
             $review.CloseMainWindow()|Out-Null
             Check-Closed
             continue
         }
         if(!$dirty){
+            Lose-Gpu
             Minimize
             $review.CloseMainWindow()|Out-Null
             Check-Closed
@@ -122,14 +128,17 @@ try {
         }
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
         Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the document'
+        Lose-Gpu
         Minimize
         Close-Decision $false 'Cancel'
         [CapyWindowLifecycle]::ShowWindowAsync($handle,3)|Out-Null
         Wait-Until {[CapyWindowLifecycle]::IsZoomed($handle)} 'Review did not maximize'
+        Lose-Gpu
         Minimize
         Close-Decision $true 'Cancel'
         [CapyWindowLifecycle]::ShowWindowAsync($handle,9)|Out-Null
         Wait-Until {![CapyWindowLifecycle]::IsZoomed($handle)} 'Review did not restore from maximized state'
+        Lose-Gpu
         Minimize
         Close-Decision $false 'Discard Changes'
         Check-Closed
@@ -144,6 +153,7 @@ try {
         maximized_state_survives_minimize_and_prompt='passed'
         restored_caption_measurements_and_error_status='passed'
         discard_and_zero_exit='passed'
+        gpu_recovery_overlap=if($RecoverGpu){'forced device loss queued with close, minimize, Cancel and Discard'}else{'not requested'}
         scope='isolated native window state and controlled replay; not physical input, mixed DPI or presentation acceptance'
     }|ConvertTo-Json
 } finally {

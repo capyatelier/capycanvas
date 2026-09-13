@@ -55,6 +55,7 @@ struct GlyphRasterizer {
             check_hresult(font->CreateFontFace(faces[i].put()));
         }
     }
+    static float fontSize(double value){return std::floor(float(value)*100.f)/100.f;}
     static float linear(float x){return x<=.04045f?x/12.92f:std::pow((x+.055f)/1.055f,2.4f);}
     static float srgb(float x){return x<=.0031308f?12.92f*x:1.055f*std::pow(x,1.f/2.4f)-.055f;}
     static int canonical(int x){x>>=5;return (x<<5)|(x<<2)|(x>>1);}
@@ -75,12 +76,20 @@ struct GlyphRasterizer {
         float length=std::sqrt(c*c+d*d);bool rotated=b!=0||c!=0;
         auto quarter=[&](double x){return std::floor(float(x*scale)*4+.5f)/4;};
         DWRITE_MATRIX transform{a/length,b/length,c/length,d/length,quarter(position.OffsetX),rotated?quarter(position.OffsetY):std::floor(float(position.OffsetY*scale)+.5f)};
-        auto face=faces[bold].get();auto count=uint32_t(text.size());float em=float(font)*length;
+        auto face=faces[bold].get();auto count=uint32_t(text.size());float em=fontSize(font)*length;
         std::vector<UINT32> codes(text.begin(),text.end());std::vector<UINT16> glyphs(count);
         check_hresult(face->GetGlyphIndices(codes.data(),count,glyphs.data()));
         std::vector<DWRITE_GLYPH_METRICS> metrics(count);check_hresult(face->GetDesignGlyphMetrics(glyphs.data(),count,metrics.data()));
         DWRITE_FONT_METRICS fontMetrics;face->GetMetrics(&fontMetrics);std::vector<float> advances(count);
-        for(size_t i=0;i<count;i++)advances[i]=em*metrics[i].advanceWidth/fontMetrics.designUnitsPerEm;
+        std::vector<INT32> kerning(count);
+        if(count>1)check_hresult(faces[bold].as<IDWriteFontFace1>()->GetKerningPairAdjustments(count,glyphs.data(),kerning.data()));
+        double cursor=0;
+        for(size_t i=0;i<count;i++){
+            double width=fontSize(font)*(double(metrics[i].advanceWidth)+kerning[i])/fontMetrics.designUnitsPerEm;
+            // Horizontal labels retain pair kerning and each glyph's quarter-pixel origin.
+            advances[i]=count>1&&!rotated?quarter(position.OffsetX+cursor+width)-quarter(position.OffsetX+cursor):float(width)*length;
+            cursor+=width;
+        }
         DWRITE_GLYPH_RUN run{face,em,count,glyphs.data(),advances.data(),nullptr,FALSE,0};
         com_ptr<IDWriteGlyphRunAnalysis> analysis;
         auto mode=DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
@@ -142,20 +151,21 @@ struct Device {
         return device;
     }
 };
-// Retain the static hue mesh and shared field bitmap independently.
+// Retain the static hue brush and shared field bitmap independently.
 // Marker motion redraws their image without rerasterizing the color field.
 struct WheelImage {
     std::shared_ptr<Device> device;
     Imaging::SurfaceImageSource surface{nullptr};
     int pixels=0;
-    com_ptr<ID2D1GradientMesh> ring;
+    com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
+    com_ptr<ID2D1BitmapBrush> disc;
     hstring ringShape,fieldKey;
     void draw(Image const& image,J const& model,double size,double scale,bool reset=false){
         int next=std::max(1,int(std::ceil(size*scale)));
         if(reset){surface=nullptr;device.reset();}
         if(!surface||pixels!=next||!device||FAILED(device->d3d->GetDeviceRemovedReason())){
-            device=Device::get();pixels=next;ring=nullptr;field=nullptr;
+            device=Device::get();pixels=next;ring=nullptr;field=nullptr;disc=nullptr;
             surface=Imaging::SurfaceImageSource(pixels,pixels,false);
             check_hresult(surface.as<ISurfaceImageSourceNativeWithD2D>()->SetDevice(device->d2d.get()));
             image.Source(surface);
@@ -170,7 +180,7 @@ struct WheelImage {
             context->SetDpi(96,96);
             context->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             context->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
-            context->SetTransform(D2D1::Matrix3x2F::Scale(float(size*scale),float(size*scale))*
+            context->SetTransform(D2D1::Matrix3x2F::Scale(float(pixels),float(pixels))*
                 D2D1::Matrix3x2F::Translation(float(offset.x),float(offset.y)));
             context->Clear(D2D1::ColorF(0,0,0,0));
             auto geometry=object(model,L"geometry");
@@ -208,7 +218,17 @@ struct WheelImage {
                         piece.topEdgeMode=piece.bottomEdgeMode=piece.leftEdgeMode=piece.rightEdgeMode=D2D1_PATCH_EDGE_MODE_ALIASED;patches.push_back(piece);
                     }
                 }
-                ring=nullptr;check_hresult(context->CreateGradientMesh(patches.data(),uint32_t(patches.size()),ring.put()));
+                com_ptr<ID2D1GradientMesh> mesh;
+                check_hresult(context->CreateGradientMesh(patches.data(),uint32_t(patches.size()),mesh.put()));
+                com_ptr<ID2D1Image> target;context->GetTarget(target.put());
+                D2D1_MATRIX_3X2_F transform;context->GetTransform(&transform);
+                com_ptr<ID2D1CommandList> commands;check_hresult(context->CreateCommandList(commands.put()));
+                context->SetTarget(commands.get());context->SetTransform(D2D1::Matrix3x2F::Identity());
+                context->DrawGradientMesh(mesh.get());
+                context->SetTarget(target.get());context->SetTransform(transform);
+                check_hresult(commands->Close());
+                ring=nullptr;
+                check_hresult(context->CreateImageBrush(commands.get(),D2D1::ImageBrushProperties(D2D1::RectF(0,0,1,1)),ring.put()));
                 ringShape=shape;
             }
             Paint white{1,1,1,1},black{0,0,0,1},hue=paint(array(model,L"wheel_hue_color"));
@@ -239,25 +259,18 @@ struct WheelImage {
                         throw hresult_invalid_argument(L"Invalid shared color field");
                     field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(fieldPixels,fieldPixels),bytes.data(),fieldPixels*4,
                         D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
+                    disc=nullptr;
+                    if(projection==2)check_hresult(context->CreateBitmapBrush(field.get(),D2D1::BitmapBrushProperties(),
+                        D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1.f/fieldPixels,1.f/fieldPixels)),disc.put()));
                     fieldKey=wanted;
                 }
                 if(projection==2){
-                    com_ptr<ID2D1EllipseGeometry> clip;
                     float radius=float(num(geometry,L"disc_radius"));
-                    check_hresult(factory->CreateEllipseGeometry(D2D1::Ellipse(center,radius,radius),clip.put()));
-                    context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clip.get()),nullptr);
-                }
-                context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-                if(projection==2)context->PopLayer();
+                    context->FillEllipse(D2D1::Ellipse(center,radius,radius),disc.get());
+                }else context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
             }
-            // A single analytic annulus clip gives the mesh a continuous rim.
-            com_ptr<ID2D1EllipseGeometry> outside,inside;
-            check_hresult(factory->CreateEllipseGeometry(D2D1::Ellipse(center,outer,outer),outside.put()));
-            check_hresult(factory->CreateEllipseGeometry(D2D1::Ellipse(center,inner,inner),inside.put()));
-            ID2D1Geometry* rims[]={outside.get(),inside.get()};com_ptr<ID2D1GeometryGroup> rim;
-            check_hresult(factory->CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE,rims,2,rim.put()));
-            context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),rim.get()),nullptr);
-            context->DrawGradientMesh(ring.get());context->PopLayer();
+            // Stroke one ellipse, as in the reference canvas, to keep both rims consistent.
+            context->DrawEllipse(D2D1::Ellipse(center,(inner+outer)/2,(inner+outer)/2),ring.get(),outer-inner);
             float radius=float(std::clamp(size*.04,6.,10.)/size);
             com_ptr<ID2D1SolidColorBrush> brush;check_hresult(context->CreateSolidColorBrush(white,brush.put()));
             for(auto const& entry:{std::pair{L"wheel_hue_marker",L"wheel_hue_color"},std::pair{L"wheel_marker",L"marker_color"}}){
@@ -342,7 +355,9 @@ struct View:std::enable_shared_from_this<View>{
         Imaging::WriteableBitmap result(size,size);uint8_t* bytes=nullptr;
         check_hresult(result.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
         for(int y=0;y<size;y++)for(int x=0;x<size;x++){
-            auto value=uint8_t((int((x+.5)/scale/5)+int((y+.5)/scale/5))%2?204:140);auto p=bytes+(y*size+x)*4;
+            // Match the shared repeating conic gradient, including its quadrant boundaries.
+            double dx=std::fmod((x+.5)/scale,10.)-5,dy=std::fmod((y+.5)/scale,10.)-5;
+            auto value=uint8_t(dx==0||dx*dy<0?204:140);auto p=bytes+(y*size+x)*4;
             p[0]=p[1]=p[2]=value;p[3]=255;
         }
         result.Invalidate();return result;
@@ -453,7 +468,7 @@ struct View:std::enable_shared_from_this<View>{
         PathGeometry geometry;geometry.Figures().Append(figure);readoutHit.Data(geometry);
         auto ink=focused?fill(color(L"#3584e4")):data->brush(L"text");
         double labelFont=std::clamp(panelSize*.044,9.,12.);
-        labelMetrics.Text(str(view,L"readout_label"));labelMetrics.FontSize(labelFont);
+        labelMetrics.Text(str(view,L"readout_label"));labelMetrics.FontSize(GlyphRasterizer::fontSize(labelFont));
         labelMetrics.Measure({1000,1000});
         auto labelNext=labelMetrics.Text()+L"/"+data->theme()+L"/"+to_hstring(labelFont)+L"/"+to_hstring(rasterScale)+(focused?L"/focus":L"");
         if(labelNext!=labelKey){
@@ -471,7 +486,7 @@ struct View:std::enable_shared_from_this<View>{
         auto texts=array(view,L"readout_layout_text");bool rgb=str(view,L"readout")==L"rgb";
         double font=labelFont,digit=0,total=0;std::array<double,3> widths{};
         for(;;font-=.25){
-            if(measuredFont!=font){advances.clear();measuredFont=font;metrics.FontSize(font);}
+            if(measuredFont!=font){advances.clear();measuredFont=font;metrics.FontSize(GlyphRasterizer::fontSize(font));}
             digit=0;for(wchar_t c=L'0';c<=L'9';c++)digit=std::max(digit,advance(c));
             total=0;
             for(int i=0;i<3;i++){

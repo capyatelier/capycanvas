@@ -36,6 +36,7 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -61,7 +62,7 @@ private data class LayerDrag(val id: Long, val top: Float, val pointer: Offset, 
 private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-symbolic")
 
 /** The native view translates the shared layer model; no layer policy lives here. */
-@Composable internal fun LayerPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier) {
+@Composable internal fun LayerPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, onContent: (PanelContentSize) -> Unit = {}) {
     val colors = LocalPalette.current
     val density = LocalDensity.current
     val context = LocalContext.current
@@ -70,6 +71,13 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     val active = view.objectOrNull("editing_layer")
     val controls = view.getJSONObject("controls")
     val layers = state.array("layers").objects()
+    var headerHeight by remember { mutableFloatStateOf(0f) }
+    var footerHeight by remember { mutableFloatStateOf(0f) }
+    var rowHeight by remember { mutableFloatStateOf(40f) }
+    val fixedHeight = headerHeight + footerHeight
+    val measured = if (headerHeight > 0f && footerHeight > 0f)
+        PanelContentSize(fixedHeight + layers.size * rowHeight, fixedHeight, rowHeight) else null
+    SideEffect { measured?.let(onContent) }
     val currentLayers by rememberUpdatedState(layers)
     val list = rememberLazyListState()
     val epoch = state.getJSONObject("document_file").optLong("epoch")
@@ -147,7 +155,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     }
     Box(modifier.fillMaxSize().onGloballyPositioned { panelOrigin = it.boundsInRoot().topLeft }) {
         Column(Modifier.fillMaxSize()) {
-            Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density.density }.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     var blendOpen by remember { mutableStateOf(false) }
                     Box(Modifier.weight(1f)) {
@@ -182,7 +190,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     val id=layer.getLong("id")
                     val target=drag?.takeIf { it.target==id }
                     val highlight=when { target==null -> 0; layer.getBoolean("group") && target.fraction>.25f && target.fraction<.75f -> 3; target.fraction<.5f -> 1; else -> 2 }
-                    LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
+                    LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
                         context={mask,point -> contextMenu(layer,mask,point)},
                         held={contactHeld=it},
                         cancelContext={menuGeneration++; menu=null},
@@ -200,7 +208,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                         })
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
+            Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { footerHeight = it.height / density.density }.padding(horizontal=6.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                 LayerButton(host,"add-layer","New layer",action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
                 LayerButton(host,"folder","New group",action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
                 LayerButton(host,"mask","Add layer mask",enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })

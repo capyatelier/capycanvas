@@ -192,6 +192,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         &mut self.backend
     }
 
+    /// Replace GPU state while retaining the editor, input queue and history.
+    /// The caller prepares source assets in the replacement before this boundary.
+    /// A failed resize leaves the current backend and replay state untouched.
+    pub fn replace_backend(&mut self, mut backend: B) -> Result<B, B::Error> {
+        backend.resize_surface(self.view.width_px, self.view.height_px)?;
+        let previous = std::mem::replace(&mut self.backend, backend);
+        self.rebuild_all = true;
+        self.composite_all = true;
+        Ok(previous)
+    }
+
     pub fn metrics(&self) -> EngineMetrics {
         self.metrics
     }
@@ -784,6 +795,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.append_real_dab(point, self.finalized_real_points);
             self.finalized_real_points += 1;
         }
+    }
+
+    /// Drain admitted samples without submitting GPU work. The producer must be
+    /// quiescent or owned by this caller; completed strokes retain their history.
+    pub fn flush_input(&mut self) -> Result<(), EngineError<B::Error>> {
+        while let Some(event) = self.input.pop() {
+            self.process_event(event)?;
+        }
+        Ok(())
+    }
+
+    /// Retire input after the host stops accepting samples. Commit completed
+    /// strokes, then cancel only an unfinished stroke and its predicted tail.
+    pub fn finish_input(&mut self) -> Result<(), EngineError<B::Error>> {
+        self.flush_input()?;
+        self.cancel_active();
+        Ok(())
     }
 
     fn process_input(&mut self) -> Result<(), EngineError<B::Error>> {
@@ -1676,6 +1704,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingRenderer {
         time_seconds: f32,
+        fail_resize: bool,
         size: [u32; 2],
         persistent_dabs: usize,
         persistent: Vec<Dab>,
@@ -1698,6 +1727,9 @@ mod tests {
         }
 
         fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error> {
+            if self.fail_resize {
+                return Err(BackendError("replacement resize failed"));
+            }
             self.size = [width, height];
             Ok(())
         }
@@ -1758,6 +1790,161 @@ mod tests {
         fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
             None
         }
+    }
+
+    #[test]
+    fn backend_replacement_replays_active_and_committed_ink_without_changing_history() {
+        for preset in [
+            DefaultBrushPreset::GPen,
+            DefaultBrushPreset::NaturalBlender,
+            DefaultBrushPreset::WatercolorWash,
+        ] {
+            let (mut input, consumer) = input_queue(32);
+            let mut canvas = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("device recovery", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            canvas.set_brush(default_brush(preset)).unwrap();
+            canvas
+                .set_instant_feedback(InstantFeedbackConfig {
+                    enabled: false,
+                    ..Default::default()
+                })
+                .unwrap();
+            for (sequence, phase, x) in [
+                (1, PenPhase::Down, 10.),
+                (2, PenPhase::Move, 40.),
+                (3, PenPhase::Up, 70.),
+                (4, PenPhase::Down, 20.),
+                (5, PenPhase::Move, 60.),
+            ] {
+                input.push(event(sequence, phase, x)).unwrap();
+                canvas.render_frame_at(sequence * 16_000_000).unwrap();
+            }
+            let checkpoint = canvas.checkpoint();
+            let document = canvas.document().clone();
+            let previous = canvas
+                .replace_backend(RecordingRenderer::default())
+                .unwrap();
+            assert!(canvas.has_active_stroke());
+            canvas.render_frame_at(80_000_000).unwrap();
+            assert!(canvas.backend().saw_reset);
+            assert_eq!(
+                canvas.backend().persistent,
+                previous.persistent,
+                "{preset:?}"
+            );
+            if preset == DefaultBrushPreset::WatercolorWash {
+                assert_eq!(canvas.backend().material_batches, previous.material_batches);
+            }
+            assert_eq!(canvas.document(), &document);
+            assert_eq!(canvas.checkpoint(), checkpoint);
+            // A terminal event queued before replacement still commits exactly once.
+            input.push(event(6, PenPhase::Up, 90.)).unwrap();
+            canvas
+                .replace_backend(RecordingRenderer::default())
+                .unwrap();
+            canvas.render_frame_at(96_000_000).unwrap();
+            assert!(!canvas.has_active_stroke());
+            assert_eq!(canvas.document().strokes().count(), 2);
+            let committed = canvas.backend().persistent.clone();
+            let final_checkpoint = canvas.checkpoint();
+            assert!(canvas.undo().unwrap());
+            canvas.render_frame().unwrap();
+            assert_eq!(canvas.document().strokes().count(), 1);
+            assert!(canvas.can_redo());
+            canvas
+                .replace_backend(RecordingRenderer::default())
+                .unwrap();
+            canvas.render_frame().unwrap();
+            assert!(canvas.can_redo(), "replacement must retain the redo branch");
+            assert!(canvas.redo().unwrap());
+            canvas.render_frame().unwrap();
+            assert_eq!(canvas.backend().persistent, committed, "{preset:?}");
+            assert_eq!(canvas.checkpoint(), final_checkpoint);
+        }
+    }
+
+    #[test]
+    fn input_retirement_commits_beyond_one_batch_and_discards_only_unfinished_ink() {
+        let (mut input, consumer) = input_queue(INPUT_BATCH + 10);
+        let mut canvas = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("CPU retirement", 128, 128),
+            consumer,
+            view(128, 128),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        for index in 0..=INPUT_BATCH + 1 {
+            let phase = if index == 0 {
+                PenPhase::Down
+            } else if index == INPUT_BATCH + 1 {
+                PenPhase::Up
+            } else {
+                PenPhase::Move
+            };
+            input.push(event(index as u64 + 1, phase, 30.)).unwrap();
+        }
+        input.push(event(9000, PenPhase::Down, 40.)).unwrap();
+        input.push(event(9001, PenPhase::Move, 80.)).unwrap();
+        canvas.finish_input().unwrap();
+        assert!(!canvas.has_active_stroke());
+        assert_eq!(canvas.document().strokes().count(), 1);
+        assert_eq!(
+            canvas.backend().persistent_dabs,
+            0,
+            "no GPU submit occurred"
+        );
+        let checkpoint = canvas.checkpoint();
+        assert!(canvas.undo().unwrap());
+        assert_eq!(canvas.document().strokes().count(), 0);
+        assert!(canvas.redo().unwrap());
+        assert_eq!(canvas.checkpoint(), checkpoint);
+        canvas.finish_input().unwrap();
+        assert_eq!(canvas.checkpoint(), checkpoint, "retirement is idempotent");
+    }
+
+    #[test]
+    fn failed_backend_replacement_retains_backend_history_and_pending_input() {
+        let (mut input, consumer) = input_queue(32);
+        let mut canvas = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("failed recovery", 128, 128),
+            consumer,
+            view(128, 128),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        canvas.render_frame().unwrap();
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        assert!(
+            canvas
+                .replace_backend(RecordingRenderer {
+                    fail_resize: true,
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert!(!canvas.backend().fail_resize);
+        canvas.render_frame().unwrap();
+        assert_eq!(canvas.document().strokes().count(), 1);
+        assert!(canvas.undo().unwrap());
+        assert!(canvas.redo().unwrap());
     }
 
     #[test]

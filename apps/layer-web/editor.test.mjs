@@ -7,9 +7,18 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   const show=async panel=>{
     await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("${panel}"));if(group.active!=="${panel}")layerApp.dispatch({type:"select_panel_tab",group:group.id,panel:"${panel}"});})()`);await settle();
   };
-  const pointer=async(selector,fx,fy,move)=>{
+  const pointer=async(selector,fx,fy,move,pointerType="mouse")=>{
     const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width*${fx},y:r.y+r.height*${fy}}})()`);
-    for(const [type,x,y,buttons]of [["mousePressed",p.x,p.y,1],...(move?[["mouseMoved",p.x+move[0],p.y+move[1],1]]:[]),["mouseReleased",p.x+(move?.[0]||0),p.y+(move?.[1]||0),0]])await call("Input.dispatchMouseEvent",{type,x,y,button:"left",buttons,clickCount:1});
+    const appearance=()=>evaluate(`([...document.querySelectorAll('.tool-tile > button[data-command]')].map(n=>({command:n.dataset.command,disabled:n.disabled,opacity:getComputedStyle(n).opacity})))`);
+    const before=selector==="#canvas"?await appearance():null;
+    if(before)assert.ok(before.length>0,"Check actual toolbar command buttons");
+    for(const [type,x,y,buttons]of [["mousePressed",p.x,p.y,1],...(move?[["mouseMoved",p.x+move[0],p.y+move[1],1]]:[]),["mouseReleased",p.x+(move?.[0]||0),p.y+(move?.[1]||0),0]]){
+      await call("Input.dispatchMouseEvent",{type,x,y,button:"left",buttons,clickCount:1,pointerType,force:buttons ? 0.6 : 0});
+      if(before&&buttons){
+        await settle();
+        assert.deepEqual(await appearance(),before,`${pointerType} ${type}: canvas contact must not dim toolbar icons`);
+      }
+    }
     await settle();
   };
   await invoke("reset_layout");
@@ -104,7 +113,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
     window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value)},async close(){editorFiles.set(options.suggestedName,bytes)},async abort(){}}}});
     window.showOpenFilePicker=async()=>[{name:"roundtrip.capy",async getFile(){return new File([editorFiles.get([...editorFiles.keys()].find(k=>k.endsWith(".capy")))],"roundtrip.capy")}}];`);
   await invoke("fit_canvas");
-  await pointer("#canvas",.50,.50,[65,20]);
+  await pointer("#canvas",.50,.50,[65,20],"pen");
   assert.ok(await evaluate('layerApp.state().document_file.modified'));
   await evaluate('(()=>{const effect=layerApp.state().adjustments.find(a=>a.id.includes("domain_warp"));if(!effect)throw Error("Domain Warp missing");layerApp.dispatch(effect.action);})()');
   await settle();

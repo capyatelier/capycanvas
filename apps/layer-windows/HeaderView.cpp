@@ -349,7 +349,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             AutomationProperties::SetItemStatus(item,flag(state,L"selected")?L"On":L"Off");
             ToolTipService::SetToolTip(item,box_value(str(state,L"tooltip")));
         }
-        hidden=flag(snapshot,L"chrome_hidden");keepZen=flag(snapshot,L"keep_zen_button",true);
+        hidden=flag(snapshot,L"chrome_hidden")&&!flag(snapshot,L"windows_rendering_suspended");keepZen=flag(snapshot,L"keep_zen_button",true);
         applyWorkspaces();reflow();requests();
     }
     std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const {

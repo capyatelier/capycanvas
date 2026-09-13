@@ -49,6 +49,13 @@ handling. Retain full pixel differences and geometry checks within one logical
 pixel, tighter where exact alignment is possible. Permit only narrowly
 documented platform rasterization differences and system-control accommodations.
 
+The user's 2026-09-13 clarification makes perceptual parity the visual acceptance
+criterion: exact pixel identity is unnecessary when differences are imperceptible
+at normal viewing size. Fix visible differences and straightforward mismatches;
+do not add complexity to eliminate insignificant rasterization differences.
+Keep the full comparisons as diagnostic evidence. Simplicity and removal of
+dead, deprecated or unnecessary paths are explicit goals alongside functionality.
+
 For the current validation scope, demonstrate sustained **90 Hz drawing on Mac
 and 120 Hz on iPad**, using representative simple and complex brushes, prediction
 where supported, pen-up and 4K multilayer documents, including ten-minute sessions.
@@ -97,6 +104,87 @@ bars are not acceptable. The 2026-09-13 productivity review supersedes the
 blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
+
+## Workspace recovery and editor workflows — 2026-09-13
+
+Fast native restarts now reclaim abandoned workspace ownership once every prior
+client has exited. A shared OS file lock protects live clients; the first new
+opener clears abandoned claims transactionally without shortening leases or
+adding a platform retry. A real killed-process regression covers saved contents,
+concurrent owners and stale fencing. The lock sidecar is protected from backup
+overwrite. Built-in Layout History now enables restoration while retaining
+name/deletion protections and owner/current/busy checks.
+
+Mac and the connected iPad pass settings/workspace restart, completed artwork
+recovery and independent windows. Mac also passes New/Export cancellation;
+the iPad export check awaits user input at the system Files prompt. Interrupted
+background/expiration and provider-delivery acceptance remain open.
+
+Both hosts pass Navigator/Diagnostics, numeric tool controls, system status,
+Layout History, filters and shortcut editing. Native curve/gradient labels now
+include point/stop counts; ineffective separate value attributes are removed.
+Shortcut search initially lost a character while typing. Settings, shortcut and
+filter search now reuse the existing local-draft text helper; the old
+workspace-only helper is removed. The full shortcut workflow now captures an
+existing accelerator, replaces its binding and executes the new action in the
+editor. Toolbar search, creation, rename, duplication and deletion also pass.
+
+After integrating main through `b56bca3`, both signed builds pass and each host
+passes six focused workflows with no failures or skips: Color, filters,
+shortcuts, toolbar editing, restart and history. The shared regression passes
+476 tests, with one existing hardware-only host check ignored. Six live Color
+captures pass the unchanged oracle, with guide error at most one channel level
+and field error zero. A final pull through `65a9855` retains steady command styling
+while drawing; the 410 Apple/host/UI regressions and both signed builds pass.
+Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers also pass their
+focused native follow-ups. The subsequent integration through `19d6722` also
+passes both signed builds, both native follow-ups, 411 Apple/host/UI checks and
+the focused CPU input-retirement regression. This retains the accepted Color
+appearance; full-editor visual and physical-input/performance acceptance remain open.
+
+Installed-device XCTest now uses the documented destination-artifact setup;
+normal launch/relaunch works and the obsolete Color attach branch is removed.
+The latest review app and runner are installed on the iPad, its saved namespace
+is restored, and artist app data remains intact. Private evidence and earlier
+failures remain under `artifacts/apple-lifecycle-workflows-v1/` and
+`artifacts/apple-feature-workflows-v1/`.
+
+## Compact Color panel — 2026-09-13
+
+Both Apple editors now project the shared compact Color layout: Okhsv circle,
+HSV square, HLS triangle, overlapping paint swatches, transparency, Swap, shape
+icons and curved shape/RGB readouts. Rust owns color conversion, picking,
+geometry and text. Native field/guide caches replace the old HLS-only cache and
+bridge; header and readout font metrics use one shared helper. Native contact
+adapters retain the starting wheel region and cancel on shape/slot changes.
+
+The connected iPad workflow exposed foreground hit testing extending into the
+visible background swatch. Adding the standard circular content shape to each
+styled swatch fixes the original center tap; the same unchanged workflow passes
+on Mac and iPad. Both final signed builds include main's latest shared docking
+changes. Each host passes its full Color workflow with no skips, including all
+shapes, readouts, slots, Swap, empty corners and continuous dragging. All six
+live color oracles pass, with guide error at most one channel level and field
+error zero. The iPad review namespace is restored; artist data remains intact.
+
+The 216-case component matrix on each host passes color checks at the unchanged
+two-level tolerance. Native control frames agree exactly, with Chrome differing
+by at most 0.00521 points. Eighteen Mac hover/press/cancel captures also pass their
+interaction checks. Complete PNG differences remain available. Representative
+normal-size review, including the largest mean-error UIKit case, finds no
+material geometry or color mismatch; residual native rasterization is acceptable
+under the user's perceptual-parity criterion. This does not close whole-editor
+visual, physical Pencil, lifecycle or sustained-performance acceptance.
+
+Fractional native text positioning and standard Mac icon compositing improve
+alignment without an additional renderer. UIKit icon compositing and alternative
+primitive drawing methods were rejected because they did not help. No further
+compositing experiment was adopted. The integrated shared regression passes
+407 tests (42 Apple, 25 host, 340 UI), with one existing hardware-only host check
+ignored. All 22 Metal-analysis tests pass; presentation stalls and the complete
+performance workload matrix remain open. Private captures, deployment metadata
+and failures are retained under `artifacts/apple-color-milestone-v1/` and the
+preceding Color artifact directories.
 
 ## Shared flat editor menus — 2026-09-13
 

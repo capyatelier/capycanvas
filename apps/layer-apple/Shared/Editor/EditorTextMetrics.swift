@@ -6,11 +6,11 @@ import AppKit
 import UIKit
 #endif
 
-/// Keep fractional font advances when packing adjacent header labels. SwiftUI
+/// Keep fractional font advances when packing labels and curved readouts. SwiftUI
 /// rounds each natural Text allocation up to a pixel, accumulating visible drift
 /// across a menu row. The text still uses the ordinary native system font.
-@MainActor enum HeaderTextMetrics {
-    enum Weight { case bold, medium }
+@MainActor enum EditorTextMetrics {
+    enum Weight { case bold, medium, regular }
     private struct Key: Hashable { let text: String; let size: Double; let weight: Weight }
     private struct FontKey: Hashable { let size: Double; let weight: Weight }
     private static var widths: [Key: CGFloat] = [:]
@@ -20,9 +20,9 @@ import UIKit
         let key = FontKey(size: size, weight: weight)
         if let font = fonts[key] { return font }
         #if canImport(AppKit)
-        let base = NSFont.systemFont(ofSize: size, weight: weight == .bold ? .bold : .medium)
+        let base = NSFont.systemFont(ofSize: size, weight: weight == .bold ? .bold : weight == .medium ? .medium : .regular)
         #else
-        let base = UIFont.systemFont(ofSize: size, weight: weight == .bold ? .bold : .medium)
+        let base = UIFont.systemFont(ofSize: size, weight: weight == .bold ? .bold : weight == .medium ? .medium : .regular)
         #endif
         var font: CTFont = base
         // The system's named Medium instance uses weight 510. The shared web
@@ -50,5 +50,22 @@ import UIKit
         if widths.count >= 64 { widths.removeAll(keepingCapacity: true) }
         widths[key] = width
         return width
+    }
+    /// Keep rotated glyphs at their fractional baselines. Default Core Graphics
+    /// glyph quantization shifts the curve relative to the measured advances.
+    static func draw(_ text: String, size: Double, weight: Weight, in graphics: GraphicsContext,
+        baseline: CGPoint, color: Color) {
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
+            .font: nativeFont(size: size, weight: weight),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.resolve(in: graphics.environment).cgColor]))
+        graphics.withCGContext { context in
+            context.setAllowsFontSubpixelPositioning(true)
+            context.setShouldSubpixelPositionFonts(true)
+            context.setAllowsFontSubpixelQuantization(false)
+            context.setShouldSubpixelQuantizeFonts(false)
+            context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+            context.textPosition = baseline
+            CTLineDraw(line, context)
+        }
     }
 }

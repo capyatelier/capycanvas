@@ -117,25 +117,48 @@ pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char 
     .unwrap_or(std::ptr::null_mut())
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn capy_apple_color_hit(x: f32, y: f32, size: f32, space: u32) -> u32 {
-    let space = match space {
-        0 => layer_ui::ColorSpace::Hsv,
-        1 => layer_ui::ColorSpace::Hls,
-        _ => return 0,
+pub extern "C" fn capy_apple_color_hit(x: f32, y: f32, size: f32, shape: u32) -> u32 {
+    let Some(shape) = color_shape(shape) else {
+        return 0;
     };
-    match layer_ui::ColorWheelGeometry::new(size).and_then(|g| g.hit([x, y], space)) {
+    match layer_ui::ColorWheelGeometry::new(size).and_then(|g| g.hit_shape([x, y], shape)) {
         None => 0,
         Some(layer_ui::ColorWheelPart::Hue) => 1,
         Some(layer_ui::ColorWheelPart::Field) => 2,
     }
 }
-/// Stateless display-encoded HLS field. No editor, GPU or file access.
+fn color_shape(shape: u32) -> Option<layer_ui::ColorShape> {
+    match shape {
+        0 => Some(layer_ui::ColorShape::Circle),
+        1 => Some(layer_ui::ColorShape::Square),
+        2 => Some(layer_ui::ColorShape::Triangle),
+        _ => None,
+    }
+}
+/// Static wheel resources, fetched only when shape or allocation changes.
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_apple_color_resources(size: f32, shape: u32) -> *mut c_char {
+    catch_unwind(|| {
+        let shape = color_shape(shape)?;
+        let layout = layer_ui::ColorPanelLayout::new(size)?;
+        let mut state = layer_ui::ColorState::default();
+        state.apply(layer_ui::ColorAction::Shape { shape }).ok()?;
+        let json = serde_json::json!({"layout": layout, "hue_stops": state.wheel_hue_stops()});
+        CString::new(json.to_string()).ok().map(CString::into_raw)
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(std::ptr::null_mut())
+}
+/// Stateless display-encoded wheel field. No editor, GPU or file access.
 /// # Safety
 /// `rgba` must point to `count` writable bytes exclusively borrowed for this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_hls_field(
+pub unsafe extern "C" fn capy_apple_color_field(
     side: u32,
     hue: f32,
+    shape: u32,
+    guide: bool,
     rgba: *mut u8,
     count: usize,
 ) -> i32 {
@@ -150,9 +173,20 @@ pub unsafe extern "C" fn capy_apple_hls_field(
     {
         return 0;
     }
-    i32::from(layer_ui::render_hls_field(side, hue, unsafe {
-        std::slice::from_raw_parts_mut(rgba, count)
-    }))
+    let pixels = unsafe { std::slice::from_raw_parts_mut(rgba, count) };
+    i32::from(match (color_shape(shape), guide) {
+        (Some(shape), true) => layer_ui::render_hue_guide(side, shape, pixels),
+        (Some(layer_ui::ColorShape::Circle), false) => {
+            layer_ui::render_okhsv_disc(side, hue, pixels)
+        }
+        (Some(layer_ui::ColorShape::Square), false) => {
+            layer_ui::render_hsv_field(side, hue, pixels)
+        }
+        (Some(layer_ui::ColorShape::Triangle), false) => {
+            layer_ui::render_hls_field(side, hue, pixels)
+        }
+        _ => false,
+    })
 }
 /// # Safety
 /// Valid handle; json must be a NUL-terminated UTF-8 string except for requests 3, 5 and 7.

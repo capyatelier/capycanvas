@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
@@ -113,7 +114,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             CompositionLocalProvider(LocalWorkspaceZ provides 160) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
                     .chromeRegion(dock).shadow(6.dp, shape).clip(shape).background(LocalPalette.current.panel)
-                    .combinedClickable(onClick = {}, onDoubleClick = {
+                    .combinedClickable(interactionSource = remember { MutableInteractionSource() },
+                        indication = rememberChromeFocusIndication(), onClick = {}, onDoubleClick = {
                         host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
                     })) {
                     Box(Modifier.placed(column.getJSONObject("expand").relativeTo(bounds), dock.density)

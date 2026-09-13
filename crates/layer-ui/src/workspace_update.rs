@@ -75,6 +75,9 @@ pub struct WorkspaceDragPresentation {
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkspaceGroupPosition {
     pub id: u32,
+    /// Absolute displayed bounds, potentially outside the viewport during a
+    /// drag. Hosts clip these without fitting or resizing the retained child.
+    /// The ordinary layout supplies fitted geometry on completion/cancellation.
     pub bounds: Bounds,
 }
 

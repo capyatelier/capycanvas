@@ -461,6 +461,18 @@ impl DocumentService {
         self.import = Some(import);
         Ok(())
     }
+    pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        self.cancel_import(host);
+        if self.export.take().is_some() {
+            let active = self.active.take().ok_or("Missing PNG export request")?;
+            Self::complete(
+                host,
+                active.id,
+                Err("PNG export stopped because painting is unavailable".into()),
+            )?;
+        }
+        Ok(())
+    }
     fn cancel_import(&mut self, host: &mut NativeHost) {
         if let Some(import) = &self.import {
             import.cancelled.store(true, Ordering::Release);
@@ -574,6 +586,7 @@ impl DocumentService {
                     return Err("The file dialog no longer matches this document operation".into());
                 }
                 host.session.require_document_idle()?;
+                if host.session.rendering_suspended() { return Err("PNG export requires an available GPU".into()); }
                 location(path)?;
                 Ok(())
             })();
@@ -771,6 +784,27 @@ impl DocumentService {
                 }
             }
             Ok(Completed::Prepared(candidate)) => {
+                let current_device = host
+                    .session
+                    .engine()
+                    .backend()
+                    .0
+                    .as_ref()
+                    .map(|gpu| gpu.device());
+                let prepared_device = candidate
+                    .engine()
+                    .backend()
+                    .0
+                    .as_ref()
+                    .map(|gpu| gpu.device());
+                if current_device != prepared_device {
+                    self.worker.retire(candidate);
+                    return Self::complete(
+                        host,
+                        active.id,
+                        Err("The GPU changed while opening the document. Try again.".into()),
+                    );
+                }
                 match host.session.adopt_project(
                     candidate,
                     active.epoch,
@@ -867,6 +901,121 @@ mod tests {
             }
             std::fs::remove_dir(&self.directory).unwrap();
         }
+    }
+
+    #[test]
+    fn renderer_failure_cancels_waiting_export_but_preserves_an_accepted_save() {
+        let mut f = Fixture::new();
+        f.invoke(CommandId::AddLayer);
+        let document = f.host.session.engine().document().clone();
+        f.invoke(CommandId::ExportDocument);
+        let export = f.path("Not captured.png");
+        f.act(DocumentAction::Export {
+            id: f.request(),
+            path: export.clone(),
+        });
+        assert!(f.service.export.is_some());
+        f.host.suspend_renderer().unwrap();
+        f.service.renderer_unavailable(&mut f.host).unwrap();
+        assert!(!f.host.session.state().document_file.busy);
+        assert!(f.host.session.state().document_file.modified);
+        assert!(
+            f.host
+                .session
+                .state()
+                .host_error
+                .as_ref()
+                .unwrap()
+                .contains("PNG export stopped")
+        );
+        assert!(!std::path::Path::new(&export).exists());
+        f.invoke(CommandId::SaveDocumentAs);
+        let path = f.path("Accepted save.capy");
+        f.act(DocumentAction::Save {
+            id: f.request(),
+            path: path.clone(),
+        });
+        f.service.renderer_unavailable(&mut f.host).unwrap();
+        assert!(
+            f.service.active.is_some(),
+            "retirement must retain the writing job"
+        );
+        f.finish();
+        let saved = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
+        assert_eq!(saved.document.layers, document.layers);
+        assert!(!f.host.session.state().document_file.modified);
+    }
+
+    #[test]
+    fn suspended_renderer_saves_admitted_ink_and_keeps_close_decisions() {
+        use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+        let mut f = Fixture::new();
+        f.host.resize(512, 512, 1.).unwrap();
+        let view = f.host.session.state().camera.revision;
+        // This host has no GPU at any point; queue pressure must remain CPU-only.
+        for index in 0..8200 {
+            let phase = if index == 0 {
+                PenPhase::Down
+            } else if index == 8197 {
+                PenPhase::Up
+            } else if index == 8198 {
+                PenPhase::Down
+            } else {
+                PenPhase::Move
+            };
+            f.host
+                .retire_pointer_event(
+                    PenEvent {
+                        device_id: 1,
+                        sequence: index + 1,
+                        timestamp_ns: index * 1_000_000,
+                        view_revision: view,
+                        surface_position: layer_core::Point { x: 256., y: 256. },
+                        pressure: 0.5,
+                        tilt_radians: [0.; 2],
+                        twist_radians: 0.,
+                        distance: 0.,
+                        phase,
+                        tool: ToolKind::Pen,
+                        flags: SampleFlags::PRIMARY,
+                    },
+                    layer_ui::PointerButton::Primary,
+                )
+                .unwrap();
+        }
+        f.host.suspend_renderer().unwrap();
+        f.service.renderer_unavailable(&mut f.host).unwrap();
+        assert_eq!(f.host.session.engine().document().strokes().count(), 1);
+        assert!(f.host.session.state().document_file.modified);
+        assert!(f.host.session.command(CommandId::SaveDocumentAs).enabled);
+        assert!(!f.host.session.command(CommandId::ExportDocument).enabled);
+        assert!(!f.host.session.command(CommandId::Undo).enabled);
+        f.act(DocumentAction::Close);
+        let state = f.host.session.state().document_file.clone();
+        f.act(DocumentAction::RespondClose {
+            id: f.request(),
+            epoch: state.epoch,
+            revision: state.revision,
+            decision: CloseDecision::Cancel,
+        });
+        assert!(!f.host.session.state().document_file.close_ready);
+        let source = f.host.session.engine().document().clone();
+        f.invoke(CommandId::SaveDocumentAs);
+        let path = f.path("Recovered drawing.capy");
+        f.act(DocumentAction::Save {
+            id: f.request(),
+            path: path.clone(),
+        });
+        assert!(
+            f.host.session.state().document_file.modified,
+            "only durable completion clears dirty"
+        );
+        f.finish();
+        let project = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
+        assert_eq!(project.document.layers, source.layers);
+        assert!(!f.host.session.state().document_file.modified);
+        f.act(DocumentAction::Close);
+        assert!(f.host.session.state().document_file.close_ready);
     }
 
     fn pending_import(f: &mut Fixture, id: u64, submitted: bool) {

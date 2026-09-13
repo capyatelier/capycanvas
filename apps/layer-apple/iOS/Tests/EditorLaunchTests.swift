@@ -293,7 +293,7 @@ final class EditorLaunchTests: XCTestCase {
         app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
         app.launch()
         checkColorControls(in: app) { mode, wheel, state in
-            attachColorFixture(name: "ipad-color-" + mode, space: mode, state: state,
+            attachColorFixture(name: "ipad-color-" + mode, state: state,
                 screenshot: XCUIScreen.main.screenshot(), viewport: app.frame, wheel: wheel)
         }
     }

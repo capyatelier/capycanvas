@@ -23,6 +23,9 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,6 +34,12 @@ import kotlin.math.sin
 /** Opt-in measurement on the real Android frame clock, without Compose test
  * clock advancement or wait-for-idle between pointer samples. */
 class AndroidWorkspacePerformanceTest {
+    @Before fun isolateWorkspace() {
+        CanvasHost.workspaceDirectoryForTest = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
+            "workspace-performance-tests/${java.util.UUID.randomUUID()}").absolutePath
+    }
+    @After fun releaseWorkspace() { CanvasHost.workspaceDirectoryForTest = null }
+
     @Test fun continuousDragFrameTiming() = frameTiming(false)
 
     @Test fun continuousResizeFrameTiming() = frameTiming(true)
@@ -78,6 +87,7 @@ class AndroidWorkspacePerformanceTest {
                 return result
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
+            waitFor { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
             var saved = JSONObject()
             scenario.onActivity { saved = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString()) }
             val fixture = JSONObject(saved.toString())

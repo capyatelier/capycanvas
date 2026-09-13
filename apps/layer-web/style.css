@@ -102,7 +102,7 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 #document-title, #view-info, #status, input:not([type="range"]):not([type="checkbox"]):not([type="color"]), textarea { user-select: text; -webkit-user-select: text; }
 .brush-preview, svg { -webkit-user-drag: none; pointer-events: none; }
 #canvas:focus { outline: none; }
-#workspace { position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
+#workspace { overflow: clip; position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
 #workspace[data-workspace-cursor], #workspace[data-workspace-cursor] * { cursor: var(--workspace-cursor) !important; }
 #center { position: absolute; inset: 0; }
 body:not([data-gpu="ready"]) #canvas { visibility: hidden; }

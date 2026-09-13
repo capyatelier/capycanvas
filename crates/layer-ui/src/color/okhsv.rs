@@ -407,14 +407,14 @@ mod tests {
         // Evaluated with the author's JavaScript get_ST_mid, Oklab matrix and
         // transfer function, using 0.95 * C/L and normalizing linear RGB.
         for (hue, expected) in [
-            (0., [1., 0.163655202, 0.550018377]),
-            (29.233885, [1., 0.31651658, 0.251919346]),
-            (60., [1., 0.580053495, 0.129344782]),
-            (142.49534, [0.515005847, 1., 0.4830821]),
-            (180., [0.259638019, 1., 0.888443341]),
-            (240., [0.133308935, 0.695515072, 1.]),
-            (264.05203, [0.230930863, 0.455261708, 1.]),
-            (300., [0.605122904, 0.236994203, 1.]),
+            (0., [1., 0.163_655_2, 0.550_018_37]),
+            (29.233885, [1., 0.31651658, 0.251_919_36]),
+            (60., [1., 0.580_053_5, 0.129_344_78]),
+            (142.49534, [0.515_005_8, 1., 0.4830821]),
+            (180., [0.259_638, 1., 0.888_443_35]),
+            (240., [0.133_308_93, 0.695_515_1, 1.]),
+            (264.05203, [0.230_930_86, 0.455_261_7, 1.]),
+            (300., [0.605_122_9, 0.236_994_2, 1.]),
         ] {
             let actual = hue_preview(hue);
             assert!(
@@ -442,12 +442,11 @@ mod tests {
             let (a, b) = (stops[interval], stops[interval + 1]);
             let t = (offset - a.offset) / (b.offset - a.offset);
             let actual = hue_preview(h);
-            for c in 0..3 {
+            for (c, actual) in actual.into_iter().enumerate() {
                 let interpolated = a.color[c] + t * (b.color[c] - a.color[c]);
                 assert!(
-                    (interpolated - actual[c]).abs() < 1. / 255.,
-                    "hue {h}: {interpolated} != {}",
-                    actual[c]
+                    (interpolated - actual).abs() < 1. / 255.,
+                    "hue {h}: {interpolated} != {actual}"
                 );
             }
         }

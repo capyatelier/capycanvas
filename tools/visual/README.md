@@ -259,78 +259,111 @@ Chrome comparison still differs at 303,396 of 5,680,128 pixels (5.341359%).
 
 ## Complete Color panels
 
-The `color-panel` fixture renders the production shared Apple panel in invisible
-AppKit hosts and the production browser panel in Chrome. Rust supplies color
-models, geometry and formatted numeric values. It covers both Apple presets,
-light/dark themes, HSV/HLS, all three selected paint slots and 160/226-point
-widths: 48 complete panels. The native fixture requires a built Mac asset bundle.
+The `color-panel` fixture renders the production shared Apple panel and the
+production browser controls. Rust supplies the model, layout, guide stops,
+field pixels and formatted readout. It covers both Apple presets, light/dark,
+Okhsv circle / HSV square / HLS triangle, shape/RGB readouts, three selected
+paint slots and 128/160/226-point widths: 216 complete panels per host.
+The AppKit entry point needs a built Mac asset bundle and uses temporary native
+windows. The same source also has a UIKit application entry point for an
+independently signed, isolated component-capture app. Neither entry point reads
+artist storage. Captures wait for stable pixels and require all measured bounds.
 
 ```sh
-CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/Release/CapyCanvas-Mac.app" \
-CAPY_COLOR_CAPTURES="$PWD/artifacts/apple-color-panel/final" \
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/CompactColorMac/Build/Products/Debug/CapyCanvas-Mac.app" \
+CAPY_COLOR_CAPTURES="$PWD/artifacts/apple-color-panel" \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-panel-capture.swift
-node tools/visual/chrome-capture.mjs 226 600 2 artifacts/apple-color-panel/final light color-panel \
-  artifacts/apple-color-panel/final/fixtures.json
+node tools/visual/chrome-capture.mjs 226 226 2 artifacts/apple-color-panel light color-panel \
+  artifacts/apple-color-panel/fixtures.json
 artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
-  artifacts/apple-color-panel/final/web-0-light-hsv-foreground-226.png \
-  artifacts/apple-color-panel/final/native-0-light-hsv-foreground-226.png \
-  --output artifacts/apple-color-panel/final/diff-0-light-hsv-foreground-226
+  artifacts/apple-color-panel/web-0-light-circle-shape-foreground-226.png \
+  artifacts/apple-color-panel/native-0-light-circle-shape-foreground-226.png \
+  --output artifacts/apple-color-panel/diff-0-light-circle-shape-foreground-226
 ```
 
-The manifest controls each browser viewport, scale and theme. Repeat the pixel
-comparison for every manifest name. Each geometry report retains 31 rectangles,
-including the paint interiors and all three numeric controls. All 1,488 measured
-rectangles are within one logical point. Measurement readers are disabled in
-ordinary editors; the fixture creates no visible native windows or drawing data.
+Schema 2 controls every browser viewport, scale, theme and state. The browser
+fixture uses the real compact controls; it has no substitute numeric widgets.
+Each case measures 12 rectangles, including all paint interiors and shape buttons.
+Native measurements are disabled in ordinary editors. Repeat the full-image
+comparison for every manifest name and retain differences without masks.
 
-Each native case also writes `oracle-NAME.json`, containing the actual Rust
-paint color, remembered hue and wheel bounds. Sample either host against the
-same independent picker oracle; this checks interior color correctness separately
-from the complete pixel comparison:
+The same browser renderer accepts Windows' schema-2 grid of six `items`, generated
+by `cargo run -p layer-ui --example compact_color_fixture -- OUTPUT SCALE` and
+measured by its native Color fixture. Grid frame names use `ITEM/color-CONTROL`;
+the native manifest supplies `frames`, the catalog and optional hover/focus state.
+Field files resolve beside the input manifest, independently of the screenshot
+output directory. The Apple adapter retains its required 216/18-case matrices.
+
+Each case also writes `oracle-NAME.json` with the accepted Rust paint, remembered
+hue, shape, wheel bounds and marker radius. Check both native and browser images
+against the same independent picking oracle:
 
 ```sh
 cargo build -p layer-ui --example color_wheel_reference
 artifacts/ui/parity/python-env/bin/python tools/visual/check_color_wheel.py \
-  artifacts/apple-color-panel/final/native-0-light-hls-foreground-160.png \
-  artifacts/apple-color-panel/final/oracle-0-light-hls-foreground-160.json \
-  --output artifacts/apple-color-panel/final/native-oracle-0-light-hls-foreground-160.json
+  artifacts/apple-color-panel/native-0-light-circle-shape-foreground-160.png \
+  artifacts/apple-color-panel/oracle-0-light-circle-shape-foreground-160.json \
+  --output artifacts/apple-color-panel/native-oracle-0-light-circle-shape-foreground-160.json
 ```
 
-Run this for all manifest names and the corresponding `web-NAME.png` images.
-Keep failures from both capture paths; a bitmap result alone cannot validate the
-live UIKit/AppKit renderer.
+Geometry and interior color checks do not establish exact PNG identity. The
+full-image reports retain native text, antialiasing and compositing differences.
+Apple visual acceptance uses perceptual parity at normal viewing size: exact
+identity is unnecessary for imperceptible differences. Fix visible mismatches
+and simple refinements without adding complexity solely to reduce pixel error.
+Component captures also do not exercise native touch/Pencil delivery, a full
+editor or sustained drawing performance.
 
-Full exact pixel comparison still fails, with 9.777–20.803% differing pixels
-across these AppKit pairs and mean channel error 1.617740 over all 22,233,600 pixels.
-Text, edge and remaining color differences remain unmasked. This establishes component
-geometry, not physical UIKit/Mac rendering or full-editor acceptance.
+The Mac `tests/color-panel-interactions.swift` fixture uses the same asset and
+output environment variables. It captures 18 resting, hover and held-press states
+across both themes, and verifies that dragging a pressed button outside before
+release leaves paint unchanged. Its pointer movement stays inside its owned
+window's content; clicks are posted only to that window. Pass its manifest to the
+same browser command above to compare the actual Web hover/active states.
+`interaction_states: true` requires exactly 18 cases; the resting matrix still
+requires 216. This fixture does not establish keyboard focus or iPad input.
 
-The separate `testColorControls` workflow uses the real workspace library and
-scrolls inside the panel to reach the full numeric controls. Opt-in debug-only
-`CAPY_COLOR_PROBE` metadata records accepted Rust hue/RGBA for the existing
-wheel-color oracle; hard-coded colors after a rounded touch are not an accurate
-reference. Release builds ignore that variable. Native input, sampled color
-correctness and complete pixel parity remain distinct checks.
+The separate `testColorControls` workflow exercises native contacts and button
+actions. Debug-only `CAPY_COLOR_PROBE` exposes the accepted Rust state on the
+native wheel's accessibility value. Release builds keep the human color
+readout. The workflow launches its own fresh namespace and initial actions.
+Use the [installed-device test configuration](../../apps/layer-apple/README.md#validation)
+for physical iPad runs; no separate prelaunch or attach mode is needed.
 
-The current simulator HSV capture passes 853 samples at the existing two-level
-channel tolerance. HLS passes 680 samples with hue-ring error at most two and
-exact agreement for all 310 field samples. Both sets of 48 bitmap captures pass
-27,160 samples per host. Complete image differences above remain separate.
+Apple fields use physical-pixel RGBA8 samples from shared Rust. A field image
+changes only with hue, shape or size; the separate guide cache changes only
+with shape or size. The guide interpolates the same adaptive sRGB stops as Web,
+avoiding a full perceptual conversion per pixel during resizing. Fractional
+native font advances and unquantized CoreText glyph positions keep the curved
+readout's digit cells aligned. Ordinary native font smoothing stays enabled;
+disabling it regresses some readouts despite correct advances.
 
-The Apple renderer uses Canvas gradients for HSV/the ring and a shared Rust
-RGBA8 field for HLS. One cached image is regenerated only on hue or physical-size
-changes. Check the raster against the picker, validate the C boundary/cache
-lifetime, and measure generation cost without GUI automation:
+The two rotated shape icons use `drawingGroup()` on macOS, improving all 216
+complete-panel comparisons and the 18 interaction captures. The same modifier
+slightly regresses UIKit, so its drawing path is retained. Repeated physical
+UIKit captures verify the restored frames and pixels. Keep these host-specific
+results separate from the unchanged interior-color tolerance and the remaining
+full-image text, edge and compositing differences.
+Wheel painting uses panel coordinates: a fractional child Canvas allocation can
+round before drawing, even when the input view's measured bounds are correct.
+The painted destination follows Web Canvas's rounded logical edges, and native
+field/guide rasters use that destination's physical pixel size. Keep both the
+full-image comparison and picking oracle; control-frame checks alone cannot
+detect this rendering drift. Swatch paint is above its inset selection border.
 
 ```sh
-cargo test -p layer-ui hls_raster
+cargo test -p layer-ui color::
+cargo test -p layer-apple compact_color
 cargo test -p layer-apple hls_raster
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-field-cache.swift
-cargo run --release -p layer-ui --example color_field_benchmark
+cargo build --release -p layer-ui --example color_field_benchmark
+# Run after compilers, UI automation and GPU profilers have finished.
+target/release/examples/color_field_benchmark
 ```
 
-The benchmark excludes host allocation, upload and presentation. It measures
-CPU field generation, not sustained editor performance or input latency.
+The benchmark covers all three fields and their guides at the matrix's physical
+sizes. It excludes host allocation, upload and presentation, and measures CPU
+cost rather than editor frame rate or input latency.
 
 ## Complete header components
 

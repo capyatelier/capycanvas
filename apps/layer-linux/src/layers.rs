@@ -801,7 +801,7 @@ impl LayerPanel {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
-            .min_content_height(72)
+            .min_content_height(0)
             .child(&view)
             .build();
         root.append(&list);
@@ -835,6 +835,32 @@ impl LayerPanel {
             updating: Cell::new(false),
         }
     }
+    /// The virtual ListView's request describes its viewport, not all rows.
+    /// Layer rows have a uniform height; sample realized rows and multiply by
+    /// the visible model count, without instantiating a large document's rows.
+    pub fn content_measurement(&self, width: i32) -> (f32, layer_ui::PanelScrollMeasurement) {
+        let fixed_height = (self.root.measure(gtk::Orientation::Vertical, width).1
+            - self.list.measure(gtk::Orientation::Vertical, width).1)
+            .max(0) as f32;
+        let unit_height = self
+            .rows
+            .borrow()
+            .values()
+            .filter(|row| row.id.get() != 0)
+            .map(|row| row.root.measure(gtk::Orientation::Vertical, width).1)
+            .max()
+            .unwrap_or(layer_ui::TILE_SIZE as i32) as f32;
+        let content_height =
+            (fixed_height + unit_height * self.model.n_items() as f32).min(999_999.0);
+        (
+            content_height,
+            layer_ui::PanelScrollMeasurement {
+                fixed_height,
+                unit_height,
+            },
+        )
+    }
+
     pub fn bind(&self, w: &Rc<Workspace>) {
         *self.owner.borrow_mut() = Rc::downgrade(w);
         w.watch_popover(self.context.upcast_ref());

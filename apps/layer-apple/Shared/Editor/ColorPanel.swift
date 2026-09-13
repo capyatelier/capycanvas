@@ -2,126 +2,240 @@ import SwiftUI
 
 struct ColorPanel: View {
     @ObservedObject var store: EditorStore
+    @StateObject private var resources = ColorWheelResources()
+    @FocusState private var readoutFocused: Bool
     private var model: JSON { store.snapshot["color_panel"] }
-    private var context: String { model["space"].string + store.state["colors"]["paint_slot"].string }
-    private var textSize: CGFloat { max(1, store.catalog["text_size_pt"].number * 4 / 3) }
-    private var buttonHeight: CGFloat { textSize * 1.66 + 8 }
+    private var context: String { model["shape"].string + store.state["colors"]["paint_slot"].string }
     private var captureState: String? {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["CAPY_COLOR_PROBE"] == "1" else { return nil }
-        return try? JSON(["space": model["space"].raw, "hue": model["components"][0]["value"].raw,
+        return try? JSON(["space": model["space"].raw, "shape": model["shape"].raw,
+            "hue": model["wheel_components"][0].raw, "components": model["components"].array.map { $0["value"].raw },
             "rgba": store.state["brush"]["color"].raw]).encoded()
         #else
         return nil
         #endif
     }
     var body: some View {
-        VStack(spacing: 0) {
-            GeometryReader { allocation in
-                let size = min(allocation.size.width, allocation.size.height)
-                ZStack {
-                    ColorWheelDrawing(model: model).allowsHitTesting(false)
-                    ColorWheelInput(space: model["space"].string == "hls" ? 1 : 0, context: context) { part, point, size in
-                        color(["op": "pick", "part": part == 1 ? "hue" : "field",
-                            "point": [point.x, point.y], "size": size])
-                    }
-                }.frame(width: size, height: size)
-            }.aspectRatio(1, contentMode: .fit).modifier(ColorPanelMeasurement(id: "wheel"))
-            ColorSwatchesLayout(height: buttonHeight, swapWidth: HeaderTextMetrics.width("Swap", size: textSize, weight: .bold) + 24) {
-                ForEach(model["swatches"].array.indices, id: \.self) { index in
-                    let swatch = model["swatches"][index]
-                    Button { color(["op": "select", "slot": swatch["slot"].raw]) } label: {
-                        swatch["rgba"].paintColor.frame(height: 22).clipShape(RoundedRectangle(cornerRadius: 3))
-                            .modifier(ColorPanelMeasurement(id: "paint-" + swatch["slot"].string))
-                            .padding(.horizontal, 12).padding(.vertical, 4)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: buttonHeight)
-                            .contentShape(Rectangle())
-                    }.buttonStyle(PaintSlotButtonStyle(selected: swatch["selected"].bool))
+        GeometryReader { allocation in
+            let side = max(128, min(allocation.size.width, allocation.size.height))
+            let layout = resources.layout(side: side, shape: ColorWheelShape(model["shape"].string))
+            let palette = EditorPalette(source: store.state["palette"])
+            ZStack(alignment: .topLeading) {
+                ColorWheelDrawing(model: model, bounds: layout["wheel"])
+                    .frame(width: side, height: side).allowsHitTesting(false)
+                ColorWheelInput(shape: ColorWheelShape(model["shape"].string).rawValue, context: context,
+                    value: captureState ?? model["readout_description"].string) { part, point, size in
+                    color(["op": "pick_wheel", "part": part == 1 ? "hue" : "field",
+                        "point": [point.x, point.y], "size": size])
+                }.colorPlaced(layout["wheel"], id: "wheel")
+                // Foreground is above background for both painting and hit testing.
+                ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
+                    let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
+                    Button { color(["op": "select", "slot": slot]) } label: {
+                        ColorPaintPreview(rgba: swatch["rgba"])
+                            .modifier(ColorPanelMeasurement(id: "paint-" + slot))
+                            .padding(slot == "foreground" ? 3 : 1)
+                            .contentShape(Circle())
+                    }.buttonStyle(ColorPanelButtonStyle(kind: .paint(swatch["selected"].bool), palette: palette))
+                        .clipShape(Circle()).contentShape(Circle())
                         .accessibilityLabel(swatch["label"].string)
                         .accessibilityAddTraits(swatch["selected"].bool ? .isSelected : [])
-                        .accessibilityIdentifier("color-" + swatch["slot"].string)
-                        .modifier(ColorPanelMeasurement(id: swatch["slot"].string))
+                        .accessibilityIdentifier("color-" + slot)
+                        .colorPlaced(layout[slot], id: slot)
+                }
+                ForEach(0..<2, id: \.self) { index in
+                    let shape = model["other_shapes"][index].string
+                    Button { color(["op": "shape", "shape": shape]) } label: {
+                        SharedIcon(name: "color-" + shape)
+                            #if os(macOS)
+                            // Keep the Mac asset outline smooth during rotation.
+                            .drawingGroup()
+                            #endif
+                            .rotationEffect(.degrees(layout["shape_rotations"][index].number))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Circle())
+                    }.buttonStyle(ColorPanelButtonStyle(kind: .shape, palette: palette))
+                        .accessibilityLabel("Use \(shape == "circle" ? "Okhsv" : shape == "triangle" ? "HLS" : "HSV") \(shape)")
+                        .accessibilityIdentifier("color-shape-" + shape)
+                        .colorPlaced(layout["shapes"][index], id: "shape-\(index)")
                 }
                 Button { color(["op": "swap"]) } label: {
-                    Text("Swap").fontWeight(.bold)
-                        .frame(width: HeaderTextMetrics.width("Swap", size: textSize, weight: .bold) + 24, height: buttonHeight)
-                        .contentShape(Rectangle())
-                }.buttonStyle(EditorControlButtonStyle()).fixedSize(horizontal: true, vertical: false)
+                    SharedIcon(name: "color-swap")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Circle())
+                }.buttonStyle(ColorPanelButtonStyle(kind: .swap, palette: palette))
                     .accessibilityLabel("Swap foreground and background").accessibilityIdentifier("color-swap")
-                    .modifier(ColorPanelMeasurement(id: "swap"))
-            }.padding(.vertical, 6)
-            Button { color(["op": "toggle_space"]) } label: {
-                Text(model["space"].string == "hsv" ? "HSV square" : "HLS triangle").fontWeight(.bold)
-                    .frame(maxWidth: .infinity).frame(height: buttonHeight).contentShape(Rectangle())
-            }.buttonStyle(EditorControlButtonStyle()).modifier(ColorPanelMeasurement(id: "space"))
-                .padding(.bottom, 8)
-                .accessibilityLabel("Switch HSV square / HLS triangle")
-                .accessibilityValue(model["space"].string.uppercased()).accessibilityIdentifier("color-space")
-            VStack(spacing: 6) {
-                ForEach(model["components"].array.indices, id: \.self) { index in
-                    let item = model["components"][index]
-                    let editingContext = context
-                    NumberControl(store: store, label: item["name"].string, value: item["value"].number,
-                            control: item["numeric"], identifier: "color-\(index)") { value, completion in
-                            guard editingContext == context else { completion(nil); return }
-                            store.edit(["type": "color", "action": ["op": "component", "index": index, "value": value]], completion: completion)
-                        }.id(context + "-\(index)")
-                }
-            }
-        }.frame(maxWidth: .infinity)
+                    .colorPlaced(layout["swap"], id: "swap")
+                let readoutHit = ColorReadoutHit(radius: layout["wheel"][2].number * model["geometry"]["outer"].number + 2)
+                Button { color(["op": "toggle_readout"]) } label: {
+                    ColorReadoutDrawing(model: model, half: layout["readout"][2].number,
+                        radius: layout["readout_radius"].number,
+                        ink: readoutFocused ? palette.accent : palette["text"], focused: readoutFocused)
+                        .contentShape(readoutHit)
+                }.buttonStyle(.plain).clipShape(readoutHit).contentShape(readoutHit)
+                    .focused($readoutFocused).focusEffectDisabled()
+                    .accessibilityLabel(model["readout_description"].string)
+                    .accessibilityValue(model["readout_label"].string).accessibilityIdentifier("color-readout")
+                    .colorPlaced(layout["readout"], id: "readout")
+            }.frame(width: side, height: side, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.aspectRatio(1, contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
-            .modifier(ColorPanelCaptureState(value: captureState))
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }
 }
 
-/// The pixel oracle needs the accepted color, rather than an idealized pointer
-/// coordinate. Opt-in debug accessibility metadata adds no visible capture UI.
-private struct ColorPanelCaptureState: ViewModifier {
-    let value: String?
-    func body(content: Content) -> some View {
-        if let value { content.accessibilityValue(value) } else { content }
+/// Native buttons retain press/cancel and keyboard behavior. Only the shared
+/// paint, shape and Swap feedback differs between their visual roles.
+private struct ColorPanelButtonStyle: ButtonStyle {
+    enum Kind: Equatable { case paint(Bool), shape, swap }
+    let kind: Kind
+    let palette: EditorPalette
+    func makeBody(configuration: Configuration) -> some View {
+        Content(configuration: configuration, kind: kind, palette: palette)
     }
-}
-
-private struct ColorSwatchesLayout: Layout {
-    let height: CGFloat
-    let swapWidth: CGFloat
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        CGSize(width: proposal.width ?? 226, height: height)
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let slotWidth = max(30, (bounds.width - swapWidth - 18) / 3)
-        for (index, view) in subviews.enumerated() {
-            view.place(at: CGPoint(x: bounds.minX + CGFloat(index) * (slotWidth + 6), y: bounds.minY), anchor: .topLeading,
-                proposal: ProposedViewSize(width: index == 3 ? swapWidth : slotWidth, height: height))
+    private struct Content: View {
+        let configuration: Configuration
+        let kind: Kind
+        let palette: EditorPalette
+        @State private var hovered = false
+        var body: some View {
+            configuration.label
+                .foregroundStyle(kind == .shape && hovered ? palette.accent : palette["text"])
+                .background {
+                    if case .paint(let selected) = kind {
+                        Circle().strokeBorder(palette["text"].opacity(selected || hovered ? 1 : 0.25),
+                            lineWidth: selected || hovered ? 2 : 1)
+                    }
+                }
+                .background {
+                    switch kind {
+                    case .paint:
+                        Circle().fill(configuration.isPressed ? palette["text"].opacity(0.16)
+                            : hovered ? palette["text"].opacity(0.08) : palette["panel"])
+                    case .swap:
+                        Circle().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : hovered ? 0.12 : 0))
+                    case .shape: EmptyView()
+                    }
+                }
+                .onHover { hovered = $0 }
         }
     }
 }
 
-/// The shared paint slots show their alpha over a five-point checkerboard.
-/// Selected/pressed buttons replace that background, including transparent paint.
-private struct PaintSlotButtonStyle: ButtonStyle {
-    let selected: Bool
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.background {
-            if configuration.isPressed { Rectangle().fill(.foreground).opacity(0.16) }
-            else if selected { EditorPalette.sharedAccent.opacity(0.22) }
-            else {
-                Canvas { graphics, size in
-                    for row in 0..<Int(ceil(size.height / 5)) {
-                        for column in 0..<Int(ceil(size.width / 5)) {
-                            let level = Double((row + column) % 2 == 0 ? 187 : 136) / 255
-                            graphics.fill(Path(CGRect(x: column * 5, y: row * 5, width: 5, height: 5)),
-                                with: .color(Color(.sRGB, white: level, opacity: 1)))
-                        }
-                    }
+private struct ColorPaintPreview: View {
+    let rgba: JSON
+    var body: some View {
+        Canvas { graphics, size in
+            for row in 0..<Int(ceil(size.height / 5)) {
+                for column in 0..<Int(ceil(size.width / 5)) {
+                    let level = Double((row + column) % 2 == 0 ? 140 : 204) / 255
+                    graphics.fill(Path(CGRect(x: column * 5, y: row * 5, width: 5, height: 5)),
+                        with: .color(Color(.sRGB, white: level, opacity: 1)))
+                }
+            }
+            graphics.fill(Path(CGRect(origin: .zero, size: size)), with: .color(rgba.paintColor))
+        }.clipShape(Circle())
+    }
+}
+
+/// The readout occupies the corner outside the hue ring. Its clipped native
+/// button leaves the entire visible ring available to the wheel recognizer.
+struct ColorReadoutHit: Shape {
+    let radius: CGFloat
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: rect.origin)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+        path.addArc(center: CGPoint(x: rect.maxX, y: rect.maxY), radius: radius,
+            startAngle: .degrees(-90), endAngle: .degrees(-180), clockwise: true)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct ColorReadoutDrawing: View {
+    let model: JSON
+    let half: CGFloat
+    let radius: CGFloat
+    let ink: Color
+    let focused: Bool
+    private var texts: [String] { model["readout_layout_text"].array.map(\.string) }
+    private var rgb: Bool { model["readout"].string == "rgb" }
+    private var labelSize: CGFloat { min(12, max(9, half * 2 * 0.044)) }
+    private var metrics: (font: CGFloat, glyphs: [Character: CGFloat], digit: CGFloat, widths: [CGFloat]) {
+        var font = labelSize
+        let glyphs = Set(texts.joined() + "0123456789")
+        while true {
+            let widths = Dictionary(uniqueKeysWithValues: glyphs.map {
+                ($0, EditorTextMetrics.width(String($0), size: font, weight: .regular))
+            })
+            let digit = "0123456789".compactMap { widths[$0] }.max() ?? 0
+            let spans = texts.map { text in
+                text.reduce(CGFloat(0)) { $0 + ($1.isNumber || $1 == " " ? digit : widths[$1, default: 0]) }
+                    + (rgb ? font * 0.8 + 2 : 0)
+            }
+            if spans.reduce(0, +) + 6 <= radius * .pi / 2 - 4 || font <= 8 {
+                return (font, widths, digit, spans)
+            }
+            font -= 0.25
+        }
+    }
+    var body: some View {
+        let metrics = metrics
+        Canvas { graphics, _ in
+            let font = metrics.font, widths = metrics.widths
+            EditorTextMetrics.draw(model["readout_label"].string, size: labelSize, weight: .bold,
+                in: graphics, baseline: CGPoint(x: 2, y: labelSize + 1), color: ink.opacity(0.9))
+            if focused {
+                let width = EditorTextMetrics.width(model["readout_label"].string, size: labelSize, weight: .bold) + 5
+                graphics.stroke(Path(roundedRect: CGRect(x: 1, y: 1, width: width, height: labelSize + 4),
+                    cornerRadius: 5), with: .color(ink.opacity(0.9)), lineWidth: 1.5)
+            }
+            let available = radius * .pi / 2 - 4
+            func width(_ glyph: Character) -> CGFloat { metrics.glyphs[glyph, default: 0] }
+            func advance(_ glyph: Character) -> CGFloat { glyph.isNumber || glyph == " " ? metrics.digit : width(glyph) }
+            let total = widths.reduce(0, +), chip = font * 0.8
+            let gap = min(radius * 0.24, max(3, (available - total) * 0.5))
+            var cursor = -(total + gap * 2) * 0.5
+            func transformed(_ angle: CGFloat) -> GraphicsContext {
+                var local = graphics
+                local.translateBy(x: half + radius * cos(angle), y: half + radius * sin(angle))
+                local.rotate(by: .radians(angle + .pi / 2))
+                return local
+            }
+            for (index, text) in texts.enumerated() {
+                let span = widths[index], mid = -3 * CGFloat.pi / 4 + (cursor + span * 0.5) / radius
+                cursor += span + gap
+                var along = -span * 0.5
+                if rgb {
+                    let local = transformed(mid + (along + chip * 0.5) / radius)
+                    let colors = [Color(.sRGB, red: 0.93, green: 0.31, blue: 0.36),
+                                  Color(.sRGB, red: 0.25, green: 0.73, blue: 0.43),
+                                  Color(.sRGB, red: 0.29, green: 0.56, blue: 0.98)]
+                    local.fill(Path(roundedRect: CGRect(x: -chip * 0.5, y: -font * 0.76, width: chip, height: chip),
+                        cornerRadius: 2), with: .color(colors[index]))
+                    along += chip + 2
+                }
+                for glyph in text {
+                    let cell = advance(glyph)
+                    let local = transformed(mid + (along + cell * 0.5) / radius)
+                    EditorTextMetrics.draw(String(glyph), size: font, weight: .regular,
+                        in: local, baseline: CGPoint(x: -width(glyph) * 0.5, y: 0), color: ink.opacity(0.8))
+                    along += cell
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+private extension View {
+    func colorPlaced(_ bounds: JSON, id: String) -> some View {
+        frame(width: bounds[2].number, height: bounds[3].number)
+            .modifier(ColorPanelMeasurement(id: id))
+            .offset(x: bounds[0].number, y: bounds[1].number)
     }
 }
 
@@ -135,7 +249,7 @@ extension EnvironmentValues {
 struct ColorPanelFrames: PreferenceKey {
     static let defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, next in next }
+        value.merge(nextValue()) { _, new in new }
     }
 }
 private struct ColorPanelMeasurement: ViewModifier {

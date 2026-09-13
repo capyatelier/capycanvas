@@ -2146,3 +2146,251 @@ resize, workspace restore, theme changes and zero exit. Rust is unchanged
 from the preceding 523-test and strict-Clippy checkpoint. Custom ClearType tuning,
 other physical display scales, physical digitizer behavior and 120 Hz painting
 remain separate acceptance gates.
+
+### Compact picker label spacing and hue stroke
+
+The native labels now retain the font's pair kerning and quarter-pixel glyph
+origins. Font metrics use Chromium's hundredth-pixel effective font size while
+layout keeps the original logical size. Independent browser probes reproduce
+all four complete labels from individually positioned glyphs at three sizes;
+native DirectWrite metrics confirm the LC and RG pair adjustments.
+
+The transparency checker now samples the shared repeating conic gradient's
+quadrant boundaries, including the tile center. This removes the reversed gray
+cells at the actual 1.5 display scale. The hue mesh is retained in an image brush
+and strokes a single ellipse, matching the reference drawing operation and
+reducing the previous annulus clip's rim differences. The wheel uses its whole
+allocated bitmap extent for the normalized drawing transform. No new runtime
+dependency or per-drag cache allocation was introduced.
+
+The complete default surfaces at scale 1.5 now compare as follows:
+
+| Theme / size | Exact differing pixels | Mean absolute RGB error (0–255) | Maximum |
+| --- | ---: | ---: | ---: |
+| dark 128 | 21.461% | 0.8252 | 64 |
+| dark 160 | 25.064% | 0.6483 | 63 |
+| dark 226 | 25.285% | 0.4927 | 68 |
+| dark 360 | 25.911% | 0.3386 | 68 |
+| light 128 | 21.715% | 0.7839 | 71 |
+| light 160 | 25.266% | 0.6383 | 58 |
+| light 226 | 25.338% | 0.4835 | 68 |
+| light 360 | 25.976% | 0.3460 | 82 |
+
+Average error improves at every default size and theme. The fourteen keyboard
+focus and hover surfaces at size 160 have mean error 0.6340–0.6574 and maximum
+error 58–78. **All twenty-two complete-image comparisons still fail exact pixel
+equality.** The eight production browser references were recaptured and remain
+byte-identical. Reported bounds retain the preceding size-160 wheel discrepancy.
+No reference styles, comparator tolerances or capture boundaries were changed.
+
+Normal Debug and Release builds, the production Color fixture, the full Release
+picker input exercise and the full Release editor exercise pass. Picker checks
+cover all shapes with synthetic mouse/pen/touch in the field and ring,
+cancellation, keyboard activation, paint slots and swap, native menus, the
+mouse-hold negative case, retained drawer input and an unchanged document.
+Editor checks cover titlebar hits, tools, Zen modes, retained resize, workspace
+restoration, themes and zero exit. Rust is unchanged from the 523-test and
+strict-Clippy checkpoint. Physical pen, other display scales and 120 Hz painting
+remain open acceptance work.
+
+### Compact picker retained circle field
+
+The circular color field now fills a native ellipse using a retained bitmap
+brush. The brush follows the field cache's hue, size, shape and device lifetime.
+This removes the temporary ellipse clipping layer from each redraw and improves
+field-edge coverage. The shared field pixels and input geometry are unchanged.
+
+At actual display scale 1.5, all default surfaces improve in average error:
+
+| Theme / size | Exact differing pixels | Mean absolute RGB error (0–255) | Maximum |
+| --- | ---: | ---: | ---: |
+| dark 128 | 21.470% | 0.8240 | 64 |
+| dark 160 | 25.020% | 0.6433 | 63 |
+| dark 226 | 25.273% | 0.4873 | 68 |
+| dark 360 | 25.900% | 0.3369 | 68 |
+| light 128 | 21.715% | 0.7818 | 71 |
+| light 160 | 25.238% | 0.6269 | 58 |
+| light 226 | 25.321% | 0.4748 | 68 |
+| light 360 | 25.965% | 0.3412 | 78 |
+
+Four focus and three hover states in both themes have mean error 0.6226–0.6525
+and maximum error 58–78. **All twenty-two complete-image comparisons still fail
+exact equality.** References remain byte-identical to the preceding recapture;
+capture boundaries and comparator tolerances are unchanged.
+
+Independent plain white circle probes also reproduce the browser edge error,
+isolating it from color conversion. The installed browser's
+[pinned Skia revision](https://github.com/google/skia/tree/4f574af2444846ceca4d277a8095c5d4229d175f)
+uses curve subdivision and scan-position rounding. Contour reconstruction remains
+diagnostic research; no additional rasterizer or dependency was introduced.
+
+Normal Debug/Release and Color fixture builds pass. Full Release picker checks
+pass all three shapes with synthetic mouse/pen/touch, cancellation, keyboard,
+slots/swap, native menus, retained drawer input and unchanged document. Full
+Release editor checks also pass, including titlebar hits, tools, Zen, resize,
+workspace restoration, themes and zero exit. Rust remains unchanged from the
+523-test and strict-Clippy checkpoint. Physical input, other physical scales,
+strict visual parity and 120 Hz painting remain open.
+
+### Reproducible MSIX archive assembly
+
+The MSIX packager consumes a verified portable payload, preserves app-local
+runtimes and license notices, and derives its package logos from the shared
+symbolic mark using the existing GTK icon proportions and colors. App source
+and packaging source are recorded separately, with script and asset hashes.
+Dirty inputs produce an explicit development artifact.
+
+Both the normal unsigned package and the separate Windows 11 unsigned test
+identity pass MakeAppx semantic validation and repeated assembly with identical
+SHA-256 hashes. The normalizer handles the SDK's ZIP64 headers, changing only
+timestamps before signing. It preserves compressed blocks and block maps and
+refuses signed packages before mutation.
+
+The 1,085-entry archives pass inventory hashing, MakeAppx extraction, activation
+metadata and repeat-logo checks. ZIP32 fixtures verify payload preservation,
+normalization idempotence and signed-archive refusal without mutation. Negative
+inputs cover altered hashes, duplicate/traversal paths, undeclared files and
+invalid versions/identity lengths. The archive suite passes under both Windows
+PowerShell 5.1 and PowerShell 7.
+
+An ordinary-user installation attempt failed with Windows error 0x80073D2B:
+unsigned executable activations require administrator installation. No test
+package remained registered. Installed identity, launch, update, uninstall,
+clean-machine behavior and publisher signing remain unverified. The existing
+portable ZIP and its runtime acceptance are unchanged. Strict picker pixels,
+physical pen, GPU recovery and 120 Hz painting also remain open.
+
+### Color-wheel visual acceptance
+
+The wheel acceptance requirement now permits imperceptible differences and
+prioritizes implementation simplicity. Normal-size review of the existing native
+and production-browser captures at 128, 160, 226 and 360 logical pixels, in both
+themes at display scale 1.5, finds no material difference in the three wheel
+projections, hue guides or marker positions. The current Direct2D wheel is
+accepted for those conditions. The exact-difference measurements above remain
+valid diagnostics; exact pixel equality is no longer required for the wheel.
+
+The app retains its existing native renderer and dependency set. Experimental
+Skia rendering and canvas-export probes remain local research and are not part
+of the app. This review changes no production code, capture bounds, reference
+styles or comparator tolerances. The preceding interaction and build validation
+still applies to the unchanged implementation. Text/edge antialiasing differences
+remain visible under close comparison; additional physical display scales,
+digitizer behavior, device recovery and 120 Hz painting still need acceptance.
+
+### Windows GPU reconstruction and failed-resource cleanup
+
+The Windows host detects both D3D12 removal and the deferred wgpu device-loss
+callback. It parks the render owner, detaches the old swap chain on the XAML
+thread, retires the renderer, and prepares a replacement with bounded retries.
+The existing session retains document history, queued input, active strokes,
+source image assets, camera, brush settings and workspace. GPU-only readbacks
+are canceled, pending filter validation restarts from owned source bytes, and
+native preview caches reset when the renderer generation changes. Document
+candidates prepared against the old device cannot replace the live document.
+
+The uncaptured-error callback records the first error and returns normally.
+With the pinned wgpu version, a panic during failed pipeline creation can leave
+its resource handle allocated, retaining the removed D3D12 device and preventing
+a second reconstruction. Recording the error lets the returned handle drop;
+normal host boundaries still report validation errors. Callback state never
+owns the GPU. Arbitrary ABI panics continue to poison the host.
+
+Validation at this checkpoint:
+
+- 569 ordinary Rust tests pass across engine, host, UI, Windows and workspace;
+  five hardware tests are explicitly excluded from that ordinary run.
+- The new opt-in D3D12 regression passes: a deliberately invalid pipeline reports
+  its error without a panic, releases its registry handle, and permits a new
+  hardware device after actual removal even while callback state is retained.
+- Strict all-target Clippy for engine, UI and Windows passes. Three existing
+  test-style findings were corrected without changing expected float bits.
+- Normal Debug and Release builds pass. Both native document fixtures pass two
+  actual device removals, byte-identical PNG exports, preserved document and
+  workspace state, Undo/Redo, subsequent Save/Save As and clean shutdown. Release
+  also verifies imported-layer thumbnails become ready after each replacement.
+- Debug lifecycle checks pass removal overlapping startup/brush preparation,
+  close, minimize, Cancel and Discard. The strict C++ work-buffer suite passes.
+
+The removal hook is available only in an isolated smoke-test host and removes
+this process's D3D12 device; it does not reset the physical display adapter.
+This milestone does not cover permanent recovery failure: exhausted retries
+still end render services, so retaining Save/Save As and the dirty-close decision
+in that state remains required work. Pending export/open/import overlaps,
+multiple-window removal, physical driver reset, sleep/resume, digitizer behavior
+and 120 Hz painting remain separate acceptance gates. No package or presentation
+benchmark was regenerated for this checkpoint.
+
+### Integrated GPU recovery and two native windows
+
+The reconstruction milestone is integrated with upstream main through ce41feb,
+including Apple compact color controls and the shared GTK/Web/Android floating
+preview and content-size work. The merged engine/host/UI/Windows/workspace suite
+passes 574 ordinary tests. Strict all-target Clippy passes after a small iterator
+cleanup in the incoming hue-guide and HSV raster loops; their calculations and
+accepted output are unchanged. The full 343-test UI suite passes after cleanup.
+Normal merged Debug and Release builds pass.
+
+The merged Release document fixture passes repeated real removal, unchanged PNG
+exports, thumbnail readiness, state/history preservation and subsequent saving.
+The multiwindow fixture also passes removal initiated once from each of two open
+windows. Both the initiating window and idle sibling reconstruct, retain their
+separate document/camera/brush/workspace state, and support Undo/Redo. Subsequent
+independent closes and creating another native window pass with zero process
+exit and no stderr output.
+
+The complete merged Release editor and compact-color interaction fixtures pass,
+including titlebar hits, retained resize, themes, Zen modes, all three picker
+shapes, synthetic mouse/pen/touch, cancellation, keyboard, menus and drawer input.
+These checks preserve the accepted native wheel implementation. Permanent GPU
+failure and CPU saving, concurrent document-operation recovery, physical input,
+suspend/driver-reset behavior, installed distribution and 120 Hz acceptance
+remain open. Local profiles, screenshots and binaries are excluded from commits.
+
+### Saving after GPU reconstruction cannot finish
+
+Exhausted reconstruction now preserves the native document and settings services
+until the user saves or approves closing. The render owner stops input admission,
+retires already admitted samples without GPU submission, keeps completed stroke
+history and cancels an unfinished stroke. It then releases rendering resources,
+cancels pending GPU readbacks and filter candidates, and continues CPU document
+operations. An accepted save keeps its worker; an uncaptured PNG export is
+canceled. Source assets and in-memory document history remain owned by the session.
+
+The unavailable-painting screen uses the current theme and exposes File, Save,
+Save As and Preferences. It restores the header even when failure occurs in Zen
+mode, without rewriting the saved Zen preference. Shared command/action policy
+rejects operations that need rendering. The ordinary and retirement input paths
+reuse the same native contact, dialog and chrome arbitration.
+
+Validation:
+
+- 578 ordinary Rust tests pass across engine, host, UI, Windows and workspace;
+  five opt-in hardware tests are excluded from that suite. New CPU-only tests
+  exercise more than one engine batch and an overflowing native input queue,
+  completed versus unfinished strokes, durable archive contents, an accepted
+  save, a waiting PNG export, and transform/filter-candidate cancellation.
+- Strict all-target engine/host/UI/Windows Clippy and C++ input tests pass.
+  Debug and Release builds pass.
+- Debug and Release native document fixtures pass exhausted recovery, Save and
+  Save As, canceled pickers, dirty-close Cancel/Discard, preferences, and clean
+  shutdown. Release also covers failure in Zen. Saved projects reopen and export
+  PNG bytes identical to the pre-failure drawing. The failure screen was inspected.
+- Ordinary repeated-removal and two-window recovery fixtures still pass in
+  Release. The complete Release editor regression passes after the final header
+  and failure-screen changes.
+
+This fixture removes the process-owned D3D12 device and prevents reconstruction
+only in an isolated test host. Arbitrary ABI panics keep their existing fatal
+handling. Concurrent document-operation recovery, physical input, mixed DPI,
+suspend/driver-reset behavior, installed MSIX/clean-machine delivery and 120 Hz
+painting/input latency remain open. No package or performance measurement was
+regenerated for this milestone.
+
+The milestone is integrated with upstream main through 65a9855, including steady
+command-icon presentation during canvas strokes. The merged 578-test suite,
+strict all-target Clippy and Release build pass. The merged native exhausted-
+recovery fixture passes Save/Save As, Zen, Cancel/Discard, durable reopen and
+identical PNG output. The compact picker regression also passes all three shapes,
+synthetic mouse/pen/touch, cancellation, keyboard, menus, slots/swap and retained
+drawer input. This integration preserves the accepted native wheel renderer.

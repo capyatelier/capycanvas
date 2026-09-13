@@ -167,6 +167,7 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
         "WORKSPACES.SQLITE3",
         "WORKSPACES.SQLITE3-WAL",
         "WORKSPACES.SQLITE3-SHM",
+        "WORKSPACES.SQLITE3-LOCK",
     ] {
         assert!(
             worker
@@ -196,12 +197,14 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
             .unwrap(),
         opaque
     );
-    assert!(
-        worker
-            .backup_database(&f.directory.join("workspaces.sqlite3"))
-            .wait()
-            .is_err()
-    );
+    for suffix in ["", "-wal", "-shm", "-lock"] {
+        assert!(
+            worker
+                .backup_database(&f.directory.join(format!("workspaces.sqlite3{suffix}")))
+                .wait()
+                .is_err()
+        );
+    }
     assert_eq!(
         f.store
             .connection
@@ -1026,6 +1029,111 @@ fn concurrent_claims_have_exactly_one_editable_owner() {
             ..
         })
     )));
+}
+
+#[test]
+fn killed_native_process_restores_without_waiting_for_its_lease() {
+    const CHILD_DIRECTORY: &str = "CAPY_WORKSPACE_RESTART_TEST_DIRECTORY";
+    let clock = || Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+    if let Some(directory) = std::env::var_os(CHILD_DIRECTORY) {
+        let directory = std::path::PathBuf::from(directory);
+        let mut store =
+            SqliteStore::with_clock(&directory.join("workspaces.sqlite3"), clock()).unwrap();
+        let entity = workspace("Saved before crash");
+        let id = entity.id.clone();
+        store
+            .commit(
+                CommitBatch::prepare(
+                    Owner::fresh(),
+                    vec![Mutation::Create {
+                        entity,
+                        claim: true,
+                        name_policy: NamePolicy::Exact,
+                    }],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        std::fs::write(
+            directory.join("ready.json"),
+            serde_json::to_vec(&store.load(&id).unwrap()).unwrap(),
+        )
+        .unwrap();
+        // Keep the real process and its storage handle alive until the parent
+        // kills it. Killing must bypass Rust teardown and lease release.
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).unwrap();
+        panic!("The parent must kill the child, not close its input");
+    }
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let directory = std::env::temp_dir().join(format!("capy-workspace-killed-{}", new_id()));
+    let mut child = Child(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sqlite::tests::killed_native_process_restores_without_waiting_for_its_lease",
+                "--nocapture",
+            ])
+            .env(CHILD_DIRECTORY, &directory)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let started = std::time::Instant::now();
+    let saved: StoredEntity = loop {
+        if let Ok(bytes) = std::fs::read(directory.join("ready.json"))
+            && let Ok(saved) = serde_json::from_slice(&bytes)
+        {
+            break saved;
+        }
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "Child exited before saving"
+        );
+        assert!(
+            started.elapsed().as_secs() < 15,
+            "Child did not finish saving"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let path = directory.join("workspaces.sqlite3");
+    let mut concurrent = SqliteStore::with_clock(&path, clock()).unwrap();
+    assert_eq!(concurrent.load(&saved.entity.id).unwrap(), saved);
+    assert_eq!(
+        concurrent
+            .claim(&saved.entity.id, Owner::fresh())
+            .unwrap_err()
+            .kind,
+        ErrorKind::OwnedElsewhere
+    );
+    drop(concurrent);
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    let mut restarted = SqliteStore::with_clock(&path, clock()).unwrap();
+    assert_eq!(
+        restarted.load(&saved.entity.id).unwrap().entity,
+        saved.entity
+    );
+    let successor = restarted.claim(&saved.entity.id, Owner::fresh()).unwrap();
+    let old_claim = saved.claim.unwrap();
+    assert!(successor.claim.as_ref().unwrap().fence > old_claim.fence);
+    assert!(
+        restarted
+            .renew(&saved.entity.id, &old_claim.owner, old_claim.fence)
+            .is_err()
+    );
+    restarted
+        .release(&saved.entity.id, &old_claim.owner, old_claim.fence)
+        .unwrap();
+    assert_eq!(restarted.load(&saved.entity.id).unwrap(), successor);
+    drop(restarted);
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

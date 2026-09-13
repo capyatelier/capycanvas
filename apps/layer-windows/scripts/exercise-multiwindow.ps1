@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -172,6 +172,42 @@ try {
     Use-Window $first
     Invoke 'Cancel' -Name -Within (Control 'document-dialog')
     Wait-Until {$null -eq (Find 'document-dialog') -and @((Model).state.requests|Where-Object {$_.kind.type -eq 'document'}).Count -eq 0} 'Cancel did not keep the first window open'
+    if($RecoverGpu){
+        function Recovery-Signature($Window){
+            $state=(Model $Window).state
+            $state.document_file.PSObject.Properties.Remove('revision')
+            @($state.document_file,$state.camera,$state.workspace,$state.brush)|ConvertTo-Json -Depth 80 -Compress
+        }
+        $before=@{}
+        foreach($window in @($first,$second)){
+            Wait-Until {(Model $window).windows_filter_load.phase -eq 'ready'} 'Filters must settle before multiwindow removal' 60
+            $before[$window.id]=Recovery-Signature $window
+        }
+        # One removal affects the process/adapter, including its idle sibling.
+        foreach($source in @($first,$second)){
+            $generations=@{};$revisions=@{}
+            foreach($window in @($first,$second)){
+                $state=Model $window
+                $generations[$window.id]=$state.windows_gpu_generation
+                $revisions[$window.id]=$state.state.document_file.revision
+            }
+            Use-Window $source
+            Invoke 'Test GPU loss' -Name
+            foreach($window in @($first,$second)){
+                Wait-Until {$state=Model $window;$state.windows_gpu_generation -eq $generations[$window.id]+1 -and $state.brush_ready} "Window $($window.id) did not reconstruct its GPU" 60
+                if((Model $window).state.document_file.revision -ne $revisions[$window.id]){throw 'Multiwindow recovery changed a document revision'}
+                Wait-Until {(Recovery-Signature $window) -eq $before[$window.id]} 'Multiwindow recovery changed document, history, camera, workspace or brush'
+            }
+        }
+        foreach($window in @($first,$second)){
+            Use-Window $window
+            Invoke 'Undo' -Name
+            Wait-Until {!(Model).state.document_file.modified} 'Undo after multiwindow recovery did not restore the clean document'
+            Invoke 'Redo' -Name
+            Wait-Until {(Recovery-Signature $window) -eq $before[$window.id]} 'Redo after multiwindow recovery did not restore its document'
+        }
+        Use-Window $first
+    }
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$first.hwnd)
     Invoke 'Discard Changes' -Name -Within (Control 'document-dialog')
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$first.hwnd) -and @(Windows).Count -eq 1} 'Initial window did not close independently'
@@ -191,7 +227,7 @@ try {
     if(!$review.WaitForExit(5000)){throw 'Final window process exit exceeded five seconds'}
     if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

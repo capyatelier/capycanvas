@@ -1121,6 +1121,7 @@ mod tests {
             panel: Panel::Brushes,
             tab_width: 600.,
             content_height: 0.,
+            scroll: None,
         });
         layout.reset_column_width(40, VIEW).unwrap();
         assert_eq!(
@@ -1234,6 +1235,7 @@ mod tests {
             panel: Panel::Brushes,
             tab_width: 300.,
             content_height: 0.,
+            scroll: None,
         });
         assert_collapse_threshold(&layout, 3, 4, false, 320. - TILE_SIZE, true);
         assert_eq!(layout.collapse_at_divider(4, [0., 0.], VIEW), None);

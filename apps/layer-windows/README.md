@@ -26,7 +26,9 @@ commits.
 
 See the [Windows development guide](../../docs/development/windows.md) for prerequisites,
 NuGet setup, build commands and output locations. The guide also documents the
-unsigned portable ZIP packager and extracted-package validation.
+unsigned portable ZIP packager, extracted-package validation, and reproducible
+MSIX assembly with a separate local test identity. MSIX installation and
+publisher signing remain acceptance gates.
 
 ## Diagnostics and privacy
 
@@ -227,6 +229,13 @@ to keep formatting updates distinct from edits before close.
 
 ## Color panel checks
 
+Color-wheel acceptance is visual equivalence at normal viewing size, with
+imperceptible raster differences allowed. Keep the native implementation simple;
+do not add a rendering dependency or browser-specific pixel corrections solely
+to obtain exact equality. Preserve the shared colors, geometry and interactions.
+Review paired captures in both themes at the tested display scale; the strict
+pixel comparator remains a diagnostic, not a wheel release gate.
+
 The native Color panel and Brush color drawer use the shared compact picker:
 Okhsv circle, HSV square, HLS triangle, overlapping paint swatches, shape
 buttons, swap, and curved shape/RGB readouts. Rust owns layout, projection,
@@ -235,12 +244,18 @@ and mouse/pen/touch capture. A solo docked Color panel fits the available
 height. Rotated shape icons retain shared SVG geometry as native vectors; the
 swap button uses the native SVG loader. DirectWrite rasterizes readout glyphs
 at their final transform, using the shared canvas's integral backing size.
+Labels preserve pair kerning and quarter-pixel glyph positions; font metrics
+use the reference's hundredth-pixel font size. The hue brush strokes a single
+ellipse, and the transparency checker preserves conic-gradient boundaries.
+The circular field retains a bitmap brush and fills its ellipse directly;
+field changes invalidate the brush together with the shared pixel cache.
 Glyph images and text correction tables are retained across updates; size,
 scale, text and ink changes invalidate the corresponding images. The native
 readout button retains the complete accessible color description.
 
 The text rasterizer follows the reference's default Windows canvas rendering:
 [Skia's DirectWrite modes and font hinting](https://github.com/google/skia/blob/main/src/ports/SkScalerContext_win_dw.cpp),
+[font-size precision](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/fonts/font_description.cc),
 [font-cache transform precision](https://github.com/google/skia/blob/main/src/core/SkScalerContext.cpp),
 [glyph position rounding](https://github.com/google/skia/blob/main/src/core/SkGlyph.h),
 and [sRGB coverage correction](https://github.com/google/skia/blob/main/src/core/SkMaskGamma.cpp).

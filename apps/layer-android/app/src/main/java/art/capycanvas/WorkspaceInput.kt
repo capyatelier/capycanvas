@@ -49,6 +49,14 @@ internal fun resizePointerIcon(edge: String) = when (edge) {
     else -> AndroidPointerIcon.TYPE_ARROW
 }
 
+/** Native content facts in logical pixels; Rust chooses the dropped height. */
+internal data class PanelContentSize(val height: Float, val fixedHeight: Float? = null, val unitHeight: Float = 0f)
+private data class PanelMeasurement(val tabWidth: Float = 0f, val content: PanelContentSize = PanelContentSize(0f)) {
+    fun json(panel: String) = obj("panel" to panel, "tab_width" to tabWidth, "content_height" to content.height.coerceAtMost(999_999f)).apply {
+        content.fixedHeight?.let { put("scroll", obj("fixed_height" to it, "unit_height" to content.unitHeight)) }
+    }
+}
+
 /** Native hit geometry and gesture capture only. Rust owns movement, tear-off,
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
@@ -97,7 +105,7 @@ internal class DockInteraction(val host: CanvasHost) {
     private var position = Offset.Zero
     private var generation = 0
     private var contextTarget: String? = null
-    private val measurements = mutableMapOf<String, Pair<Float, Float>>()
+    private val measurements = mutableMapOf<String, PanelMeasurement>()
 
     fun measureColumnDrawer(column: Int, group: Int?, bounds: Rect?) {
         val next = bounds?.takeIf { group != null && it.width > 0f && it.height > 0f }?.let {
@@ -129,15 +137,18 @@ internal class DockInteraction(val host: CanvasHost) {
         host.dispatch(obj("type" to "measure_drawer_tiles", "measurements" to JSONArray(drawerTiles.values.toList())))
         drawerTileRevision++
     }
-    fun measure(panel: String, tabWidth: Float? = null, contentHeight: Float? = null) {
-        val old = measurements[panel] ?: (0f to 0f)
-        val next = (tabWidth ?: old.first) to (contentHeight ?: old.second)
+    fun measure(panel: String, tabWidth: Float? = null, content: PanelContentSize? = null) {
+        val old = measurements[panel] ?: PanelMeasurement()
+        val next = PanelMeasurement(tabWidth ?: old.tabWidth, content ?: old.content)
         val accepted = host.snapshot?.array("panel_measurements")?.objects()?.find { it.getString("panel") == panel }
-        if (next == old && accepted?.number("tab_width") == next.first && accepted.number("content_height") == next.second) return
+        if (next == old && accepted?.number("tab_width") == next.tabWidth && accepted.number("content_height") == next.content.height.coerceAtMost(999_999f) &&
+            accepted.objectOrNull("scroll")?.number("fixed_height") == next.content.fixedHeight &&
+            (next.content.fixedHeight == null || accepted.objectOrNull("scroll")?.number("unit_height") == next.content.unitHeight)) return
         measurements[panel] = next
-        host.dispatch(obj("type" to "measure_panels", "measurements" to JSONArray(measurements.map { (id, size) ->
-            obj("panel" to id, "tab_width" to size.first, "content_height" to size.second)
-        })))
+        publishMeasurements()
+    }
+    private fun publishMeasurements() {
+        host.dispatch(obj("type" to "measure_panels", "measurements" to JSONArray(measurements.map { (id, size) -> size.json(id) })))
     }
 
     // Shared workspace gestures have their own Zen state in Rust. Only tile
@@ -176,6 +187,7 @@ internal class DockInteraction(val host: CanvasHost) {
         // Opening another tab can invalidate Rust's transient measurement even
         // when the displayed rectangle is unchanged.
         val actions = mutableListOf<JSONObject>()
+        if (phase == "up") actions.add(obj("type" to "measure_panels", "measurements" to JSONArray(measurements.map { (id, size) -> size.json(id) })))
         if (action.getString("type") == "drag_workspace") actions.add(obj("type" to "measure_column_drawers",
             "measurements" to JSONArray(columnDrawers.values.toList())))
         actions.add(JSONObject(action.toString()).put("phase", phase).put("viewport", viewport)
