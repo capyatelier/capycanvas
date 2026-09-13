@@ -121,6 +121,38 @@ impl NativeWorkspaces {
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        // Pausing input through GTK sensitivity restyles every descendant and
+        // clears native focus/gesture state. Intercept new input instead, while
+        // still letting releases and cancellation finish existing sequences.
+        let gate = gtk::EventControllerLegacy::new();
+        gate.set_name(Some("workspace-input-pause"));
+        gate.set_propagation_phase(gtk::PropagationPhase::Capture);
+        gate.connect_event(glib::clone!(
+            #[weak]
+            w,
+            #[upgrade_or]
+            glib::Propagation::Stop,
+            move |_, event| {
+                if matches!(
+                    event.event_type(),
+                    gdk::EventType::ButtonPress
+                        | gdk::EventType::KeyPress
+                        | gdk::EventType::MotionNotify
+                        | gdk::EventType::Scroll
+                        | gdk::EventType::TouchBegin
+                        | gdk::EventType::TouchUpdate
+                        | gdk::EventType::TouchpadSwipe
+                        | gdk::EventType::TouchpadPinch
+                        | gdk::EventType::TouchpadHold
+                ) && !w.workspaces.accepts_input(&w)
+                {
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
+        ));
+        w.surface.add_controller(gate);
         if let Some(manager) = &self.manager {
             WINDOWS.with(|windows| {
                 windows
@@ -218,7 +250,7 @@ impl NativeWorkspaces {
                     .as_ref()
                     .is_some_and(|old| old != capture)
             });
-        w.surface.set_sensitive(false);
+        self.update_input_state(w);
         self.label.set_text("Opening workspace…");
         glib::spawn_future_local(glib::clone!(
             #[weak]
@@ -226,7 +258,7 @@ impl NativeWorkspaces {
             async move {
                 // Startup can still be compiling installed filter resources.
                 // Let rendering finish that preparation before the idle-only
-                // workspace adoption, while the editor remains insensitive.
+                // workspace adoption, while editor input remains paused.
                 let deadline = Instant::now() + Duration::from_secs(30);
                 loop {
                     let result = w
@@ -333,7 +365,7 @@ impl NativeWorkspaces {
         }
         manager.finish_transition();
         self.busy.set(false);
-        w.surface.set_sensitive(!self.validating_owner.get());
+        self.update_input_state(w);
         self.update_status();
         if self.close_requested.get() {
             w.window.close();
@@ -475,13 +507,18 @@ impl NativeWorkspaces {
         self.revalidate(w);
         false
     }
+    fn update_input_state(&self, w: &Workspace) {
+        w.surface.update_state(&[gtk::accessible::State::Busy(
+            self.busy.get() || self.validating_owner.get(),
+        )]);
+    }
     pub fn revalidate(&self, w: &Rc<Workspace>) {
         if !self.ready.get() || self.busy.get() || self.validating_owner.replace(true) {
             return;
         }
         let manager = self.manager.as_ref().unwrap().clone();
         let id = manager.active_id();
-        w.surface.set_sensitive(false);
+        self.update_input_state(w);
         glib::spawn_future_local(glib::clone!(
             #[weak]
             w,
@@ -501,7 +538,7 @@ impl NativeWorkspaces {
                     }
                 }
                 w.workspaces.validating_owner.set(false);
-                w.surface.set_sensitive(!w.workspaces.busy.get());
+                w.workspaces.update_input_state(&w);
                 w.workspaces.update_status();
             }
         ));
@@ -570,7 +607,9 @@ impl NativeWorkspaces {
                 }),
             );
         } else {
-            self.root.set_visible(self.busy.get() || !self.ready.get());
+            // Routine switches and autosaves need no flashing status message.
+            // Keep startup and actionable recovery visible.
+            self.root.set_visible(!self.ready.get());
             self.label.remove_css_class("error");
             self.retry.set_visible(false);
             self.recovery.set_visible(false);
@@ -663,7 +702,7 @@ impl NativeWorkspaces {
         self.busy.set(true);
         self.operation_generation
             .set(self.operation_generation.get().wrapping_add(1));
-        w.surface.set_sensitive(false);
+        self.update_input_state(w);
         glib::spawn_future_local(glib::clone!(
             #[weak]
             w,
@@ -682,11 +721,11 @@ impl NativeWorkspaces {
                             gpu.session.end_workspace_transition();
                         }
                         w.workspaces.show_error(error);
-                        w.surface.set_sensitive(true);
                         w.workspaces.recover_close(&w);
                     }
                 }
                 w.workspaces.busy.set(false);
+                w.workspaces.update_input_state(&w);
             }
         ));
         true

@@ -939,12 +939,19 @@ impl Workspace {
         let status = gtk::Label::new(None);
         status.set_visible(false);
         status.add_css_class("error");
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        status.add_css_class("workspace-notice");
+        let content = gtk::Overlay::new();
         let workspaces = manager::NativeWorkspaces::new();
+        workspaces.root.add_css_class("workspace-notice");
         header_status.prepend(&workspaces.switcher);
-        content.append(&surface);
-        content.append(&status);
-        content.append(&workspaces.root);
+        content.set_child(Some(&surface));
+        // Notices must not resize the full-window canvas, change its viewport,
+        // or recreate the GPU swapchain while opening/saving a workspace.
+        let notices = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        notices.set_valign(gtk::Align::End);
+        notices.append(&status);
+        notices.append(&workspaces.root);
+        content.add_overlay(&notices);
         window.set_content(Some(&content));
         let this = Rc::new(Self {
             window,

@@ -39,6 +39,7 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .workspace-drop-before { box-shadow: inset 0 2px var(--accent-bg-color); }
 .workspace-drop-after { box-shadow: inset 0 -2px var(--accent-bg-color); }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
+.workspace-notice { background: var(--window-bg-color); padding: 6px 12px; border-radius: 6px; }
 .workspace-save-status { background: var(--window-bg-color); padding: 6px 0; color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }

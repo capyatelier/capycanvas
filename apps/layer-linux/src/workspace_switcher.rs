@@ -82,13 +82,8 @@ impl NativeWorkspaces {
             button.set_active(active.as_ref() == Some(id));
         }
         self.switcher.set_visible(!ids.is_empty());
-        self.switcher.set_sensitive(
-            self.manager.is_some()
-                && self.ready.get()
-                && !self.busy.get()
-                && !self.switch_pending.get()
-                && !self.validating_owner.get(),
-        );
+        self.switcher
+            .set_sensitive(self.manager.is_some() && self.ready.get());
     }
 }
 
@@ -103,6 +98,7 @@ fn bind_button(w: &Rc<Workspace>, button: &gtk::ToggleButton, id: String) {
             // the requested switch fails or focuses a different window.
             native.update_switcher();
             if !native.ready.get()
+                || !native.accepts_input(&w)
                 || native.busy.get()
                 || native.switch_pending.get()
                 || native

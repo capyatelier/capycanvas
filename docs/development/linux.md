@@ -112,3 +112,12 @@ above. Its compositor setup can also wrap a focused Cargo test like the one abov
 Headless Mutter still needs a working Vulkan GPU. Keep native input injection on
 that private display; the [input driver](../../apps/layer-linux/bench/native-input.js)
 must not control an ordinary desktop session.
+
+For workspace-switching flashes or jumps, run
+`bash tools/performance/workspace-motion.sh gtk --workspace-transitions`.
+The run directory's `input/transitions.json` records canvas bounds after each GTK
+frame, editor sensitivity changes, and transient notices; `steady.png` and
+`notice.png` compare the canvas with a recovery notice. The test also checks real
+mouse, touch, and keyboard input during a pause. Routine workspace operations
+pause input without disabling/restyling the editor. Notices overlay the canvas
+so they cannot resize its viewport or GPU surface.

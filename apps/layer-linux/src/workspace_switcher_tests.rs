@@ -1,4 +1,189 @@
 use super::*;
+
+#[test]
+#[ignore = "isolated Mutter input and SQLite; workspace-motion.sh gtk --workspace-transitions"]
+fn native_workspace_transition_stability() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.WorkspaceTransitions");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(true);
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    pump(300);
+    let geometry = |w: &Workspace| {
+        let b = w.area.compute_bounds(&w.window).unwrap();
+        [b.x(), b.y(), b.width(), b.height()]
+    };
+    let original = geometry(&w);
+    let frames = Rc::new(RefCell::new(Vec::new()));
+    let clock = w.window.frame_clock().unwrap();
+    let sampling = clock.connect_after_paint(glib::clone!(
+        #[weak]
+        w,
+        #[strong]
+        frames,
+        move |_| frames.borrow_mut().push(geometry(&w))
+    ));
+    let disabled = Rc::new(Cell::new(0));
+    w.surface.connect_sensitive_notify(glib::clone!(
+        #[strong]
+        disabled,
+        move |surface| {
+            if !surface.is_sensitive() {
+                disabled.set(disabled.get() + 1);
+            }
+        }
+    ));
+    let notices = Rc::new(Cell::new(0));
+    w.workspaces.root.connect_visible_notify(glib::clone!(
+        #[strong]
+        notices,
+        move |root| {
+            if root.is_visible() {
+                notices.set(notices.get() + 1);
+            }
+        }
+    ));
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    for _ in 0..2 {
+        for (id, name) in DEFAULT_WORKSPACES.map(|(id, preset)| (id, preset.name().to_lowercase()))
+        {
+            let button =
+                find_named(w.header.upcast_ref(), &format!("workspace-switch-{name}")).unwrap();
+            click(&w, &dir, &mut step, &button);
+            while w.workspaces.busy.get()
+                || w.workspaces
+                    .manager
+                    .as_ref()
+                    .unwrap()
+                    .active_id()
+                    .as_deref()
+                    != Some(id)
+            {
+                pump(5);
+                assert!(Instant::now() < deadline);
+            }
+            pump(200);
+        }
+    }
+    // The same owner validation runs after a lease has expired or ownership
+    // was lost while this window was inactive.
+    w.workspaces.revalidate(&w);
+    pump(300);
+    // Hold the host's pause long enough to deliver real input. Checking the
+    // button signal catches native activation even if the model rejects it.
+    let painter = find_named(w.header.upcast_ref(), "workspace-switch-painter")
+        .unwrap()
+        .downcast::<gtk::ToggleButton>()
+        .unwrap();
+    let activations = Rc::new(Cell::new(0));
+    painter.connect_clicked(glib::clone!(
+        #[strong]
+        activations,
+        move |_| activations.set(activations.get() + 1)
+    ));
+    assert!(painter.grab_focus());
+    let active = w.workspaces.manager.as_ref().unwrap().active_id();
+    w.workspaces.busy.set(true);
+    w.workspaces.update_status();
+    click(&w, &dir, &mut step, painter.upcast_ref());
+    let point = at(&w, painter.upcast_ref(), 0.5, 0.5);
+    send(
+        &dir,
+        &mut step,
+        serde_json::json!([
+            {"touch":"down", "point":point}, {"touch":"up"},
+            {"key":0xff0d, "down":true}, {"key":0xff0d, "down":false},
+            {"key":0x20, "down":true}, {"key":0x20, "down":false},
+        ]),
+    );
+    assert_eq!(
+        activations.get(),
+        0,
+        "Paused editor must block mouse, touch and keyboard activation"
+    );
+    assert_eq!(w.workspaces.manager.as_ref().unwrap().active_id(), active);
+    w.workspaces.busy.set(false);
+    w.workspaces.update_status();
+    click(&w, &dir, &mut step, painter.upcast_ref());
+    assert_eq!(
+        activations.get(),
+        1,
+        "Input resumes without replacing widgets or losing their signals"
+    );
+    assert_eq!(
+        w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_id()
+            .as_deref(),
+        Some(DEFAULT_WORKSPACES[0].0)
+    );
+    pump(250);
+    let busy_notices = notices.get();
+    let switching_frames = frames.borrow().clone();
+    capture_reference(&w, &dir.join("steady.png").to_string_lossy(), 1.0);
+    // A real failure still needs visible recovery actions, without moving the
+    // canvas or changing its viewport and GPU swapchain size.
+    w.workspaces.show_error(layer_workspace::StoreError::new(
+        layer_workspace::ErrorKind::FailedWrite,
+        "Test storage failure",
+    ));
+    w.workspaces.update_status();
+    pump(200);
+    assert!(w.workspaces.root.is_visible());
+    capture_reference(&w, &dir.join("notice.png").to_string_lossy(), 1.0);
+    let error_geometry = geometry(&w);
+    clock.disconnect(sampling);
+    let moved = switching_frames
+        .iter()
+        .filter(|frame| **frame != original)
+        .count();
+    let report = serde_json::json!({
+        "baseline":original, "frames":switching_frames, "resized_frames":moved,
+        "disabled_editor_transitions":disabled.get(), "busy_notices":busy_notices,
+        "notice_geometry":error_geometry,
+    });
+    std::fs::write(
+        dir.join("transitions.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "Workspace transitions: {} frames, {moved} resized frames, {} editor disables, {busy_notices} busy notices; notice bounds {error_geometry:?}",
+        switching_frames.len(),
+        disabled.get()
+    );
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    assert_eq!(
+        disabled.get(),
+        0,
+        "Temporary input pauses must not restyle the entire editor"
+    );
+    assert_eq!(
+        busy_notices, 0,
+        "Ordinary switches must not flash a status row"
+    );
+    assert_eq!(
+        moved, 0,
+        "Workspace switches must keep the canvas geometry fixed"
+    );
+    assert_eq!(
+        error_geometry, original,
+        "Recovery notices must not resize the canvas"
+    );
+    w.window.close();
+    pump(300);
+}
 use crate::workspace::manager::now_ms;
 use layer_workspace::{DEFAULT_WORKSPACES, ManagerPage};
 

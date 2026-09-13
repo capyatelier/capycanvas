@@ -91,7 +91,7 @@ impl NativeWorkspaces {
         self.update_status();
         self.operation_generation
             .set(self.operation_generation.get().wrapping_add(1));
-        w.surface.set_sensitive(false);
+        self.update_input_state(w);
         while manager.saving() || self.validating_owner.get() {
             glib::timeout_future(Duration::from_millis(10)).await;
         }
@@ -110,7 +110,7 @@ impl NativeWorkspaces {
             manager.finish_transition();
         }
         self.busy.set(false);
-        w.surface.set_sensitive(!self.validating_owner.get());
+        self.update_input_state(w);
         self.update_status();
         if self.close_requested.get() {
             glib::idle_add_local_once(glib::clone!(
