@@ -952,7 +952,7 @@ class AndroidInteractionTest {
                 customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
                 assertEquals("First tile retains standard top padding", 6 * density,
                     bounds("column-icon-brushes").top - bounds("collapsed-column-46").top, 1f)
-                compose.onNodeWithTag("column-divider-46-0").assertDoesNotExist()
+                instrumentation.runOnMainSync { assertFalse(exists("column-divider-46-0")) }
                 assertEquals("Collapsed group spacing matches toolbar divider and gaps", 12 * density,
                     bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)
                 fun line(tag: String, horizontal: Boolean, name: String, slotDp: Float = 8f) {

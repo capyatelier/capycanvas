@@ -444,6 +444,91 @@ pub struct HeaderGeometry {
     pub overflow: [Option<Bounds>; 3],
     pub hidden: [Vec<u32>; 3],
 }
+
+/// Toolkit-independent title-bar content. Hosts supply text measurements and
+/// device status; component availability and tool semantics stay in the session.
+#[derive(Serialize)]
+pub struct HeaderView {
+    pub model: HeaderLayout,
+    pub editing: bool,
+    pub items: Vec<HeaderItemView>,
+    pub sizes: Vec<HeaderSizeView>,
+    pub components: Vec<HeaderComponentView>,
+    pub primary_menu: ContextMenu,
+}
+#[derive(Serialize)]
+pub struct HeaderItemView {
+    pub id: u32,
+    pub label: String,
+    pub enabled: bool,
+    pub selected: bool,
+    pub icon: &'static str,
+}
+#[derive(Serialize)]
+pub struct HeaderSizeView {
+    pub id: HeaderSize,
+    pub label: &'static str,
+    pub tile: f32,
+    pub icon: i32,
+    pub height: f32,
+}
+#[derive(Serialize)]
+pub struct HeaderComponentView {
+    pub item: HeaderItem,
+    pub label: String,
+    pub singleton: bool,
+}
+impl<R: layer_render::CanvasRenderer> UiSession<R> {
+    pub fn header_view(&self) -> HeaderView {
+        let state = self.state();
+        let model = state.workspace.layout.header.projected_for(state.platform);
+        let items = model
+            .entries()
+            .map(|entry| {
+                let (enabled, selected, icon) = match entry.item {
+                    HeaderItem::Tool { control } => {
+                        let (enabled, selected) = tool_state(state, control);
+                        (enabled, selected, tool_choice(control).icon)
+                    }
+                    HeaderItem::Capy => (true, state.workspace.zen_mode, ""),
+                    _ => (true, false, ""),
+                };
+                HeaderItemView {
+                    id: entry.id,
+                    label: entry.item.label(),
+                    enabled,
+                    selected,
+                    icon,
+                }
+            })
+            .collect();
+        HeaderView {
+            model,
+            items,
+            editing: state.customization.header_editing,
+            sizes: HeaderSize::ALL
+                .into_iter()
+                .map(|id| HeaderSizeView {
+                    id,
+                    label: id.label(),
+                    tile: id.tile(),
+                    icon: id.icon(),
+                    height: id.height(),
+                })
+                .collect(),
+            components: HeaderItem::COMPONENTS
+                .into_iter()
+                .filter(|item| item.available_on(state.platform))
+                .map(|item| HeaderComponentView {
+                    item,
+                    label: item.label(),
+                    singleton: item.singleton(),
+                })
+                .collect(),
+            primary_menu: self.application_menu(ApplicationMenu::Primary),
+        }
+    }
+}
 impl HeaderLayout {
     /// Whole-item overflow, a truly centered middle region and protected native
     /// caption areas. Hosts measure text; the allocation/overflow policy is shared.

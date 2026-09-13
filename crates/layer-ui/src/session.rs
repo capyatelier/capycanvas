@@ -223,6 +223,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             .or(self.workspace_preview.as_ref())
             .unwrap_or(&self.state.workspace)
             .clone();
+        self.state
+            .customization
+            .committed_header(&mut workspace.layout);
         workspace.layout.measurements.clear();
         workspace.layout.column_scroll.clear();
         workspace.layout.titlebar_insets = [0.0; 3];

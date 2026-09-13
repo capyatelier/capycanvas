@@ -163,6 +163,15 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val dock = remember(host) { DockInteraction(host) }
+    val header = remember(host, dock) { HeaderInteraction(host, dock) }
+    SideEffect {
+        header.editing = snapshot?.objectOrNull("header")?.optBoolean("editing") == true
+        header.enabled = snapshot != null && !snapshot.optBoolean("chrome_hidden") && snapshot.objectOrNull("preferences") == null && snapshot.objectOrNull("picker") == null && snapshot.objectOrNull("toolbar_prompt") == null && snapshot.objectOrNull("toolbar_manager") == null
+    }
+    DisposableEffect(host, header) {
+        host.headerKeyHandler = header::key
+        onDispose { header.finish(true); host.headerKeyHandler = null }
+    }
     val activity = LocalActivity.current
     val requestingDragFrames = dock.dragging
     DisposableEffect(requestingDragFrames, activity) {
@@ -198,7 +207,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
-    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").workspaceGestures(dock)
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").headerGestures(header).workspaceGestures(dock)
         .workspaceDragCursor(dock.dragCursor)
         .drawWithContent { drawContent(); host.recordUiDraw() }
         .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {
@@ -232,8 +241,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
         if (snapshot != null && state != null) {
             val hidden = snapshot.optBoolean("chrome_hidden")
-            if (!hidden && snapshot.objectOrNull("preferences") == null) Header(host, state, dock)
-            if (snapshot.objectOrNull("preferences") == null && (!hidden || snapshot.optBoolean("keep_zen_button"))) {
+            if (!hidden && snapshot.objectOrNull("preferences") == null) WorkspaceHeader(host, snapshot, header)
+            if (snapshot.objectOrNull("preferences") == null && (hidden && snapshot.optBoolean("keep_zen_button"))) {
                 ZenButton(host, state, dock, hidden)
             }
             val layout = snapshot.getJSONObject("layout")
@@ -299,7 +308,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         cursor = if (horizontal) AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW else AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW))
                 }
             }
-            if (!hidden) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
+            if (!hidden && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {
                     CameraStatus(host)
                 }
@@ -378,49 +387,6 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             },
         onLongClick = { dock.holdContext(target) }, iconSize = host.catalog.getInt("zen_icon_size").dp,
         selectedColor = colors.text.copy(alpha = .08f)) { host.invoke("zen_mode") }
-}
-
-@Composable private fun Header(host: CanvasHost, state: JSONObject, dock: DockInteraction) {
-    val colors = LocalPalette.current
-    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).chromeRegion(dock).background(colors.surround).padding(6.dp)) {
-        val showTitle = maxWidth >= 1100.dp
-        val switcherWidth = (maxWidth * .45f).coerceAtMost(480.dp)
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.size(36.dp))
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                host.snapshot?.array("application_menus")?.objects()?.forEach { menu ->
-                    val id = menu.getString("id")
-                    key(id) {
-                        var open by remember { mutableStateOf(false) }
-                        // Menus are part of the GPU-free snapshot, so they open
-                        // immediately even while the render owner initializes.
-                        val model = menu.objectOrNull("model")
-                        DisposableEffect(open) {
-                            val ownsPopup = open
-                            if (ownsPopup) { dock.popupOpen = true; dock.refresh() }
-                            onDispose { if (ownsPopup) { dock.popupOpen = false; dock.refresh() } }
-                        }
-                        Box {
-                            Box(Modifier.height(36.dp).testTag("application-menu-$id").clip(RoundedCornerShape(6.dp)).background(colors.surround)
-                                .clickable { open = true }.padding(horizontal = HeaderTextPadding), contentAlignment = Alignment.Center) {
-                                Text(menu.getString("label"), fontWeight = FontWeight.Bold)
-                            }
-                            if (open) model?.let { WorkspaceMenu(host, it) { open = false } }
-                        }
-                    }
-                }
-            }
-            if (showTitle) state.array("tabs").optJSONObject(0)?.let { tab ->
-                Text("${tab.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${tab.optInt("width")} × ${tab.optInt("height")}",
-                    Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = HeaderTextPadding),
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            // Android always uses an immersive fullscreen workspace.
-            WorkspaceSwitcher(host, Modifier.widthIn(max = switcherWidth))
-            if (state.getJSONObject("settings").optString("show_clock") != "never") SystemStatus()
-            IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip"), modifier = Modifier.testTag("header-settings")) { host.invoke("settings") }
-        }
-    }
 }
 
 @Composable private fun PanelGroup(host: CanvasHost, state: JSONObject, group: JSONObject,

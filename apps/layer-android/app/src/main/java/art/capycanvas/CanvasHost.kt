@@ -116,6 +116,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     // Native focus, not application state; prevents typing from invoking tools.
     var editingText = false
+    internal var headerKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
     private var platformPredictionAvailable: Boolean? = null
     internal val nativePredictionEnabled: Boolean
         get() = platformPredictionAvailable == true && (snapshot?.objectOrNull("state")?.objectOrNull("settings")?.let {
@@ -277,6 +278,15 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun query(query: JSONObject, reply: (Any?) -> Unit) = post {
         val value = org.json.JSONTokener(Native.query(handle, query.toString())).nextValue()
         main.post { reply(if (value == JSONObject.NULL) null else value) }
+    }
+    /** Validate and apply on the same native owner turn. A delayed main-thread
+     * reply must never apply an old drop after Done, cancellation or a switch. */
+    internal fun headerAction(request: JSONObject) = post {
+        val value = org.json.JSONTokener(Native.query(handle, obj("type" to "header", "request" to request).toString())).nextValue()
+        if (value is JSONObject) {
+            Native.dispatch(handle, value.toString())
+            refreshChrome(); publish(true); wake()
+        }
     }
     // Programmatic package import/replacement, without a shader-editor UI.
     fun loadFilters(manifest: String, modules: JSONObject, mode: String = "add") = post {

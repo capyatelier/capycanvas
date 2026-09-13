@@ -475,18 +475,18 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
 @Composable internal fun ToolPicker(host: CanvasHost, picker: JSONObject) {
     Dialog({ host.customize(obj("type" to "cancel_tools")) }) {
         Surface(shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.widthIn(max = 560.dp).heightIn(max = 650.dp).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.widthIn(max = 560.dp).heightIn(max = 650.dp).padding(20.dp).testTag("tool-picker"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(picker.getString("title"), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 picker.optString("name").takeIf { !picker.isNull("name") }?.let { name ->
                     CoreTextField(name, { host.customize(obj("type" to "picker_name", "name" to it)) }, Modifier.fillMaxWidth().testTag("toolbar-name"),
                         label = { Text(picker.getString("name_label")) })
                 }
-                CoreTextField(picker.optString("query"), { host.customize(obj("type" to "picker_search", "query" to it)) },
+                CoreTextField(picker.optString("query"), { host.customize(obj("type" to "picker_search", "query" to it)) }, Modifier.testTag("tool-picker-search"),
                     placeholder = { Text(picker.getString("search_hint")) })
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                     picker.array("choices").objects().forEachIndexed { index, tool ->
                         if (index > 0) HorizontalDivider(color = LocalPalette.current.divider)
-                        Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).toggleable(tool.optBoolean("selected"), role = Role.Checkbox) { selected ->
+                        Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).testTag("tool-picker-choice-${tool.getString("label")}").toggleable(tool.optBoolean("selected"), role = Role.Checkbox) { selected ->
                             host.customize(obj("type" to "picker_select", "control" to tool.getJSONObject("control"), "selected" to selected))
                         }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             tool.optString("icon").takeIf { it.isNotEmpty() && it != "null" }?.let { SharedIcon(it, null) }
@@ -501,8 +501,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                     }
                 }
                 Row(Modifier.align(Alignment.End)) {
-                    TextButton({ host.customize(obj("type" to "cancel_tools")) }) { Text("Cancel") }
-                    Button({ host.customize(obj("type" to "confirm_tools")) }, enabled = picker.getBoolean("can_confirm")) { Text(picker.getString("confirm_label")) }
+                    TextButton({ host.customize(obj("type" to "cancel_tools")) }, Modifier.testTag("tool-picker-cancel")) { Text("Cancel") }
+                    Button({ host.customize(obj("type" to "confirm_tools")) }, Modifier.testTag("tool-picker-confirm"), enabled = picker.getBoolean("can_confirm")) { Text(picker.getString("confirm_label")) }
                 }
             }
         }

@@ -54,7 +54,7 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
 }
 
 /** Native broadcasts/settings drive this small UI island, independently of the render owner. */
-@Composable internal fun SystemStatus() {
+@Composable internal fun SystemStatus(clock: Boolean = true, showBattery: Boolean = true) {
     val context = LocalContext.current
     var time by remember(context) { mutableStateOf(DateFormat.getTimeFormat(context).format(Date())) }
     var battery by remember(context) { mutableStateOf<DeviceBattery?>(null) }
@@ -87,10 +87,10 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
     }
     Row(Modifier.testTag("system-status"),
         horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.height(36.dp).testTag("system-clock").semantics(mergeDescendants = true) {}.padding(horizontal = HeaderTextPadding), contentAlignment = Alignment.Center) {
+        if (clock) Box(Modifier.height(36.dp).testTag("system-clock").semantics(mergeDescendants = true) {}.padding(horizontal = HeaderTextPadding), contentAlignment = Alignment.Center) {
             Text(time, maxLines = 1, fontWeight = FontWeight.Medium)
         }
-        battery?.let {
+        if (showBattery) battery?.let {
             Box(Modifier.size(36.dp).testTag("system-battery-tile"), contentAlignment = Alignment.Center) {
                 BatteryIndicator(it)
             }

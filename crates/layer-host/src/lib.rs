@@ -1,6 +1,7 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
 mod renderer;
+mod header;
 mod snapshot;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -52,6 +53,7 @@ pub struct NativeHost {
     document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
     service_changes: u32,
+    header_drag: Option<layer_ui::HeaderDrag>,
 }
 
 impl NativeHost {
@@ -82,6 +84,7 @@ impl NativeHost {
             document_view_revision: 0,
             last_durable_workspace: None,
             service_changes: 0,
+            header_drag: None,
         })
     }
     /// Regions changed since the platform service last observed accepted input.
@@ -565,6 +568,7 @@ impl NativeHost {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
+            Header { request: header::HeaderRequest },
             FilterPackageModules {
                 manifest: String,
             },
@@ -653,6 +657,7 @@ impl NativeHost {
             },
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
+            Query::Header { request } => self.header_request(request),
             Query::FilterPackageModules { manifest } => {
                 json!(layer_core::EffectPackage::parse(&manifest)?.module_names()?)
             }

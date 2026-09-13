@@ -78,6 +78,7 @@ class MainActivity : ComponentActivity() {
     // superclass carries a class-wide restriction that lint also inherits here.
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (host.headerKeyHandler?.invoke(event) == true) return true
         host.key(event)
         return super.dispatchKeyEvent(event)
     }
