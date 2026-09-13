@@ -85,17 +85,73 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
-The user also requests native Apple context menus and Liquid Glass for modals
-and popups on both platforms where supported, preserving their approximate
-design, layout and complete actions. Native menu migration must preserve the
-confirmed held-contact transition into dragging. System sheets, alerts and
-popovers keep their platform presentation; custom overlays use a shared glass
-surface with an older-system material fallback and an opaque Reduce Transparency
-appearance. This presentation accommodation does not relax editor geometry or
-performance acceptance.
-The same requested Liquid Glass treatment includes the header's workspace pill
-switcher, retaining its segment layout and selected-workspace highlight. Its
-glass pixels are an intentional platform accommodation from the shared track.
+The user requests native Apple context menus where they preserve the confirmed
+held-contact transition into dragging. Long-press context menus, including layer
+and saved workspace rows, must remain vertical; horizontal edit bars are not
+acceptable. Each menu/preview belongs to its actual row. Arrowed popovers remain
+suitable for pickers and small forms. Apple's
+[context-menu guidance](https://developer.apple.com/design/human-interface-guidelines/context-menus/)
+and [popover guidance](https://developer.apple.com/design/human-interface-guidelines/popovers/)
+describe these presentations. Physical finger and Pencil both moved a row after
+its native menu appeared in the isolated fixture. Automated touch synthesis
+failed the same handoff; this does not establish a physical UIKit limitation or
+validate the pending production adapter.
+
+The subsequent readability review supersedes the blanket Liquid Glass request:
+text must remain readable over drawing content. App-owned popups, sheets and the
+workspace pill use opaque colors from the original shared palette while keeping
+approximately the same geometry. UIKit native menus use increased contrast in
+the editor window; AppKit native menus retain OS appearance/accessibility
+behavior. Neither host changes global accessibility preferences. Settings use
+an opaque native semantic background. Native styling does not take precedence
+over readability, and the earlier glass captures do not prove accessibility.
+
+The iPad comparison found that the public
+[accessibility contrast trait](https://developer.apple.com/documentation/uikit/uimutabletraits-13ja5/accessibilitycontrast)
+reduces native-menu translucency when set on the window. Setting it only on the
+source row did not affect the menu. App-owned presentations use SwiftUI's
+[presentation background](https://developer.apple.com/documentation/swiftui/view/presentationbackground(_:))
+with an opaque color; a content-only background would miss presentation margins.
+Do not force AppKit's high-contrast appearance names: Apple's
+[appearance documentation](https://developer.apple.com/documentation/appkit/nsappearance/name-swift.struct/accessibilityhighcontrastdarkaqua)
+reserves their selection for the system accessibility setting. These focused
+comparisons do not constitute a complete accessibility or physical-device pass.
+
+## Readable popup surfaces — 2026-09-12
+
+Custom overlays, popovers, app-owned sheets and the workspace pill now use
+opaque colors. Popup foregrounds and backgrounds come from the same shared
+palette; settings keep a native opaque semantic surface. Popup presentation
+backgrounds also cover native margins and arrows. Action hints are stronger,
+while disabled actions retain their disabled state and existing appearance.
+Default configured sRGB popup text contrast is 9.79:1 dark and 11.55:1 light;
+the 75%-opacity hint ratios are 6.34:1 and 5.54:1. These calculations cover the
+default shared colors, not arbitrary user themes or native materials.
+
+Both Apple targets build, including the signed device target. The user confirmed
+that the updated full iPad editor is readable, then reported backgrounds that did
+not follow Dark mode. Native window appearance now follows the explicit editor
+setting while observing the underlying system separately. Returning to System
+therefore works even after an explicit override. Presented sheets and popovers
+read the live shared palette/theme instead of retaining their opening values.
+
+The focused Settings workflow passes on Mac and iPad Simulator: choose the theme
+opposite the system, then return to System with the sheet still open. Reviewed
+captures show matching sheet, editor and layer-popup colors in both themes.
+A direct AppKit fixture also verifies explicit choices, returning to System and
+application appearance changes without UI automation. Earlier iPad layer-popup
+and native Zen-menu captures established the opaque/increased-contrast surfaces;
+these native-menu captures included uncommitted source-adapter work and do not
+establish production row-menu acceptance. Direct AppKit captures confirm opaque
+shared popup content in both themes; they do not measure native NSMenu pixels.
+The final milestone also passes both focused UI workflows and the signed device
+build with unfinished native-menu sources excluded. The isolated physical iPad
+app is installed and launched with the theme correction.
+The existing 96-case header fixture passes on both Apple presets; all 1,044
+control rectangles match the previous geometry within floating-point noise.
+The production native row menu/drag adapter still requires interaction validation.
+These checks do not close full accessibility, visual parity or performance gates.
+Raw captures, local identifiers and signing information remain in ignored artifacts.
 
 ## Glass surfaces and layer origins — 2026-09-12
 

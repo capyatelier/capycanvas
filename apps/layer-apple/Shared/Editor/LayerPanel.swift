@@ -112,6 +112,7 @@ struct LayerPanel: View {
     private var menuContent: some View {
         LayerActionMenu(store: store, menu: menu, dismiss: closeMenu)
             .presentationCompactAdaptation(.popover)
+            .modifier(EditorPopupPresentation())
     }
     private func closeMenu() {
         menuRequest = UUID(); menuSource = nil; menu = JSON()
@@ -375,7 +376,7 @@ private struct LayerActionMenu: View {
             Image(systemName: "checkmark").opacity(item["selected"].bool ? 1 : 0).frame(width: 16)
             Text(item["label"].string).lineLimit(1)
             Spacer(minLength: 4)
-            Text(item["hint"].string).opacity(0.55)
+            Text(item["hint"].string).opacity(0.75)
         }.padding(.horizontal, 4).frame(height: 28).contentShape(Rectangle())
     }
 }

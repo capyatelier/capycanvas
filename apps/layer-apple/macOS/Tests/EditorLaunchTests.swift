@@ -3,6 +3,8 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
+
     @MainActor func testWorkspaceSwitcher() {
         checkWorkspaceSwitcher(in: editorTestApplication())
     }

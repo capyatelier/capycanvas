@@ -32,7 +32,7 @@ struct WorkspaceSwitcher: View {
             }
         }
         .clipShape(Capsule())
-        .modifier(EditorGlassSurface(shape: Capsule()))
+        .background(palette["bg"], in: Capsule())
         .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
         .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
         .modifier(HeaderControlMeasurement(id: "workspace-switcher"))

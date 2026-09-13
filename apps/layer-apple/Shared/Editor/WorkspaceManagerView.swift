@@ -20,12 +20,13 @@ struct WorkspaceManagerPresentation: ViewModifier {
                             }
                         }
                     }.padding(14).frame(maxWidth: 580, alignment: .leading)
-                        .modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
+                        .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
                 }
             }
             .sheet(isPresented: $manager.presented, onDismiss: { manager.dismissed() }) {
                 WorkspaceManagerView(manager: manager, library: library)
                     .modifier(WorkspacePackagePicker(files: manager.files))
+                    .modifier(EditorPopupPresentation())
             }
     }
 }

@@ -88,7 +88,7 @@ struct WorkspaceSwitcherRows: View {
         if let drag = interaction.drag, let row = rows.first(where: { $0["id"].string == drag.id }) {
             HStack { SharedIcon(name: "grip", size: 12); Text(row["title"].string).lineLimit(1); Spacer() }
                 .padding(.horizontal, 10).frame(width: drag.bounds.width, height: drag.bounds.height)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 6)))
                 .shadow(radius: 4, y: 2)
                 .offset(x: drag.bounds.minX, y: drag.bounds.minY + drag.point.y - drag.origin.y)
                 .allowsHitTesting(false).accessibilityHidden(true)
@@ -96,7 +96,7 @@ struct WorkspaceSwitcherRows: View {
         if let id = interaction.menu, let row = rows.first(where: { $0["id"].string == id }) {
             menu(row).frame(width: interaction.menuBounds.width, alignment: .leading)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { interaction.menuSize = $0 }
-                .modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 8)))
+                .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8)))
                 .shadow(radius: 6, y: 2)
                 .offset(x: interaction.menuBounds.minX, y: interaction.menuBounds.minY)
                 .accessibilityElement(children: .contain).accessibilityLabel("Options for " + row["title"].string)

@@ -12,16 +12,16 @@ visual and hardware performance evidence. Shared changes must build on both.
 See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
 for the shared-code boundaries, milestone matrix and remaining work.
 
-Popup presentation follows the system design: native sheets, alerts and popovers
-retain their system background, and `EditorGlassSurface` gives custom overlays
-and the workspace pill switcher Liquid Glass on iPadOS/macOS 26 or later.
-The switcher retains its segment geometry and selected-workspace highlight.
-Native materials follow the editor theme. Older systems retain regular material;
-Reduce Transparency uses an opaque semantic background. Keep existing popup
-sizes and one effect per custom surface. Attach contextual presentations to the
-control or row that invoked them; layer menus use the pressed row and the footer
-action uses its own button. `testLayerContextMenuAnchors` exercises mask/content
-actions and retains iPad captures of the row and footer origins.
+Popup text uses opaque shared-theme surfaces, including the workspace pill.
+`EditorPopupSurface` pairs the shared text and panel colors for custom overlays;
+`EditorPopupPresentation` fills app-owned popovers and sheets, including their
+margins and arrows. Settings retain an opaque native semantic background.
+Keep existing sizes and attach contextual presentations to the invoking control
+or row. Layer menus use the pressed row; the footer uses its own button.
+Native iPad menus use increased contrast within each editor window because a
+source-view-only override does not affect UIKit's separately presented menu.
+This does not change system accessibility settings. Mac system menus retain
+AppKit appearance and accessibility behavior. Long-press menus remain vertical.
 
 [Performance workflows and measurements](PERFORMANCE.md) include five opt-in
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
@@ -288,6 +288,7 @@ CAPY_PROPERTY_INVENTORY=/tmp/capy-inventory.json \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-menu-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-appearance.swift
 ```
 
 The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
@@ -318,6 +319,11 @@ and coordinator workflows. These macOS-hosted checks do not exercise UIKit
 widgets. Passing the audit establishes catalog coverage; complete native
 workflows, dynamic controls, visual states and hardware performance still
 require their own evidence. Save/Load Layout remains excluded.
+
+`editor-appearance.swift` checks explicit Light/Dark, returning to System and
+native application appearance changes with an isolated AppKit editor window.
+`testPopupThemeFollowsExplicitAndSystem` runs the Settings workflow on either
+Apple target and attaches captures for reviewing sheet and popup colors.
 
 Tool Settings renders checkable and ordinary actions with the same shared
 button component on both Apple targets. Labels use the shared bold text size,

@@ -52,6 +52,10 @@ final class CanvasView: UIView {
         super.didMoveToWindow()
         sceneGeometry = nil
         if let window {
+            // Native menus are presented beside their source view, so a source-
+            // only trait override cannot improve their material. This affects
+            // our editor window, never the user's system accessibility setting.
+            window.traitOverrides.accessibilityContrast = .high
             // iPadOS window resizing owns bottom-corner drags even when UIKit
             // reports zero safe-area insets. Reserve one editor tile of control
             // clearance; Rust applies it to docks, drawers and floating bounds.

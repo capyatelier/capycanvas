@@ -66,6 +66,7 @@ struct EditorChoice: View {
                     }.padding(6)
                 }.frame(width: 230, height: min(400, CGFloat(options.count) * 28 + 12))
                     .presentationCompactAdaptation(.popover)
+                    .modifier(EditorPopupPresentation())
             }
     }
 }

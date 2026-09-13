@@ -8,7 +8,7 @@ struct WorkspaceDialogs: ViewModifier {
     }
     func body(content: Content) -> some View {
         content.sheet(isPresented: Binding(get: { open }, set: { _ in })) {
-            WorkspaceDialog(store: store).interactiveDismissDisabled()
+            WorkspaceDialog(store: store).interactiveDismissDisabled().modifier(EditorPopupPresentation())
         }
     }
 }

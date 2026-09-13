@@ -93,7 +93,7 @@ struct WorkspaceContactMenu: View {
                 WorkspaceMenu(store: store, menu: interaction.menu, width: interaction.menuBounds.width) { interaction.closeMenu() }
                     .frame(maxHeight: interaction.viewport.height)
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { interaction.menuSize = $0 }
-                    .modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 8)))
+                    .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8)))
                     .shadow(radius: 6, y: 2)
                     .offset(x: interaction.menuBounds.minX, y: interaction.menuBounds.minY)
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

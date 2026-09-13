@@ -18,6 +18,7 @@ struct WorkspaceContext: ViewModifier {
             .popover(isPresented: Binding(get: { !menu.isNull }, set: { if !$0 { menu = JSON() } })) {
                 WorkspaceMenu(store: store, menu: menu) { menu = JSON() }
                     .presentationCompactAdaptation(.popover)
+                    .modifier(EditorPopupPresentation())
             }
             .onChange(of: menu.isNull) { _, empty in store.workspace.popover(popupID, open: !empty) }
             .onDisappear { generation = UUID(); menu = JSON(); store.workspace.popover(popupID, open: false) }
@@ -47,7 +48,7 @@ struct WorkspaceMenu: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(8)
                     }.buttonStyle(.plain).accessibilityIdentifier("workspace-menu-back")
                 } else if !menu["title"].string.isEmpty {
-                    Text(menu["title"].string).opacity(0.55).padding(8)
+                    Text(menu["title"].string).opacity(0.75).padding(8)
                 }
                 let sections = page["sections"].array.filter { !$0.array.isEmpty }
                 ForEach(sections.indices, id: \.self) { section in
@@ -61,7 +62,7 @@ struct WorkspaceMenu: View {
                             HStack(spacing: 8) {
                                 SharedIcon(name: "check").opacity(item["selected"].bool ? 1 : 0)
                                 Text(item["label"].string).frame(maxWidth: .infinity, alignment: .leading)
-                                if !item["hint"].string.isEmpty { Text(item["hint"].string).opacity(0.55) }
+                                if !item["hint"].string.isEmpty { Text(item["hint"].string).opacity(0.75) }
                                 if !item["sections"].array.isEmpty { Image(systemName: "chevron.right") }
                             }.padding(.horizontal, 8).frame(minHeight: 32).contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(!item["enabled"].bool)
