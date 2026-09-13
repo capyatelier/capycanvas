@@ -1,5 +1,7 @@
+import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
+import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
@@ -201,6 +203,9 @@ try {
   if (process.argv.includes("--zen")) {
     await checkZen({call,evaluate,settle});
     assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--icons")) {
+    await checkIcons({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
     assert.deepEqual(errors,[]);
@@ -267,6 +272,9 @@ try {
   } else if (process.argv.includes("--fullscreen")) {
     const {windowId} = await call("Browser.getWindowForTarget",{targetId:target.targetId},null);
     await checkFullscreen({call,evaluate,settle,windowId});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--color-panel")) {
+    await checkColorPanel({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--editor")) {
     await checkEditor({call,evaluate,settle,canvasPixels});

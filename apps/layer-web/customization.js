@@ -4,7 +4,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   element, button, icon, numberField, panelFrame,
   dispatch, draggable, grip, place, updateZen, editor }) {
   const send = (action) => dispatch({ type: "customize", action });
-  const views = new Map(), fields = new Map();
+  const views = new Map(), fields = new Map(), panelViewKeys = new WeakMap();
   const tileResize = new ResizeObserver(entries => {
     for (const { target: strip } of entries) {
       if (!strip.isConnected || !strip.dataset.axis) continue;
@@ -204,6 +204,11 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       if (!panel) {
         panel = element("div", "panel tile-panel"); panelFrame(panel, false); panels.set(config.id, panel);
       }
+      // Color/brush updates also publish this region. Retain unchanged panel
+      // DOM instead of rewriting attributes and forcing style work on every pick.
+      const viewKey = JSON.stringify([config.content.kind, view]);
+      if (panelViewKeys.get(panel) === viewKey) continue;
+      panelViewKeys.set(panel, viewKey);
       const toolbar = config.content.kind === "toolbar";
       target(panel, { kind: toolbar ? "ribbon" : "panel", panel: config.id });
       if (toolbar) {
@@ -309,7 +314,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   const manager = element("dialog", "toolbar-manager"); manager.id = "toolbar-manager";
   const managerHeader = element("header", "dialog-header"), managerTitle = element("h2");
   const closeManager = () => send({ type: "close_toolbar_manager" });
-  const managerClose = button("×", closeManager, "dialog-close");
+  const managerClose = button("", closeManager, "dialog-close"); managerClose.append(icon("close"));
   managerHeader.append(managerTitle, managerClose);
   const managerBody = element("div", "toolbar-manager-body"), managerDescription = element("p");
   const managerScroll = element("div", "toolbar-manager-scroll"), managerList = element("div", "managed-toolbars"), managerEmpty = element("p", "toolbar-manager-empty");

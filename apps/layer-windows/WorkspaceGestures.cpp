@@ -44,7 +44,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,motion=0,menuGeneration=0;
     double slopX=4,slopY=4;
-    J lastRelease,lastCancel;
+    J lastRelease,lastCancel,lastCaptureLoss;
     uint64_t contactVersion=0,contactToken=0;
     bool ownsFocus()const{return owner&&GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)==owner&&!IsIconic(owner);}
     bool crossed(Point at)const{return std::abs(at.X-origin.X)>slopX||std::abs(at.Y-origin.Y)>slopY;}
@@ -65,6 +65,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             {L"recognizing",B(recognizing)}});
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
+        if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         AutomationProperties::SetHelpText(root,value.Stringify());
     }
     bool current()const{
@@ -411,6 +412,17 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         })),true);
         root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer==e.Pointer().PointerId()){
+                if(self->trace){
+                    auto source=e.OriginalSource().try_as<UIElement>();
+                    auto p=e.GetCurrentPoint(self->root);
+                    self->lastCaptureLoss=O({{L"generation",N(double(self->generation))},
+                        {L"source_is_root",B(source==self->root)},{L"root_captured",B(self->owns(self->root))},
+                        {L"source_name",S(source?AutomationProperties::GetAutomationId(source):L"")},
+                        {L"root_hit_test_visible",B(self->root.IsHitTestVisible())},{L"external_popup",B(self->data->externalPopup)},
+                        {L"source_loaded",B(self->source.get()&&self->source.get().IsLoaded())},
+                        {L"in_contact",B(p.IsInContact())},{L"dragging",B(self->dragging)},
+                        {L"position",point(p.Position())}});
+                }
                 // A Button releases its capture before the normal routed Up.
                 if(e.OriginalSource().try_as<UIElement>()==self->root||e.GetCurrentPoint(self->root).IsInContact())
                     self->cancel(L"capture_lost");

@@ -1,3 +1,3 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-  <path class="transparent-fill foreground-stroke" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" d="m6 4 2-2 2 2ZM6 4v3h4V4M6.5 7 5 14h6L9.5 7M4 14h8M4 4 1 3m3 3L1 7m11-3 3-1m-3 3 3 1M6 10h4M8 12v2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+  <path d="m8 1 3 3H5zm-3 4h6v3H5zm1.2 4h3.6l1.4 5H13v1H3v-1h1.8zM7 10v2h2v-2zM1 3l3 1v1.5l-3-1zM1 8l3-1.5V8L1 9.5zM12 4l3-1v1.5l-3 1zM12 6.5 15 8v1.5L12 8z" fill-rule="evenodd"/>
 </svg>

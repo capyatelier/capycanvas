@@ -7,6 +7,7 @@ import Foundation
     let sections: [[Item]]
     struct Item {
         let label: String
+        let identifier: String
         let enabled: Bool
         let selected: Bool?
         let hint: String
@@ -21,7 +22,10 @@ import Foundation
                 section.array.map { item in
                     let payload = item["action"]
                     let enabled = parentEnabled && item["enabled"].bool
-                    return Item(label: item["label"].string, enabled: enabled,
+                    return Item(label: item["label"].string,
+                        identifier: item["identifier"].isNull
+                            ? (payload["type"].string == "invoke" ? "command-" + payload["command"].string : "menu-action-" + item["label"].string)
+                            : item["identifier"].string, enabled: enabled,
                         selected: item["selected"].isNull ? nil : item["selected"].bool,
                         hint: item["hint"].string, bindings: item["bindings"].array,
                         sections: decodeSections(item["sections"], parentEnabled: enabled),

@@ -18,11 +18,22 @@ export async function captureToolActions({fixture, width, height, scale, output,
     document.body.style.background=fixture.palette.panel;
     const element=(tag,css,text)=>{const e=document.createElement(tag);if(css)e.className=css;if(text)e.textContent=text;return e;};
     const button=(text,action,css)=>{const b=element('button',css,text);b.onclick=action;return b;};
+    const icons=new Map();
+    for(const item of fixture.actions) {
+      const name=item.command.icon;
+      if(!name)throw Error('Tool action has no shared icon: '+item.command.id);
+      const response=await fetch('/icons/layer-'+name+'-symbolic.svg');
+      if(!response.ok)throw Error('Missing shared icon: '+name);
+      const svg=new DOMParser().parseFromString(await response.text(),'image/svg+xml').documentElement;
+      svg.dataset.asset=name;svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');
+      icons.set(name,svg);
+    }
+    const icon=name=>icons.get(name).cloneNode(true);
     const controls=[];
     for(let column=0;column<4;column++) {
       const commands=fixture.actions.map(item=>({...item.command,selected:column%2===1,enabled:column<2}));
       const tool_actions=fixture.actions.map(item=>({checkable:item.checkable,command:item.command.id}));
-      const panels=createEditorPanels({state:()=>({commands,tool_actions,tool_settings:[]}),element,button,dispatch(){}});
+      const panels=createEditorPanels({state:()=>({commands,tool_actions,tool_settings:[]}),element,button,icon,dispatch(){}});
       const root=panels.control('tool_settings');root.disposeEditor();
       root.style.cssText='position:absolute;top:6px;left:'+(6+column*(fixture.column_width+8))+'px;width:'+fixture.column_width+'px';
       document.body.append(root);controls.push([...root.children]);
@@ -31,7 +42,9 @@ export async function captureToolActions({fixture, width, height, scale, output,
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     return controls.flatMap((nodes,column)=>nodes.map((node,index)=>({key:column+'-'+index,
       bounds:node.getBoundingClientRect().toJSON(),enabled:!node.disabled,selected:node.getAttribute('aria-pressed'),
-      label:node.textContent,opacity:getComputedStyle(node).opacity,background:getComputedStyle(node).backgroundColor})));
+      label:node.querySelector('span').textContent,opacity:getComputedStyle(node).opacity,background:getComputedStyle(node).backgroundColor,
+      icon:node.querySelector('svg').dataset.asset,iconBounds:node.querySelector('svg').getBoundingClientRect().toJSON(),
+      labelBounds:node.querySelector('span').getBoundingClientRect().toJSON()})));
   })()`);
   assert.equal(frames.length, 4*fixture.actions.length);
   for (const row of frames) {
@@ -41,6 +54,10 @@ export async function captureToolActions({fixture, width, height, scale, output,
     assert.equal(row.label,item.command.label);
     assert.equal(row.opacity,column<2?'1':'0.36');
     assert.equal(row.bounds.width,fixture.column_width);
+    assert.equal(row.icon,item.command.icon);
+    assert.equal(row.iconBounds.width,16);assert.equal(row.iconBounds.height,16);
+    assert.equal(row.iconBounds.x,row.bounds.x+17);
+    assert.equal(row.labelBounds.x,row.iconBounds.right+6);
   }
   const name='web-'+theme+'-'+fixture.column_width;
   await writeFile(output+'/'+name+'.json',JSON.stringify({scale,frames:Object.fromEntries(frames.map(r=>[r.key,r.bounds])),controls:frames},null,2));

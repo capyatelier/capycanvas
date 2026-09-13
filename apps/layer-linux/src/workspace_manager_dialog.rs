@@ -45,7 +45,7 @@ impl ManagerUi {
         dialog.set_widget_name("workspace-manager");
         let view = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
-        let create = gtk::Button::from_icon_name("list-add-symbolic");
+        let create = crate::icons::button("layer-plus-symbolic");
         create.set_widget_name("workspace-manager-new");
         header.pack_end(&create);
         view.add_top_bar(&header);
@@ -358,7 +358,7 @@ impl ManagerUi {
             row.set_activatable(true);
             if compact {
                 row.add_css_class("workspace-manager-row");
-                let handle = gtk::Image::from_icon_name("layer-grip-symbolic");
+                let handle = crate::icons::image("layer-grip-symbolic");
                 handle.set_widget_name(&format!("workspace-reorder-handle-{}", item.id));
                 handle.add_css_class("workspace-reorder-handle");
                 handle.add_css_class("dim-label");
@@ -370,10 +370,10 @@ impl ManagerUi {
                 row.add_prefix(&handle);
                 let active = manager.active_id().as_deref() == Some(&item.id);
                 if active {
-                    row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
+                    row.add_suffix(&crate::icons::image("layer-check-symbolic"));
                 }
                 if pinned.contains(&item.id) {
-                    let pin = gtk::Image::from_icon_name("layer-pin-symbolic");
+                    let pin = crate::icons::image("layer-pin-symbolic");
                     pin.add_css_class("dim-label");
                     pin.set_tooltip_text(Some("Shown in top bar"));
                     pin.update_property(&[gtk::accessible::Property::Label("Shown in top bar")]);
@@ -707,7 +707,7 @@ fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
 }
 fn actions_menu(w: &Rc<Workspace>, label: &str, actions: Vec<ManagerButton>) -> gtk::MenuButton {
     let menu = gtk::MenuButton::builder()
-        .icon_name("view-more-symbolic")
+        .child(&crate::icons::image("layer-more-symbolic"))
         .tooltip_text(label)
         .build();
     menu.add_css_class("flat");

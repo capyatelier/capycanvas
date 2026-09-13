@@ -89,8 +89,8 @@ body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input, select, summary { font: inherit; accent-color: var(--accent); }
 button, select, input[type="color"], summary { min-height: 34px; border: 0; border-radius: 6px; background: transparent; color: var(--text); padding: 5px 17px; }
 button, summary { cursor: default; font-weight: 700; line-height: 24px; }
-:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
+:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
 button:disabled { opacity: .36; cursor: default; }
 button[aria-pressed="true"], button[aria-selected="true"] { background: var(--selected); }
 :focus-visible { outline: none; }
@@ -393,7 +393,8 @@ dialog::backdrop { background: #0008; }
 body[data-theme="light"] dialog::backdrop { background: #0002; }
 .dialog-header { position: relative; display: grid; place-items: center; height: 46px; flex: none; }
 dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
-.dialog-close { position: absolute; right: 11px; top: 11px; min-height: 24px; width: 24px; height: 24px; padding: 0; line-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); font-size: 20px; }
+.dialog-close { display: grid; place-items: center; position: absolute; right: 11px; top: 11px; min-height: 24px; width: 24px; height: 24px; padding: 0; line-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); font-size: 20px; }
+.dialog-close > svg { width: 16px; height: 16px; }
 .preferences-layout { height: 100%; display: grid; grid-template-columns: clamp(190px, 26%, 210px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .preferences-sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); box-shadow: inset -1px 0 #0003; }
 .preferences-navigation { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
@@ -531,9 +532,13 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .panel .filter-picker-header button { flex:none; display:grid; place-items:center; width:48px; height:34px; padding:0; min-height:0; }
 .filter-picker-list { flex:1; min-height:0; overflow:auto; scrollbar-width:none; }
 .filter-category { margin:8px; font-size:inherit; font-weight:700; opacity:.55; }
+.filter-category { display:flex; align-items:center; gap:6px; }
+.filter-category-icon { display:flex; }
+.filter-category-icon[hidden] { display:none; }
 .panel .filter-row { display:flex; flex-direction:column; align-items:stretch; width:100%; text-align:right; padding:3px 6px; min-width:0; min-height:0; font-weight:400; line-height:18px; }
 .filter-row canvas { display:block; width:100%; height:40px; pointer-events:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 .filter-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.filter-row span > svg:not(.filter-animation) { display:inline-block; width:16px; height:16px; margin-right:6px; vertical-align:-3px; }
 .filter-animation { display:inline-block; width:12px; height:12px; margin-right:4px; vertical-align:-1px; opacity:.55; }
 .effect-properties,.renderer-stats { margin:6px; }
 .effect-properties h3 { font-size:inherit; margin:0 0 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -561,17 +566,34 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .header-menu .popover { max-height:calc(100dvh - 60px); overflow:auto; }
 .tool-groups { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
 .tool-choice-button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; }
+.tool-choice-label { display:flex; align-items:center; gap:6px; }
+.tool-choice-button svg, .tool-choice-label svg { flex-shrink:0; }
+.tool-setting-action { display:flex; align-items:center; gap:6px; }
 .tool-groups .tool-choice-button { width:auto; flex:1; min-width:70px; flex-direction:column; font-size:.85em; }
 .tool-subtools { display:flex; flex-direction:column; gap:4px; }
 .tool-subtools .brush-preview { width:82px; height:32px; object-fit:contain; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
 .tool-settings-control h3 { margin:4px 0; font-size:inherit; }
-.color-wheel { display:block; width:100%; aspect-ratio:1; touch-action:none; }
-.color-components { display:flex; flex-direction:column; gap:6px; }
-.color-swatches { display:flex; gap:6px; margin:6px 0; }
-.color-swatch { min-width:30px; flex:1; padding:4px; background:repeating-conic-gradient(#888 0 25%,#bbb 0 50%) 0 / 10px 10px; }
-.color-swatch > span { display:block; height:22px; border-radius:3px; }
-.color-space { width:100%; margin-bottom:8px; }
+/* Shared square allocations keep the curved controls clear at four tiles. */
+.color-wheel-control { display:flex; flex-direction:column; min-width:128px; max-height:100%; }
+.color-wheel-stage { position:relative; flex:0 1 auto; min-height:128px; width:100%; aspect-ratio:1; container-type:size; }
+.color-wheel-square { position:absolute; width:min(100cqw,100cqh); height:min(100cqw,100cqh); left:50%; top:50%; transform:translate(-50%,-50%); }
+.color-wheel { position:absolute; display:block; touch-action:none; }
+.color-wheel-control :is(.color-swatch,.color-utility,.color-shape,.color-readout) { position:absolute; touch-action:manipulation; display:grid; place-items:center; min-width:0; min-height:0; padding:3px; border-radius:50%; clip-path:circle(50%); }
+.color-wheel-control .color-swatch { background:var(--panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 25%,transparent); }
+.color-wheel-control .color-swatch:is([data-color-slot="background"],[data-color-slot="transparent"]) { padding:1px; }
+.color-wheel-control .color-swatch > span { pointer-events:none; display:block; width:100%; height:100%; border-radius:50%; }
+.color-wheel-control .color-swatch[aria-pressed="true"] { box-shadow:inset 0 0 0 2px var(--text); }
+:where(:root:not([data-touch])) .color-wheel-control .color-swatch:hover { box-shadow:inset 0 0 0 2px var(--text); }
+.color-wheel-control .color-utility { padding:2px; background:transparent; }
+:where(:root:not([data-touch])) .color-wheel-control .color-utility:hover { background:color-mix(in srgb,var(--text) 12%,transparent); }
+.color-wheel-control :is(.color-shape,.color-utility) svg { pointer-events:none; width:16px; height:16px; }
+.color-wheel-control button.color-shape, .color-wheel-control button.color-readout { background:transparent; box-shadow:none; }
+:where(:root:not([data-touch])) .color-wheel-control button.color-shape:hover { color:var(--accent); }
+.color-wheel-control button.color-readout { padding:0; border-radius:0; }
+.color-wheel-control .color-readout canvas { width:100%; height:100%; pointer-events:none; }
+.color-wheel-control :is(.color-shape,.color-swatch,.color-utility):focus-visible { outline-offset:-2px; }
+.color-wheel-control .color-readout:focus-visible { color:var(--accent); outline:none; }
 .navigator-control { display:flex; flex-direction:column; gap:2px; height:100%; min-height:0; }
 .navigator-overview { position:relative; width:100%; height:164px; flex:1 1 164px; min-height:0; touch-action:none; background:var(--bg); }
 .navigator-clip { position:absolute; inset:0; overflow:hidden; pointer-events:none; }

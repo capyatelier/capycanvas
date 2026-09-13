@@ -2,7 +2,7 @@
 #include "UiControls.h"
 #include "LayerThumbnails.h"
 #include "NativeMenus.h"
-#include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include "LayerRowDrag.h"
 #include <optional>
 
 winrt::Microsoft::UI::Xaml::FrameworkElement LayersPanel(
@@ -32,6 +32,8 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     hstring imageKey,iconKey;
     J model()const;
     bool current()const;
+    bool clickAllowed()const;
+    bool contextAllowed()const;
     void action(J operation);
     void init();
     void refresh();
@@ -39,7 +41,6 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     void commit(bool cancel);
     void context(bool mask,UIElement const& anchor);
     void highlight(int position);
-    void dragSource(UIElement const& source);
 };
 struct ElementFactory : implements<ElementFactory,IElementFactory> {
     std::weak_ptr<LayersView> owner;
@@ -61,12 +62,12 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     Windows::Foundation::Collections::IObservableVector<Windows::Foundation::IInspectable> source{
         single_threaded_observable_vector<Windows::Foundation::IInspectable>()};
     std::map<void*,std::shared_ptr<LayerRow>> rows;
-    Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr},dragTimer{nullptr};
-    double dragSpeed=0;
+    Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
+    std::unique_ptr<LayerRowDrag> pickup;
     MenuFlyout menu{nullptr};
     uint64_t menuGeneration=0;
-    std::optional<double> dragged;
-    hstring dragEpoch;
+    bool menuOpen=false,menuPending=false;
+    std::optional<double> menuTarget;
     ~LayersView();
     J view()const{return object(data->state,L"layer_tools");}
     J editing()const{return object(view(),L"editing_layer");}
@@ -74,8 +75,7 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     void init();
     void refresh();
     void preview();
-    void context(double id,bool mask,UIElement const& anchor);
-    void clearDrag();
-    bool dragCurrent()const;
+    void context(double id,bool mask,UIElement const& anchor,
+        std::optional<Windows::Foundation::Point> at={},bool holding=false);
 };
 }

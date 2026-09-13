@@ -170,7 +170,7 @@ impl TileStrip {
 
 /// One shared vector glyph; CSS rotates it with the strip orientation.
 pub fn grip() -> gtk::Image {
-    let grip = gtk::Image::from_icon_name("layer-grip-symbolic");
+    let grip = crate::icons::image("layer-grip-symbolic");
     grip.add_css_class("panel-grip");
     grip.set_tooltip_text(Some("Drag to move panel"));
     grip.set_cursor_from_name(Some("grab"));

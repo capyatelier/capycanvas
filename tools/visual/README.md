@@ -201,10 +201,13 @@ Ordinary symbolic icons remain one image. Mixed paints retain drawing order and
 composite as a group before disabled opacity. The generator rejects unsupported
 mixed groups/effects rather than silently changing their compositing semantics.
 
-The direct fixture captures all 96 compiled icons at 16/24/32 points, two explicit
+The direct fixture captures all canonical compiled icons at 16/24/32 points, two explicit
 foreground/background palettes, and normal/accent/disabled states: 18 complete
-grids with 1,728 glyphs per host. These are shared AppKit component captures;
-building the iPad target does not turn them into UIKit pixel evidence.
+grids (157 icons and 2,826 glyphs per host in the current bank). It checks that
+bare model keys and SVG filename stems resolve to the same asset, including
+hyphenated names such as `add-layer`. The Mac fixture uses AppKit. A separate
+UIKit simulator runner below renders the same manifest with `SharedIcon` in a
+real `UIHostingController`; neither fixture establishes physical-device pixels.
 
 ```sh
 python3 apps/layer-apple/tests/test_icon_assets.py
@@ -214,7 +217,7 @@ CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/
 CAPY_ICON_SOURCES="$PWD/apps/layer-web/icons" \
 CAPY_ICON_CAPTURES="$PWD/artifacts/apple-icons" \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/icon-capture.swift
-node tools/visual/chrome-capture.mjs 576 384 2 artifacts/apple-icons light icons \
+node tools/visual/chrome-capture.mjs 576 672 2 artifacts/apple-icons light icons \
   artifacts/apple-icons/fixtures.json
 artifacts/ui/parity/python-env/bin/python tools/visual/check_icon_paints.py \
   artifacts/apple-icons --output artifacts/apple-icons/paint-check.json
@@ -223,12 +226,29 @@ artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
   --output artifacts/apple-icons/diff-light-32-normal
 ```
 
-Repeat complete comparison for every manifest name. All 216 focused flat-paint
-samples pass with maximum channel error one, including fixed fills, foreground
-outlines, overlapping swatches and disabled blending. Full comparisons retain
-15,925,248 pixels: 527,943 differ exactly, per-grid fractions are 1.467–11.404%,
-weighted mean channel error is 0.226276 and maximum is 107. Exact parity fails;
-the flat-paint check does not waive edge rasterization differences.
+For UIKit, build the iPad target for Simulator and boot one iPad simulator.
+The runner accepts only a simulator asset bundle, creates a disposable capture
+app, copies out its own grids and uninstalls it. It uses no XCTest or editor
+storage. Select `--simulator UUID` if several iPads are booted; `--output` must
+be a new local directory.
+
+```sh
+python3 apps/layer-apple/scripts/capture-icons-ios.py \
+  --assets-app PATH_TO_BUILT_SIMULATOR_APP \
+  --fixtures artifacts/apple-icons/fixtures.json --output artifacts/apple-icons-uikit
+node tools/visual/chrome-capture.mjs 576 672 2 artifacts/apple-icons-uikit light icons \
+  artifacts/apple-icons-uikit/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/check_icon_paints.py \
+  artifacts/apple-icons-uikit --output artifacts/apple-icons-uikit/paint-check.json
+```
+
+Repeat complete comparison for every manifest name on each host. The current
+157-icon matrix retains 27,869,184 pixels per host. AppKit's 216 flat-paint
+samples pass with maximum channel error one; UIKit's 216 samples match exactly.
+Full AppKit comparisons have mean channel error 0.145/255 and exact differing
+fractions of 0.97–12.81%. UIKit has mean error 0.133/255 and fractions of
+0.92–2.41%. Both have maximum channel error 107/255 and fail exact pixel parity;
+flat-paint checks do not waive the remaining rasterization differences.
 
 The full native editor fixture now waits for visible layer thumbnails using
 opt-in Debug metadata (`CAPY_CAPTURE_PROBE`); an early GPU/Navigator readiness
@@ -598,13 +618,13 @@ pointer/keyboard interaction, full-editor parity or hardware performance.
 The tool-action fixture compares the production SwiftUI `ToolActionControl` and
 browser `toolSettings` factory. It contains all six shipped actions in four
 enabled/selected combinations, at 120- and 226-point column widths. Generate
-the action list from a complete `apple-inventory --gpu` result; the generator
-requires matching action labels and checkability on both Apple presets. Theme
+the action list from a complete `inventory --gpu` result; the generator
+requires matching action labels, icons and checkability on both Apple presets. Theme
 colors and font size come from the shared `toolbar-fixture` example.
 
 ```sh
 mkdir -p artifacts/ui/tool-actions
-cargo run -p layer-host --example apple-inventory -- --gpu \
+cargo run -p layer-host --example inventory -- --gpu \
   > artifacts/ui/tool-actions/inventory.json
 cargo run -p layer-host --example toolbar-fixture -- mac light \
   > artifacts/ui/tool-actions/theme-light.json
@@ -628,24 +648,25 @@ Repeat for `dark`, and for column width 226 with total capture width 940.
 Height is 420 and scale is 2 in every case. Native and browser sidecar JSON
 files expose each control's measured `frames` keyed by column/action index;
 compare their `x`, `y`, `width` and `height` without rounding. The browser also
-asserts labels, selected/disabled states, full column width and disabled opacity.
+asserts labels, selected/disabled states, full column width, disabled opacity,
+canonical icon identity, 16-point glyph bounds and the six-point icon/text gap.
 The native host never displays a window and closes its surface after capture.
 It uses an explicitly active control environment without changing OS settings.
 
-All 96 measured native bounds match Chrome exactly. Greedy wrapping retains
-the browser's line breaks, including “Show rulers” on one line and “Snap to /
-rulers” on two lines in the narrow case. Full raw sRGB comparisons still fail
+All 96 measured native bounds match Chrome exactly with the published icons.
+The controls retain the browser's leading icon, intrinsic text width and greedy
+wrapping. At 120 points all six actions occupy two lines; at 226 they occupy one.
+Full raw sRGB comparisons still fail
 at zero tolerance; no pixels are cropped, masked or excluded:
 
 | Theme / column width | Mean absolute channel error | Exact differing pixels | Maximum channel error |
 | --- | ---: | ---: | ---: |
-| Light / 120 | 0.947 | 12.810% | 152 |
-| Light / 226 | 0.365 | 8.202% | 106 |
-| Dark / 120 | 0.994 | 13.028% | 173 |
-| Dark / 226 | 0.409 | 8.349% | 128 |
+| Light / 120 | 0.812 | 14.460% | 191 |
+| Light / 226 | 0.408 | 8.461% | 148 |
+| Dark / 120 | 0.884 | 14.701% | 180 |
+| Dark / 226 | 0.446 | 8.607% | 159 |
 
-Before the control change, the corresponding mean errors were 13.581, 7.679,
-13.599 and 7.571. Residual glyph, edge and fill differences remain visible in
+Residual glyph, edge and fill differences remain visible in
 the full comparison reports; this is not a full pixel acceptance pass. These
 AppKit component captures do not establish native UIKit appearance, activation,
 accessibility interaction, complete editor parity or hardware performance.

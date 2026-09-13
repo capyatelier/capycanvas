@@ -846,7 +846,7 @@ impl Workspace {
     ) -> Rc<Self> {
         static ICONS: std::sync::Once = std::sync::Once::new();
         ICONS.call_once(|| {
-            gtk::gio::resources_register_include!("layer-icons.gresource").expect("bundled icons");
+            crate::icons::register();
             gtk::IconTheme::for_display(&gdk::Display::default().unwrap())
                 .add_resource_path("/dev/layer/icons");
         });
@@ -1122,6 +1122,16 @@ impl Workspace {
                 // Native dialogs own their keys. Workspace previews block canvas
                 // input, but must not swallow button activation or navigation.
                 if this.window.visible_dialog().is_some() || this.preferences.recording() {
+                    return glib::Propagation::Proceed;
+                }
+                // Space also pans the canvas, but focused color buttons own
+                // native Space / Enter activation, including in retained drawers.
+                if matches!(key, gdk::Key::space | gdk::Key::Return | gdk::Key::KP_Enter)
+                    && gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
+                        w.is::<gtk::Button>()
+                            && w.ancestor(crate::tool_panels::ColorWheel::static_type()).is_some()
+                    })
+                {
                     return glib::Propagation::Proceed;
                 }
                 let editing = gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
@@ -1949,8 +1959,8 @@ impl Workspace {
                         && let Some(image) = button.child().and_downcast::<gtk::Image>()
                     {
                         let name = format!("layer-{icon}-symbolic");
-                        if image.icon_name().as_deref() != Some(&name) {
-                            image.set_icon_name(Some(&name));
+                        if crate::icons::name(&image).as_deref() != Some(&name) {
+                            crate::icons::set(&image, Some(&name));
                         }
                     }
                 }
@@ -2334,7 +2344,7 @@ impl Workspace {
                 let content = button.child().unwrap();
                 let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();
                 let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
-                icon.set_icon_name(Some(&format!("layer-{}-symbolic", config.icon())));
+                crate::icons::set(&icon, Some(&format!("layer-{}-symbolic", config.icon())));
                 icon.set_visible(tab.show_icon);
                 label.set_label(config.title());
                 label.set_visible(tab.show_name);

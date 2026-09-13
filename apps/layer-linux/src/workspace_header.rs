@@ -112,7 +112,7 @@ impl Header {
         }
         let overflow = std::array::from_fn(|i| {
             let b = gtk::MenuButton::builder()
-                .icon_name("layer-menu-symbolic")
+                .child(&crate::icons::image("layer-menu-symbolic"))
                 .tooltip_text(format!(
                     "More {} window-bar items",
                     HeaderZone::ALL[i].label().to_lowercase()
@@ -124,7 +124,7 @@ impl Header {
             b
         });
         let recovery = gtk::MenuButton::builder()
-            .icon_name("layer-menu-symbolic")
+            .child(&crate::icons::image("layer-menu-symbolic"))
             .tooltip_text("Window bar recovery: menus and customization")
             .build();
         recovery.set_widget_name("header-recovery");
@@ -358,8 +358,8 @@ impl Header {
                             .iter()
                             .find(|c| c.id == CommandId::ZenMode)
                             .and_then(|c| c.icon)
-                            .unwrap_or("capy-looking-up");
-                        image.set_icon_name(Some(&format!("layer-{icon}-symbolic")));
+                            .unwrap_or(ZenIcon::LookingUp.icon());
+                        crate::icons::set(&image, Some(&format!("layer-{icon}-symbolic")));
                     }
                 }
             }
@@ -426,7 +426,16 @@ impl Header {
                     HeaderItem::Tool { control } => tool_choice(control).icon,
                     _ => ZenIcon::LookingUp.icon(),
                 };
-                let image = gtk::Image::from_icon_name(&format!("layer-{icon}-symbolic"));
+                let image = if matches!(
+                    entry.item,
+                    HeaderItem::Tool {
+                        control: ToolbarControl::Color
+                    }
+                ) {
+                    crate::icons::color_pair()
+                } else {
+                    crate::icons::image(&format!("layer-{icon}-symbolic"))
+                };
                 image.set_pixel_size(size.icon());
                 b.set_child(Some(&image));
                 if entry.item
@@ -482,7 +491,7 @@ impl Header {
             }
             HeaderItem::Menu => {
                 let menu = w.chrome_menu(ApplicationMenu::Primary);
-                menu.set_icon_name("layer-menu-symbolic");
+                menu.set_child(Some(&crate::icons::image("layer-menu-symbolic")));
                 menu.upcast()
             }
             HeaderItem::MenuLabels => {
@@ -568,7 +577,7 @@ impl Header {
         content.set_can_target(!editing);
         content.set_can_focus(!editing);
         if editing {
-            let grip = gtk::Button::from_icon_name("layer-grip-symbolic");
+            let grip = crate::icons::button("layer-grip-symbolic");
             grip.add_css_class("flat");
             grip.add_css_class("header-grip");
             grip.set_valign(gtk::Align::Center);

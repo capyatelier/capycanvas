@@ -14,7 +14,9 @@ pub(crate) mod operation;
 mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
-pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
+pub use art_layers::{
+    LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
+};
 #[path = "application_menu.rs"]
 mod application_menu;
 #[path = "document_files.rs"]
@@ -2833,8 +2835,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => None,
                 })
                 .collect();
-            // Undo/redo preserves which group is open, even though transient
-            // customization popups are reset. Rebuild its shared presentation.
+            changed |= CUSTOMIZATION;
+        }
+        if changed & (LAYOUT | CUSTOMIZATION) != 0 {
+            // Attached groups survive transient popup resets, including opening
+            // Preferences. Keep their bodies consistent with the allocated space.
+            // Undo/redo also preserves the open group in layout history.
             for settings in &self.state.workspace.layout.column_settings {
                 let Some(group) = self
                     .state
@@ -7789,6 +7795,119 @@ mod tests {
             s.engine.document().layer(LayerId(1)).unwrap().mask,
             source.mask
         );
+    }
+
+    #[test]
+    fn layer_drop_preview_rejects_invalid_moves_and_does_not_create_history() {
+        let mut s = session();
+        let original = s.engine.document().layers.clone();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        })
+        .unwrap();
+        let id = s.engine.document().active_layer.0;
+        let created = s.engine.document().layers.clone();
+        assert_eq!(s.layer_drop_hint(id, 1, 0.0), None);
+        assert_eq!(s.layer_drop_hint(id, id, 0.5), None);
+        assert_eq!(s.layer_drop_hint(0, id, 0.0), None);
+        assert_eq!(s.layer_drop_hint(id, u64::MAX, 0.0), None);
+        for fraction in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert_eq!(s.layer_drop_hint(id, 1, fraction), None);
+        }
+        assert_eq!(
+            s.layer_drop_hint(id, 1, 1.0),
+            Some(LayerDropPosition::Below)
+        );
+        assert_eq!(s.engine.document().layers, created);
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Drop {
+                id,
+                target: 1,
+                fraction: 0.0,
+            },
+        })
+        .unwrap();
+        // The no-op drop must not consume Undo ahead of the preceding New layer.
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().layers, original);
+        s.engine.redo().unwrap();
+        assert_eq!(s.engine.document().layers, created);
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Drop {
+                id,
+                target: 1,
+                fraction: 1.0,
+            },
+        })
+        .unwrap();
+        let moved = s.engine.document().layers.clone();
+        assert_ne!(moved, created);
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().layers, created);
+        s.engine.redo().unwrap();
+        assert_eq!(s.engine.document().layers, moved);
+    }
+
+    #[test]
+    fn layer_drop_preview_shares_parent_lock_cycle_and_clipping_validation() {
+        let mut s = session();
+        for _ in 0..2 {
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::New {
+                    group: true,
+                    clipped: false,
+                },
+            })
+            .unwrap();
+        }
+        let child = s.engine.document().active_layer;
+        let parent = s
+            .engine
+            .document()
+            .layer(child)
+            .unwrap()
+            .properties
+            .parent
+            .unwrap();
+        assert_eq!(s.layer_drop_hint(parent.0, child.0, 0.5), None);
+        assert_eq!(
+            s.layer_drop_hint(1, child.0, 0.5),
+            Some(LayerDropPosition::Into)
+        );
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: parent.0,
+                value: true,
+            },
+        })
+        .unwrap();
+        assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
+        assert_eq!(s.layer_drop_hint(child.0, 1, 0.0), None);
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: parent.0,
+                value: false,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Select { id: 1, mask: false },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: false,
+                clipped: true,
+            },
+        })
+        .unwrap();
+        let clipped = s.engine.document().active_layer.0;
+        // Both moving the base out and orphaning a clipped layer are rejected.
+        assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
+        assert_eq!(s.layer_drop_hint(clipped, child.0, 0.5), None);
     }
 
     #[test]
@@ -15082,5 +15201,14 @@ mod tests {
         assert_eq!(app.state.workspace.layout.bands.len(), 4);
         assert!(serde_json::to_value(&app.state).unwrap()["commands"].is_array());
     }
-    include!("column_group_tests.rs");
+    mod gtk_column_groups {
+        use super::*;
+        const COLUMN_PLATFORM: Platform = Platform::Gtk;
+        include!("column_group_tests.rs");
+    }
+    mod windows_column_groups {
+        use super::*;
+        const COLUMN_PLATFORM: Platform = Platform::Windows;
+        include!("column_group_tests.rs");
+    }
 }

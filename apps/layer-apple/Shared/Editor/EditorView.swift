@@ -52,6 +52,7 @@ struct EditorView<Canvas: View>: View {
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .modifier(EditorPopoverHost())
         .coordinateSpace(name: "editor-workspace")
         .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor-workspace")).onEnded { event in
             store.workspace.chrome(["kind": "contact", "position": [event.location.x, event.location.y], "canvas": false])
@@ -79,7 +80,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
-            SettingsView(store: store).modifier(StorageAlert(store: store))
+            SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
                 .foregroundStyle(.primary).presentationBackground(.background)
                 .modifier(EditorPresentationAppearance())
         }
@@ -226,7 +227,7 @@ struct MenuItems: View {
                 if !item["sections"].array.isEmpty {
                     Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke, usesShortcuts: usesShortcuts)) }.disabled(!item["enabled"].bool)
                 } else {
-                    Button { store.dispatch(item["action"]); didInvoke() } label: {
+                    Button { invoke(item["action"]) } label: {
                         if item["selected"].bool { Label(item["label"].string, systemImage: "checkmark") }
                         else { Text(item["label"].string) }
                     }.disabled(!item["enabled"].bool || item["action"].isNull)
@@ -237,6 +238,12 @@ struct MenuItems: View {
                 }
             }
         }
+    }
+    private func invoke(_ action: JSON) {
+        #if os(macOS)
+        if nativeTextMenuAction(action) { didInvoke(); return }
+        #endif
+        store.dispatch(action); didInvoke()
     }
 }
 

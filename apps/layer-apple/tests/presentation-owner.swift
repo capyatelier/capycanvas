@@ -32,18 +32,22 @@ private func require(_ value: Bool, _ message: String) {
             owner.attach(layer, width: 128, height: 128, scale: 1); barrier(owner)
             guard let gate = layer.presentationGate else { fatalError("Attached layer lacks its owner's gate") }
             let count = layer.maximumDrawableCount
+            let cancelled = DispatchSemaphore(value: 0)
             let old = fill(gate, count: count)
             require(!owner.canAdmitPresentation, "The owner must observe its attached layer")
+            owner.whenPresentationAvailable { cancelled.signal() }
             owner.resize(width: 160, height: 128, scale: 1); barrier(owner)
             require(owner.canAdmitPresentation, "Resize must invalidate discarded drawable tickets")
             let resized = fill(gate, count: count)
             for ticket in old { gate.retired(ticket) }
             require(!owner.canAdmitPresentation, "Old-size callbacks retired new-size tickets")
+            owner.whenPresentationAvailable { cancelled.signal() }
             owner.invalidatePresentations()
             require(owner.canAdmitPresentation, "Resume must invalidate discarded drawable tickets")
             let resumed = fill(gate, count: count)
             for ticket in resized { gate.retired(ticket) }
             require(!owner.canAdmitPresentation, "Pre-suspension callbacks retired resumed tickets")
+            owner.whenPresentationAvailable { cancelled.signal() }
             owner.detach(); barrier(owner)
             require(layer.presentationGate == nil && owner.canAdmitPresentation, "Detach must release admission and disconnect the layer")
             let replacement = ObservedMetalLayer()
@@ -53,8 +57,14 @@ private func require(_ value: Bool, _ message: String) {
             let latest = fill(gate, count: replacement.maximumDrawableCount)
             for ticket in resumed { gate.retired(ticket) }
             require(!owner.canAdmitPresentation, "Detached-layer callbacks retired replacement tickets")
+            require(cancelled.wait(timeout: .now()) == .timedOut,
+                "Resize, resume and detach must retire old capacity waiters")
+            let notified = DispatchSemaphore(value: 0)
+            owner.whenPresentationAvailable { notified.signal() }
             for ticket in latest { gate.retired(ticket) }
             require(owner.canAdmitPresentation, "Completed replacement drawables must reopen admission")
+            require(notified.wait(timeout: .now()) == .success && notified.wait(timeout: .now()) == .timedOut,
+                "The actual owner's replacement layer must notify capacity exactly once")
             owner.detach(); barrier(owner)
             print("PASS platform \(platform): real Metal attach, pending admission, resize, resume, detach and replacement")
         }

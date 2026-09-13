@@ -23,6 +23,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "panel_handle_target"
             | "drop"
             | "workspace_drag_preview"
+            | "layer_drop"
             | "drawer"
             | "drawer_toolbar"
             | "expansion"
@@ -60,6 +61,49 @@ mod tests {
             result
         }
     }
+    #[test]
+    fn layer_drop_query_validates_epoch_and_preserves_document_and_history() {
+        use layer_ui::{LayerAction, Platform, UiAction};
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        host.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: true,
+                clipped: false,
+            },
+        })
+        .unwrap();
+        let group = host.session.engine().document().active_layer.0;
+        let epoch = host.session.state().document_file.epoch;
+        let before = host.session.engine().document().layers.clone();
+        for requested_epoch in [epoch, epoch + 1] {
+            let reply = metadata(query(&mut host, &json!({
+                "type":"layer_drop", "epoch":requested_epoch, "id":1, "target":group, "fraction":0.5
+            }).to_string()).unwrap());
+            assert!(reply["error"].is_null());
+            assert_eq!(reply["result"]["epoch"], epoch);
+            assert_eq!(
+                reply["result"]["position"],
+                if requested_epoch == epoch {
+                    json!("into")
+                } else {
+                    Value::Null
+                }
+            );
+            assert_eq!(host.session.engine().document().layers, before);
+        }
+        host.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::Undo,
+        })
+        .unwrap();
+        assert!(
+            host.session
+                .engine()
+                .document()
+                .layer(layer_core::LayerId(group))
+                .is_none()
+        );
+    }
+
     #[test]
     fn native_startup_uses_editor_preset_and_saved_workspaces_remain_authoritative() {
         use layer_ui::{Platform, UiAction, WorkspaceState};

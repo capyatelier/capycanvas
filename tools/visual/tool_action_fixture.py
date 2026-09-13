@@ -21,12 +21,14 @@ def actions_for(platform):
             previous = actions.setdefault(command["id"], item)
             assert previous["checkable"] == item["checkable"]
             assert previous["command"]["label"] == command["label"]
+            assert previous["command"]["icon"] == command["icon"]
     return list(actions.values())
 
 
 actions = actions_for("mac")
-identity = lambda items: {(item["command"]["id"], item["command"]["label"], item["checkable"]) for item in items}
+identity = lambda items: {(item["command"]["id"], item["command"]["label"], item["command"]["icon"], item["checkable"]) for item in items}
 assert identity(actions) == identity(actions_for("ios")), "Apple tool-action inventories differ"
+assert all(item["command"]["icon"] for item in actions), "Tool actions must use shared icons"
 assert len(actions) == 6, "Review capture height and coverage when the shipped action set changes"
 print(json.dumps({
     "schema": 1, "actions": actions, "theme": theme["theme"],

@@ -32,7 +32,6 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.window.PopupProperties
 import org.json.JSONObject
@@ -196,7 +195,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                         if (view.optString("id") == id) SharedIcon("check", "Current workspace", Modifier.padding(start = 6.dp).size(16.dp))
                         Box(Modifier.rowBounds(drag.options, id)) {
                             IconButton({ drag.menu = id }, enabled = enabled,
-                                modifier = Modifier.size(36.dp).testTag("workspace-options-$id").semantics { contentDescription = "Options for ${row.getString("title")}" }) { Text("⋮", fontSize = 22.sp) }
+                                modifier = Modifier.size(36.dp).testTag("workspace-options-$id").semantics { contentDescription = "Options for ${row.getString("title")}" }) { SharedIcon("more", null) }
                             DropdownMenu(drag.menu == id, { drag.menu = null }, properties = PopupProperties(focusable = !drag.contact),
                                 modifier = Modifier.testTag("workspace-row-menu")) {
                                 fun closeEdit(value: JSONObject) { drag.menu = null; edit(value) }

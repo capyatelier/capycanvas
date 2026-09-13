@@ -168,3 +168,36 @@ defaults automatically, so a fresh profile is useful when reviewing the design.
 - Shared unit/bridge tests, GTK isolated real-input tests, Web regressions,
   actual release executable and screenshot inspection. Report physical-device
   and untested-host limitations explicitly.
+
+## Main integration — 2026-09-13
+
+Merged `origin/main` at `6ff2201` into the GTK window-bar branch at `69bbea6`.
+The repository's upstream branch is named `main`, not `master`. The customizable
+header, nested shared tool picker, total-Zen policy and drawer dismissal are
+retained alongside the incoming compact color picker and shared SVG icon bank.
+Header controls, palette grips and tool-picker rows now use the shared GTK SVG
+renderer; the header's color tile uses its live foreground/background paintable.
+The customization command also has a packaged toolbar icon.
+
+Validation passed: release GTK executable and Web/Wasm build; 434 shared tests
+(337 UI, 25 host, 72 workspace; one hardware-only host test remains ignored);
+and these 16 isolated native GTK cases:
+
+- Picker journey, all drawer controls, outside drawer dismissal, caption/cancel,
+  and editor controls: `/tmp/capy-workspace-motion.medFeO`, `DIcal8`, `Fz2pM4`,
+  `mXj9GZ`, `6s0MI5` (later IDs share the same directory prefix).
+- Both-theme/all-size spacing and SVG checks, persistence, held context menus,
+  640px overflow, and 2× mouse/touch palette drag: `vhR8dn`, `nNFK25`, `Ct9AS6`,
+  `EbQcvA`, `i6lhdC`.
+- Compact color input, full SVG bank and 280 production-control icon checks,
+  drawing/default layout, Zen icon choices, invalid-default recovery, and canvas
+  behind the header: `ok94G4`, `W7Ypa3`, `YABflV`, `7U6tbi`, `x276nW`, `CYKNQT`.
+
+Reviewed header, editor and color-drawer captures in both themes. Tests were
+updated to use the new wheel's rotated hue geometry and Okhsv coordinates, and
+to expect a valid saved `shape` after workspace recovery rather than no field.
+The native runner now resolves a short test name to exactly one full Rust test
+name: Cargo substring filtering had accidentally selected both the default
+workspace and default-recovery tests. Physical pen and other native platforms
+were not revalidated by this integration. The Web build is a merge check, not a
+port of the GTK window-bar editor.

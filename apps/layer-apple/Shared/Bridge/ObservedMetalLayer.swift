@@ -10,6 +10,7 @@ final class FramePresentationGate: @unchecked Sendable {
     private var capacity = 3
     private var serial: UInt64 = 0
     private var pending = Set<UInt64>()
+    private var available: (@Sendable () -> Void)?
     var hasCapacity: Bool {
         lock.lock(); defer { lock.unlock() }
         return pending.count < capacity
@@ -18,6 +19,17 @@ final class FramePresentationGate: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if let capacity { self.capacity = max(1, capacity) }
         pending.removeAll(keepingCapacity: true)
+        available = nil
+    }
+    /// One waiter, installed atomically with the capacity check so retirement
+    /// between the display tick and registration cannot lose the notification.
+    func whenAvailable(_ action: (@Sendable () -> Void)?) {
+        lock.lock()
+        available = action
+        let ready = pending.count < capacity ? available : nil
+        if ready != nil { available = nil }
+        lock.unlock()
+        ready?()
     }
     func acquired() -> UInt64 {
         lock.lock(); defer { lock.unlock() }
@@ -25,9 +37,14 @@ final class FramePresentationGate: @unchecked Sendable {
         return serial
     }
     func retired(_ ticket: UInt64) {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         // Old-surface, duplicate and cancelled-frame callbacks are harmless.
         pending.remove(ticket)
+        let ready = pending.count < capacity ? available : nil
+        if ready != nil { available = nil }
+        lock.unlock()
+        // The callback may register another waiter; never call it under lock.
+        ready?()
     }
 }
 

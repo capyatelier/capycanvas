@@ -107,6 +107,15 @@ import SwiftUI
         case "column": return layout["collapsed"].array.contains { $0["id"].uint == item["column"].uint }
         default:
             if item["type"].string == "drag_divider" { return layout["dividers"].array.contains { $0["id"].uint == item["id"].uint } }
+            if item["type"].string == "resize_column_panel" {
+                guard let column = layout["collapsed"].array.first(where: { $0["id"].uint == item["column"].uint }),
+                      !column["group_panel"].isNull else { return false }
+                if item["after"].isNull { return true }
+                let panel = column["group_panel"]
+                return panel["dividers"].array.indices.contains {
+                    panel["panels"][$0]["panel"].string == item["after"].string
+                }
+            }
             return groups.contains { (!$0["id"].isNull && $0["id"].uint == item["group"].uint)
                 || (!$0["group"].isNull && $0["group"].uint == item["group"].uint) }
         }

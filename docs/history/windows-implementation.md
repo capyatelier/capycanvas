@@ -1873,3 +1873,276 @@ pickup, attached column group panels and per-column preferences, starting-layout
 preview, remaining raster differences, physical pressure/tilt/eraser/touch,
 DPI/device recovery, distribution and sustained 120 Hz painting/input latency
 still require work. No presentation benchmark ran during this milestone.
+
+## Whole layer-row pickup checkpoint
+
+Windows now recognizes layer pickup across row whitespace and child controls,
+using actual native mouse, pen and touch identities. Mouse bodies and explicit
+grips move after system slop; pen/touch bodies wait for a native hold and leave
+early motion to scrolling. The same held contact can open a menu and then drag;
+released holds retain the menu. Child clicks are suppressed after pickup, while
+native rename fields keep selection and text-menu ownership.
+
+The retained layer surface owns capture through edge scrolling and virtualization.
+ScrollPresenter required two distinct fixes: grips must claim before its Down
+handler redirects input, and held contacts require temporarily disabling its
+scroll axes as well as ignoring new input. All paths restore scrolling. The
+native scrollbar now reserves its template column instead of covering row grips.
+Actual cancellation, capture loss, source removal and loss of focus retire the
+contact and its menu.
+
+A shared read-only drop query uses the same reparent plan as the final edit,
+preserving locks, clipping, cycles and layer/mask offsets. No-op placements do
+not create history entries. The query is document-epoch fenced; the native host
+also rejects stale source, target and revision responses.
+
+Shared validation passes 424 tests across UI, host and Windows, with four
+explicit hardware ignores; strict Windows Clippy and the Rust/WinUI build pass.
+The existing full Layers editing regression also passes. The pickup fixture
+covers each device's body/whitespace/child/grip arbitration, held menus,
+group drops, native scrolling, edge capture, source removal, rename ownership,
+minimization and one-step Undo/Redo, including floating and drawer rows.
+Floating setup uses mouse input: a separate pen tab tear-off exposed capture loss
+and remains open. These results do not establish physical pen/touch acceptance.
+
+A diagnostic race left an old per-window JSON file after a failed atomic rename,
+even though native Redo and its toolbar state had advanced. Opt-in trace writes
+now retry transient replacement failures briefly and report persistent errors to
+the debugger. The fixture records native publication evidence alongside failures;
+trace timing is excluded from presentation measurements.
+
+Visual parity, attached column panels/preferences, starting-layout preview,
+physical input and recovery, distribution, sustained 120 Hz painting and physical
+input latency remain open. The unrelated GPU filter-reference investigation is
+excluded from this milestone. No performance benchmark ran here.
+
+## Audited shared icons on Windows
+
+The shared SVG bank and Rust catalog mappings from the published icon audit
+are integrated with Windows. All 157 SVGs are staged in light and dark variants,
+preserving explicit colors and opacity while resolving `currentColor`. Native
+tool groups, subtools, commands and filter layers consume the shared identities.
+Filter category headings, the selected category and preview captions now show
+their specific icons. Native checkable tool actions retain checkbox semantics
+beside command glyphs. New Layer uses the document-plus asset; column expansion
+uses the shared inward-facing double chevrons.
+
+The integrated shared suite passes 428 tests with four explicit hardware ignores,
+along with strict Windows Clippy and the Rust/WinUI build. Native tool editing,
+filter category/search/insertion, preview/Undo, both-theme filter replacement,
+drawer/column history and Navigator drawer checks pass. The staged SVGs match
+their source in both themes. Full raster parity and physical-device/performance
+acceptance remain open.
+
+## Attached column groups and starting-layout preview
+
+Windows collapsed columns now expose Drawers, Group panel, Auto-hide and Apply
+to all columns through the shared column menu. Attached groups occupy shared
+vertical slots beside the icon strip, with native width/split resize cursors and
+immediate captured pickup. Shared Rust owns allocation, cancellation, preferences
+and one-step history. Resizing retains native bodies and scrolling, including
+Layers, toolbar tiles and GPU Navigator content. Widths and split weights survive
+restart; open groups remain transient. Chrome hiding in Zen removes the attached
+presentation and restores it when chrome returns.
+
+Opening Preferences or another customization dialog previously cleared attached
+bodies while leaving their layout allocation. Shared reconciliation now preserves
+that presentation on both GTK and Windows. The same column contract tests run
+for both platforms, including preferences, resizing, dismissal, cancellation,
+all-column settings and history restoration.
+
+Restore Starting Layout now previews its saved baseline in the editor behind the
+native confirmation. Cancel and window close restore the current arrangement;
+confirmation preserves tool settings and creates one workspace history step.
+The native service test checks that preview never reaches storage, failed writes
+retain the current arrangement, Retry applies once, and Undo/Redo remain exact.
+
+The column fixture measures actual native slot bounds against shared geometry
+using the Win32 client origin and current DPI. It covers both sides, every pointer
+device, retained resize/cancellation/history, presentation switching, auto-hide
+without painting, all-column preferences, Navigator, Layers, Zen, both themes and
+restart. Toolbar and row pickup fixtures select Drawers or Group panel explicitly.
+Their row-body target avoids the attached resize strip, and cancellation accounts
+for immediate attached-panel removal rather than a drawer closing animation.
+
+The affected unit checks pass 502 tests (25 host, 315 UI, 98 Windows and
+64 workspace), with four explicit hardware ignores. Strict Windows Clippy and
+both Debug and Release Rust/WinUI builds pass. Column fixtures pass for mouse,
+pen and touch; toolbar and layer-row pickup pass all six device/presentation
+combinations. The existing drawer regression and Release manager/editor fixtures
+also pass, including preview/Cancel, one-step reset history, restart, both Zen
+modes, themes, retained controls, resizing and titlebar hit regions. Native slot
+bounds agree with shared allocations within one physical pixel. These checks do
+not establish full-image parity, physical digitizer features or painting cadence.
+
+Capture diagnostics and the focused tab fixture remain available. The user
+confirmed physical Layers tab tear-off follows pen contact through release;
+injected pen/touch tab capture loss is still unresolved. No diagnostic capture,
+private profile, machine report, generated asset or binary belongs in this commit.
+
+Full-image workspace parity, strict renderer reference agreement, the complete
+physical input matrix, mixed-DPI/device recovery, distribution and sustained
+120 Hz painting plus physical input latency remain open. No performance
+benchmark ran during this milestone.
+
+## Portable Windows distribution
+
+The Windows packager now builds Release Rust/WinUI into a fresh staging directory
+and produces an unsigned Windows 11 x64 ZIP with self-contained WinUI and app-local
+Visual C++ runtimes. It includes project/branding terms, notices for the resolved
+Cargo and pinned NuGet dependencies, and Rust/native runtime notices. Missing
+unreviewed notices fail packaging. Supplemental texts retain their exact upstream
+source commits.
+
+The package records its source commit, development status, toolchain versions and
+every file's size/hash. Uncommitted changes require an explicit development option.
+A clean source change during packaging aborts the build. Sorted paths, fixed ZIP
+timestamps and normalized entry attributes make archive assembly repeatable for
+identical payloads; two assemblies must have the same SHA-256. This is narrower
+than bit-identical recompilation across toolchain installations.
+
+The extracted-package fixture validates the complete inventory before launch.
+It uses a path with spaces, an unrelated working directory and a disposable
+profile, then checks complete filter loading, runtime origins, drawing, Undo/Redo,
+pan, resize and zero-exit shutdown. Rust, XAML, Windows App Runtime and the C++
+runtime load from the package. The observed shader compiler loads from the Windows
+system directory. Captures, loaded-module paths and profiles remain local.
+
+The Release build, notice collection, repeated archive comparison and extracted
+native fixture pass. The dirty-source gate and rejection of changed or undeclared
+archive files also pass; invalid packages never launch. This checkpoint does not
+establish clean-machine deployment,
+MSIX/signing, full-image parity, physical pen/touch features, mixed-DPI/device
+recovery or sustained 120 Hz painting/input latency. No performance benchmark ran.
+
+### Compact Windows Color picker milestone
+
+Windows now projects the compact shared ColorPanelView introduced on main:
+Okhsv circle, HSV square, HLS triangle, paint-pair/transparent swatches,
+shape switches, swap and curved shape/RGB readouts. The native view fits a
+solo docked panel to its available height. Shared Rust supplies logical layout,
+projection-aware hit tests, display hue guides and field pixels. WinUI retains
+the buttons and capture owner; unhandled wheel contacts are classified against
+shared geometry before capture, independently of the image's hit-test surface.
+Native swatch menus support secondary click, pen/touch holds and the keyboard.
+
+The four shared SVG color icons are staged as native path geometry so rotation
+does not resample a bitmap. The hue mesh uses a continuous annulus clip.
+Painted wheel-image edges follow the browser canvas's logical-pixel snapping,
+while shared edit geometry remains unchanged. Chromium's
+[canvas painter](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/core/paint/html_canvas_painter.cc)
+and the actual composed reference establish this distinction from DOM bounds.
+
+Validation: 523 shared/native unit tests and strict Windows Clippy pass.
+Documented Debug and Release builds pass. Release checks pass the full editor,
+titlebar hit regions, native measurements, both Zen modes, retained resize,
+workspace restoration, themes and zero exit. The dedicated compact picker
+fixture passes all three projections with synthetic mouse, pen and touch,
+field/hue contacts beneath the curved readout, cancellation, keyboard activation,
+unchanged paint on shape/readout toggles, retained buttons, slots/swap, native
+context menus, the mouse-hold negative case and retained Color drawer input.
+Picker edits leave the document unchanged and every accepted fixture exits zero.
+
+Matched production native/browser fixtures cover 128, 160, 226 and 360 logical
+pixels, dark/light themes and both readouts (48 pickers on eight complete
+surfaces) at the available 150% display scale. Other native scales are not
+accepted. Reported bounds agree except the intentionally snapped wheel image
+at size160, whose paint width differs from the fractional DOM box by at most
+0.672 logical pixels.
+
+**Exact raster parity is not accepted.** The unchanged whole-image,
+zero-tolerance comparison fails all eight surfaces: 22.84–26.23% of pixels
+differ, with mean absolute channel error 0.465–1.399 on the 0–255 scale and
+maximum channel error 137–146. Curved text and edge rasterization remain
+visible in the difference images. References were not masked, rescaled or
+replaced and tolerances were not changed. Capture commands and evidence
+boundaries are in the Windows README; machine captures and reports stay
+ignored. Physical digitizer and final painting/performance acceptance remain
+separate, and the 120 Hz display is currently unavailable.
+
+### Compact picker text and state refinement
+
+Paired instrumentation measured the actual visible native/browser glyph
+baselines within 0.000026 logical pixels, with matching Segoe UI advances.
+The large curved-digit differences came from rasterization rather than layout.
+Native digits now use DirectWrite font outlines as retained WinUI geometry,
+transformed before rasterization. The readout remains a named native button.
+The temporary text instrumentation was removed after preserving local evidence.
+
+Keyboard focus follows main's styles. The readout uses a centered rounded
+stroke; shape, swatch and swap buttons do not add a system outline absent from
+the reference. Four focus and three hover states were captured in dark and
+light at size 160. Hover and focus affect the corresponding reference regions.
+Native captures use OS mouse input because cursor repositioning alone did not
+reliably cause pointer-over styling.
+
+Documented Debug/Release builds and the final production input fixture pass,
+including all projections/devices, keyboard activation, menus, cancellation,
+retained drawer input, unchanged documents and zero exit. A drawer test race
+was measured on the same failed instance: its visible wheel continued moving
+during the opening animation. The fixture now waits for stable complete bounds
+and native capture release before switching devices. No Rust behavior changed
+since the preceding 523-test and strict-Clippy checkpoint.
+
+All eight complete default captures improve: mean absolute channel error is
+0.433–1.326 on the 0–255 scale; maximum channel error is 82–101, down from
+137–146. Exact differing pixels remain 22.71–26.21%. The fourteen size-160
+focus/hover comparisons have mean error 0.838–0.986 and maximum 88–89.
+**Every zero-tolerance comparison still fails.** Text coverage, gradient
+quantization and edge rasterization remain open. The comparator, reference
+rendering and tolerances are unchanged. These results establish neither
+additional native display scales nor physical pen or 120 Hz painting acceptance.
+
+### Compact picker native text rasterization
+
+The picker now rasterizes Segoe UI through DirectWrite at each final glyph
+transform. It matches the reference's three-channel grayscale reduction, sRGB
+text correction, font-cache precision and font-table hinting. Horizontal
+labels use whole-pixel baselines; rotated digits use quarter-pixel positions.
+The backing size is integral, including the fractional extent at size 226.
+Glyph images and correction tables are retained; cache keys include effective
+raster scale. The native readout button still owns input and its full accessible
+description. The unrotated swap control reuses the native SVG loader, preserving
+the shared rounded stroke geometry without the extra XAML subpath workaround.
+The three rotated shape controls retain native vector geometry.
+
+Independent raw-canvas probes narrowed curved digits and the bold label to a
+maximum alpha difference of one at the investigated sizes. Those probes explain
+the implementation; they are not the acceptance images. The complete production
+matrix at actual display scale 1.5 has these zero-tolerance results:
+
+| Theme / size | Exact differing pixels | Mean absolute RGB error (0–255) | Maximum |
+| --- | ---: | ---: | ---: |
+| Dark 128 | 21.790% | 0.9771 | 72 |
+| Dark 160 | 25.345% | 0.7487 | 66 |
+| Dark 226 | 25.622% | 0.5860 | 68 |
+| Dark 360 | 26.019% | 0.4041 | 85 |
+| Light 128 | 22.021% | 0.9370 | 90 |
+| Light 160 | 25.533% | 0.7396 | 64 |
+| Light 226 | 25.655% | 0.5789 | 72 |
+| Light 360 | 26.078% | 0.4113 | 98 |
+
+All eight default surfaces improve in average error over the preceding
+milestone. Four focus and three hover states in both themes at size 160 have
+mean error 0.7353–0.7578 and maximum error 64–78. Fractional label measurement
+also preserves the existing focus rectangle. **All twenty-two complete-image
+comparisons still fail exact equality.** No reference styles, pixels, image
+boundaries, comparator or tolerance were changed.
+
+Geometry reports retain the distinction between the snapped native paint image
+and the logical browser canvas: at size 160 the reported wheel widths differ
+by 0.671875 DIP. Other default sizes have matching reported bounds. Exposing the
+input Canvas directly was investigated and reverted after its zero ActualWidth
+prevented fixture readiness; both owned diagnostic instances were inspected
+before closing normally. This does not establish exact input-bound geometry.
+All temporary browser and readiness instrumentation was removed.
+
+The documented Debug/Release builds and production picker input fixture pass:
+all three shapes with synthetic mouse/pen/touch in field and ring, cancellation,
+keyboard activation, paint slots and swap, native menus, mouse-hold negative
+case, retained drawer input, unchanged document and zero exit. The complete
+Release editor check also passes titlebar hit regions, tools, Zen modes, retained
+resize, workspace restore, theme changes and zero exit. Rust is unchanged
+from the preceding 523-test and strict-Clippy checkpoint. Custom ClearType tuning,
+other physical display scales, physical digitizer behavior and 120 Hz painting
+remain separate acceptance gates.

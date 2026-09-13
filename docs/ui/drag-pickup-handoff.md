@@ -11,12 +11,14 @@ menu-to-drag, cancellation, and undo/redo. Mouse tile holds only arm pickup.
 - **Windows:** toolbar/divider/disabled/drawer tiles and collapsed icons use native
   holds with same-contact menus and stable capture. Native mouse/touch/pen fixtures
   cover docked/floating/drawer tiles, icon tear-off, nested origins and Zen menus.
-  Verify and enforce layer row/grip device rules, including row whitespace, and
-  finish physical input acceptance.
+  Whole layer rows, child controls and grips now use explicit native arbitration;
+  mouse/touch/pen fixtures cover docked/floating/drawer rows, scrolling, editing,
+  cancellation and history. Pen workspace-tab tear-off exposed capture loss and
+  remains open, along with physical input acceptance.
 
 All platforms: collapsed-sidebar expand buttons use compact inward-pointing
 guillemets (`»` on the left, `«` on the right), matching the current GTK/Web
-controls. Apple and Android use the same directional glyphs; Windows still needs
-alignment. Keep the shared editor text size and bold weight.
+controls. Apple and Android use the same directional glyphs. Windows now uses
+the shared double-chevron SVGs, centered in the existing expand targets.
 
 Details: [convention](drag-and-reorder.md), [source inventory](drag-inventory.md).

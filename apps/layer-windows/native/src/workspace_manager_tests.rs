@@ -627,3 +627,115 @@ fn failed_manager_write_during_close_can_keep_the_window_open() {
     f.close();
     f.dispose();
 }
+
+#[test]
+fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
+    let mut f = Fixture::new();
+    f.ready();
+    let baseline = f
+        .service
+        .manager
+        .current()
+        .unwrap()
+        .starting_layout()
+        .unwrap()
+        .clone();
+    layout(&mut f, DockLayout::default());
+    f.native
+        .dispatch(UiAction::SetBrushSize { value: 73. })
+        .unwrap();
+    let before = f.native.session.capture_workspace().unwrap();
+    let document = f.native.session.engine().document().clone();
+    assert_ne!(before.history.layout(), &baseline);
+    f.service
+        .observe(&mut f.native, f.now, wall(), true)
+        .unwrap();
+    pollster::block_on(f.service.manager.flush()).unwrap();
+    let saved = f.service.manager.current().unwrap();
+    for confirm in [false, true] {
+        open(&mut f, Command::ResetLayout);
+        assert_eq!(f.native.session.state().workspace.layout, baseline);
+        assert_eq!(f.native.session.capture_workspace().unwrap(), before);
+        assert!(!f.service.accepts_input(wall()));
+        f.service
+            .observe(&mut f.native, f.now, wall(), true)
+            .unwrap();
+        pollster::block_on(f.service.manager.flush()).unwrap();
+        let stored = pollster::block_on(
+            f.service
+                .manager
+                .load(&f.service.manager.active_id().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(stored.entity, saved, "preview is never persisted");
+        if !confirm {
+            input(&mut f, Input::Cancel);
+            assert!(view(&f).is_null());
+            assert_eq!(
+                &f.native.session.state().workspace.layout,
+                before.history.layout()
+            );
+            assert_eq!(f.native.session.capture_workspace().unwrap(), before);
+        } else {
+            f.faults.fail.set(true);
+            input(
+                &mut f,
+                Input::Submit {
+                    name: None,
+                    choice: None,
+                },
+            );
+            settle(&mut f);
+            assert!(view(&f)["error"].is_string());
+            assert_eq!(view(&f)["can_retry"], true);
+            assert_eq!(f.native.session.capture_workspace().unwrap(), before);
+            assert_eq!(
+                &f.native.session.state().workspace.layout,
+                before.history.layout()
+            );
+            f.faults.fail.set(false);
+            input(&mut f, Input::Retry);
+            settle(&mut f);
+        }
+    }
+    assert!(view(&f).is_null());
+    let restored = f.native.session.capture_workspace().unwrap();
+    assert_eq!(restored.history.layout(), &baseline);
+    assert_eq!(restored.working, before.working);
+    assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
+    assert_eq!(f.native.session.engine().document(), &document);
+    f.native
+        .dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::UndoWorkspace,
+        })
+        .unwrap();
+    assert_eq!(
+        &f.native.session.state().workspace.layout,
+        before.history.layout()
+    );
+    f.native
+        .dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::RedoWorkspace,
+        })
+        .unwrap();
+    assert_eq!(f.native.session.state().workspace.layout, baseline);
+    f.native
+        .dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::UndoWorkspace,
+        })
+        .unwrap();
+    open(&mut f, Command::ResetLayout);
+    assert_eq!(f.native.session.state().workspace.layout, baseline);
+    let id = f.service.manager.active_id().unwrap();
+    f.close();
+    assert!(view(&f).is_null());
+    let stored = pollster::block_on(f.service.manager.load(&id)).unwrap();
+    let capture = stored.entity.capture().unwrap();
+    assert_eq!(
+        capture.history.layout(),
+        before.history.layout(),
+        "closing cannot save the preview"
+    );
+    assert_eq!(capture.working, before.working);
+    f.dispose();
+}

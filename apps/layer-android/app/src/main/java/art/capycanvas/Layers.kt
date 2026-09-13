@@ -201,7 +201,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-                LayerButton(host,"plus","New layer",action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
+                LayerButton(host,"add-layer","New layer",action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
                 LayerButton(host,"folder","New group",action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
                 LayerButton(host,"mask","Add layer mask",enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
                 LayerButton(host,"image","Import image as layer") { import.launch("image/*") }

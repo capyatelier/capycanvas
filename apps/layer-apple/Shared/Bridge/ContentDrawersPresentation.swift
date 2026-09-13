@@ -22,6 +22,7 @@ import SwiftUI
     }
     private var latest: Request?
     private var bodies: [String: JSON] = [:]
+    var isGroupPanel: Bool { model["anchor"]["kind"].string == "column" && model["tabs"].isNull }
     init(id: String, store: EditorStore) { self.id = id; self.store = store }
     func panel(_ id: JSON) -> JSON {
         if let panel = store?.panel(id.string), !panel.isNull { return panel }
@@ -40,7 +41,10 @@ import SwiftUI
         let nextKey = JSON([next.raw, store.snapshot["layout"].raw, store.snapshot["partial_zen"].raw,
             measured, id == "tool" ? store.contentDrawers.tileRevision : 0]).stableKey
         guard key != nextKey else { return }; key = nextKey
-        latest = Request(from: geometry["placement"], heights: measured, closing: next.isNull, animate: changed)
+        // Attached panels resize the workspace itself. Their content and dock
+        // allocation must change together, without a detached drawer animation.
+        latest = Request(from: geometry["placement"], heights: measured, closing: next.isNull,
+            animate: changed && !isGroupPanel)
         // Coalesce changes while Rust owns a query. Cancelling a Swift task
         // cannot cancel an already-queued native request, so do not enqueue a
         // replacement until the current reply returns.
@@ -69,6 +73,7 @@ import SwiftUI
         }
     }
     func measure(_ height: CGFloat, column: Int) {
+        guard !isGroupPanel else { return } // Shared weights own each stacked viewport.
         guard height.isFinite, abs((heights[column] ?? 0) - height) > 0.5 else { return }
         heights[column] = height; refresh(current)
     }

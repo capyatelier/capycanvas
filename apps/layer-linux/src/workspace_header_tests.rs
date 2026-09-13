@@ -1,6 +1,22 @@
 //! Actual GTK widgets and Mutter-delivered input for the window-bar builder.
 use super::*;
 
+fn assert_shared_icons(widget: &gtk::Widget) {
+    if let Some(image) = widget.downcast_ref::<gtk::Image>()
+        && let Some(name) = crate::icons::name(image).filter(|name| name.starts_with("layer-"))
+    {
+        assert!(
+            image.paintable().is_some_and(|p| p.is::<gtk::Svg>()),
+            "{name} must use the shared SVG renderer, not theme-symbolic loading"
+        );
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        assert_shared_icons(&widget);
+    }
+}
+
 struct Driver {
     w: Rc<Workspace>,
     _app: NativeTestApp,
@@ -284,7 +300,7 @@ fn native_default_workspace_recovery_input() {
             .unwrap()
             .working;
     // The failing workspace is inactive, so its saved bytes cannot be autosaved
-    // over by the live editor. This is the exact incompatible ColorState field.
+    // over by the live editor. "wheel" is not a supported ColorShape variant.
     sql(
         "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id='builtin:workspace:painter'",
     );
@@ -295,9 +311,9 @@ fn native_default_workspace_recovery_input() {
     assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
     assert_eq!(
         sql(
-            "SELECT json_type(working,'$.colors.shape') IS NULL FROM items WHERE id='builtin:workspace:painter'"
+            "SELECT json_extract(working,'$.colors.shape') FROM items WHERE id='builtin:workspace:painter'"
         ),
-        "1"
+        "circle"
     );
     d.click_name(&d.header_tool(ToolbarControl::Color));
     assert!(state(&d.w).customization.drawer.is_some());
@@ -383,7 +399,7 @@ fn native_default_workspace_recovery_input() {
         }
     }
     assert_eq!(
-        sql("SELECT count(*) FROM items WHERE json_type(working,'$.colors.shape') IS NOT NULL"),
+        sql("SELECT count(*) FROM items WHERE json_extract(working,'$.colors.shape')='wheel'"),
         "0"
     );
     assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
@@ -592,6 +608,7 @@ fn native_header_picker_journey() {
             "Add to Right · before Brush"
         );
         d.click_name("header-add-tools");
+        assert_shared_icons(d.w.window.visible_dialog().unwrap().upcast_ref());
         assert!(d.w.window.visible_dialog().is_some());
         assert!(!d.named("toolbar-name").is_mapped());
         assert!(!d.named("confirm-tools").is_sensitive());
@@ -727,6 +744,7 @@ fn native_header_spacing_visual() {
         for size in HeaderSize::ALL {
             d.w.dispatch(HeaderAction::SetSize { size }.action());
             pump(250);
+            assert_shared_icons(d.w.header.root.upcast_ref());
             let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap();
             let b = close.compute_bounds(&d.w.surface).unwrap();
             assert!(
@@ -788,6 +806,7 @@ fn native_header_spacing_visual() {
             d.click(&tool);
             assert!(!button.has_css_class("drawer-origin-bottom"));
             d.edit();
+            assert_shared_icons(d.w.header.root.upcast_ref());
             let capy = h.entries().find(|e| e.item == HeaderItem::Capy).unwrap().id;
             let item = d.named(&format!("header-item-{capy}"));
             let grip = d

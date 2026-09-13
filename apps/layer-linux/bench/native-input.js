@@ -26,23 +26,39 @@ const columnDrops = ARGV.includes('--column-drops');
 const layerHold = ARGV.includes('--layer-hold');
 const workspaceHold = ARGV.includes('--workspace-hold') || layerHold || dragPickup || columnDrops;
 const workspaceSwitcher = ARGV.includes('--workspace-switcher');
+const iconAudit = ARGV.includes('--icons');
 const workspaceTransitions = ARGV.includes('--workspace-transitions');
 const workspaceManagerVisual = ARGV.includes('--workspace-manager-visual');
 const workspaceMenus = ARGV.includes('--workspace-menus') || workspaceSwitcher || workspaceManagerVisual || workspaceTransitions;
 const workspaceResize = ARGV.includes('--workspace-resize') || ARGV.includes('--web-workspace-resize');
-const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('--web-workspace-resize');
-const workspaceMotion = columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
+const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('--web-workspace-resize') || ARGV.includes('--web-color-panel');
+const colorPanel = ARGV.includes('--color-panel') || ARGV.includes('--web-color-panel');
+const workspaceMotion = colorPanel || columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 // Group panels include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
 if ((nativeTest && !ARGV.includes('--native-storage')) || drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
 const launch = [
-    ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
-        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+    ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', colorPanel ? '--color-panel' : workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
+        'cargo', 'test', '--release', '-p', 'layer-linux', iconAudit ? 'native_icon_audit' : colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
 ];
-if (nativeTest) launch[5] = nativeTest;
+if (nativeTest) {
+    // Cargo's filter is a substring match: a short name can accidentally run
+    // another case (and its storage/input protocol) in the same process.
+    const listing = Gio.Subprocess.new(
+        ['cargo', 'test', '--locked', '--release', '-p', 'layer-linux', '--', '--list'],
+        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+    );
+    const [, stdout, stderr] = listing.communicate_utf8(null, null);
+    if (!listing.get_successful()) throw Error(`Cannot list native tests: ${stderr}`);
+    const matches = stdout.split('\n').filter(line => line.endsWith(': test'))
+        .map(line => line.slice(0, -6)).filter(name => name.split('::').at(-1) === nativeTest);
+    if (matches.length !== 1) throw Error(`Expected exactly one native test named ${nativeTest}, found ${matches.length}`);
+    launch[5] = matches[0];
+    launch.push('--exact');
+}
 const process = launcher.spawnv(launch);
 let passed = false;
 process.wait_async(null, (p, result) => {
@@ -79,7 +95,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (nativeTest || workspaceSwitcher || columnDrops || workspaceTransitions) {
+    if (nativeTest || workspaceSwitcher || columnDrops || workspaceTransitions || colorPanel) {
         // Announce the virtual keyboard before testing activation. Otherwise
         // the first key can arrive before GTK binds the new wl_keyboard.
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, true]);

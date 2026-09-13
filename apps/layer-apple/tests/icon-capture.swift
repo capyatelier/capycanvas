@@ -13,6 +13,11 @@ import SwiftUI
         let names = try FileManager.default.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "svg" }.map { $0.deletingPathExtension().lastPathComponent }
             .sorted()
+        for name in names {
+            let key = String(name.dropFirst("layer-".count).dropLast("-symbolic".count))
+            precondition(SharedIcon.assetKey(name) == key && SharedIcon.assetKey(key) == key,
+                "Icon filenames and model identities must resolve to the same asset: \(name)")
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let width = 576, height = ((names.count + 11) / 12) * 48
         var fixtures: [JSON] = []

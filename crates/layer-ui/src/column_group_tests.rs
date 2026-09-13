@@ -4,7 +4,7 @@ fn group_edit(s: &mut UiSession<Recorder>, action: CustomizationAction) {
 }
 fn group_fixture() -> (UiSession<Recorder>, u32, u32, Panel) {
     let mut s = session();
-    s.set_platform(Platform::Gtk);
+    s.set_platform(COLUMN_PLATFORM);
     let group = s
         .state
         .workspace
@@ -38,7 +38,7 @@ fn group_fixture() -> (UiSession<Recorder>, u32, u32, Panel) {
 fn attached_outside_divider_resizes_group_without_expanding_the_strip() {
     for panel in [Panel::Brushes, Panel::Layers] {
         let mut s = session();
-        s.set_platform(Platform::Gtk);
+        s.set_platform(COLUMN_PLATFORM);
         let viewport = [1800., 1100.];
         let group = s.state.workspace.layout.panel_group(panel).unwrap();
         group_edit(&mut s, CustomizationAction::SetColumnCollapsed { group, collapsed: true });
@@ -388,7 +388,7 @@ fn group_panel_drag_cancellation_restores_open_projection_and_preferences() {
 #[test]
 fn apply_column_settings_includes_columns_hidden_inside_a_collapsed_parent() {
     let mut s = session();
-    s.set_platform(Platform::Gtk);
+    s.set_platform(COLUMN_PLATFORM);
     let group = s.state.workspace.layout.panel_group(Panel::Brushes).unwrap();
     s.dispatch(UiAction::MovePanel {
         panel: Panel::Sizes,
@@ -448,4 +448,24 @@ fn apply_column_settings_includes_columns_hidden_inside_a_collapsed_parent() {
     assert_eq!(setting.mode, ColumnMode::Drawers);
     assert!(setting.auto_hide);
     assert_eq!(setting.width, Some(380.));
+}
+
+#[test]
+fn attached_columns_survive_preferences_and_customization_resets() {
+    let (mut s, column, group, panel) = group_fixture();
+    group_edit(&mut s, CustomizationAction::ToggleColumnDrawer { group, panel });
+    let before = serde_json::to_value(s.layout([1800., 1100.])).unwrap();
+    for command in [CommandId::Settings, CommandId::KeyboardShortcuts, CommandId::About] {
+        invoke(&mut s, command);
+        assert!(s.state.settings_open);
+        assert_eq!(s.state.workspace.layout.open_column_group(column), Some(group));
+        assert!(s.state.customization.column_drawers.iter().any(ContentDrawer::is_group_panel));
+        assert_eq!(serde_json::to_value(s.layout([1800., 1100.])).unwrap(), before);
+        s.dispatch(UiAction::CloseSettings).unwrap();
+    }
+    group_edit(&mut s, CustomizationAction::ManageToolbars);
+    assert!(s.state.customization.column_drawers.iter().any(ContentDrawer::is_group_panel));
+    group_edit(&mut s, CustomizationAction::CloseToolbarManager);
+    assert!(s.state.customization.column_drawers.iter().any(ContentDrawer::is_group_panel));
+    assert_eq!(serde_json::to_value(s.layout([1800., 1100.])).unwrap(), before);
 }

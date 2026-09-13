@@ -22,6 +22,9 @@ final class NativeOwner: @unchecked Sendable {
     private var layer: CAMetalLayer?
     private let presentationGate = FramePresentationGate()
     var canAdmitPresentation: Bool { presentationGate.hasCapacity }
+    func whenPresentationAvailable(_ action: (@Sendable () -> Void)?) {
+        presentationGate.whenAvailable(action)
+    }
     /// Resizing or returning from occlusion/suspension can discard previously
     /// submitted drawables. Late callbacks cannot retire replacement tickets.
     func invalidatePresentations() { presentationGate.reset() }
@@ -485,6 +488,11 @@ final class NativeOwner: @unchecked Sendable {
     func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64 = 0) {
         if let trace, trace.isRecording {
             trace.record(FrameTraceEvent(kind: .tick, a: now, b: target, c: admitted ? 1 : 0, d: denial))
+        }
+    }
+    func observeFrameRetry(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64) {
+        if let trace, trace.isRecording {
+            trace.record(FrameTraceEvent(kind: .frameRetry, a: now, b: target, c: admitted ? 1 : 0, d: denial))
         }
     }
     func observeWorkload(_ event: FrameTraceEvent) {

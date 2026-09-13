@@ -29,18 +29,18 @@ import org.json.JSONObject
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("groups").objects().forEach { item ->
-                ToolChoice(host, item, (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"))
+                ToolChoice(host, item, "group", (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"))
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("subtools").objects().forEach { item ->
-                ToolChoice(host, item, Modifier.fillMaxWidth().testTag("subtool-${item.getString("label")}"))
+                ToolChoice(host, item, "subtool", Modifier.fillMaxWidth().testTag("subtool-${item.getString("label")}"))
             }
         }
     }
 }
 
-@Composable private fun ToolChoice(host: CanvasHost, item: JSONObject, modifier: Modifier) {
+@Composable private fun ToolChoice(host: CanvasHost, item: JSONObject, kind: String, modifier: Modifier) {
     val colors = LocalPalette.current
     val context = LocalContext.current
     val label = item.getString("label")
@@ -56,10 +56,13 @@ import org.json.JSONObject
                     context.assets.open("$id-${if (colors.dark) "dark" else "light"}.png").use { BitmapFactory.decodeStream(it).asImageBitmap() }
                 }
                 Image(swatch, null, Modifier.fillMaxWidth().height(40.dp).testTag("brush-preview-$id"), contentScale = ContentScale.FillBounds)
-                Text(label, Modifier.fillMaxWidth(), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
+                    Text(label, Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
+                }
             } else Row(Modifier.heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SharedIcon(item.getString("icon"), null)
+                SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                 Text(label, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -87,6 +90,8 @@ import org.json.JSONObject
                     EditorCheck(command.optBoolean("selected"), command.getString("label"), enabled = command.getBoolean("enabled")) { host.invoke(id) }
                     Text(command.getString("label"))
                 } else TextButton({ host.invoke(id) }, Modifier.testTag("tool-action-$id"), enabled = command.getBoolean("enabled")) {
+                    SharedIcon(command.getString("icon"), null)
+                    Spacer(Modifier.width(6.dp))
                     Text(command.getString("label"))
                 }
             }

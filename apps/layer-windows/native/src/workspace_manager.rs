@@ -593,6 +593,19 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             }
             _ => return Err(StoreError::invalid("This operation does not use a prompt.")),
         };
+        if matches!(operation, Mutation::Reset) {
+            let current = self
+                .manager
+                .current()
+                .ok_or_else(|| StoreError::invalid("Open a workspace first."))?;
+            self.preview_begin(native)?;
+            let before = native.session.state().revision;
+            let change = native
+                .session
+                .preview_workspace_layout(current.starting_layout()?)
+                .map_err(StoreError::invalid)?;
+            native.apply_change(before, change);
+        }
         self.ui.prompt = Some(operation);
         let view = self.ui.view.as_mut().unwrap();
         view.prompt = None;

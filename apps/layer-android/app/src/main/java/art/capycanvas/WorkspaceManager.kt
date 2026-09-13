@@ -55,8 +55,8 @@ import org.json.JSONObject
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(view.getString("title"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
                     if (page != "history") FilledTonalIconButton({ host.workspaceInput(obj("type" to "form", "kind" to "new")) },
-                        enabled = !busy, modifier = Modifier.size(32.dp).testTag("new-workspace").semantics { contentDescription = "New Workspace" }, shape = RoundedCornerShape(6.dp)) { Text("+", fontSize = 22.sp) }
-                    IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = "Close" }) { Text("×", fontSize = 22.sp) }
+                        enabled = !busy, modifier = Modifier.size(32.dp).testTag("new-workspace").semantics { contentDescription = "New Workspace" }, shape = RoundedCornerShape(6.dp)) { SharedIcon("plus", null) }
+                    IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = "Close" }) { SharedIcon("close", null) }
                 }
                 view.getString("intro").takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.settingsSecondary) }
                 WorkspaceRows(host, view, rowInteraction, Modifier.weight(1f, fill = false).height(315.dp).fillMaxWidth())

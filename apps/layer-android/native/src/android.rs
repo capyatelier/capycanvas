@@ -1,10 +1,10 @@
-//! JNI and Vulkan window ownership. Every method except creation/destruction is
-//! invoked by the same Android render Looper, never by a Compose callback.
+//! JNI and Vulkan window ownership. Session methods run on the Android render
+//! Looper. Stateless number/color presentation helpers never access an App or GPU.
 use crate::app::App;
 use jni::{
     JNIEnv,
     objects::{JClass, JDoubleArray, JObject, JString},
-    sys::{jboolean, jfloat, jint, jlong, jstring},
+    sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
 use layer_render::CanvasRenderer;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
@@ -687,16 +687,95 @@ pub extern "system" fn Java_art_capycanvas_Native_colorWheelHit(
     struct Hit {
         size: f32,
         point: [f32; 2],
-        space: layer_ui::ColorSpace,
+        shape: layer_ui::ColorShape,
     }
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str::<Hit>(&s).map_err(error))
         .and_then(|hit| {
             serde_json::to_string(
                 &layer_ui::ColorWheelGeometry::new(hit.size)
-                    .and_then(|geometry| geometry.hit(hit.point, hit.space)),
+                    .and_then(|geometry| geometry.hit_shape(hit.point, hit.shape)),
             )
             .map_err(error)
         });
     string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_colorPanelLayout(
+    mut env: JNIEnv,
+    _: JClass,
+    size: jfloat,
+) -> jstring {
+    let result = layer_ui::ColorPanelLayout::new(size)
+        .ok_or_else(|| "Invalid color panel size".to_owned())
+        .and_then(|layout| serde_json::to_string(&layout).map_err(error));
+    string(&mut env, result)
+}
+
+fn color_shape(env: &mut JNIEnv, shape: &JString) -> Result<layer_ui::ColorShape, String> {
+    match read(env, shape)?.as_str() {
+        "circle" => Ok(layer_ui::ColorShape::Circle),
+        "square" => Ok(layer_ui::ColorShape::Square),
+        "triangle" => Ok(layer_ui::ColorShape::Triangle),
+        _ => Err("Invalid color wheel shape".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_colorHueStops(
+    mut env: JNIEnv,
+    _: JClass,
+    shape: JString,
+) -> jstring {
+    let result = color_shape(&mut env, &shape).and_then(|shape| {
+        let mut state = layer_ui::ColorState::default();
+        state.apply(layer_ui::ColorAction::Shape { shape })?;
+        serde_json::to_string(state.wheel_hue_stops()).map_err(error)
+    });
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_colorFieldPixels(
+    mut env: JNIEnv,
+    _: JClass,
+    size: jint,
+    hue: jfloat,
+    shape: JString,
+) -> jintArray {
+    let result = (|| {
+        if !(1..=2048).contains(&size) || !hue.is_finite() {
+            return Err("Invalid color field raster size or hue".to_owned());
+        }
+        let shape = color_shape(&mut env, &shape)?;
+        let mut rgba = vec![0; size as usize * size as usize * 4];
+        let valid = match shape {
+            layer_ui::ColorShape::Circle => {
+                layer_ui::render_okhsv_disc(size as u32, hue, &mut rgba)
+            }
+            layer_ui::ColorShape::Triangle => {
+                layer_ui::render_hls_field(size as u32, hue, &mut rgba)
+            }
+            layer_ui::ColorShape::Square => false,
+        };
+        if !valid {
+            return Err("Unsupported color field raster".into());
+        }
+        let pixels: Vec<i32> = rgba
+            .chunks_exact(4)
+            .map(|p| i32::from_be_bytes([p[3], p[0], p[1], p[2]]))
+            .collect();
+        let array = env.new_int_array(pixels.len() as i32).map_err(error)?;
+        env.set_int_array_region(&array, 0, &pixels)
+            .map_err(error)?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            let _ = env.throw_new("java/lang/IllegalArgumentException", message);
+            std::ptr::null_mut()
+        }
+    }
 }

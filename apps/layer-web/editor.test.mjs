@@ -16,7 +16,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   if(await evaluate("layerApp.state().workspace.zen_mode"))await invoke("zen_mode");
   console.log("editor startup",await evaluate('layerApp.startupTimes'));
   await wait('layerApp.startupTimes.complete!==null');
-  assert.equal(await evaluate('document.querySelectorAll(".header-menu").length'),8);
+  assert.ok(await evaluate('layerApp.app.editor_models(innerWidth,innerHeight).application_menus.every(menu=>document.querySelector(`[data-menu="${menu.id}"]`))'));
   assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   assert.ok((await canvasPixels()).white>10000);
   for(let i=0;i<4;i++)await invoke("zoom_in");
@@ -36,7 +36,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await pointer(".dock-group .color-wheel",.95,.5);
   await pointer(".dock-group .color-wheel",.6,.4);
   assert.notDeepEqual(await evaluate('layerApp.state().brush.color'),before,"Color wheel changes paint");
-  await click(".dock-group .color-space");
+  await click('.dock-group [data-color-shape="triangle"]');
   assert.equal(await evaluate('layerApp.state().colors.space'),"hls");
   await pointer(".dock-group .color-wheel",.6,.5);
   await click('.dock-group [data-color-slot="transparent"]');
@@ -61,7 +61,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('!!document.querySelector(".navigator-surface")'),"Navigator uses a native GPU surface");
   await evaluate('window.editorWorkspace=layerApp.app.workspace_persistence(); window.editorSettings=layerApp.state().settings; layerApp.dispatch({type:"restore_settings",settings:{...editorSettings,total_zen:false}})');
   await invoke("zen_mode");
-  await evaluate('window.dispatchEvent(new PointerEvent("pointermove",{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:"mouse",bubbles:true}))');
+  await call("Input.dispatchMouseEvent",{type:"mouseMoved",...await evaluate('({x:innerWidth/2,y:innerHeight/2})'),buttons:0});
   await settle();
   assert.ok(await evaluate('document.querySelector("#workspace").classList.contains("zen-hidden")'));
   assert.equal(await evaluate('document.querySelector(".zen-toolbar")'),null,"Total Zen has no alternate toolbar projection");
@@ -109,7 +109,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await evaluate('(()=>{const effect=layerApp.state().adjustments.find(a=>a.id.includes("domain_warp"));if(!effect)throw Error("Domain Warp missing");layerApp.dispatch(effect.action);})()');
   await settle();
   await invoke("save_document_as");
-  await wait('!layerApp.state().document_file.busy');
+  await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
   assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
   assert.ok(await evaluate('[...editorFiles.entries()].some(([name,bytes])=>name.endsWith(".capy")&&bytes.length>100)'));
   await invoke("export_document");
@@ -128,8 +128,12 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('layerApp.state().tabs[0].width>320'));
   await evaluate('layerApp.dispatch({type:"select_layer",id:layerApp.state().layers.find(l=>l.label==="Current ink").id})');
   await settle();
-  await pointer("#canvas",.5,.5,[30,0]);
-  assert.ok(await evaluate("layerApp.state().document_file.modified"),"Painting the loaded project marks it modified");
+  // Selecting the paint layer can prepare a different brush target. Wait for
+  // that target, not just the brush that was ready before selecting the layer.
+  await wait('layerApp.app.brush_ready()');
+  // Use untouched paper: painting the same opaque stroke again can be a no-op.
+  await pointer("#canvas",.4,.65,[30,0]);
+  await wait('layerApp.state().document_file.modified');
   await invoke("new_document");
   await wait('!![...document.querySelectorAll(".document-dialog h2")].find(n=>n.textContent.includes("Save changes"))');
   await click(".document-dialog footer button");
@@ -145,11 +149,19 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await wait('!layerApp.state().document_file.close_ready && layerApp.state().document_file.location==null && !layerApp.state().document_file.modified');
   await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:editorWorkspace}); layerApp.dispatch({type:"restore_settings",settings:editorSettings}); [window.showSaveFilePicker,window.showOpenFilePicker]=editorSavedPickers;');
   await settle();
-  await evaluate('window.dispatchEvent(new Event("pagehide"))');
-  assert.ok(await evaluate('!!JSON.parse(localStorage.getItem("layer.workspace.v1")).layout.panels.find(p=>p.id==="commands")'));
+  // Workspace persistence now uses the shared database controller; the old
+  // localStorage key is only a migration input. Verify the Commands panel
+  // remains available after a completed save/reload. The profile is isolated.
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
+  await call("Page.reload", {ignoreCache: true});
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  await wait('window.layerApp?.startupTimes.complete != null');
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy');
+  assert.ok(await evaluate('!!layerApp.app.workspace_persistence().layout.panels.find(p=>p.id==="commands")'));
+  assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
   await mkdir(directory,{recursive:true});
   const image=await call("Page.captureScreenshot",{format:"png"});
   await writeFile(`${directory}/editor-parity.png`,Buffer.from(image.data,"base64"));
-  console.log("Project save/open/new, PNG export, unsaved cancellation, persistence passed");
+  console.log("Project save/open/new, PNG export, unsaved cancellation, workspace restoration passed");
 }

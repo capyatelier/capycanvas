@@ -49,8 +49,13 @@ __declspec(dllimport) int32_t capy_load_filter_directory(CapyHost*, const char* 
 __declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
 /* Pure shared image bounds for the native cutout; output has four floats. */
 __declspec(dllimport) bool capy_navigator_image(float width, float height, uint32_t document_width, uint32_t document_height, float* output);
-/* Stateless shared color hit policy: 0 none, 1 hue, 2 field; space 0 HSV / 1 HLS. */
-__declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t space);
+/* Stateless shared color presentation: projection 0 square, 1 triangle, 2 circle.
+   Hit result: 0 none, 1 hue, 2 field. Free returned strings with capy_string_free.
+   Field output is exactly side*side*4 writable RGBA8 bytes, side in 1..=2048. */
+__declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t projection);
+__declspec(dllimport) char* capy_color_layout(float size);
+__declspec(dllimport) char* capy_color_hue_stops(uint32_t projection);
+__declspec(dllimport) bool capy_color_field(uint32_t side, float hue, uint32_t projection, uint8_t* output, size_t length);
 /* Flush/join on the render owner before destroying the callback context.
    Cleanup is required even after a renderer failure. */
 __declspec(dllimport) int32_t capy_finish_services(CapyHost*);

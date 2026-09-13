@@ -43,7 +43,11 @@ function Control([string]$Value,[switch]$Name){
     $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name;$null -ne $hit.item} "Missing $Value"
     $hit.item
 }
-function Invoke([string]$Value,[switch]$Name){(Control $Value -Name:$Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+function Invoke([string]$Value,[switch]$Name){
+    $item=Control $Value -Name:$Name;$pattern=$null
+    if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
+    else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
+}
 function ContextMenu([string]$Id){
     Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -96,6 +100,7 @@ try{
     # The full editor groups Properties with Filters; Layers is independent.
     ContextMenu 'panel-tab-properties'
     Invoke 'Collapse column' -Name
+    ContextMenu 'column-icon-properties';Invoke 'Drawers' -Name
     Invoke 'column-icon-properties'
     Wait-Until {$null -ne (Find 'drawer-tab-adjustments')} 'Column drawer did not expose shared tabs'
     $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'})[0]

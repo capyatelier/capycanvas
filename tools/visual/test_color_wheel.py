@@ -75,11 +75,51 @@ print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(report["passed"])
 
+    def test_rounded_corners_exclude_only_the_painted_boundary(self):
+        self.image.putpixel((66,0), (0,0,0,0))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["pixels_above_tolerance"], 1)
+        fixture = json.loads(self.fixture.read_text())
+        fixture["field_corner_radius"] = 6
+        self.fixture.write_text(json.dumps(fixture))
+        self.oracle.write_text(self.oracle.read_text().replace('"model": {',
+            '"model": {"geometry": {"square": [0.5,0,1]},'))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(report["passed"])
+        self.assertGreaterEqual(report["sampled_pixels"]["field"], 20)
+        self.image.putpixel((88,33), (0,64,137,255))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["pixels_above_tolerance"], 1)
+        self.assertEqual(report["worst_samples"][0]["pixel"], [88,33])
+
     def test_mismatched_orientation_is_rejected(self):
         self.image = Image.new("RGB", (128,256))
         result, _ = self.check_image()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("viewport dimensions do not match", result.stderr)
+
+    def test_gamut_cusp_excludes_only_its_subpixel_fringe(self):
+        model = {"geometry": {"center": [0.5,0.5]}, "hue_start_degrees": 0,
+            "wheel_hue_stops": [
+                {"offset": 0.625, "color": [0,0,1]},
+                {"offset": 0.6250001, "color": [0,0.2,1]}]}
+        self.oracle.write_text(self.oracle.read_text().replace('"model": {',
+            '"model": {' + json.dumps(model)[1:-1] + ','))
+        self.image.putpixel((11,11), (255,90,128,255))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(report["excluded_cusp_pixels"], 0)
+        self.image.putpixel((22,11), (255,64,137,255))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(report["worst_samples"][0]["pixel"], [22,11])
+        self.image.putpixel((11,11), (255,64,128,0))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(report["maximum_channel_error"]["hue"], 255)
 
 if __name__ == "__main__":
     unittest.main()

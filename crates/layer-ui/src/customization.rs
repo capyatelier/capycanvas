@@ -688,9 +688,7 @@ impl DockLayout {
                 collapsed: column.is_none(),
             },
         )]];
-        if let Some(column) =
-            column.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic))
-        {
+        if let Some(column) = column.filter(|_| platform.column_group_panels()) {
             let settings = self.column_settings(column);
             let mut modes = Vec::new();
             for (label, mode) in [
@@ -1022,7 +1020,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                     "{} brush preset",
                     choice.map(|b| b.category).unwrap_or("Paint")
                 ),
-                "brush",
+                choice.map_or("brush", |b| crate::tools::group(b.id).icon()),
             )
         }
         ToolbarControl::Size { pixels } => (
@@ -1872,8 +1870,7 @@ impl CustomizationState {
                     .collapsed_column_for_group(group)
                     .ok_or("The column is not collapsed")?;
                 let settings = layout.column_settings(column);
-                if settings.mode == crate::ColumnMode::GroupPanel
-                    && matches!(platform, Platform::Gtk | Platform::Generic)
+                if settings.mode == crate::ColumnMode::GroupPanel && platform.column_group_panels()
                 {
                     let close = settings.open_group == Some(group);
                     layout.column_settings_mut(column).open_group = (!close).then_some(group);
@@ -1923,7 +1920,7 @@ impl CustomizationState {
                 let s = layout.column_settings_mut(column);
                 s.mode = mode;
                 s.open_group = if mode == crate::ColumnMode::GroupPanel
-                    && matches!(platform, Platform::Gtk | Platform::Generic)
+                    && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
                 {
                     open
                 } else {
@@ -1952,7 +1949,7 @@ impl CustomizationState {
                     s.mode = source.mode;
                     s.auto_hide = source.auto_hide;
                     s.open_group = if s.mode == crate::ColumnMode::GroupPanel
-                        && matches!(platform, Platform::Gtk | Platform::Generic)
+                        && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
                     {
                         open
                     } else {

@@ -27,6 +27,8 @@ LayerThumbnail thumbnail(J const& layer,bool mask){
 }
 J LayerRow::model()const{return findId(array(data->state,L"layers"),id);}
 bool LayerRow::current()const{return epoch==epochOf(data)&&model().Size()!=0;}
+bool LayerRow::clickAllowed()const{auto view=owner.lock();return view&&(!view->pickup||!view->pickup->SuppressClick());}
+bool LayerRow::contextAllowed()const{auto view=owner.lock();return view&&(!view->pickup||!view->pickup->SuppressContext());}
 void LayerRow::action(J operation){if(!data->updating&&current())data->dispatchDocument(layerAction(operation),epoch);}
 void LayerRow::context(bool isMask,UIElement const& anchor){if(current())if(auto view=owner.lock())view->context(id,isMask,anchor);}
 void LayerRow::init(){
@@ -41,7 +43,10 @@ void LayerRow::init(){
         body.ColumnDefinitions().Append(column);
     }
     auto pick=[&](hstring const& title,int column,std::function<void()> action){
-        auto control=button(data,title,std::move(action));control.Width(column==4||column==6?30:column==5||column==9?12:24);
+        auto control=button(data,title,[weak,action=std::move(action)]{
+            auto self=weak.lock();auto view=self?self->owner.lock():nullptr;
+            if(view&&(!view->pickup||!view->pickup->SuppressClick()))action();
+        });control.Width(column==4||column==6?30:column==5||column==9?12:24);
         control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);body.Children().Append(control);return control;
     };
     eye=pick(L"Layer visibility",0,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"visible"))}}));});
@@ -62,7 +67,7 @@ void LayerRow::init(){
     content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
     link=pick(L"Link layer mask",5,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"link_mask")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"mask_linked"))}}));});
     link.Content(icon(L"link",data->theme(),12));
-    name=button(data,L"Layer",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
+    name=button(data,L"Layer",[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
     name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});name.Margin({6,0,2,0});
     StackPanel caption;title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);
@@ -81,7 +86,7 @@ void LayerRow::init(){
     rename.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating)self->committing=false;});
     rename.LosingFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->commit(false);});
     rename.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->commit(false);});
-    name.DoubleTapped([weak](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock())self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);});
+    name.DoubleTapped([weak](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);});
     name.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(e.Key()==Windows::System::VirtualKey::F2){self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);}
         else if(e.Key()==Windows::System::VirtualKey::Application||(e.Key()==Windows::System::VirtualKey::F10&&(GetKeyState(VK_SHIFT)&0x8000))){
@@ -97,42 +102,16 @@ void LayerRow::init(){
     AutomationProperties::SetName(contentImage,L"Layer preview");AutomationProperties::SetName(maskImage,L"Layer mask preview");
     AutomationProperties::SetAutomationId(contentImage,L"layer-"+to_hstring(uint64_t(id))+L"-thumbnail");
     AutomationProperties::SetAutomationId(maskImage,L"layer-"+to_hstring(uint64_t(id))+L"-mask-thumbnail");
-    root.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock())self->context(false,self->root);e.Handled(true);});
-    mask.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock())self->context(true,self->mask);e.Handled(true);});
-    dragSource(name);dragSource(content);dragSource(mask);dragSource(grip);
+    root.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){
+        if(auto self=weak.lock()){
+            if(self->renaming)return;
+            if(self->contextAllowed())self->context(false,self->root);
+        }
+        e.Handled(true);
+    });
+    mask.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contextAllowed())self->context(true,self->mask);e.Handled(true);});
     dropMark.IsHitTestVisible(false);dropMark.BorderBrush(fill({255,53,132,228}));dropMark.Margin({-6,-2,-6,-2});
     Grid::SetColumnSpan(dropMark,10);body.Children().Append(dropMark);
-    root.AllowDrop(true);
-    auto over=[weak](auto&&,DragEventArgs const& e){if(auto self=weak.lock()){
-        auto view=self->owner.lock();auto layer=self->model();
-        if(!self->current()||!view||!view->dragCurrent()||*view->dragged==self->id){e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::None);return;}
-        float fraction=flag(layer,L"can_drop_below")?std::clamp(e.GetPosition(self->root).Y/float(std::max(1.,self->root.ActualHeight())),0.f,1.f):0.f;
-        bool into=flag(layer,L"group")&&fraction>=.25f&&fraction<.75f;
-        self->highlight(into?3:fraction<.5f?1:2);
-        e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::Move);
-        e.DragUIOverride().Caption((into?L"Move into ":fraction<.5f?L"Move above ":L"Move below ")+str(layer,L"label"));
-        e.Handled(true);
-    }};
-    root.DragEnter(over);root.DragOver(over);
-    root.DragLeave([weak](auto&&,auto&&){if(auto self=weak.lock())self->highlight(0);});
-    root.Drop([weak](auto&&,DragEventArgs const& e){if(auto self=weak.lock()){
-        auto view=self->owner.lock();if(!view||!view->dragCurrent()||!self->current())return;
-        float fraction=flag(self->model(),L"can_drop_below")?std::clamp(e.GetPosition(self->root).Y/float(std::max(1.,self->root.ActualHeight())),0.f,1.f):0.f;
-        self->action(O({{L"op",S(L"drop")},{L"id",N(*view->dragged)},{L"target",N(self->id)},{L"fraction",N(fraction)}}));
-        view->clearDrag();e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::Move);e.Handled(true);
-    }});
-}
-void LayerRow::dragSource(UIElement const& source){
-    auto weak=weak_from_this();source.CanDrag(true);
-    source.DragStarting([weak](auto&&,DragStartingEventArgs const& e){
-        auto self=weak.lock();auto view=self?self->owner.lock():nullptr;
-        if(!self||!view||!self->current()||self->renaming||!flag(self->model(),L"can_drop_below")||flag(self->model(),L"locked")){e.Cancel(true);return;}
-        view->dragged=self->id;view->dragEpoch=self->epoch;
-        // This format carries no document pixels, names, or filesystem paths.
-        e.Data().SetData(L"CapyCanvas.InternalLayer",box_value(L"layer"));
-        e.AllowedOperations(Windows::ApplicationModel::DataTransfer::DataPackageOperation::Move);
-    });
-    source.DropCompleted([view=owner](auto&&,auto&&){if(auto self=view.lock())self->clearDrag();});
 }
 void LayerRow::commit(bool cancel){
     if(!renaming||committing||data->updating||!current())return;

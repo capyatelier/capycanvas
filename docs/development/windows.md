@@ -34,6 +34,49 @@ and C++ parts. Packages go into ignored `artifacts/windows/packages`; use
 The Windows App SDK runtime is copied beside the executable. No UWP application
 package or generated application XAML is needed for this development build.
 
+## Portable package
+
+Build an unsigned Windows 11 x64 ZIP from a committed checkout:
+
+~~~powershell
+./apps/layer-windows/scripts/package.ps1
+~~~
+
+This runs the Release Rust/WinUI build into a fresh output directory, collects
+the self-contained Windows App SDK and app-local Visual C++ runtime, and adds
+project, dependency and runtime notices. The pinned Cargo and NuGet dependencies
+are recorded with the compiler/SDK versions and source commit. Every payload file
+has a size and SHA-256 entry in package-manifest.json. Packages and build logs
+stay under ignored artifacts/windows/distribution.
+
+Use -SkipRestore when the pinned NuGet packages are already available. Uncommitted
+changes require -AllowDirty, which marks both the filename and manifest as a
+development package. A clean build fails if source changes during packaging.
+The packager assembles the same payload twice with sorted paths and fixed ZIP
+timestamps, requires identical hashes, and writes a .sha256 sidecar. This verifies
+deterministic archive assembly; it does not establish identical compilation
+across machines or toolchain installations.
+
+Extract the complete archive and launch CapyCanvas.exe. To check an archive on an
+unlocked Windows desktop:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-package.ps1 -Archive <path-to-zip>
+~~~
+
+The fixture verifies the complete file inventory, extracts to a fresh path
+containing spaces, and launches with an unrelated working directory and isolated
+preferences. It checks packaged filter loading, app-local runtime origins,
+drawing/Undo/Redo, pan, resize and clean exit. A failed live app is retained for
+inspection. Captures and diagnostics stay outside the payload.
+
+Deployment follows Microsoft's
+[self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
+and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
+Clean-machine installation, signing/MSIX delivery, full visual and physical-input
+acceptance, device recovery and sustained painting performance remain separate
+acceptance work.
+
 ## How the host works
 
 The native shell collects pointer history and dispatches shared commands. A render
@@ -136,10 +179,14 @@ and inspect stderr before relaunching. Opt-in `ui-state-<pid>-<window>.json`,
 directory. Check snapshot `process_id`, `window_id` and freshness. The per-window
 JSON files use atomic replacement; compatibility files `ui-state.json` and
 `camera-state.json` can be read mid-write. Read relevant fields from one snapshot
-per assertion rather than dumping whole models or mixing revisions. A timeout does not prove
+per assertion rather than dumping whole models or mixing revisions. Compare a
+suspect snapshot's workspace revision with the native workspace's UIA ItemStatus;
+a leftover `.pending` file can indicate failed diagnostic replacement even when
+the app advanced correctly. A timeout does not prove
 the app exited: inspect its state and close only the owned test app with
 `./apps/layer-windows/scripts/exercise-window.ps1 -ProcessId $review.Id -Action Close`,
-which checks successful exit. Close the diagnostic PowerShell session afterward.
+which checks successful exit. Add `-DiscardUnsaved` only for an owned disposable
+review whose synthetic edits can be discarded. Close the diagnostic PowerShell session afterward.
 In test scripts, remove flags with `Remove-Item Env:NAME`: passing `$null` to
 `.NET SetEnvironmentVariable` can leave an empty, still-enabled flag on newer runtimes.
 
@@ -159,6 +206,12 @@ fault, record the exception code and `kv` stack before closing or restarting;
 when inspecting a crash dump, select its exception context with `.ecxr` first.
 See Microsoft's [exception controls](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/sx--sxd--sxe--sxi--sxn--sxr--sx---set-exceptions-)
 and [symbol setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-symbol-and-source-paths-in-cdb).
+For workspace gestures, inspect the `Drawing workspace` element's UIA HelpText
+with `CAPY_TRACE_UI=1`: it records the actual pointer device, capture state and
+last cancellation. Its ItemStatus reports layout publication separately. Compare
+an injected-input failure with physical input before changing native capture;
+they can differ even when the test reports the expected device type.
+
 Keep debugger logs and dumps local: they can contain document contents and paths.
 Debugger runs are for diagnosis; measure presentation without an attached debugger.
 

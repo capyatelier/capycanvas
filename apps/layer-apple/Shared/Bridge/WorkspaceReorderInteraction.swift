@@ -6,7 +6,6 @@ import SwiftUI
     let contact = ReorderContact()
     var viewport = CGRect.zero
     @Published private(set) var menu = JSON()
-    @Published var menuSize = CGSize(width: 360, height: 360)
     private var menuPoint = CGPoint.zero
     private var menuSource: String?
     private var menuTarget: String?
@@ -24,10 +23,9 @@ import SwiftUI
             && ["picker", "toolbar_prompt", "toolbar_manager", "preferences"].allSatisfy { store.snapshot[$0].isNull }
             && store.state["customization"]["control"].isNull
     }
-    var menuBounds: CGRect {
-        let size = CGSize(width: min(360, viewport.width), height: min(menuSize.height, viewport.height))
-        return CGRect(x: max(viewport.minX, min(menuPoint.x, viewport.maxX - size.width)),
-            y: max(viewport.minY, min(menuPoint.y, viewport.maxY - size.height)), width: size.width, height: size.height)
+    var menuAnchor: CGRect {
+        if let menuSource, let bounds = workspace?.sourceInstances[menuSource]?.bounds { return bounds }
+        return CGRect(origin: menuPoint, size: CGSize(width: 1, height: 1))
     }
     func validate() {
         if contact.target != nil { _ = contact.validate() }
@@ -84,21 +82,14 @@ import SwiftUI
 struct WorkspaceContactMenu: View {
     @ObservedObject var interaction: WorkspaceReorderInteraction
     @ObservedObject var store: EditorStore
-    @FocusState private var focused: Bool
     var body: some View {
-        if !interaction.menu.isNull {
-            ZStack(alignment: .topLeading) {
-                Color.clear.contentShape(Rectangle()).onTapGesture { interaction.closeMenu() }
-                    .accessibilityIdentifier("workspace-context-dismiss")
-                WorkspaceMenu(store: store, menu: interaction.menu, width: interaction.menuBounds.width) { interaction.closeMenu() }
-                    .frame(maxHeight: interaction.viewport.height)
-                    .onGeometryChange(for: CGSize.self) { $0.size } action: { interaction.menuSize = $0 }
-                    .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8)))
-                    .shadow(radius: 6, y: 2)
-                    .offset(x: interaction.menuBounds.minX, y: interaction.menuBounds.minY)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .focusable().focused($focused).onAppear { focused = true }
-                .onKeyPress(.escape) { interaction.cancel(); return .handled }
-        }
+        let anchor = interaction.menuAnchor
+        Color.clear.frame(width: anchor.width, height: anchor.height)
+            .editorPopover(isPresented: Binding(get: { !interaction.menu.isNull }, set: {
+                if !$0 { interaction.closeMenu() }
+            }), placement: .inward) {
+                WorkspaceMenu(store: store, menu: interaction.menu) { interaction.closeMenu() }
+            }
+            .offset(x: anchor.minX, y: anchor.minY).allowsHitTesting(false)
     }
 }

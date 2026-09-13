@@ -13,8 +13,8 @@ ports are compared.
 
 Install a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`,
 GTK4 and libadwaita development packages, and Wayland development libraries.
-Package names vary by distribution. The current development stack is GTK 4.22
-and libadwaita 1.9; the enabled API features are declared in
+Package names vary by distribution. GTK 4.22 or later is required for the shared
+SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features are declared in
 [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
 
 Check the libraries visible to the build:
@@ -76,6 +76,15 @@ covered in the [publication guide](publication.md).
 
 ## Validate
 
+Run `bash tools/performance/workspace-motion.sh gtk --icons` for the complete
+shared icon bank and actual category, preset, mode, filter and toolbar controls.
+It uses the private compositor and fresh storage described below, checks both
+themes at 16/24/32 pixels, and writes native captures to
+`artifacts/icon-audit/gtk/`. Set `LAYER_MOTION_SCALE=2`,
+`LAYER_MOTION_VIEWPORT=2400x2000`, and an absolute `LAYER_TEST_ARTIFACTS` path for
+a separate high-DPI run. See the [icon audit](../ui/icon-audit.md) for paint checks
+and full-image comparison with the canonical SVGs in Chrome.
+
 The [testing guide](testing.md) lists GTK interaction and shared-engine checks.
 The [UI implementation record](../history/ui-implementation.md) and
 [Wayland feasibility record](../history/wayland-subsurface-feasibility.md) explain
@@ -102,6 +111,51 @@ test modules, including [workspace_switcher_tests.rs](../../apps/layer-linux/src
 Reuse `native_test_app`, widget lookup helpers and `pump` to exercise actual GTK
 dialogs; wait for workspace readiness and operation completion before assertions.
 Persistence cases should verify reopening as well as the visible rows.
+
+For the compact Color panel, run
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/gtk" bash tools/performance/workspace-motion.sh gtk --color-panel`.
+This exercises native mouse/touch picking, overlapping paint swatches, the
+visible swap button and its context menu, both shape alternatives, readout
+cycles and keyboard activation. It checks 144/160/200/280/360 px panels in both
+themes, all three shapes and their two readouts (shape units or RGB), retaining
+screenshots and geometry. The entire control occupies one
+square and compresses in short docks; `native_default_workspace` covers that
+shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
+is the design minimum. Values are read-only; tap the model label to toggle between
+the shape's units and RGB. Two bare shape
+buttons follow the upper-right arc; the swap button sits beside the overlapping
+paints. Right-click or hold either paint swatch (or use Shift+F10 while focused)
+also opens the swap action. The readout has no tooltip or hover decoration.
+Picker coordinates are retained per paint so hue changes, drags through black,
+alpha edits, swaps and saved-state reloads do not lose powerless components.
+The circle uses a smooth elliptical projection of the full Okhsv square, with
+extra spacing between the disc and hue ring. Its
+ring rotates 24° counterclockwise to place the blue hue at the bottom. Its hue
+guide uses the smooth C/L curve from Okhsl with a 5% margin, then scales linear
+RGB so the brightest channel is one. This preserves hue and softens the colors
+without the maximum-saturation boundary jump. Actual Okhsv conversion and field
+sampling retain their full range.
+Selecting a shape always restores its units: OKLCH for circle, HSB for square,
+HLS for triangle, including when the previous readout was RGB. All readouts
+use fixed digit cells and arc positions so digit-count changes do not move the values.
+Square remains HSV and triangle remains HLS.
+Switching shapes preserves sRGB paint; each model retains powerless coordinates.
+The conversions adapt [Ottosson’s Okhsv reference](https://bottosson.github.io/posts/colorpicker/)
+with explicit neutral/black handling and a more accurate blue gamut boundary.
+OKLCH shows lightness percent, chroma to three decimal places and hue degrees
+([conversion reference](https://www.w3.org/TR/css-color-4/#oklch)). Neutral colors
+retain the picker's hue. Shape units are the default.
+Saved HSB/Lab/OKLCH preferences migrate to shape units;
+saved RGB preferences remain RGB.
+
+The Okhsv field stays on the CPU. Its raster reuses an interpolated saturation
+curve and sRGB transfer table; picking keeps full-precision conversion. Hosts
+sample the smooth field at logical-pixel resolution and keep the ring, circular
+clip and markers at native resolution. Shared conversion/raster tests and the
+Web 2× interpolation comparison bound the measured color error. For native
+raster timings, run
+`cargo run --locked --release -p layer-ui --example color_wheel_bench`.
+This measures computation only, not GTK snapshotting or display latency.
 
 For real pointer/hold/drag delivery, use
 `bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.

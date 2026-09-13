@@ -157,7 +157,7 @@ impl Editor {
         for (item, chip) in &self.components {
             let item = *item;
             let (label, icon) = match item {
-                HeaderItem::Capy => ("Capy", "layer-capy-looking-up-symbolic"),
+                HeaderItem::Capy => ("Capy", "layer-zen-looking-up-symbolic"),
                 HeaderItem::Menu => ("Main Menu", "layer-menu-symbolic"),
                 HeaderItem::MenuLabels => ("Menu Labels", "view-list-symbolic"),
                 HeaderItem::Workspaces => ("Workspaces", "view-grid-symbolic"),
@@ -170,7 +170,7 @@ impl Editor {
             let name = item.label().to_lowercase().replace(' ', "-");
             chip.set_widget_name(&format!("header-component-{name}"));
             chip.add_css_class("header-component");
-            let grip = gtk::Button::from_icon_name("layer-grip-symbolic");
+            let grip = crate::icons::button("layer-grip-symbolic");
             grip.add_css_class("header-component-grip");
             grip.add_css_class("flat");
             grip.set_valign(gtk::Align::Center);
@@ -186,7 +186,7 @@ impl Editor {
                 "Add {label} at the marked position, or hold then drag"
             )));
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            content.append(&gtk::Image::from_icon_name(icon));
+            content.append(&crate::icons::image(icon));
             content.append(&gtk::Label::new(Some(label)));
             button.set_child(Some(&content));
             button.connect_clicked(glib::clone!(

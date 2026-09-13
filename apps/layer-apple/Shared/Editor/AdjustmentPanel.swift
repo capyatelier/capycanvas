@@ -27,6 +27,7 @@ struct AdjustmentPanel: View {
                         }
                     } label: {
                         HStack {
+                            SharedIcon(name: categories.first { $0["id"].string == picker["category"].string }?["icon"].string ?? "adjustments")
                             Text(categories.first { $0["id"].string == picker["category"].string }?["label"].string ?? "")
                                 .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             SharedIcon(name: "chevron-down")
@@ -43,8 +44,10 @@ struct AdjustmentPanel: View {
                         ForEach(choices.indices, id: \.self) { index in
                             let choice = choices[index]
                             if index == 0 || choice["category"].string != choices[index - 1]["category"].string {
-                                Text(choice["category_label"].string).fontWeight(.bold).foregroundStyle(palette["text"].opacity(0.55))
-                                    .padding(8)
+                                HStack(spacing: 6) {
+                                    SharedIcon(name: choice["category_icon"].string)
+                                    Text(choice["category_label"].string).fontWeight(.bold)
+                                }.foregroundStyle(palette["text"].opacity(0.55)).padding(8)
                             }
                             AdjustmentRow(store: store, previews: store.filterPreviews, choice: choice)
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(projection)) } action: { rect in
@@ -81,6 +84,7 @@ private struct AdjustmentRow: View {
                 HStack(spacing: 4) {
                     Spacer(minLength: 0)
                     if choice["animated"].bool { SharedIcon(name: "animation", size: 12).opacity(0.55) }
+                    SharedIcon(name: choice["icon"].string)
                     Text(choice["label"].string).lineLimit(1)
                 }
             }.padding(.horizontal, 6).padding(.vertical, 3).contentShape(RoundedRectangle(cornerRadius: 6))

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers','group_panel')][string]$ColumnMode='drawers')
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -375,17 +375,22 @@ try {
     [CapyRowPointer]::RightClick($at.x,$at.y)
     Invoke 'Collapse column' -Name
     Wait-Until {$null -ne (Find 'column-icon-toolbar')} 'Toolbar context did not collapse its column'
+    $at=Point 'column-icon-toolbar';[CapyRowPointer]::RightClick($at.x,$at.y)
+    $mode=if($ColumnMode -eq 'drawers'){'Drawers'}else{'Group panel'}
+    (Control $mode -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Start-Sleep -Milliseconds 300
     Tap 'column-icon-toolbar'
-    Wait-Until {$null -ne (Find 'drawer-tab-toolbar')} 'Collapsed toolbar did not open its drawer'
+    Wait-Until {$null -ne (Find 'drawer-panel-toolbar')} 'Collapsed toolbar did not open its contents'
     $destination=Point 'tile-toolbar-4'
     $script:case='drawer-early';Early-Motion 'tile-toolbar-1' $destination
     $script:case='drawer-release';Held-Release 'tile-toolbar-1'
     $script:case='drawer-drag';Held-Drag 'tile-toolbar-1' $destination
     $script:case='nested-drawer'
-    # Using the Window menu for Undo dismisses transient drawers. Reopen the
-    # same toolbar through its icon before testing the nested tool drawer.
-    Tap 'column-icon-toolbar'
-    Wait-Until {@((Model).state.customization.column_drawers).Count -gt 0} 'Toolbar drawer did not reopen after workspace history'
+    # History dismisses transient drawers but retains attached group panels.
+    # Reopen only when the current native presentation actually needs it.
+    $null=Point 'column-icon-toolbar'
+    if(!(Find 'drawer-panel-toolbar')){Tap 'column-icon-toolbar'}
+    Wait-Until {$null -ne (Find 'drawer-panel-toolbar')} 'Toolbar contents did not return after workspace history'
     $toolbar=@((Model).panels|Where-Object id -eq 'toolbar')[0]
     $color=@($toolbar.tiles|Where-Object {$_.control.kind -eq 'color'})[0]
     Tap ('tile-toolbar-'+$color.id)
@@ -400,7 +405,7 @@ try {
     [CapyRowPointer]::Dispose()
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires review'}
-    [pscustomobject]@{device=$Device;short_click='passed';early_rejection='passed';hold_release_menu='passed';same_contact_drag='passed';immediate_grip='passed';native_cancellation='passed';one_step_undo_redo='passed';collapsed_icons='passed';floating_tiles='passed';divider_tiles='passed';disabled_commands='passed';drawer_tiles='passed';nested_drawer='passed';zen_context_and_activation='passed';divider_keyboard='passed';held_blur='passed';native_submenu='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, full presentation matrix and timing remain separate'}|ConvertTo-Json
+    [pscustomobject]@{device=$Device;column_mode=$ColumnMode;short_click='passed';early_rejection='passed';hold_release_menu='passed';same_contact_drag='passed';immediate_grip='passed';native_cancellation='passed';one_step_undo_redo='passed';collapsed_icons='passed';floating_tiles='passed';divider_tiles='passed';disabled_commands='passed';drawer_tiles='passed';nested_drawer='passed';zen_context_and_activation='passed';divider_keyboard='passed';held_blur='passed';native_submenu='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, full presentation matrix and timing remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_
     @{case=$script:case;error=$failure.ToString();gesture=(Gesture)}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')

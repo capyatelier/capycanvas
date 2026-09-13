@@ -57,7 +57,7 @@ impl ToolCatalog {
         row.set_subtitle(description);
         row.set_title_lines(1);
         row.set_subtitle_lines(1);
-        row.add_prefix(&gtk::Image::from_icon_name(&format!(
+        row.add_prefix(&crate::icons::image(&format!(
             "layer-{icon}-symbolic"
         )));
         self.choices.append(&row);

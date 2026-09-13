@@ -62,6 +62,10 @@ impl Action {
                     phase: ContactPhase::Up | ContactPhase::Cancel,
                     ..
                 }
+                | UiAction::ResizeColumnPanel {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
                 | UiAction::ResizeFloating {
                     phase: ContactPhase::Up | ContactPhase::Cancel,
                     ..

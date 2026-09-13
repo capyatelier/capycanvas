@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][int]$ProcessId,
       [ValidateSet('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan','Test backlog')][string]$Action='Stroke',
-      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved)
+      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved,[string]$StateDirectory)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -43,7 +43,8 @@ if($Action -eq 'Close') {
     $dirty=$false
     if($DiscardUnsaved){
         if($p.ProcessName -ne 'CapyCanvas'){throw 'Discard requires a controlled CapyCanvas review.'}
-        $stateFile=Join-Path (Split-Path -Parent $p.Path) 'ui-state.json'
+        if(!$StateDirectory){$StateDirectory=Split-Path -Parent $p.Path}
+        $stateFile=Join-Path $StateDirectory 'ui-state.json'
         $snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json
         if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){
             throw 'Discard is only available for an isolated review with a matching trace.'

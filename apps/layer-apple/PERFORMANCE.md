@@ -17,6 +17,64 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Retry after presentation capacity returns — 2026-09-13
+
+The shared frame driver can now retry a capacity-denied tick once when Metal
+reports a presentation. Registration checks capacity under the same lock as
+ticket retirement, so a callback just before registration cannot lose the wake.
+The callback runs outside that lock and schedules the retry on the main queue.
+A newer display tick, detach/replacement, pending frame or expired original
+target rejects it. A retry that encounters a full pool does not register another
+retry. Resize, resume and detach discard capacity waiters with their old tickets.
+The ordinary display-link preference and idle pause remain unchanged.
+
+This addresses a measured scheduling race, without treating presentation as a
+guarantee that Core Animation has recycled the drawable. In the previous Mac
+ten-minute watercolor trace, capacity-denied ticks preceded 1,878 of 3,651 long
+continuous presentation intervals. The median delay from such a tick to the next
+presentation callback was 0.055 ms; the driver previously waited for another
+display tick. The corresponding iPad trace had no capacity-denied ticks, so this
+diagnosis does not explain its acquisition stalls. These are temporal associations.
+
+Two fresh 45-second `wet-watercolor-4k` Release runs on source `008b646`, before
+and after the retry change, used the same 2400 × 1740 Mac viewport, 90 Hz target,
+240 Hz synthetic input, prediction and disabled GPU queue timestamps. Both
+complete with no rejected input, frame errors, missing/zero-time presentations
+during measurement, or CPU service over 11.11 ms.
+
+| Mac measured result | Before | Retry |
+| --- | ---: | ---: |
+| Actual presentations | 3,568 | 3,737 |
+| CPU owner p99 / max, ms | 5.875 / 8.436 | 5.584 / 7.695 |
+| Long continuous intervals / total | 225 / 3,539 (6.36%) | 46 / 3,708 (1.24%) |
+| Admission-to-presentation p99, ms | 32.940 | 32.829 |
+
+The same candidate then completed 600.001 measured seconds: 49,416 actual
+presentations, CPU p50/p95/p99/max 3.444/4.912/5.722/9.139 ms, and zero CPU
+service samples over the Mac budget. Continuous presentation p50/p95/p99/max
+was 11.111/11.111/22.222/44.445 ms. Its 1,329 long intervals out of 49,040
+(2.71%) still fail sustained cadence acceptance. Of 30,676 capacity-denied ticks,
+29,946 received an admitted retry; these callbacks are recorded separately from
+display ticks. Admission-to-presentation p99/max was 33.616/44.076 ms.
+
+The measured interval has no rejected input, renderer errors, missing callbacks,
+zero-time presentations or recorder overflow. The full trace retains three
+zero-time presentations outside measurement. Measured peak footprint was
+1,761.19 MiB, with 140.80 MiB first-to-last growth and nominal thermal samples.
+The recorder and workload both contribute memory; this does not isolate a leak.
+Builds, UI automation and GPU profiling were idle throughout measurement.
+Each exported process identity matched its launch, and owned apps closed after
+export. The short pair supports this scheduling improvement; the ten-minute
+candidate is not an identical-source ten-minute before/after comparison.
+
+Both physical Release targets compile. Direct shared-driver and real Metal
+gate/owner checks cover atomic registration, concurrent duplicate callbacks,
+deadline expiry, newer ticks, cancellation and surface lifecycle on both Apple
+presets. All 29 trace-analysis tests pass. This is not new physical iPad timing
+evidence. The complete workload matrix, iPad stalls, residual Mac cadence gaps,
+isolated GPU work, calibrated instrumentation overhead and physical input latency
+remain open. Raw traces and local signing/device information remain ignored.
+
 ## Owner lifetime and presentation admission — 2026-09-12
 
 Both native targets now drain autoreleased objects after every asynchronous
@@ -1031,6 +1089,7 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
+| 13 presentation retry | attempt time, original display target, admitted flag, denial reason using kind 0 values |
 
 The analyzer also retains local scheduling experiment records: kind 12 contains
 frame ID, CPU commit deadline, presentation target and drawable admission status

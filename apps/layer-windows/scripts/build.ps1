@@ -1,12 +1,16 @@
 param(
     [ValidateSet('Debug','Release')][string]$Configuration = 'Debug',
     [string]$PackagesDirectory,
+    [string]$OutputDirectory,
     [switch]$SkipRust,
+    [ValidateSet('None','Number','Color')][string]$ControlFixture = 'None',
     [switch]$SkipRestore
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 if (!$PackagesDirectory) { $PackagesDirectory = Join-Path $repo 'artifacts/windows/packages' }
+if (!$OutputDirectory) { $OutputDirectory = Join-Path $repo "artifacts/windows/$Configuration" }
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio Build Tools with C++ and Windows application development support.' }
 $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -29,7 +33,8 @@ try {
         & cargo @cargoArgs
         if ($LASTEXITCODE -ne 0) { throw 'Rust build failed.' }
     }
-    & msbuild apps/layer-windows/CapyCanvas.vcxproj /m "/p:Configuration=$Configuration" /p:Platform=x64 "/p:PlatformToolset=$toolset" "/p:CapyPackages=$PackagesDirectory" /v:minimal /nologo
+    $fixture = switch ($ControlFixture) { Number {'true'} Color {'Color'} default {'false'} }
+    & msbuild apps/layer-windows/CapyCanvas.vcxproj /m "/p:Configuration=$Configuration" /p:Platform=x64 "/p:CapyControlFixture=$fixture" "/p:PlatformToolset=$toolset" "/p:CapyPackages=$PackagesDirectory" "/p:OutDir=$OutputDirectory/" /v:minimal /nologo
     if ($LASTEXITCODE -ne 0) { throw 'WinUI build failed.' }
-    Write-Output (Join-Path $repo "artifacts/windows/$Configuration/CapyCanvas.exe")
+    Write-Output (Join-Path $OutputDirectory 'CapyCanvas.exe')
 } finally { Pop-Location }
