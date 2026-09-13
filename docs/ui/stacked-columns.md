@@ -15,8 +15,13 @@ that member. The gap between members is also an insertion target. The new
 column contains only the dropped content; a whole group retains its tab order,
 active tab and tab style, and a toolbar retains its tools. Stack preferences
 apply to the new member. Icon bodies still insert tabs and group dividers still
-insert groups within a member. This extension is GTK-only pending approval
-before the Web and Android rollout.
+insert groups within a member. A 12 px target centered on the bottom edge of
+the last tile appends a new group inside that member, with a blue insertion
+line at the tile boundary. It includes the trailing gap above the footer grip,
+so compact members earlier in a stack have the same target as its last member.
+It only appears when the last group is scrolled into view and excludes the
+grip itself. The grip and spacing between members continue creating stack
+members. These extensions are implemented in GTK first.
 
 “Open individual panels” and Auto-hide belong to the stack. Enabling
 “Open individual panels” opens the selected tab group in a compact popover.
@@ -65,5 +70,8 @@ Validate the additional GTK targets with
 This covers mouse/touch panel tabs, floating group handles, toolbar handles,
 held collapsed icons and drawer tabs, singleton and multi-member targets,
 insertion previews, cancellation, opening and one-step undo/redo in both themes.
+Run `bash tools/performance/workspace-motion.sh gtk --native-test=native_column_group_append_input`
+for appending groups before the fixed grips of the first and middle members,
+including the divider created by the drop.
 Physical pen verification remains a manual check; the native pickup recognizers
 and their device rules are unchanged.

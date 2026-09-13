@@ -4,6 +4,16 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --native-test=native_stack_member_drop_input"]
 fn native_stack_member_drop_input() {
+    native_stack_drop_input(false);
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_column_group_append_input"]
+fn native_column_group_append_input() {
+    native_stack_drop_input(true);
+}
+
+fn native_stack_drop_input(append: bool) {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let output = std::path::PathBuf::from(
         std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
@@ -48,7 +58,7 @@ fn native_stack_member_drop_input() {
             for stacked in [false, true] {
                 for source in ["panel", "group", "toolbar", "icon", "drawer-tab"] {
                     eprintln!(
-                        "Stack member drop: {theme:?}, touch={touch}, stacked={stacked}, {source}"
+                        "Stack drop: {theme:?}, touch={touch}, stacked={stacked}, append={append}, {source}"
                     );
                     let mut fixture = layer_ui::WorkspaceState::default();
                     fixture.layout.bands[0].edge = edge;
@@ -86,6 +96,30 @@ fn native_stack_member_drop_input() {
                     } else {
                         4
                     };
+                    if append {
+                        // Both the first multi-group member and a middle
+                        // single-group member must have a trailing group target.
+                        fixture
+                            .layout
+                            .set_panel_visible(Panel::Color, true)
+                            .unwrap();
+                        let group = fixture.layout.panel_group(Panel::Color).unwrap();
+                        fixture
+                            .layout
+                            .set_column_collapsed(group, true, viewport)
+                            .unwrap();
+                        fixture
+                            .layout
+                            .move_item(
+                                viewport,
+                                DockItem::Column { column: group },
+                                DockTarget::StackColumn {
+                                    column: target,
+                                    before: false,
+                                },
+                            )
+                            .unwrap();
+                    }
                     if source == "group" {
                         fixture.layout.select_tab(8, Panel::Properties).unwrap();
                         fixture
@@ -161,14 +195,47 @@ fn native_stack_member_drop_input() {
                             .bounds;
                         [b.x + b.width - 10., b.y + layer_ui::TAB_BAR_HEIGHT * 0.5]
                     };
-                    let target_bounds = w
+                    let target_column = w
                         .resolved()
                         .collapsed
-                        .iter()
+                        .into_iter()
                         .find(|c| c.id == target)
-                        .unwrap()
-                        .grip;
-                    let destination = center(target_bounds);
+                        .unwrap();
+                    let last = target_column.groups.last().unwrap();
+                    let destination = if append {
+                        let tile = last.icons.last().unwrap();
+                        let b = w
+                            .columns
+                            .button(target, tile.panel)
+                            .unwrap()
+                            .compute_bounds(&w.surface)
+                            .unwrap();
+                        assert!(
+                            (b.y() + b.height() - last.bounds.y - last.bounds.height).abs() <= 1.
+                        );
+                        [
+                            target_column.bounds.x + TILE_SIZE * 0.5,
+                            last.bounds.y + last.bounds.height + 3.,
+                        ]
+                    } else {
+                        center(target_column.grip)
+                    };
+                    let expected_target = if append {
+                        DockTarget::Split {
+                            group: last.group,
+                            edge: Edge::Bottom,
+                        }
+                    } else {
+                        DockTarget::StackColumn {
+                            column: target,
+                            before: false,
+                        }
+                    };
+                    let capture_name = if append {
+                        "column-group"
+                    } else {
+                        "stack-member"
+                    };
                     if source == "icon" {
                         perform(serde_json::json!([
                             event("down", start),
@@ -194,14 +261,11 @@ fn native_stack_member_drop_input() {
                         .borrow()
                         .clone()
                         .expect("visible stack insertion preview");
-                    assert_eq!(
-                        hint.target,
-                        DockTarget::StackColumn {
-                            column: target,
-                            before: false
-                        }
-                    );
+                    assert_eq!(hint.target, expected_target);
                     assert!(hint.bounds.height <= 3. && hint.bounds.width == TILE_SIZE);
+                    if append {
+                        assert!(hint.bounds.y + hint.bounds.height <= target_column.grip.y);
+                    }
                     if source == "panel" && !stacked {
                         // Cancellation must return the torn-off tab and its original selection.
                         perform(
@@ -221,7 +285,7 @@ fn native_stack_member_drop_input() {
                         capture_reference(
                             &w,
                             output
-                                .join(format!("stack-member-preview-{theme:?}.png"))
+                                .join(format!("{capture_name}-preview-{theme:?}.png"))
                                 .to_str()
                                 .unwrap(),
                             1.,
@@ -231,13 +295,33 @@ fn native_stack_member_drop_input() {
                     assert!(w.workspace_drag.borrow().is_none() && w.drop_hint.borrow().is_none());
                     let layout = state(&w).workspace.layout;
                     layout.validate().unwrap();
-                    let member = layout.panel_group(selected).unwrap();
+                    let group = layout.panel_group(selected).unwrap();
+                    let member = layout.collapsed_column_for_group(group).unwrap();
                     let stack = layout.column_stack(4);
-                    assert_eq!(stack.members, [old_members.clone(), vec![member]].concat());
+                    if append {
+                        let mut expected_members = old_members.clone();
+                        *expected_members.iter_mut().find(|m| **m == target).unwrap() = member;
+                        assert_eq!(stack.members, expected_members);
+                        let resolved = w.resolved();
+                        let column = resolved.collapsed.iter().find(|c| c.id == member).unwrap();
+                        assert_eq!(column.groups.len(), target_column.groups.len() + 1);
+                        assert_eq!(column.groups.last().unwrap().group, group);
+                        let strip = find_named(
+                            w.surface.upcast_ref(),
+                            &format!("collapsed-column-{member}"),
+                        )
+                        .unwrap();
+                        assert!(
+                            find_css(&strip, "column-divider").is_some(),
+                            "appending renders a group divider"
+                        );
+                    } else {
+                        assert_eq!(stack.members, [old_members.clone(), vec![member]].concat());
+                    }
                     assert!(!stack.drawers && !stack.auto_hide);
                     assert_eq!(layout.panels, registry);
                     assert_eq!(
-                        layout.group_panels(member).unwrap(),
+                        layout.group_panels(group).unwrap(),
                         if source == "group" {
                             vec![Panel::Layers, Panel::Adjustments, Panel::Properties]
                         } else {
@@ -263,14 +347,14 @@ fn native_stack_member_drop_input() {
                         .unwrap();
                     assert!(open.bounds.width >= 128.);
                     assert_eq!(
-                        r.groups.iter().find(|g| g.id == member).unwrap().active,
+                        r.groups.iter().find(|g| g.id == group).unwrap().active,
                         selected
                     );
                     if source == "group" && stacked && !touch {
                         crate::capture(
                             &w,
                             output
-                                .join(format!("stack-member-open-{theme:?}.png"))
+                                .join(format!("{capture_name}-open-{theme:?}.png"))
                                 .to_str()
                                 .unwrap(),
                         );

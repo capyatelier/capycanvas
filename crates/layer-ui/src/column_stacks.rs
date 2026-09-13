@@ -64,7 +64,8 @@ pub struct OpenColumn {
 
 impl ResolvedLayout {
     /// Empty space and footer grips append a new member; the gap between
-    /// members inserts there. Icons and group dividers keep their own targets.
+    /// members inserts there. The last tile's boundary appends a group within
+    /// its member before the empty-space/handle target can claim the contact.
     pub(crate) fn stack_item_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
         if self
             .groups
@@ -74,6 +75,9 @@ impl ResolvedLayout {
             return None;
         }
         for member in &self.collapsed {
+            if let Some(hint) = member.append_group_drop_hint(point) {
+                return Some(hint);
+            }
             if member.empty.contains(point[0], point[1]) || member.grip.contains(point[0], point[1])
             {
                 return Some(DropHint {

@@ -43,6 +43,42 @@ pub struct CollapsedColumnPlacement {
     pub open: Option<OpenColumn>,
 }
 impl CollapsedColumnPlacement {
+    /// The final tile boundary has the same 12px reach as an internal divider.
+    /// Compact members have only the 6px footer margin below their last tile:
+    /// use that margin and the tile's lower edge, without taking the grip.
+    pub(crate) fn append_group_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        let last = self.groups.last()?;
+        let bottom = last.bounds.y + last.bounds.height;
+        if bottom <= self.content.y || bottom > self.content.y + self.content.height {
+            return None;
+        }
+        let available = Bounds {
+            height: (self.grip.y - self.content.y).max(0.),
+            ..self.content
+        };
+        let target = Bounds {
+            y: bottom - TILE_SIZE / 6.,
+            height: TILE_SIZE / 3.,
+            ..self.content
+        }
+        .intersection(available)?;
+        if !target.contains(point[0], point[1]) || self.grip.contains(point[0], point[1]) {
+            return None;
+        }
+        Some(DropHint {
+            target: DockTarget::Split {
+                group: last.group,
+                edge: Edge::Bottom,
+            },
+            bounds: Bounds {
+                y: bottom - 1.5,
+                height: 3.,
+                ..self.content
+            }
+            .intersection(available)?,
+        })
+    }
+
     fn divider_bounds(bounds: Bounds, leading: bool) -> Bounds {
         // Top padding keeps its prepend drop target, without a painted line.
         // Dividers between groups retain the toolbar's centered 8px slot.

@@ -1,5 +1,168 @@
 const STACK_VIEW: [f32; 2] = [1800., 1100.];
 
+fn three_member_target() -> UiSession<Recorder> {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let layout = &mut s.state.workspace.layout;
+    layout.set_column_collapsed(5, true, STACK_VIEW).unwrap();
+    let mut target = 4;
+    for panel in [Panel::Navigator, Panel::Color] {
+        layout.set_panel_visible(panel, true).unwrap();
+        let group = layout.panel_group(panel).unwrap();
+        layout
+            .set_column_collapsed(group, true, STACK_VIEW)
+            .unwrap();
+        layout
+            .move_item(
+                STACK_VIEW,
+                DockItem::Column { column: group },
+                DockTarget::StackColumn {
+                    column: target,
+                    before: false,
+                },
+            )
+            .unwrap();
+        target = group;
+    }
+    s
+}
+
+#[test]
+fn gtk_member_trailing_edges_append_groups_without_taking_grips() {
+    for index in 0..3 {
+        for item in [
+            DockItem::Panel {
+                panel: Panel::Properties,
+            },
+            DockItem::Group { group: 8 },
+            DockItem::Group { group: 2 },
+        ] {
+            for offset in [-5., 0., 5.] {
+                let mut s = three_member_target();
+                let r = s.layout(STACK_VIEW);
+                let members = s.state.workspace.layout.column_stack(4).members;
+                let c = r.collapsed.iter().find(|c| c.id == members[index]).unwrap();
+                let last = c.groups.last().unwrap();
+                let bottom = last.bounds.y + last.bounds.height;
+                let x = c.bounds.x + TILE_SIZE * 0.5;
+                if index < 2 {
+                    assert_eq!(
+                        c.empty.height, 0.,
+                        "compact members have no empty-area target"
+                    );
+                    assert_eq!(bottom + WORKSPACE_SPACING, c.grip.y);
+                }
+                let hint = s
+                    .drop_hint(STACK_VIEW, [x, bottom + offset], &[], item, None)
+                    .unwrap();
+                assert_eq!(
+                    hint.target,
+                    DockTarget::Split {
+                        group: last.group,
+                        edge: Edge::Bottom
+                    }
+                );
+                assert_eq!(hint.bounds.height, 3.);
+                assert_eq!(hint.bounds.y + 1.5, bottom);
+                assert!(hint.bounds.y + hint.bounds.height <= c.grip.y);
+                assert!(matches!(
+                    s.drop_hint(STACK_VIEW, [x, bottom - 8.], &[], item, None)
+                        .unwrap()
+                        .target,
+                    DockTarget::Tab { .. }
+                ));
+                assert_eq!(
+                    s.drop_hint(
+                        STACK_VIEW,
+                        [x, c.grip.y + c.grip.height * 0.5],
+                        &[],
+                        item,
+                        None
+                    )
+                    .unwrap()
+                    .target,
+                    DockTarget::StackColumn {
+                        column: c.id,
+                        before: false
+                    }
+                );
+                let before = crate::durable_layout(&s.state.workspace.layout);
+                s.dispatch(item.move_action(hint.target, STACK_VIEW))
+                    .unwrap();
+                let layout = &s.state.workspace.layout;
+                layout.validate().unwrap();
+                let moved = match item {
+                    DockItem::Panel { panel } => vec![panel],
+                    DockItem::Group { group: 8 } => {
+                        vec![Panel::Layers, Panel::Adjustments, Panel::Properties]
+                    }
+                    _ => vec![Panel::Toolbar],
+                };
+                let member = layout
+                    .collapsed_column_for_group(layout.panel_group(moved[0]).unwrap())
+                    .unwrap();
+                let stack = layout.column_stack(member);
+                assert_eq!(stack.members.len(), members.len());
+                assert_eq!(stack.members[index], member);
+                for other in 0..3 {
+                    if other != index {
+                        assert_eq!(stack.members[other], members[other]);
+                    }
+                }
+                let updated = s.layout(STACK_VIEW);
+                let column = updated.collapsed.iter().find(|c| c.id == member).unwrap();
+                assert_eq!(column.groups.len(), c.groups.len() + 1);
+                let appended = column.groups.last().unwrap();
+                assert_eq!(
+                    appended.icons.iter().map(|i| i.panel).collect::<Vec<_>>(),
+                    moved
+                );
+                assert_eq!(appended.divider.height, 1.);
+                let after = crate::durable_layout(layout);
+                invoke(&mut s, CommandId::UndoWorkspace);
+                assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+                invoke(&mut s, CommandId::RedoWorkspace);
+                assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
+            }
+        }
+    }
+}
+
+#[test]
+fn trailing_group_targets_follow_scrolling_and_stay_out_of_grips() {
+    let mut s = three_member_target();
+    let viewport = [STACK_VIEW[0], 220.];
+    let initial = s.layout(viewport);
+    let c = initial.collapsed.iter().find(|c| c.id == 4).unwrap();
+    let x = c.bounds.x + TILE_SIZE * 0.5;
+    assert!(
+        c.groups.last().unwrap().bounds.y + c.groups.last().unwrap().bounds.height
+            > c.content.y + c.content.height
+    );
+    assert!(
+        c.append_group_drop_hint([x, c.grip.y - 3.]).is_none(),
+        "a clipped last group cannot be appended before scrolling to its end"
+    );
+    s.dispatch(UiAction::MeasureColumnScroll {
+        column: 4,
+        offset: 10000.,
+    })
+    .unwrap();
+    let scrolled = s.layout(viewport);
+    let c = scrolled.collapsed.iter().find(|c| c.id == 4).unwrap();
+    let point = [x, c.grip.y - 3.];
+    let hint = c.append_group_drop_hint(point).unwrap();
+    assert_eq!(
+        hint.target,
+        DockTarget::Split {
+            group: 6,
+            edge: Edge::Bottom
+        }
+    );
+    assert!(hint.bounds.y >= c.content.y && hint.bounds.y + hint.bounds.height <= c.grip.y);
+    assert!(c.append_group_drop_hint([x, c.grip.y + 1.]).is_none());
+}
+
 #[test]
 fn panels_groups_and_toolbars_become_independent_stack_members() {
     for stacked in [false, true] {
