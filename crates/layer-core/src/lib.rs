@@ -1,9 +1,13 @@
 //! Portable, renderer-agnostic document model for Layer.
 //!
 //! This crate contains no window, graphics API, inference runtime, async
-//! executor, or platform types. Strokes use shared point storage so undo/redo
-//! moves handles; late sensor corrections replace that storage without changing
-//! already captured document snapshots.
+//! executor, or window types. Immutable raster revisions back committed edits,
+//! undo/redo and project snapshots. Live contacts retain bounded shared samples.
+
+#[cfg(unix)]
+mod atomic_file;
+#[cfg(unix)]
+pub use atomic_file::atomic_write;
 
 pub mod color;
 mod effect_catalog;

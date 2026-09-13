@@ -113,8 +113,11 @@ export function createHeader({app, state, workspace, element, button, icon, plac
         const m=menu(()=>application(spec.id),spec.label); m.dataset.menu=spec.id;
         if(spec.id==='window')m.querySelector('.popover').id='workspace-menu'; labels.append(m);
       }
-      content.append(labels);
+      r.full=labels;
+      r.compact=menu(primary,'Application menus','menu','header-menu-labels-compact');
+      content.append(labels,r.compact);
     } else if(kind==='workspaces') {
+      r.full=switcher;
       content.append(switcher);
       r.compact=menu(()=>application('window'),'Workspaces'); r.compact.id='header-workspace-selector';
       content.append(r.compact);
@@ -209,11 +212,16 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       // Natural text widths are measured independently of allocated/animated
       // neighbors. The retained selector can switch to the shared Window menu.
       const wasHidden=r.root.hidden; r.root.hidden=false;r.root.classList.add('header-measuring');
-      if(r.compact){switcher.hidden=false;r.compact.hidden=true;}
+      const fullHidden=r.full?.hidden,compactHidden=r.compact?.hidden;
+      if(r.compact){r.full.hidden=false;r.compact.hidden=true;}
       let width=size.tile,compact;
       if(kind==='workspaces'){width=Math.max(144,switcher.scrollWidth);compact=144;}
       else if(kind==='document_title'){width=180;compact=80;}
-      else if(['menu_labels','clock','battery'].includes(kind))width=Math.max(width,r.content.scrollWidth);
+      // Fold the labels inside their original item before shared whole-item
+      // overflow can hide that item and the rest of its region.
+      else if(kind==='menu_labels'){width=Math.max(width,r.full.scrollWidth);compact=size.tile;}
+      else if(['clock','battery'].includes(kind))width=Math.max(width,r.content.scrollWidth);
+      if(r.compact){r.full.hidden=fullHidden;r.compact.hidden=compactHidden;}
       r.root.classList.remove('header-measuring');r.root.hidden=wasHidden;
       return{id:entry.id,width:width+extra,compact:(compact??width)+extra};
     });
@@ -227,7 +235,18 @@ export function createHeader({app, state, workspace, element, button, icon, plac
         if(r.root.contains(document.activeElement))focus=editing?root:overflow[view.model.zones.findIndex(z=>z.some(e=>e.id===id))].firstChild;
       }
       r.root.hidden=!b;
-      if(b){place(r.root,b);if(r.compact){const compact=b.width-(editing?20:0)+.01<metrics.find(m=>m.id===id).width-(editing?20:0);switcher.hidden=compact;r.compact.hidden=!compact;}}
+      if(b) {
+        place(r.root,b);
+        if(r.compact) {
+          const compact=b.width+.01<metrics.find(m=>m.id===id).width;
+          const disappearing=compact?r.full:r.compact,appearing=compact?r.compact:r.full;
+          if(!disappearing.hidden) {
+            for(const menu of [disappearing,...disappearing.querySelectorAll('details')])if(menu.tagName==='DETAILS')menu.open=false;
+            if(disappearing.contains(document.activeElement))focus=appearing.querySelector('summary,button')||r.root;
+          }
+          r.full.hidden=compact;r.compact.hidden=!compact;
+        }
+      }
       r.root.style.visibility=dragging&&contact.source.kind==='item'&&contact.source.value===id?'hidden':'';
     }
     g.zones.forEach((b,i)=>{zones[i].hidden=!editing;place(zones[i],b);});

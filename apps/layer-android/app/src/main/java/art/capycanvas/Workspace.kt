@@ -227,6 +227,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Could not initialize canvas", style = MaterialTheme.typography.titleLarge)
                     Text(message)
+                    TextButton({ host.restartCanvas() }) { Text("Restart Canvas") }
                 }
             }
         }
@@ -284,7 +285,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                   }
                 }
             }
-            if (!hidden) layout.array("dividers").objects().forEach { divider ->
+            if (!hidden) layout.array("dividers").objects().filterNot { it.optBoolean("fixed") }.forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 val horizontal = divider.getString("axis") == "horizontal"
                 val hit = JSONObject(rect.toString()).apply {

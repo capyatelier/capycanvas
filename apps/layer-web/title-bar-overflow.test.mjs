@@ -26,20 +26,21 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
   const clean=async()=>assert.equal(await evaluate('!!document.querySelector(".header-drag-preview")||document.querySelector("#workspace").hasAttribute("data-header-dragging")'),false);
   const workspace=await evaluate('layerApp.app.workspace_persistence()');
   try {
-    // A long menu-label component with a neighbor behind it reproduces the
-    // whole-region collapse. Setup uses shared edits; all pickups are native.
+    // Even the compact menu and its neighbors overflow at extreme widths.
+    // Setup uses shared edits; all pickups are native.
     for(const e of (await model()).zones.flat())await edit({type:'remove',id:e.id});
     for(const kind of ['capy','menu_labels','space'])await edit({type:'add',zone:'left',before:null,item:{kind}});
     await edit({type:'add',zone:'right',before:null,item:{kind:'settings'}});
     const menu=(await model()).zones[0][1].id,neighbor=(await model()).zones[0][2].id;
     for(const size of ['small','medium','large'])for(device of ['mouse','touch','pen']) {
+      const narrow={small:360,medium:432,large:504}[size];
       await edit({type:'set_size',size});const baseline=await model();
       await edit({type:'edit',editing:true});await resize(1800);
       const body=`[data-header-item="${menu}"]`;
       await pointer('down',center(await rect(body)));await pointer('move',{x:900,y:230});
       assert.ok(await evaluate('!!document.querySelector(".header-drag-preview")'));
       await escape();await pointer('up');await clean();assert.deepEqual(await model(),baseline);
-      await resize(880);
+      await resize(narrow);
       assert.equal(await evaluate(`document.querySelector('${body}').hidden`),true);
       await click('#header-overflow-0 > summary');
       const row=`[data-header-overflow-item="${menu}"]`,from=center(await rect(row));
@@ -60,10 +61,10 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
         await pointer('move',{x:300,y:260});
         assert.ok(await evaluate('!!document.querySelector(".header-drag-preview")'));
         if(cancellation==='capture')await evaluate('document.querySelector("#workspace").releasePointerCapture(__overflowEvents.filter(e=>e.type==="pointerdown").at(-1).id)');
-        if(cancellation==='resize')await resize(760);
+        if(cancellation==='resize')await resize(narrow-40);
         if(cancellation==='source')await evaluate(`document.querySelector('${row}').remove()`);
         await settle();await pointer('up');await clean();assert.deepEqual(await model(),baseline,`${device}: ${cancellation} cancels overflow drag`);
-        if(cancellation==='resize')await resize(880);
+        if(cancellation==='resize')await resize(narrow);
       }
       // Move the formerly hidden menu to another region with the same ID.
       await click('#header-overflow-0 > summary');await pointer('down',center(await rect(row)));

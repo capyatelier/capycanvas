@@ -45,11 +45,9 @@ impl Ownership {
             options.mode(0o600);
         }
         let file = options.open(path).map_err(unavailable)?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(file)),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(error)) => Err(unavailable(error)),
-        }
+        try_lock_file(&file)
+            .map(|locked| locked.then_some(file))
+            .map_err(unavailable)
     }
 
     pub(super) fn reconcile(&mut self, tx: &rusqlite::Transaction<'_>, now: u64) -> Result<()> {
@@ -152,4 +150,31 @@ fn unavailable(error: std::io::Error) -> StoreError {
         ErrorKind::Unavailable,
         format!("Workspace ownership lock: {error}"),
     )
+}
+
+fn try_lock_file(file: &File) -> std::io::Result<bool> {
+    // Rust's File::try_lock is unsupported on Android, although the kernel and
+    // Bionic provide flock. Keep the same open-file-description lifetime and
+    // nonblocking semantics; dropping File releases ownership on every path.
+    #[cfg(target_os = "android")]
+    {
+        use std::os::fd::AsRawFd;
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(true);
+            }
+            let error = std::io::Error::last_os_error();
+            match error.kind() {
+                std::io::ErrorKind::Interrupted => continue,
+                std::io::ErrorKind::WouldBlock => return Ok(false),
+                _ => return Err(error),
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    match file.try_lock() {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
 }

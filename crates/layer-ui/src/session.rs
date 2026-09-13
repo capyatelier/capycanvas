@@ -1627,8 +1627,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
             // Hosts opt in after projecting the complete stack and its member targets.
-            (matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Windows)
-                && !docks_hidden)
+            (matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows
+            ) && !docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
                 .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?

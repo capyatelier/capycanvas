@@ -111,6 +111,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     completed_at: Option<web_time::Instant>,
     completed_before: Option<layer_core::raster::RasterRevision>,
     restore_rasters: Vec<(LayerId, layer_core::raster::RasterRevision)>,
+    pending_frame: Option<(bool, f32)>,
     rebuild_completed: bool,
     estimates: std::collections::BTreeMap<(u64, u64), corrections::EstimatedPoint>,
     pending_smudge_dabs: Vec<Dab>,
@@ -176,6 +177,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             completed_at: None,
             completed_before: None,
             restore_rasters: Vec::new(),
+            pending_frame: None,
             rebuild_completed: false,
             estimates: Default::default(),
             pending_smudge_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
@@ -214,8 +216,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// Prepare sources and resize before adoption; failure leaves live input intact.
     /// The active builder and queued samples survive; completed history restores
     /// immutable rasters without replaying historical strokes.
-    pub fn replace_backend(&mut self, mut backend: B) -> Result<B, B::Error> {
-        backend.resize_surface(self.view.width_px, self.view.height_px)?;
+    pub fn replace_backend(&mut self, mut backend: B) -> Result<B, EngineError<B::Error>> {
+        if self.pending_frame.is_some() {
+            return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
+                "Raster restoration is busy; retry renderer replacement",
+            )));
+        }
+        backend
+            .resize_surface(self.view.width_px, self.view.height_px)
+            .map_err(EngineError::Backend)?;
         self.restore_rasters.clear();
         self.rebuild_all = true;
         self.composite_all = true;
@@ -227,11 +236,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.editor.can_undo()
+        self.pending_frame.is_none() && self.editor.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.editor.can_redo()
+        self.pending_frame.is_none() && self.editor.can_redo()
     }
 
     pub fn has_active_stroke(&self) -> bool {
@@ -512,7 +521,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// Readbacks must follow the frame that applies document edits, not capture
     /// old GPU pixels under the new document revision.
     pub fn has_pending_document_edits(&self) -> bool {
-        self.rebuild_all
+        self.pending_frame.is_some()
+            || self.rebuild_all
             || self.composite_all
             || self
                 .batches
@@ -733,10 +743,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn flush_pending_edits(&mut self) -> Result<(), DocumentError> {
-        if self
-            .batches
-            .iter()
-            .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+        if self.pending_frame.is_some()
+            || self
+                .batches
+                .iter()
+                .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
             || self
                 .document()
                 .layers
@@ -751,6 +762,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.render_frame().map_err(|_| {
                 DocumentError::InvalidLayerOperation("Could not submit the preceding raster edit")
             })?;
+            if self.pending_frame.is_some() {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Raster restoration is busy; retry the edit",
+                ));
+            }
         }
         Ok(())
     }
@@ -785,6 +801,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     ) -> Result<(), EngineError<B::Error>> {
         if !self.backend.can_submit() {
             return Ok(());
+        }
+        if let Some((reset, time)) = self.pending_frame.take() {
+            return self.submit_prepared_frame(reset, time);
         }
         if !self.backend.can_capture_raster()
             && (self.input.peek().is_some_and(|e| {
@@ -848,10 +867,19 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         self.composite_all |= rebuilt;
 
+        let time = timestamp_ns.map_or(0., |now| {
+            now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
+        });
+        self.submit_prepared_frame(rebuilt, time)
+    }
+
+    fn submit_prepared_frame(
+        &mut self,
+        rebuilt: bool,
+        time_seconds: f32,
+    ) -> Result<(), EngineError<B::Error>> {
         let packet = FramePacket {
-            time_seconds: timestamp_ns.map_or(0., |now| {
-                now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
-            }),
+            time_seconds,
             view: self.view,
             document_extent: [self.editor.document().width, self.editor.document().height],
             layers: &self.editor.document().layers,
@@ -861,6 +889,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             reset_layers: rebuilt,
             composite_all: self.composite_all,
         };
+        if !self.backend.raster_dependencies_ready(packet) {
+            self.pending_frame = Some((rebuilt, time_seconds));
+            return Ok(());
+        }
         let selection = self.display_selection().map(|s| s.into_owned());
         let result = self
             .backend
@@ -972,6 +1004,21 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// submitted raster boundaries belong to history; CPU-only sample draining
     /// cannot create a saveable raster edit. The producer must be quiescent.
     pub fn discard_unsubmitted_input(&mut self) {
+        if self.pending_frame.take().is_some() {
+            for layer in &self.document().layers {
+                for root in
+                    std::iter::once(&layer.raster).chain(layer.mask.iter().map(|m| &m.raster))
+                {
+                    if root.try_data().is_none() {
+                        let _ =
+                            root.publish(Err("Renderer stopped before raster submission".into()));
+                    }
+                }
+            }
+            self.dabs.clear();
+            self.batches.clear();
+            self.restore_rasters.clear();
+        }
         while self.input.pop().is_some() {}
         if self.has_active_stroke() {
             self.cancel_active();
@@ -1865,6 +1912,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingRenderer {
         capture_blocked: bool,
+        restore_blocked: bool,
         time_seconds: f32,
         fail_resize: bool,
         size: [u32; 2],
@@ -1880,6 +1928,9 @@ mod tests {
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
+            !self.restore_blocked
+        }
         fn can_capture_raster(&self) -> bool {
             !self.capture_blocked
         }
@@ -2736,6 +2787,58 @@ mod tests {
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             background_rgba_linear: [1.0; 4],
         }
+    }
+
+    #[test]
+    fn pending_restore_retains_one_prepared_frame_without_consuming_the_next_contact() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("deferred frame", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        engine.render_frame().unwrap();
+        let frames = engine.metrics().frames;
+        engine.backend_mut().restore_blocked = true;
+        input.push(event(1, PenPhase::Down, 8.)).unwrap();
+        input.push(event(2, PenPhase::Up, 24.)).unwrap();
+        engine.render_frame().unwrap();
+        assert_eq!(engine.metrics().input_events, 2);
+        assert_eq!(engine.metrics().frames, frames);
+        assert!(engine.has_pending_document_edits());
+        assert!(engine.document().layers[0].raster.try_data().is_none());
+        assert!(!engine.can_undo());
+        input.push(event(3, PenPhase::Down, 32.)).unwrap();
+        input.push(event(4, PenPhase::Up, 48.)).unwrap();
+        engine.render_frame().unwrap();
+        assert_eq!(engine.metrics().input_events, 2);
+        assert_eq!(engine.backend().persistent_dabs, 0);
+        assert!(
+            engine
+                .replace_backend(RecordingRenderer::default())
+                .is_err()
+        );
+        assert!(
+            engine.backend().restore_blocked,
+            "a prepared frame keeps its owning renderer"
+        );
+        assert_eq!(engine.metrics().input_events, 2);
+        engine.backend_mut().restore_blocked = false;
+        engine.render_frame().unwrap();
+        assert_eq!(engine.metrics().frames, frames + 1);
+        assert_eq!(engine.metrics().input_events, 2);
+        assert!(engine.document().layers[0].raster.host_backed());
+        assert!(engine.backend().persistent_dabs > 0);
+        assert!(engine.can_undo());
+        engine.render_frame().unwrap();
+        assert_eq!(engine.metrics().input_events, 4);
+        assert_eq!(engine.metrics().committed_strokes, 2);
+        assert!(engine.undo().unwrap());
+        assert!(engine.undo().unwrap());
+        assert!(!engine.undo().unwrap());
     }
 
     #[test]

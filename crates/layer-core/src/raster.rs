@@ -3,6 +3,8 @@
 use crate::color::PixelDescriptor;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     sync::{
@@ -10,8 +12,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
 
 pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 4) as usize;
@@ -57,6 +57,9 @@ impl<T> Publication<T> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn wait(&self) -> Result<Arc<T>, String> {
+        if let Some(value) = self.get() {
+            return value;
+        }
         let state = self.value.lock().map_err(|_| "Raster publication failed")?;
         let (state, _) = self
             .ready
@@ -132,6 +135,9 @@ impl TileBlob {
     pub fn compressed(&self) -> &[u8] {
         &self.compressed
     }
+    pub fn compressed_owned(&self) -> Arc<[u8]> {
+        self.compressed.clone()
+    }
     pub fn resident_bytes(&self) -> usize {
         self.compressed.len()
     }
@@ -166,6 +172,28 @@ impl TileBlob {
         };
         result.decode()?;
         Ok(result)
+    }
+
+    /// Transfer from this application's browser codec worker, which already
+    /// encoded or validated the blob. This avoids repeating decompression on the
+    /// input owner. Untrusted project files must use `from_compressed` instead.
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_verified_worker(
+        descriptor: PixelDescriptor,
+        digest: [u8; 32],
+        bytes: Arc<[u8]>,
+    ) -> Result<Self, String> {
+        if bytes.is_empty()
+            || bytes.len() > MAX_TILE_BYTES + 1024
+            || descriptor.byte_len([TILE_SIZE; 2]).is_none()
+        {
+            return Err("Invalid raster worker blob".into());
+        }
+        Ok(Self {
+            descriptor,
+            digest,
+            compressed: bytes,
+        })
     }
 }
 

@@ -120,15 +120,34 @@ impl App {
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            self.host.session.renderer_mut().0 = Some(
-                WgpuRasterizer::from_wgpu_staged_cached(
-                    adapter,
-                    device,
-                    queue,
-                    std::path::Path::new(cache_directory),
-                )
-                .map_err(error)?,
-            );
+            // Callbacks record failures without panicking through JNI or owning
+            // the device. The render owner suspends input and exposes recovery.
+            self.gpu_generation = self
+                .gpu_generation
+                .checked_add(1)
+                .ok_or("GPU generation exhausted")?;
+            self.gpu_failure = Default::default();
+            let lost = self.gpu_failure.clone();
+            device.set_device_lost_callback(move |reason, message| {
+                lost.get_or_init(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
+            });
+            let errors = self.gpu_failure.clone();
+            device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+                errors.get_or_init(|| error.to_string());
+            }));
+            let renderer = WgpuRasterizer::from_wgpu_staged_cached(
+                adapter,
+                device,
+                queue,
+                std::path::Path::new(cache_directory),
+            )
+            .map_err(error)?;
+            let previous = self.host.session.state().revision;
+            let (_, change) = self
+                .host
+                .session
+                .replace_renderer(layer_host::Renderer(Some(renderer)))?;
+            self.host.apply_change(previous, change);
         }
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let mut config = surface
@@ -163,7 +182,47 @@ impl App {
         self.host.dirty = true;
         Ok(())
     }
+    fn retire_gpu(&mut self) -> Result<(), String> {
+        self.surface = None;
+        let retired = self.host.session.renderer_mut().0.take();
+        self.instance = None;
+        self.blank_presented = false;
+        self.cursor = Default::default();
+        self.host.document_adopted();
+        if retired.is_some() {
+            // Capture-worker teardown can wait; never join it on the input owner.
+            std::thread::Builder::new()
+                .name("capy-retired-gpu".into())
+                .spawn(move || drop(retired))
+                .map_err(error)?;
+        }
+        Ok(())
+    }
+    fn observe_gpu_failure(&mut self, poll: bool) {
+        if poll && let Some(gpu) = self.host.session.engine().backend().0.as_ref() {
+            // Device loss callbacks may be pending when a queued thumbnail asks
+            // for resources. Deliver them before either preview or frame work.
+            if let Err(error) = gpu.device().poll(wgpu::PollType::Poll) {
+                self.gpu_failure.get_or_init(|| error.to_string());
+            }
+        }
+        if let Err(error) = self.check_gpu() {
+            if !self.host.session.rendering_suspended() {
+                let _ = self.host.suspend_renderer();
+            }
+            if self.host.session.engine().backend().0.is_some() {
+                let _ = self.retire_gpu();
+            }
+            self.host.error = Some(error);
+        }
+    }
+    fn check_gpu(&self) -> Result<(), String> {
+        self.gpu_failure
+            .get()
+            .map_or(Ok(()), |error| Err(error.clone()))
+    }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
+        self.check_gpu()?;
         self.frame_cost = [0; 5];
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
@@ -245,12 +304,15 @@ impl App {
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
         surface.presenter.set_overviews(gpu, &overviews);
-        surface.presenter.present(
-            gpu,
-            &target.texture.create_view(&Default::default()),
-            view,
-            surround,
-        ).map_err(error)?;
+        surface
+            .presenter
+            .present(
+                gpu,
+                &target.texture.create_view(&Default::default()),
+                view,
+                surround,
+            )
+            .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
         if surface.first_frame_complete.is_none() {
@@ -261,8 +323,10 @@ impl App {
         }
         self.blank_presented = true;
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
-        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-        self.frame_cost[4] = elapsed() - self.frame_cost[..4].iter().sum::<i64>();
+        // Poll once before resource use, not again after submission. The next
+        // frame/readback worker services completion; initial surface readiness
+        // has its own poll while its first finished buffer is awaited.
+        self.check_gpu()?;
         Ok(self.host.dirty)
     }
 }
@@ -270,7 +334,11 @@ impl App {
 // The Kotlin host owns this handle and never exposes it to UI callers. Calls
 // are serialized on its render Looper, including lifecycle and final disposal.
 pub(crate) unsafe fn app<'a>(handle: jlong) -> &'a mut App {
-    unsafe { &mut *(handle as *mut App) }
+    let a = unsafe { &mut *(handle as *mut App) };
+    // CPU file/menu calls remain available, but no later JNI request can use a
+    // device whose failure callback has already arrived.
+    a.observe_gpu_failure(false);
+    a
 }
 pub(crate) fn fail(env: &mut JNIEnv, result: Result<(), String>) {
     if let Err(message) = result {
@@ -358,6 +426,46 @@ pub extern "system" fn Java_art_capycanvas_Native_finishStartupCache(
         gpu.finish_startup_cache();
     }
 }
+/// Instrumentation removes only this window's device, never a driver/global GPU.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_destroyGpuForTest(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) {
+    let a = unsafe { app(handle) };
+    let result = (|| {
+        if !a.profiling {
+            return Err("GPU fault injection requires a debug test session".into());
+        }
+        a.host
+            .session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .ok_or("Missing test GPU")?
+            .device()
+            .destroy();
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_resetGpu(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) {
+    let a = unsafe { app(handle) };
+    let result = (|| {
+        a.host.suspend_renderer()?;
+        a.retire_gpu()?;
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_detach(
     mut env: JNIEnv,
@@ -496,9 +604,17 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     presentation: jlong,
 ) -> jboolean {
     let app = unsafe { app(handle) };
-    match app.render(now.max(0) as u64, presentation.max(now).max(0) as u64) {
+    let clock = app.profiling.then(std::time::Instant::now);
+    app.observe_gpu_failure(true);
+    let poll = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
+    let result = app.render(now.max(0) as u64, presentation.max(now).max(0) as u64);
+    app.frame_cost[4] = poll;
+    match result {
         Ok(wake) => wake as jboolean,
         Err(e) => {
+            if !app.host.session.rendering_suspended() {
+                let _ = app.host.suspend_renderer();
+            }
             app.host.error = Some(e.clone());
             fail(&mut env, Err(e));
             0
@@ -550,14 +666,21 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
 ) -> jstring {
     let result = read(&mut env, &query)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|query| unsafe { app(handle) }.host.query(query))
+        .and_then(|query| {
+            let a = unsafe { app(handle) };
+            a.observe_gpu_failure(true);
+            a.host.query(query)
+        })
         .map(|v| v.to_string());
     string(&mut env, result)
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_workspace(
-    mut env: JNIEnv, _: JClass, handle: jlong, request: JString,
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    request: JString,
 ) -> jstring {
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
@@ -602,7 +725,9 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     handle: jlong,
 ) -> jni::sys::jobjectArray {
     let result = (|| {
-        let renderer = unsafe { app(handle) }.host.session.renderer_mut();
+        let a = unsafe { app(handle) };
+        a.observe_gpu_failure(true);
+        let renderer = a.host.session.renderer_mut();
         if let Some(gpu) = &renderer.0 {
             gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         }
@@ -647,6 +772,10 @@ pub extern "system" fn Java_art_capycanvas_Native_importLayer(
         let name = read(&mut env, &name)?;
         let bytes = env.convert_byte_array(&rgba).map_err(error)?;
         let app = unsafe { app(handle) };
+        app.observe_gpu_failure(true);
+        if app.host.session.rendering_suspended() {
+            return Err("Restart the canvas before importing an image".into());
+        }
         app.host.import_layer_image(
             &name,
             layer_render::HostImage {

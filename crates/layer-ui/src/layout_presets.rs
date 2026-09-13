@@ -52,7 +52,13 @@ impl WorkspacePreset {
                 let stack = layout.column_stack_mut(column);
                 stack.drawers = false;
                 stack.auto_hide = false;
-                if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Windows) {
+                if matches!(
+                    platform,
+                    crate::Platform::Gtk
+                        | crate::Platform::Web
+                        | crate::Platform::Android
+                        | crate::Platform::Windows
+                ) {
                     let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
                     if band.edge != Edge::Right {
                         continue;
@@ -231,7 +237,13 @@ impl DockLayout {
     /// The shipped Paint arrangement opens its right column on adoption or
     /// reset. This is initial presentation; ordinary open/close stays transient.
     pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
-        if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Windows)
+        if matches!(
+            platform,
+            crate::Platform::Gtk
+                | crate::Platform::Web
+                | crate::Platform::Android
+                | crate::Platform::Windows
+        )
             && self.collapsed.len() == 1
             && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
         {
@@ -336,7 +348,13 @@ mod tests {
                     .iter()
                     .all(|s| !s.drawers)
             );
-            if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Windows) {
+            if matches!(
+                platform,
+                crate::Platform::Gtk
+                    | crate::Platform::Web
+                    | crate::Platform::Android
+                    | crate::Platform::Windows
+            ) {
                 assert_eq!(layout.collapsed.len(), 1);
                 assert!(layout.is_collapsed(12) && !layout.is_collapsed(4));
                 assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));

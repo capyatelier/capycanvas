@@ -210,7 +210,12 @@ impl CapyHost {
             .session
             .replace_renderer(layer_host::Renderer(Some(renderer)))?;
         self.native.apply_change(revision, change);
-        drop(retired); // GPU resources and retired shader workers stay off the UI thread.
+        // DEPRECATED teardown placement for the raster backend: a retired
+        // capture worker can wait for GPU mappings/compression. Move this drop
+        // to a retirement worker (see Android resetGpu/GTK RenderWorker), then
+        // qualify retained raster/history recovery on D3D12. Keep the shared
+        // replace_renderer call above; direct backend replacement is obsolete.
+        drop(retired); // Currently still on the render/input owner.
         if self.device_is_lost() {
             self.native.error = None;
         }
