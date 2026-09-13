@@ -163,6 +163,12 @@ fault, record the exception code and `kv` stack before closing or restarting;
 when inspecting a crash dump, select its exception context with `.ecxr` first.
 See Microsoft's [exception controls](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/sx--sxd--sxe--sxi--sxn--sxr--sx---set-exceptions-)
 and [symbol setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-symbol-and-source-paths-in-cdb).
+For workspace gestures, inspect the `Drawing workspace` element's UIA HelpText
+with `CAPY_TRACE_UI=1`: it records the actual pointer device, capture state and
+last cancellation. Its ItemStatus reports layout publication separately. Compare
+an injected-input failure with physical input before changing native capture;
+they can differ even when the test reports the expected device type.
+
 Keep debugger logs and dumps local: they can contain document contents and paths.
 Debugger runs are for diagnosis; measure presentation without an attached debugger.
 

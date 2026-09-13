@@ -59,6 +59,7 @@ public static class CapyRowPointer {
   if(process!=owner)throw new Exception("Input point is outside the owned review.");
  }
  static void Check(){if(failure!=null)throw new Exception("Pointer keepalive failed.",failure);}
+ public static void Verify(){lock(gate)Check();}
  static void MouseMove(Point point) {
   var mouse=new Mouse{dx=(point.x-GetSystemMetrics(76))*65535/(GetSystemMetrics(78)-1),
    dy=(point.y-GetSystemMetrics(77))*65535/(GetSystemMetrics(79)-1),flags=0xC001};

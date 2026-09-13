@@ -1933,3 +1933,54 @@ filter category/search/insertion, preview/Undo, both-theme filter replacement,
 drawer/column history and Navigator drawer checks pass. The staged SVGs match
 their source in both themes. Full raster parity and physical-device/performance
 acceptance remain open.
+
+## Attached column groups and starting-layout preview
+
+Windows collapsed columns now expose Drawers, Group panel, Auto-hide and Apply
+to all columns through the shared column menu. Attached groups occupy shared
+vertical slots beside the icon strip, with native width/split resize cursors and
+immediate captured pickup. Shared Rust owns allocation, cancellation, preferences
+and one-step history. Resizing retains native bodies and scrolling, including
+Layers, toolbar tiles and GPU Navigator content. Widths and split weights survive
+restart; open groups remain transient. Chrome hiding in Zen removes the attached
+presentation and restores it when chrome returns.
+
+Opening Preferences or another customization dialog previously cleared attached
+bodies while leaving their layout allocation. Shared reconciliation now preserves
+that presentation on both GTK and Windows. The same column contract tests run
+for both platforms, including preferences, resizing, dismissal, cancellation,
+all-column settings and history restoration.
+
+Restore Starting Layout now previews its saved baseline in the editor behind the
+native confirmation. Cancel and window close restore the current arrangement;
+confirmation preserves tool settings and creates one workspace history step.
+The native service test checks that preview never reaches storage, failed writes
+retain the current arrangement, Retry applies once, and Undo/Redo remain exact.
+
+The column fixture measures actual native slot bounds against shared geometry
+using the Win32 client origin and current DPI. It covers both sides, every pointer
+device, retained resize/cancellation/history, presentation switching, auto-hide
+without painting, all-column preferences, Navigator, Layers, Zen, both themes and
+restart. Toolbar and row pickup fixtures select Drawers or Group panel explicitly.
+Their row-body target avoids the attached resize strip, and cancellation accounts
+for immediate attached-panel removal rather than a drawer closing animation.
+
+The affected unit checks pass 502 tests (25 host, 315 UI, 98 Windows and
+64 workspace), with four explicit hardware ignores. Strict Windows Clippy and
+both Debug and Release Rust/WinUI builds pass. Column fixtures pass for mouse,
+pen and touch; toolbar and layer-row pickup pass all six device/presentation
+combinations. The existing drawer regression and Release manager/editor fixtures
+also pass, including preview/Cancel, one-step reset history, restart, both Zen
+modes, themes, retained controls, resizing and titlebar hit regions. Native slot
+bounds agree with shared allocations within one physical pixel. These checks do
+not establish full-image parity, physical digitizer features or painting cadence.
+
+Capture diagnostics and the focused tab fixture remain available. The user
+confirmed physical Layers tab tear-off follows pen contact through release;
+injected pen/touch tab capture loss is still unresolved. No diagnostic capture,
+private profile, machine report, generated asset or binary belongs in this commit.
+
+Full-image workspace parity, strict renderer reference agreement, the complete
+physical input matrix, mixed-DPI/device recovery, distribution and sustained
+120 Hz painting plus physical input latency remain open. No performance
+benchmark ran during this milestone.

@@ -2824,8 +2824,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => None,
                 })
                 .collect();
-            // Undo/redo preserves which group is open, even though transient
-            // customization popups are reset. Rebuild its shared presentation.
+            changed |= CUSTOMIZATION;
+        }
+        if changed & (LAYOUT | CUSTOMIZATION) != 0 {
+            // Attached groups survive transient popup resets, including opening
+            // Preferences. Keep their bodies consistent with the allocated space.
+            // Undo/redo also preserves the open group in layout history.
             for settings in &self.state.workspace.layout.column_settings {
                 let Some(group) = self
                     .state
@@ -15001,5 +15005,14 @@ mod tests {
         assert_eq!(app.state.workspace.layout.bands.len(), 4);
         assert!(serde_json::to_value(&app.state).unwrap()["commands"].is_array());
     }
-    include!("column_group_tests.rs");
+    mod gtk_column_groups {
+        use super::*;
+        const COLUMN_PLATFORM: Platform = Platform::Gtk;
+        include!("column_group_tests.rs");
+    }
+    mod windows_column_groups {
+        use super::*;
+        const COLUMN_PLATFORM: Platform = Platform::Windows;
+        include!("column_group_tests.rs");
+    }
 }

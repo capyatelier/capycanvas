@@ -684,7 +684,7 @@ impl DockLayout {
             },
         )]];
         if let Some(column) =
-            column.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic))
+            column.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows))
         {
             let settings = self.column_settings(column);
             let mut modes = Vec::new();
@@ -1725,7 +1725,7 @@ impl CustomizationState {
                     .ok_or("The column is not collapsed")?;
                 let settings = layout.column_settings(column);
                 if settings.mode == crate::ColumnMode::GroupPanel
-                    && matches!(platform, Platform::Gtk | Platform::Generic)
+                    && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
                 {
                     let close = settings.open_group == Some(group);
                     layout.column_settings_mut(column).open_group = (!close).then_some(group);
@@ -1775,7 +1775,7 @@ impl CustomizationState {
                 let s = layout.column_settings_mut(column);
                 s.mode = mode;
                 s.open_group = if mode == crate::ColumnMode::GroupPanel
-                    && matches!(platform, Platform::Gtk | Platform::Generic)
+                    && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
                 {
                     open
                 } else {
@@ -1804,7 +1804,7 @@ impl CustomizationState {
                     s.mode = source.mode;
                     s.auto_hide = source.auto_hide;
                     s.open_group = if s.mode == crate::ColumnMode::GroupPanel
-                        && matches!(platform, Platform::Gtk | Platform::Generic)
+                        && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
                     {
                         open
                     } else {

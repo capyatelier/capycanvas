@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers','group_panel')][string]$ColumnMode='drawers')
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -94,9 +94,13 @@ function Point([string]$Id,[switch]$Name) {
         if($bounds -eq $stable.bounds){$stable.count++}else{$stable.bounds=$bounds;$stable.count=0}
         $stable.count -ge 2
     } "Source $Id did not arrange visibly"
-    # A row-root source uses its transparent left padding, outside child buttons.
-    $x=if($Id -like 'layer-row-*'){$stable.bounds.X+2}else{$stable.bounds.X+$stable.bounds.Width*.5}
-    @{x=[int]$x;y=[int]($stable.bounds.Y+$stable.bounds.Height*.5)}
+    # Use row padding outside child buttons. In attached columns the outer
+    # vertical padding belongs to the width-resize strip, so use top padding.
+    $row=$Id -like 'layer-row-*'
+    $attached=$row -and $ColumnMode -eq 'group_panel'
+    $x=if($row -and !$attached){$stable.bounds.X+2}else{$stable.bounds.X+$stable.bounds.Width*.5}
+    $y=if($attached){$stable.bounds.Y+1}else{$stable.bounds.Y+$stable.bounds.Height*.5}
+    @{x=[int]$x;y=[int]$y}
 }
 function Move-To($At) {[CapyRowPointer]::Move([int]$At.x,[int]$At.y)}
 function Tap([string]$Id) {
@@ -161,7 +165,13 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     if($Cancel){
         if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
     }else{[CapyRowPointer]::Up()}
-    Wait-Until {(Gesture).phase -eq 'idle'} 'Layer contact did not finish'
+    Wait-Until {
+        (Gesture).phase -eq 'idle' -or
+            ($Cancel -and $ColumnMode -eq 'group_panel' -and !(Find 'layer-list') -and
+             @((Model).state.customization.column_drawers).Count -eq 0)
+    } 'Layer contact did not finish'
+    # Escape removes attached columns immediately, including their row surface;
+    # ordinary drawers retain that surface during their closing animation.
     if($Cancel){
         if((Rows) -ne $before){throw 'Cancelled row move changed layers'}
         if((Gesture).menu_open){throw 'Cancelled row move retained its menu'}
@@ -239,6 +249,16 @@ try {
     }
     # Reuse the same row controller after native panel reparenting and drawer
     # creation. Workspace history is independent of each document reorder.
+    # Establish the requested mode before taking the history baseline. Both
+    # presentations then exercise the same row controller and one-step Undo.
+    Focus-Key 'panel-tab-layers' 0x5d;Invoke 'Collapse column' -Name
+    $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
+    $mode=if($ColumnMode -eq 'drawers'){'Drawers'}else{'Group panel'}
+    (Control $mode -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Start-Sleep -Milliseconds 300
+    $column=@((Model).layout.collapsed|Where-Object {($_.groups.icons.panel) -contains 'layers'})[0].id
+    Invoke "expand-column-$column"
+    Wait-Until {$null -ne (Find 'panel-tab-layers')} 'Column mode setup did not restore Layers'
     $layoutBefore=(Model).layout|ConvertTo-Json -Depth 80 -Compress
     foreach($presentation in @('floating','drawer')){
         $script:case="$presentation-setup"
@@ -258,7 +278,7 @@ try {
             Invoke 'Collapse column' -Name
             Wait-Until {$tile=Find 'column-icon-layers';$tile -and !$tile.Current.IsOffscreen} 'Collapsed column did not expose Layers'
             Invoke 'column-icon-layers'
-            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'layers'}).Count -eq 1} 'Layer column drawer did not open'
+            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer column drawer did not open'
         }
         $null=Point "layer-$created-name"
         $script:case="$presentation-row";Drag-Row "layer-$created-name" $created $paint
@@ -270,7 +290,7 @@ try {
             # Escape also dismisses a containing drawer through workspace chrome.
             Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Escape did not dismiss the layer drawer'
             Invoke 'column-icon-layers'
-            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'layers'}).Count -eq 1} 'Layer drawer did not reopen after Escape'
+            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer drawer did not reopen after Escape'
         }
         $script:case="$presentation-release"
         $before=Rows
@@ -411,7 +431,7 @@ try {
     [CapyRowPointer]::Dispose()
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires review'}
-    [pscustomobject]@{device=$Device;short_click='passed';hold_release='passed';row_drag='passed';child_control_drag='passed';immediate_grip='passed';cancel='passed';one_step_undo_redo='passed';row_whitespace='passed';rename_ownership='passed';source_removal='passed';mask_and_selection_children='passed';group_content_and_into_drop='passed';keyboard_context='passed';edge_scroll_retention='passed';minimize_cancellation='passed';native_scroll=$(if($Device -eq 'mouse'){'not_applicable'}else{'passed'});floating_and_drawer_rows='passed';scope='OS-delivered synthetic input; physical-device and presentation-performance acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{device=$Device;column_mode=$ColumnMode;short_click='passed';hold_release='passed';row_drag='passed';child_control_drag='passed';immediate_grip='passed';cancel='passed';one_step_undo_redo='passed';row_whitespace='passed';rename_ownership='passed';source_removal='passed';mask_and_selection_children='passed';group_content_and_into_drop='passed';keyboard_context='passed';edge_scroll_retention='passed';minimize_cancellation='passed';native_scroll=$(if($Device -eq 'mouse'){'not_applicable'}else{'passed'});floating_and_drawer_rows='passed';scope='OS-delivered synthetic input; physical-device and presentation-performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_
     @{case=$script:case;error=$failure.ToString();gesture=(Gesture);rows=(Rows);workspace_presentation=(Find 'Drawing workspace' -Name).Current.ItemStatus}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')

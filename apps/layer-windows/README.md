@@ -550,6 +550,39 @@ and targeted opacity, Escape, toolbar insertion and theme changes through
 Preferences. Its app-only pixel check verifies a GPU overview over an opaque
 lower panel and restoration after closing configuration.
 
+## Attached column groups
+
+Collapsed columns honor the shared Drawers and Group panel settings. The
+Illustrator preset uses attached groups: every member occupies a resizable
+vertical slot beside its icon strip. Width and split handles use native cursors,
+immediate pickup and stable workspace capture. Rust owns placement, cancellation
+and one-step history; native bodies and scrolling remain retained during resize.
+The column menu also exposes Auto-hide and Apply to all columns. Widths, split
+weights and preferences persist; the currently open group is transient.
+
+Attached groups preserve their allocated content while opening Preferences or
+other customization dialogs. They hide with workspace chrome in Zen mode and
+return afterward. Layers uses its native virtualized viewport at the allocated
+height; Navigator keeps the shared GPU overview and clipped background opening.
+
+~~~powershell
+foreach ($device in 'mouse','pen','touch') {
+    ./apps/layer-windows/scripts/exercise-column-panels.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
+}
+~~~
+
+This disposable-profile fixture checks physical arranged bounds against shared
+allocations, both sides, retained width/split resize, cancellation and history,
+mode switching, auto-hide without painting, all-column preferences, Navigator,
+Layers, Zen, both themes and restart. It measures the Win32 client origin and
+current DPI; UI Automation container bounds can omit empty margins. Snapshots
+and arranged views must agree before input and history assertions.
+
+The workspace and layer pickup fixtures also accept
+`-ColumnMode drawers` or `-ColumnMode group_panel` to exercise the same native
+controllers in both retained presentations. Synthetic pen/touch results remain
+separate from physical-device and presentation-performance acceptance.
+
 ## Full editor and Zen checkpoint
 
 Windows initializes the same complete editor preset as Android and Web:
@@ -729,7 +762,9 @@ Manage Workspaces and Layout History preview arrangements in the editor behind
 the dialog. Selection, double-click and Enter do not commit the preview. Explicit
 confirmation applies it; Cancel, Escape and dismissal restore the original.
 New Workspace asks only for a name and copies the current arrangement and tool
-settings. Restore Starting Layout preserves current tool settings. Reset All
+settings. Restore Starting Layout previews its saved baseline before confirmation;
+Cancel and window close restore the current arrangement, while confirmation
+creates one workspace Undo/Redo step and preserves current tool settings. Reset All
 Brushes confirms once and saves the shared brush reset without layout history.
 There is no Save Layout or Load Layout UI.
 
@@ -955,12 +990,21 @@ foreach ($device in 'mouse','pen','touch') {
 }
 ~~~
 
+Use `-ColumnMode group_panel` for attached column bodies and `-ColumnMode drawers`
+for tabbed drawers in both pickup fixtures. Each presentation reuses the same
+device arbitration and shared history path.
+
 The isolated fixture checks docked rows, floating panels and column drawers,
 menus, child controls, whitespace, immediate grips, group drops, scrolling,
 source removal, renaming, cancellation and exact Undo/Redo. It arranges floating
-panels with mouse input before testing rows with the requested device. Pen tab
-tear-off independently exposed capture loss and remains a workspace acceptance
-gap. Physical digitizers, presentation cadence and input latency remain separate.
+panels with mouse input before testing rows with the requested device. A physical
+pen check confirmed that Layers follows the pen through tear-off until release.
+The focused `exercise-tab-pickup.ps1 -Executable <native-exe> -Device mouse` fixture
+passes short tab selection, direct/gradual tear-off, continued movement,
+cancellation and exact workspace Undo/Redo. Its OS-injected pen and touch runs
+still lose capture during direct tear-off; that discrepancy remains unresolved.
+These observations do not establish all physical input features, presentation
+cadence or latency acceptance.
 Failed fixtures leave their owned app and local evidence available for inspection.
 
 ## Shared icon updates
