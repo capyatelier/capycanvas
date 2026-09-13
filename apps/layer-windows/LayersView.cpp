@@ -8,7 +8,7 @@ namespace CapyLayers {
 UIElement ElementFactory::GetElement(ElementFactoryGetArgs const& args){
     auto view=owner.lock();if(!view)return Border();
     auto row=std::make_shared<LayerRow>();row->owner=view;row->data=view->data;
-    row->id=unbox_value<double>(args.Data());row->epoch=view->epoch;row->init();row->refresh();
+    row->id=unbox_value<double>(args.Data());row->epoch=view->epoch;row->init();if(view->pickup)view->pickup->Attach(row);row->refresh();
     view->rows.emplace(row->root.as<::IUnknown>().get(),row);return row->root;
 }
 void ElementFactory::RecycleElement(ElementFactoryRecycleArgs const& args){
@@ -17,7 +17,7 @@ void ElementFactory::RecycleElement(ElementFactoryRecycleArgs const& args){
         if(found!=view->rows.end()){found->second->commit(false);view->rows.erase(found);}
     }
 }
-LayersView::~LayersView(){if(timer)timer.Stop();if(dragTimer)dragTimer.Stop();if(menu)menu.Hide();}
+LayersView::~LayersView(){if(pickup)pickup->Cancel();if(timer)timer.Stop();if(menu)menu.Hide();}
 void LayersView::init(){
     auto weak=weak_from_this();root.RowSpacing(0);
     AutomationProperties::SetAutomationId(root,L"layer-panel");
@@ -108,31 +108,12 @@ void LayersView::init(){
     ColumnDefinition moreColumn;moreColumn.Width({24,GridUnitType::Pixel});footerFrame.ColumnDefinitions().Append(moreColumn);
     footerFrame.Children().Append(footer);Grid::SetColumn(more,1);footerFrame.Children().Append(more);
     Grid::SetRow(footerFrame,2);root.Children().Append(footerFrame);
-    dragTimer=root.DispatcherQueue().CreateTimer();dragTimer.Interval(std::chrono::milliseconds(16));
-    dragTimer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock()){
-        if(!self->dragCurrent()||self->dragSpeed==0){self->dragTimer.Stop();return;}
-        ScrollingScrollOptions options(ScrollingAnimationMode::Disabled,ScrollingSnapPointsMode::Ignore);
-        self->list.ScrollBy(0,self->dragSpeed,options);
-    }});
-    list.AddHandler(UIElement::DragOverEvent(),box_value(DragEventHandler([weak](auto&&,DragEventArgs const& e){
-        if(auto self=weak.lock();self&&self->dragCurrent()){
-            auto point=e.GetPosition(self->list);double height=self->list.ActualHeight();
-            self->dragSpeed=point.Y<32?-std::clamp((32-point.Y)/2.,1.,16.):
-                point.Y>height-32?std::clamp((point.Y-height+32)/2.,1.,16.):0;
-            if(self->dragSpeed)self->dragTimer.Start();else self->dragTimer.Stop();
-        }
-    })),true);
-    list.DragLeave([weak](auto&&,DragEventArgs const& e){if(auto self=weak.lock()){
-        auto point=e.GetPosition(self->list);
-        if(point.X<0||point.Y<0||point.X>self->list.ActualWidth()||point.Y>self->list.ActualHeight()){
-            self->dragSpeed=0;self->dragTimer.Stop();
-        }
-    }});
+    pickup=std::make_unique<LayerRowDrag>(shared_from_this());
     timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(120));
     timer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock())self->preview();});
     root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->timer.Start();self->preview();}});
     root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){
-        self->timer.Stop();++self->menuGeneration;if(self->menu)self->menu.Hide();self->clearDrag();
+        self->timer.Stop();++self->menuGeneration;if(self->menu)self->menu.Hide();if(self->pickup)self->pickup->Cancel();
     }});
 }
 void LayersView::refresh(){
@@ -145,7 +126,7 @@ void LayersView::refresh(){
     list.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);opacityGate.Visibility(opacityShown?Visibility::Visible:Visibility::Collapsed);
     footerFrame.Visibility(shown(L"layer_actions")?Visibility::Visible:Visibility::Collapsed);
     auto nextEpoch=epochOf(data);if(epoch!=nextEpoch){
-        epoch=nextEpoch;++menuGeneration;if(menu)menu.Hide();clearDrag();source.Clear();
+        epoch=nextEpoch;++menuGeneration;if(menu)menu.Hide();if(pickup)pickup->Cancel();source.Clear();
     }
     auto active=editing(),capabilities=object(view(),L"controls");
     blend.IsEnabled(flag(capabilities,L"blend"));blend.SelectedIndex(int(num(active,L"blend")));
@@ -173,13 +154,21 @@ void LayersView::refresh(){
     }
     while(source.Size()>layers.Size())source.RemoveAtEnd();
     for(auto const& [element,row]:rows)row->refresh();
-    if(dragged&&!dragCurrent())clearDrag();
+    if(menuTarget&&(menuOpen||menuPending)&&!findId(layers,*menuTarget).Size()){
+        ++menuGeneration;menuPending=false;menuOpen=false;if(menu)menu.Hide();
+    }
+    if(pickup)pickup->Refresh();
 }
 void LayersView::preview(){
     if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0)return;
     // Templates can create or replace the scroll provider after Loaded.
     if(auto presenter=list.ScrollPresenter();presenter&&AutomationProperties::GetAutomationId(presenter)!=L"layer-list"){
         AutomationProperties::SetAutomationId(presenter,L"layer-list");AutomationProperties::SetName(presenter,L"Layers");
+        // The pinned ScrollView template spans content across its auto-width
+        // scrollbar column. Reserve that column when it is visible so the
+        // native scrollbar cannot cover the row grip.
+        if(auto grid=VisualTreeHelper::GetParent(presenter).try_as<Grid>();grid&&grid.ColumnDefinitions().Size()==2)
+            Grid::SetColumnSpan(presenter,1);
     }
     std::vector<LayerThumbnail> visible;
     for(auto const& [element,row]:rows){
@@ -189,38 +178,45 @@ void LayersView::preview(){
     }
     RefreshLayerThumbnails(data->thumbnails,epoch,visible);
 }
-void LayersView::context(double id,bool mask,UIElement const& anchor){
+void LayersView::context(double id,bool mask,UIElement const& anchor,std::optional<Windows::Foundation::Point> at,bool holding){
     if(data->updating||!anchor.XamlRoot())return;
+    if(!holding&&pickup)pickup->Cancel();
     if(id>=0)action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
     auto generation=++menuGeneration;auto document=epoch;
-    if(menu)menu.Hide();auto weak=weak_from_this();auto target=make_weak(anchor);auto queue=root.DispatcherQueue();
+    if(menu)menu.Hide();menuOpen=false;menuPending=true;menuTarget=id>=0?std::optional<double>(id):std::nullopt;
+    auto weak=weak_from_this();auto target=make_weak(anchor);auto queue=root.DispatcherQueue();
     auto query=O({{L"epoch",S(document)},{L"id",id>=0?S(to_hstring(uint64_t(id))):JsonValue::CreateNullValue()},
         {L"mask",id>=0?B(mask):JsonValue::CreateNullValue()}});
-    data->query(CanvasQueryKind::LayerMenu,to_string(query.Stringify()),[weak,target,queue,generation,document,id](PreviewPacket packet){
-        queue.TryEnqueue([weak,target,generation,document,id,packet=std::move(packet)]{
+    bool queued=data->query(CanvasQueryKind::LayerMenu,to_string(query.Stringify()),[weak,target,queue,generation,document,id,at,holding](PreviewPacket packet){
+        queue.TryEnqueue([weak,target,generation,document,id,at,holding,packet=std::move(packet)]{
             auto self=weak.lock();auto anchor=target.get();
-            if(!self||!anchor||!anchor.XamlRoot()||!self->root.IsLoaded()||self->menuGeneration!=generation||epochOf(self->data)!=document||!packet)return;
+            if(!self||self->menuGeneration!=generation)return;
+            self->menuPending=false;if(self->pickup)self->pickup->MenuChanged();
+            if(!anchor||!anchor.XamlRoot()||!self->root.IsLoaded()||epochOf(self->data)!=document||!packet)return;
+            if(id>=0&&!findId(array(self->data->state,L"layers"),id).Size())return;
             try{
                 auto reply=J::Parse(to_hstring(capy_preview_metadata(packet.get())));
                 if(str(reply,L"epoch")!=document)return;
                 auto spec=object(reply,L"menu");if(!spec.Size())return;
                 auto menuId=double(std::stoull(to_string(str(reply,L"id"))));
                 self->menu=MenuFlyout();TrackPopup(self->menu,self->data);
+                self->menu.Opened([weak](auto&&,auto&&){if(auto owner=weak.lock()){owner->menuOpen=true;if(owner->pickup)owner->pickup->MenuChanged();}});
+                self->menu.Closed([weak](auto&& sender,auto&&){if(auto owner=weak.lock();owner&&owner->menu==sender){owner->menuOpen=false;if(owner->pickup)owner->pickup->MenuChanged();}});
                 NativeMenuItems(self->menu.Items(),array(spec,L"sections"),self->data,[weak,generation,document,menuId](J action){
                     if(auto self=weak.lock();self&&self->menuGeneration==generation&&epochOf(self->data)==document
                         &&(findId(array(self->data->state,L"layers"),menuId).Size()||num(self->editing(),L"id",-1)==menuId))self->data->dispatchDocument(action,document);
                 });
-                self->menu.ShowAt(anchor.as<FrameworkElement>());
+                Primitives::FlyoutShowOptions options;
+                if(at)options.Position(*at);
+                options.ShowMode(holding?Primitives::FlyoutShowMode::Transient:Primitives::FlyoutShowMode::Standard);
+                self->menu.ShowAt(anchor,options);
             }catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}
         });
     });
+    if(!queued)menuPending=false;
+    if(pickup)pickup->MenuChanged();
 }
-bool LayersView::dragCurrent()const{
-    if(!dragged||dragEpoch!=epochOf(data))return false;
-    auto layer=findId(array(data->state,L"layers"),*dragged);
-    return layer.Size()&&flag(layer,L"can_drop_below")&&!flag(layer,L"locked");
-}
-void LayersView::clearDrag(){dragged.reset();dragSpeed=0;if(dragTimer)dragTimer.Stop();for(auto const& [element,row]:rows)row->highlight(0);}
+
 }
 FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight){
     auto view=std::make_shared<LayersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});

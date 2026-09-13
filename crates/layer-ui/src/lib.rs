@@ -44,7 +44,7 @@ mod shortcuts;
 mod theme;
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{LayerAction, LayerCanvasTool, LayersView, RegionSource};
+pub use session::{LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{

@@ -136,10 +136,14 @@ and inspect stderr before relaunching. Opt-in `ui-state-<pid>-<window>.json`,
 directory. Check snapshot `process_id`, `window_id` and freshness. The per-window
 JSON files use atomic replacement; compatibility files `ui-state.json` and
 `camera-state.json` can be read mid-write. Read relevant fields from one snapshot
-per assertion rather than dumping whole models or mixing revisions. A timeout does not prove
+per assertion rather than dumping whole models or mixing revisions. Compare a
+suspect snapshot's workspace revision with the native workspace's UIA ItemStatus;
+a leftover `.pending` file can indicate failed diagnostic replacement even when
+the app advanced correctly. A timeout does not prove
 the app exited: inspect its state and close only the owned test app with
 `./apps/layer-windows/scripts/exercise-window.ps1 -ProcessId $review.Id -Action Close`,
-which checks successful exit. Close the diagnostic PowerShell session afterward.
+which checks successful exit. Add `-DiscardUnsaved` only for an owned disposable
+review whose synthetic edits can be discarded. Close the diagnostic PowerShell session afterward.
 In test scripts, remove flags with `Remove-Item Env:NAME`: passing `$null` to
 `.NET SetEnvironmentVariable` can leave an empty, still-enabled flag on newer runtimes.
 

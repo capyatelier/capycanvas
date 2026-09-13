@@ -926,7 +926,42 @@ directory. The [Windows development guide](../../docs/development/windows.md#deb
 explains manual diagnosis. A failed fixture saves evidence and leaves its owned
 app available for inspection; close it before rebuilding. Captures, debugger logs,
 dumps and profiles stay local. These fixtures do not establish physical digitizer
-behavior, painting cadence or input latency. Whole-layer-row pickup remains open.
+behavior, painting cadence or input latency.
+
+## Native layer-row pickup
+
+Layer rows use `LayerRowDrag` for native mouse/touch/pen arbitration, including
+whitespace, selection, visibility, thumbnails, names and mask-link controls.
+Mouse bodies drag after system slop; pen/touch bodies hold first, with native
+scrolling available before the hold. The trailing grip is immediate for every
+device. Held pen/touch menus keep the same contact for dragging and remain open
+on release; recognized holds/drags suppress child clicks. Native name editing
+keeps its own input. Capture, source removal, Escape and focus loss cancel.
+
+The retained layer surface owns capture across virtualization and edge scrolling.
+Grips claim before ScrollPresenter redirects Down. After a hold wins, the
+controller disables and later restores native scroll axes as well as input
+redirection: ignoring new input alone does not retire an already registered
+InteractionTracker contact. The native scrollbar has its own column so it cannot
+cover the trailing row grip.
+
+Rust owns the read-only `layer_drop` query and final drop validation, including
+locks, cycles, clipping and world-space offsets. Invalid and no-op placements
+have no indicator or history entry. A completed move is one Undo/Redo step.
+
+~~~powershell
+foreach ($device in 'mouse','pen','touch') {
+    ./apps/layer-windows/scripts/exercise-layer-pickup.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
+}
+~~~
+
+The isolated fixture checks docked rows, floating panels and column drawers,
+menus, child controls, whitespace, immediate grips, group drops, scrolling,
+source removal, renaming, cancellation and exact Undo/Redo. It arranges floating
+panels with mouse input before testing rows with the requested device. Pen tab
+tear-off independently exposed capture loss and remains a workspace acceptance
+gap. Physical digitizers, presentation cadence and input latency remain separate.
+Failed fixtures leave their owned app and local evidence available for inspection.
 
 ## Matched editor captures
 

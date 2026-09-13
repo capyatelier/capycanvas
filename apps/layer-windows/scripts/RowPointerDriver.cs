@@ -137,6 +137,14 @@ public static class CapyRowPointer {
    MouseButton(8);try{Thread.Sleep(35);}finally{MouseButton(16);}
   }
  }
+ // Native text input can move the app when the touch keyboard opens. Permit
+ // a fresh UIA-measured point for idle keyboard input, with both guards intact.
+ public static void KeyAt(ushort key,int x,int y) {
+  lock(gate){
+   Check();if(active)throw new Exception("Use the original contact for keys during a gesture.");
+   var point=new Point{x=x,y=y};Guard(point);last=point;Key(key);
+  }
+ }
  public static void Key(ushort key) {
   Guard(last);
   var down=new Input{type=1,keyboard=new Keyboard{key=key}};

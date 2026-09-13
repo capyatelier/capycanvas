@@ -59,7 +59,17 @@ void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     auto name=std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json";
     auto pending=name+".pending";
     {std::ofstream stream(pending);stream<<value;if(!stream)return;}
-    MoveFileExW(to_hstring(pending).c_str(),to_hstring(name).c_str(),MOVEFILE_REPLACE_EXISTING);
+    // Local tracing is opt-in. A transient file scanner or diagnostic reader
+    // can deny replacement; do not silently leave the previous state forever.
+    auto source=to_hstring(pending),destination=to_hstring(name);
+    for(unsigned attempt=0;;++attempt){
+        if(MoveFileExW(source.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))break;
+        auto error=GetLastError();
+        if(attempt==4||(error!=ERROR_SHARING_VIOLATION&&error!=ERROR_ACCESS_DENIED)){
+            OutputDebugStringW((std::wstring(L"Capy trace replacement failed: ")+std::to_wstring(error)+L"\n").c_str());break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     // Preserve the initial window's paths for existing single-window fixtures.
     if(primaryWindow)std::ofstream(std::string(kind)+".json")<<value;
 }

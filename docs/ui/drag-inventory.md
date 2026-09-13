@@ -95,7 +95,7 @@ GTK `DropTarget` receivers are destinations, not additional pickup surfaces.
 | Toolbar tiles, including divider, disabled-command and drawer tile instances | [`PanelBody.cpp`](../../apps/layer-windows/PanelBody.cpp) registers held tile sources; [`WorkspaceGestures.cpp`](../../apps/layer-windows/WorkspaceGestures.cpp) uses native hold recognition and system slop, claiming stable capture/scrolling only after admission. | Mouse holds arm pickup; pen/touch menus preserve the contact and remain after held release. [`exercise-workspace-pickup.ps1`](../../apps/layer-windows/scripts/exercise-workspace-pickup.ps1) covers source/device identity, early rejection, menus, cancellation, floating/drawer instances and history. Physical device validation remains open. |
 | Panel/drawer tabs and title strips; toolbar/group/footer/column grips | [`WorkspaceView.cpp`](../../apps/layer-windows/WorkspaceView.cpp), [`WorkspaceDrawers.cpp`](../../apps/layer-windows/WorkspaceDrawers.cpp), [`CollapsedColumns.cpp`](../../apps/layer-windows/CollapsedColumns.cpp), common `WorkspaceGestures` | **Keep immediate pickup**. |
 | Partial-Zen toolbar projections | `ZenToolbars.cpp` keeps automation IDs on the actual buttons; `WorkspaceGestures` uses context-only recognition for pen/touch. | Existing movement restriction retained. Pen/touch holds open menus and suppress tile activation; mouse keeps ordinary long button presses. |
-| Layer name/content/mask and grip sources | [`LayerRow.cpp`](../../apps/layer-windows/LayerRow.cpp), `dragSource`, uses `CanDrag(true)` / `DragStarting` on these four child surfaces, with no explicit device/hold distinction. | **Verify native timing**, then encode the row-versus-grip rule explicitly. Source alone cannot prove that WinUI's default touch/pen pickup matches either required path. Whole-row whitespace/control continuation is also a **gap** compared with GTK/Web/Android. |
+| Whole layer-row bodies, child controls and trailing grips | [`LayerRowDrag.cpp`](../../apps/layer-windows/LayerRowDrag.cpp) recognizes native device/hold/slop, transfers capture to the retained layer surface and preserves ScrollPresenter scrolling before pickup. [`LayerRow.cpp`](../../apps/layer-windows/LayerRow.cpp) gates child clicks and keeps native editing. | **Migrated.** Mouse rows and all grips are immediate; pen/touch bodies hold first. Shared Rust validates hints and final drops. Native fixtures cover docked/floating/drawer rows, menus, scrolling, cancellation and Undo/Redo with all three devices. Physical acceptance remains open. |
 | Collapsed-column icon bodies | `CollapsedColumns.cpp` registers held panel sources independently of the panel/tab payload. Stable workspace capture survives icon removal during tear-off. | Native scrolling cancels pending pickup; ordinary taps toggle the drawer and held/dragged releases suppress that click. The workspace pickup fixture checks mouse/touch/pen icon gestures; physical device validation remains open. |
 | Native window title movement, resize handles, sliders, scrollbars, color/curve/gradient controls, Navigator, canvas/tool input | [`WorkspaceGestures.cpp`](../../apps/layer-windows/WorkspaceGestures.cpp), [`UiControls.h`](../../apps/layer-windows/UiControls.h), [`ColorView.cpp`](../../apps/layer-windows/ColorView.cpp), [`CurveView.cpp`](../../apps/layer-windows/CurveView.cpp), [`GradientView.cpp`](../../apps/layer-windows/GradientView.cpp), [`NavigatorView.cpp`](../../apps/layer-windows/NavigatorView.cpp), [`CanvasWindow.cpp`](../../apps/layer-windows/CanvasWindow.cpp) | Direct manipulation; no reorder delay. |
 
@@ -133,9 +133,12 @@ Remaining implementation work is on Apple and Windows; see the
   delivers native mouse/touch/pen MotionEvents on the tablet. It covers early
   rejection, toolbar/divider/drawer/collapsed-icon holds, immediate grips/tabs,
   native row scrolling, menus, source removal, focus loss, and undo/redo.
-- Apple/Windows: add device-specific native pickup and scrolling checks to the
-  existing workspace and layer workflow suites; verify real Pencil/stylus and
-  mouse behavior rather than relying on generic drag actions or OS defaults.
+- Windows: `exercise-layer-pickup.ps1` checks native mouse/touch/pen row bodies,
+  child controls, grips, scrolling, menus and history in docked/floating/drawer
+  presentations. Pen workspace-tab tear-off capture loss and physical digitizer
+  validation remain open; row acceptance does not establish tab acceptance.
+- Apple: finish device-specific native pickup and scrolling checks in the
+  workspace/layer suites, including real Pencil/stylus and mouse behavior.
 
 The full required click/hold/menu/cancellation/undo matrix is in the
 [convention](drag-and-reorder.md#required-validation-when-implementing).

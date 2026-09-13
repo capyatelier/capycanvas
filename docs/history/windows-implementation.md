@@ -1873,3 +1873,45 @@ pickup, attached column group panels and per-column preferences, starting-layout
 preview, remaining raster differences, physical pressure/tilt/eraser/touch,
 DPI/device recovery, distribution and sustained 120 Hz painting/input latency
 still require work. No presentation benchmark ran during this milestone.
+
+## Whole layer-row pickup checkpoint
+
+Windows now recognizes layer pickup across row whitespace and child controls,
+using actual native mouse, pen and touch identities. Mouse bodies and explicit
+grips move after system slop; pen/touch bodies wait for a native hold and leave
+early motion to scrolling. The same held contact can open a menu and then drag;
+released holds retain the menu. Child clicks are suppressed after pickup, while
+native rename fields keep selection and text-menu ownership.
+
+The retained layer surface owns capture through edge scrolling and virtualization.
+ScrollPresenter required two distinct fixes: grips must claim before its Down
+handler redirects input, and held contacts require temporarily disabling its
+scroll axes as well as ignoring new input. All paths restore scrolling. The
+native scrollbar now reserves its template column instead of covering row grips.
+Actual cancellation, capture loss, source removal and loss of focus retire the
+contact and its menu.
+
+A shared read-only drop query uses the same reparent plan as the final edit,
+preserving locks, clipping, cycles and layer/mask offsets. No-op placements do
+not create history entries. The query is document-epoch fenced; the native host
+also rejects stale source, target and revision responses.
+
+Shared validation passes 424 tests across UI, host and Windows, with four
+explicit hardware ignores; strict Windows Clippy and the Rust/WinUI build pass.
+The existing full Layers editing regression also passes. The pickup fixture
+covers each device's body/whitespace/child/grip arbitration, held menus,
+group drops, native scrolling, edge capture, source removal, rename ownership,
+minimization and one-step Undo/Redo, including floating and drawer rows.
+Floating setup uses mouse input: a separate pen tab tear-off exposed capture loss
+and remains open. These results do not establish physical pen/touch acceptance.
+
+A diagnostic race left an old per-window JSON file after a failed atomic rename,
+even though native Redo and its toolbar state had advanced. Opt-in trace writes
+now retry transient replacement failures briefly and report persistent errors to
+the debugger. The fixture records native publication evidence alongside failures;
+trace timing is excluded from presentation measurements.
+
+Visual parity, attached column panels/preferences, starting-layout preview,
+physical input and recovery, distribution, sustained 120 Hz painting and physical
+input latency remain open. The unrelated GPU filter-reference investigation is
+excluded from this milestone. No performance benchmark ran here.

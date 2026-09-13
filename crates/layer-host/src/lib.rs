@@ -585,6 +585,12 @@ impl NativeHost {
                 id: u64,
                 mask: bool,
             },
+            LayerDrop {
+                epoch: u64,
+                id: u64,
+                target: u64,
+                fraction: f32,
+            },
             LayerThumbnails {
                 requests: Vec<(u64, u64)>,
             },
@@ -685,6 +691,18 @@ impl NativeHost {
                 )
             }
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
+            Query::LayerDrop {
+                epoch,
+                id,
+                target,
+                fraction,
+            } => {
+                let current = self.session.state().document_file.epoch;
+                let position = (epoch == current)
+                    .then(|| self.session.layer_drop_hint(id, target, fraction))
+                    .flatten();
+                json!({ "epoch": current, "position": position })
+            }
             Query::LayerThumbnails { requests } => {
                 let (accepted, images) = self.layer_thumbnails(requests)?;
                 let images: Vec<_> = images

@@ -224,6 +224,13 @@ pub enum LayerAction {
         fraction: f32,
     },
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerDropPosition {
+    Above,
+    Below,
+    Into,
+}
 #[derive(Default)]
 pub(super) struct LayerInteraction {
     pub tool: LayerCanvasTool,
@@ -264,6 +271,131 @@ impl LayerInteraction {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    // Preview and commit share this complete validation, including clipping and
+    // world-space offsets. The document probe never changes live history.
+    fn layer_reparent_edit(
+        &self,
+        id: u64,
+        parent: Option<u64>,
+        index: u32,
+    ) -> Result<Option<Edit>, String> {
+        let mut layer = self.editable_layer(id)?;
+        self.check_dependents(layer.id)?;
+        let old_parent = layer
+            .properties
+            .parent
+            .map_or(Point::default(), |p| self.engine.document().layer_offset(p));
+        layer.properties.parent = parent.map(LayerId);
+        let doc = self.engine.document();
+        if let Some(p) = layer.properties.parent
+            && doc.is_locked(p)
+        {
+            return Err("The destination group is locked".into());
+        }
+        doc.validate_layer(&layer).map_err(error)?;
+        let new_parent = layer
+            .properties
+            .parent
+            .map_or(Point::default(), |p| doc.layer_offset(p));
+        let delta = Point {
+            x: old_parent.x - new_parent.x,
+            y: old_parent.y - new_parent.y,
+        };
+        layer.properties.offset.x += delta.x;
+        layer.properties.offset.y += delta.y;
+        if let Some(m) = &mut layer.mask {
+            m.offset.x += delta.x;
+            m.offset.y += delta.y;
+        }
+        let edit = Edit::Batch(vec![
+            Edit::ReplaceLayer(Box::new(layer)),
+            Edit::MoveLayer {
+                id: LayerId(id),
+                to: index as usize,
+            },
+        ]);
+        let mut probe = self.engine.document().clone();
+        probe.apply(edit.clone()).map_err(error)?;
+        for (i, l) in probe
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.properties.clipped)
+        {
+            if probe.layers[i + 1..]
+                .iter()
+                .find(|next| {
+                    next.properties.parent == l.properties.parent && !next.properties.clipped
+                })
+                .is_none_or(|base| {
+                    !matches!(base.kind, LayerKind::Paint | LayerKind::ImportedImage)
+                })
+            {
+                return Err("Keep clipped layers above a paint layer in the same group".into());
+            }
+        }
+        if probe.layers == doc.layers {
+            return Ok(None);
+        }
+        Ok(Some(edit))
+    }
+    fn layer_drop_edit(
+        &self,
+        id: u64,
+        target: u64,
+        fraction: f32,
+    ) -> Result<Option<(Edit, LayerDropPosition)>, String> {
+        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+            return Err("Invalid layer drop position".into());
+        }
+        if id == target {
+            return Ok(None);
+        }
+        let doc = self.engine.document();
+        let row = doc.layer(LayerId(target)).ok_or("Unknown destination")?;
+        let fraction = if row.kind == LayerKind::Background {
+            0.0
+        } else {
+            fraction
+        };
+        let into = row.kind == LayerKind::Group && (0.25..0.75).contains(&fraction);
+        let position = if into {
+            LayerDropPosition::Into
+        } else if fraction < 0.5 {
+            LayerDropPosition::Above
+        } else {
+            LayerDropPosition::Below
+        };
+        let parent = if into {
+            Some(target)
+        } else {
+            row.properties.parent.map(|id| id.0)
+        };
+        let index = doc.layers.iter().position(|l| l.id == row.id).unwrap()
+            + usize::from(into || fraction >= 0.5);
+        let from = doc
+            .layers
+            .iter()
+            .position(|l| l.id == LayerId(id))
+            .ok_or("Unknown layer")?;
+        let index = index.saturating_sub(usize::from(from < index)) as u32;
+        Ok(self
+            .layer_reparent_edit(id, parent, index)?
+            .map(|edit| (edit, position)))
+    }
+    /// Validated row feedback without changing document, selection, or history.
+    /// Revalidate on release by dispatching LayerAction::Drop with the same hit.
+    pub fn layer_drop_hint(
+        &self,
+        id: u64,
+        target: u64,
+        fraction: f32,
+    ) -> Option<LayerDropPosition> {
+        self.layer_drop_edit(id, target, fraction)
+            .ok()
+            .flatten()
+            .map(|(_, position)| position)
+    }
     pub(super) fn reference_action_removes(&self) -> bool {
         let doc = self.engine.document();
         self.layer_interaction.selected.len() == 1
@@ -531,31 +663,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 target,
                 fraction,
             } => {
-                if id == target {
-                    return Ok(());
-                }
-                let doc = self.engine.document();
-                let row = doc.layer(LayerId(target)).ok_or("Unknown destination")?;
-                let into = row.kind == LayerKind::Group && (0.25..0.75).contains(&fraction);
-                let parent = if into {
-                    Some(row.id.0)
-                } else {
-                    row.properties.parent.map(|id| id.0)
-                };
-                let index = doc.layers.iter().position(|l| l.id == row.id).unwrap()
-                    + usize::from(into || fraction >= 0.5);
-                let from = doc
-                    .layers
-                    .iter()
-                    .position(|l| l.id == LayerId(id))
-                    .ok_or("Unknown layer")?;
-                self.layer_action(LayerAction::Reparent {
-                    id,
-                    parent,
-                    index: index.saturating_sub(usize::from(from < index)) as u32,
-                })?;
-                if into {
-                    self.layer_interaction.collapsed.remove(&LayerId(target));
+                if let Some((edit, position)) = self.layer_drop_edit(id, target, fraction)? {
+                    self.layer_edit(edit)?;
+                    if position == LayerDropPosition::Into {
+                        self.layer_interaction.collapsed.remove(&LayerId(target));
+                    }
                 }
             }
             LayerAction::New { group, clipped } => {
@@ -825,65 +937,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_edit(edit)?;
             }
             LayerAction::Reparent { id, parent, index } => {
-                let mut layer = self.editable_layer(id)?;
-                self.check_dependents(layer.id)?;
-                let old_parent = layer
-                    .properties
-                    .parent
-                    .map_or(Point::default(), |p| self.engine.document().layer_offset(p));
-                layer.properties.parent = parent.map(LayerId);
-                let doc = self.engine.document();
-                if let Some(p) = layer.properties.parent
-                    && doc.is_locked(p)
-                {
-                    return Err("The destination group is locked".into());
+                if let Some(edit) = self.layer_reparent_edit(id, parent, index)? {
+                    self.layer_edit(edit)?;
                 }
-                doc.validate_layer(&layer).map_err(error)?;
-                let new_parent = layer
-                    .properties
-                    .parent
-                    .map_or(Point::default(), |p| doc.layer_offset(p));
-                let delta = Point {
-                    x: old_parent.x - new_parent.x,
-                    y: old_parent.y - new_parent.y,
-                };
-                layer.properties.offset.x += delta.x;
-                layer.properties.offset.y += delta.y;
-                if let Some(m) = &mut layer.mask {
-                    m.offset.x += delta.x;
-                    m.offset.y += delta.y;
-                }
-                let edit = Edit::Batch(vec![
-                    Edit::ReplaceLayer(Box::new(layer)),
-                    Edit::MoveLayer {
-                        id: LayerId(id),
-                        to: index as usize,
-                    },
-                ]);
-                let mut probe = self.engine.document().clone();
-                probe.apply(edit.clone()).map_err(error)?;
-                for (i, l) in probe
-                    .layers
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, l)| l.properties.clipped)
-                {
-                    if probe.layers[i + 1..]
-                        .iter()
-                        .find(|next| {
-                            next.properties.parent == l.properties.parent
-                                && !next.properties.clipped
-                        })
-                        .is_none_or(|base| {
-                            !matches!(base.kind, LayerKind::Paint | LayerKind::ImportedImage)
-                        })
-                    {
-                        return Err(
-                            "Keep clipped layers above a paint layer in the same group".into()
-                        );
-                    }
-                }
-                self.layer_edit(edit)?;
             }
             other => {
                 let id = match &other {
