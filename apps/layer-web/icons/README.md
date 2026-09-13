@@ -27,6 +27,9 @@ Web-only browser-window controls load the original two-arrow fullscreen icons
 from this bank directly; no fullscreen button is added to GTK.
 Collapsed-sidebar expand buttons use `chevron-double-right` on the left and
 `chevron-double-left` on the right, centered and pointing toward the canvas.
+The Color panel uses the original `color-square`, `color-triangle` and
+`color-swap` symbols: rounded geometry and consistent 1.5 px strokes, shared
+directly by GTK and Web.
 
 Keep 16×16 icon geometry (the capybara retains its own viewBox).
 Keep ordinary SVG fill/stroke attributes authoritative. Existing symbolic classes

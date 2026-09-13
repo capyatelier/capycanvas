@@ -1,3 +1,4 @@
+import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
@@ -267,6 +268,9 @@ try {
   } else if (process.argv.includes("--fullscreen")) {
     const {windowId} = await call("Browser.getWindowForTarget",{targetId:target.targetId},null);
     await checkFullscreen({call,evaluate,settle,windowId});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--color-panel")) {
+    await checkColorPanel({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--editor")) {
     await checkEditor({call,evaluate,settle,canvasPixels});

@@ -89,8 +89,8 @@ body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input, select, summary { font: inherit; accent-color: var(--accent); }
 button, select, input[type="color"], summary { min-height: 34px; border: 0; border-radius: 6px; background: transparent; color: var(--text); padding: 5px 17px; }
 button, summary { cursor: default; font-weight: 700; line-height: 24px; }
-:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
+:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
 button:disabled { opacity: .36; cursor: default; }
 button[aria-pressed="true"], button[aria-selected="true"] { background: var(--selected); }
 :focus-visible { outline: none; }
@@ -577,12 +577,26 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .tool-subtools .brush-preview { width:82px; height:32px; object-fit:contain; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
 .tool-settings-control h3 { margin:4px 0; font-size:inherit; }
-.color-wheel { display:block; width:100%; aspect-ratio:1; touch-action:none; }
-.color-components { display:flex; flex-direction:column; gap:6px; }
-.color-swatches { display:flex; gap:6px; margin:6px 0; }
-.color-swatch { min-width:30px; flex:1; padding:4px; background:repeating-conic-gradient(#888 0 25%,#bbb 0 50%) 0 / 10px 10px; }
-.color-swatch > span { display:block; height:22px; border-radius:3px; }
-.color-space { width:100%; margin-bottom:8px; }
+/* Shared square allocations keep the curved controls clear at four tiles. */
+.color-wheel-control { display:flex; flex-direction:column; min-width:128px; max-height:100%; }
+.color-wheel-stage { position:relative; flex:0 1 auto; min-height:128px; width:100%; aspect-ratio:1; container-type:size; }
+.color-wheel-square { position:absolute; width:min(100cqw,100cqh); height:min(100cqw,100cqh); left:50%; top:50%; transform:translate(-50%,-50%); }
+.color-wheel { position:absolute; display:block; touch-action:none; }
+.color-wheel-control :is(.color-swatch,.color-utility,.color-shape,.color-readout) { position:absolute; touch-action:manipulation; display:grid; place-items:center; min-width:0; min-height:0; padding:3px; border-radius:50%; clip-path:circle(50%); }
+.color-wheel-control .color-swatch { background:var(--panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 25%,transparent); }
+.color-wheel-control .color-swatch:is([data-color-slot="background"],[data-color-slot="transparent"]) { padding:1px; }
+.color-wheel-control .color-swatch > span { pointer-events:none; display:block; width:100%; height:100%; border-radius:50%; }
+.color-wheel-control .color-swatch[aria-pressed="true"] { box-shadow:inset 0 0 0 2px var(--text); }
+:where(:root:not([data-touch])) .color-wheel-control .color-swatch:hover { box-shadow:inset 0 0 0 2px var(--text); }
+.color-wheel-control .color-utility { padding:2px; background:transparent; }
+:where(:root:not([data-touch])) .color-wheel-control .color-utility:hover { background:color-mix(in srgb,var(--text) 12%,transparent); }
+.color-wheel-control :is(.color-shape,.color-utility) svg { pointer-events:none; width:16px; height:16px; }
+.color-wheel-control button.color-shape, .color-wheel-control button.color-readout { background:transparent; box-shadow:none; }
+:where(:root:not([data-touch])) .color-wheel-control button.color-shape:hover { color:var(--accent); }
+.color-wheel-control button.color-readout { padding:0; border-radius:0; }
+.color-wheel-control .color-readout canvas { width:100%; height:100%; pointer-events:none; }
+.color-wheel-control :is(.color-shape,.color-swatch,.color-utility):focus-visible { outline-offset:-2px; }
+.color-wheel-control .color-readout:focus-visible { color:var(--accent); outline:none; }
 .navigator-control { display:flex; flex-direction:column; gap:2px; height:100%; min-height:0; }
 .navigator-overview { position:relative; width:100%; height:164px; flex:1 1 164px; min-height:0; touch-action:none; background:var(--bg); }
 .navigator-clip { position:absolute; inset:0; overflow:hidden; pointer-events:none; }

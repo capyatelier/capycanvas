@@ -1,6 +1,8 @@
 //! Color-wheel display oracle: pick each normalized sample through shared Rust
 //! policy. Used by native screenshot checks, not by the production raster path.
-use layer_ui::{ColorAction, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart};
+use layer_ui::{
+    ColorAction, ColorShape, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::io::Read;
@@ -8,6 +10,8 @@ use std::io::Read;
 #[derive(Deserialize)]
 struct Request {
     space: ColorSpace,
+    #[serde(default)]
+    shape: Option<ColorShape>,
     rgba: [f32; 4],
     /// Achromatic paint retains a hue that cannot be recovered from RGBA alone.
     #[serde(default)]
@@ -23,32 +27,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.apply(ColorAction::Space {
         space: request.space,
     })?;
+    if let Some(shape) = request.shape {
+        state.apply(ColorAction::Shape { shape })?;
+    }
     if let Some(value) = request.hue {
-        state.apply(ColorAction::Component { index: 0, value })?;
+        if request.shape.is_some() {
+            let g = ColorWheelGeometry::new(1.).unwrap();
+            state.apply(ColorAction::PickWheel {
+                part: ColorWheelPart::Hue,
+                point: state.wheel_hue_marker(&g, value),
+                size: 1.,
+            })?;
+        } else {
+            state.apply(ColorAction::Component { index: 0, value })?;
+        }
     }
     let geometry = ColorWheelGeometry::new(1.).unwrap();
     let samples: Vec<_> = request
         .points
         .into_iter()
         .map(|point| {
-            let part = geometry.hit(point, request.space);
+            let part = if let Some(shape) = request.shape {
+                geometry.hit_shape(point, shape)
+            } else {
+                geometry.hit(point, request.space)
+            };
             let mut sample = state.clone();
             if let Some(part) = part {
-                // The hue ring always displays fully saturated, opaque colors.
+                // The hue ring displays its opaque guide, independently of the paint.
                 if part == ColorWheelPart::Hue {
-                    sample.set_rgba([1., 0., 0., 1.]).unwrap();
+                    let hue = if request.shape.is_some() {
+                        state.wheel_hue_color(state.wheel_hue_at(&geometry, point))
+                    } else {
+                        layer_ui::hue_color(geometry.hue_at(point))
+                    };
+                    return json!({"part":part,"rgba":[hue[0], hue[1], hue[2], 1.]});
                 }
                 sample
-                    .apply(ColorAction::Pick {
-                        part,
-                        point,
-                        size: 1.,
+                    .apply(if request.shape.is_some() {
+                        ColorAction::PickWheel {
+                            part,
+                            point,
+                            size: 1.,
+                        }
+                    } else {
+                        ColorAction::Pick {
+                            part,
+                            point,
+                            size: 1.,
+                        }
                     })
                     .unwrap();
             }
             json!({"part":part,"rgba":sample.rgba()})
         })
         .collect();
-    println!("{}", json!({"model":state.view(),"samples":samples}));
+    let mut model = state.view();
+    if request.shape.is_some() {
+        model.field_marker = state.wheel_marker(&geometry);
+        model.hue_marker = state.wheel_hue_marker(&geometry, state.wheel_components()[0]);
+        model.hue_start_degrees = state.wheel_hue_start_degrees();
+    }
+    let mut model = serde_json::to_value(model)?;
+    model["wheel_hue_stops"] = serde_json::to_value(state.wheel_hue_stops())?;
+    println!("{}", json!({"model":model,"samples":samples}));
     Ok(())
 }
