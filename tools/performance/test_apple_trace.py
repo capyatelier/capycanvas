@@ -17,6 +17,20 @@ def header(**changes):
 
 
 class ReportChecks(unittest.TestCase):
+    def test_presentation_retries_do_not_inflate_display_tick_counts(self):
+        events = [record(13, 5, 9, 1), record(11, 10, 2, 1),
+                  record(0, 11, 19, 0, 3), record(13, 12, 19, 1),
+                  record(13, 13, 19, 0, 3), record(11, 20, 3, 1)]
+        result = analyze(header(workload={"name": "ink", "measurement_seconds": .00000001}), events)
+        self.assertEqual(result["counts"]["ticks"], 1)
+        self.assertEqual(result["counts"]["presentation_retries"], 3)
+        self.assertEqual(result["counts"]["presentation_retries_admitted"], 2)
+        measured = result["workload"]
+        self.assertEqual(measured["ticks_denied_admission"], 1)
+        self.assertEqual(measured["presentation_retries"], 2)
+        self.assertEqual(measured["presentation_retries_admitted"], 1)
+        self.assertEqual(measured["presentation_retries_denied_by_reason"]["drawable_capacity"], 1)
+
     def test_admission_backpressure_remains_visible_and_separate_from_cpu_work(self):
         events = [record(0, 1, 2, 0, 1), record(11, 10, 2, 1),
                   record(0, 11, 12, 0, 2), record(0, 13, 14, 0, 3),

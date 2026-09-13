@@ -60,6 +60,7 @@ def analyze(header, events, target_hz=120):
     memory = sorted((r for r in grouped[5] if r[4] == 0), key=lambda r: r[0])
     times = sorted(r[1] for r in visible.values())
     ticks = grouped[0]
+    retries = grouped[13]
     activity = sorted(grouped[10], key=lambda r: r[0])
     cycles = {}
     active, cycle, cursor = False, 0, 0
@@ -148,6 +149,9 @@ def analyze(header, events, target_hz=120):
                    "correction_input_batches": sum(r[6] == 2 for r in inputs.values()),
                    "ticks": len(ticks), "ticks_denied_admission": sum(not r[2] for r in ticks),
                    "ticks_denied_by_reason": admission_denials(ticks),
+                   "presentation_retries": len(retries),
+                   "presentation_retries_admitted": sum(bool(r[2]) for r in retries),
+                   "presentation_retries_denied_by_reason": admission_denials(retries),
                    "frames": len(frames), "viewport_submissions": len(submitted), "acquired_drawables": len(drawables),
                    "presented_drawables": len(visible), "zero_time_presentations": sum(not r[1] for r in presented.values()),
                    "missing_presentation_callbacks": len(drawables - presented.keys()),
@@ -200,6 +204,7 @@ def analyze(header, events, target_hz=120):
             acquired = {key for key in drawables if begin[0] <= key[0] < end[0]}
             observed_times = sorted(r[1] for r in visible.values() if begin[0] <= r[1] <= end[0])
             measured_ticks = [r for r in ticks if begin[0] <= r[0] < end[0]]
+            measured_retries = [r for r in retries if begin[0] <= r[0] < end[0]]
             memory_rows = [r for r in memory if begin[0] <= r[0] <= end[0]]
             scheduler = [r[5] for r in markers if r[1] in (3, 6) and begin[0] <= r[0] <= end[0]]
             report.update({
@@ -210,6 +215,9 @@ def analyze(header, events, target_hz=120):
                 "ticks": len(measured_ticks),
                 "ticks_denied_admission": sum(not r[2] for r in measured_ticks),
                 "ticks_denied_by_reason": admission_denials(measured_ticks),
+                "presentation_retries": len(measured_retries),
+                "presentation_retries_admitted": sum(bool(r[2]) for r in measured_retries),
+                "presentation_retries_denied_by_reason": admission_denials(measured_retries),
                 "admitted_frames_without_viewport": len(admitted) - len(rows),
                 "missing_presentation_callbacks": len(acquired - presented.keys()),
                 "zero_time_presentations": sum(key in acquired and not r[1] for key, r in presented.items()),

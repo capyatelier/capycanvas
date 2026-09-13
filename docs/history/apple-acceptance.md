@@ -118,6 +118,26 @@ Do not force AppKit's high-contrast appearance names: Apple's
 reserves their selection for the system accessibility setting. These focused
 comparisons do not constitute a complete accessibility or physical-device pass.
 
+## Presentation-capacity retry — 2026-09-13
+
+The shared Apple driver now makes one deadline-bounded retry when a presentation
+callback frees capacity just after a denied display tick. Atomic waiter
+registration, cancellation and old-surface retirement retain the serial owner's
+single-frame admission. Retries have separate trace records, so they do not
+inflate display-link counts. Direct driver/gate tests and actual owner/Metal
+resize/resume/detach checks pass on both presets; both physical Release builds
+compile, and all 29 trace-analysis tests pass.
+
+A matched 45-second Mac watercolor pair reduced long continuous presentation
+intervals from 225/3,539 to 46/3,708, with no CPU-budget exceedances. The candidate
+then completed ten measured minutes: CPU p99/max 5.722/9.139 ms, no rejected
+input, frame errors, overflow or missing/zero-time presentations during
+measurement. It still has 1,329/49,040 long continuous intervals (2.71%).
+The [performance report](../../apps/layer-apple/PERFORMANCE.md#retry-after-presentation-capacity-returns--2026-09-13)
+retains the complete observations and limits. Physical iPad timing, residual Mac
+cadence, the workload matrix and the broader parity/performance goal remain open.
+This milestone does not claim new iPad hardware performance evidence.
+
 ## Header font and background alignment — 2026-09-12
 
 A fresh 96-case comparison of both Apple presets against rebuilt local Chrome
