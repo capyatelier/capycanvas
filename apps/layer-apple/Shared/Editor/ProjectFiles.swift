@@ -335,7 +335,7 @@ struct ProjectFilesModifier: ViewModifier {
                         ProgressView().controlSize(.small)
                         Text(files.cancelling ? "Cancelling…" : "Working with document…")
                         Button("Cancel") { files.cancel() }.disabled(files.cancelling)
-                    }.padding(10).background(.regularMaterial, in: Capsule()).padding(12)
+                    }.padding(10).modifier(EditorGlassSurface(shape: Capsule())).padding(12)
                 }
             }
             .alert(files.error == nil ? "Save changes to “\(files.title)” before continuing?" : "Document",

@@ -20,7 +20,7 @@ struct WorkspaceManagerPresentation: ViewModifier {
                             }
                         }
                     }.padding(14).frame(maxWidth: 580, alignment: .leading)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).padding(12)
+                        .modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
                 }
             }
             .sheet(isPresented: $manager.presented, onDismiss: { manager.dismissed() }) {

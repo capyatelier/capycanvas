@@ -5,6 +5,8 @@ struct LayerPanel: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
     @State private var menu = JSON()
+    @State private var menuSource: LayerMenuSource?
+    @State private var menuRequest = UUID()
     @State private var importing = false
     @State private var bounds: [UInt64: CGRect] = [:]
     @State private var drag: LayerDrag?
@@ -31,8 +33,12 @@ struct LayerPanel: View {
                                             value: [layer["id"].uint: proxy.frame(in: .named("layer-panel"))])
                                     })
                                     .overlay { dropMark(layer) }
+                                    .popover(isPresented: menuPresented(at: .row(layer["id"].uint))) { menuContent }
                                     .onAppear { store.layerThumbnails.show(layer["id"].uint) }
-                                    .onDisappear { store.layerThumbnails.hide(layer["id"].uint) }
+                                    .onDisappear {
+                                        store.layerThumbnails.hide(layer["id"].uint)
+                                        if menuSource == .row(layer["id"].uint) { closeMenu() }
+                                    }
                             }
                         }.modifier(PanelBodyMeasurement(panel: "layers", part: "rows"))
                     }.accessibilityIdentifier("layer-rows")
@@ -48,10 +54,8 @@ struct LayerPanel: View {
         }.coordinateSpace(name: "layer-panel")
             .onPreferenceChange(LayerBounds.self) { bounds = $0 }
             .onChange(of: store.state["revision"].uint) { _, _ in store.layerThumbnails.refresh() }
-            .onDisappear { drag = nil }
-            .popover(isPresented: Binding(get: { !menu.isNull }, set: { if !$0 { menu = JSON() } })) {
-                LayerActionMenu(store: store, menu: menu) { menu = JSON() }
-            }
+            .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in closeMenu() }
+            .onDisappear { drag = nil; closeMenu() }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.image]) { result in
                 switch result {
                 case .success(let url): store.importLayer(url)
@@ -95,13 +99,33 @@ struct LayerPanel: View {
             LayerButton(icon: "image", label: "Import image as layer", enabled: store.snapshot["canvas_ready"].bool) { importing = true }
             LayerButton(icon: "delete", label: "Delete selected layers", enabled: view["can_delete"].bool) { store.layer(["op": "delete_selected"]) }
             Spacer(minLength: 0)
-            LayerButton(icon: "more", label: "Layer actions", enabled: !current.isNull) { openMenu(current, mask: current["mask_selected"].bool) }
+            LayerButton(icon: "more", label: "Layer actions", enabled: !current.isNull) {
+                openMenu(current, mask: current["mask_selected"].bool, source: .footer)
+            }.popover(isPresented: menuPresented(at: .footer)) { menuContent }
         }.padding(.horizontal, 6).padding(.vertical, 4)
     }
-    private func openMenu(_ layer: JSON, mask: Bool) {
+    private func menuPresented(at source: LayerMenuSource) -> Binding<Bool> {
+        Binding(get: { menuSource == source && !menu.isNull }, set: { presented in
+            if !presented && menuSource == source { closeMenu() }
+        })
+    }
+    private var menuContent: some View {
+        LayerActionMenu(store: store, menu: menu, dismiss: closeMenu)
+            .presentationCompactAdaptation(.popover)
+    }
+    private func closeMenu() {
+        menuRequest = UUID(); menuSource = nil; menu = JSON()
+    }
+    private func openMenu(_ layer: JSON, mask: Bool, source: LayerMenuSource? = nil) {
         drag = nil
+        let request = UUID(), epoch = store.state["document_file"]["epoch"].uint
+        menuRequest = request; menuSource = source ?? .row(layer["id"].uint)
         store.layer(["op": "context", "id": layer["id"].raw, "mask": mask])
-        store.query(["type": "layer_menu", "id": layer["id"].raw, "mask": mask]) { menu = $0 }
+        store.query(["type": "layer_menu", "id": layer["id"].raw, "mask": mask]) { result in
+            guard menuRequest == request, store.state["document_file"]["epoch"].uint == epoch,
+                  layers.contains(where: { $0["id"].uint == layer["id"].uint }) else { return }
+            menu = result
+        }
     }
     private func updateDrag(_ layer: JSON, _ event: DragGesture.Value) {
         let id = layer["id"].uint
@@ -135,6 +159,7 @@ struct LayerPanel: View {
     }
 }
 
+private enum LayerMenuSource: Equatable { case row(UInt64), footer }
 private struct LayerDrag { let id: UInt64; let top: CGFloat; let translation: CGFloat; let target: UInt64?; let fraction: Double }
 private struct LayerBounds: PreferenceKey {
     static var defaultValue: [UInt64: CGRect] = [:]
@@ -343,6 +368,7 @@ private struct LayerActionMenu: View {
                 }
             }.padding(6)
         }.frame(width: 340).frame(maxHeight: 560).font(.system(size: store.catalog["text_size_pt"].number * 4 / 3))
+            .accessibilityElement(children: .contain).accessibilityIdentifier("layer-context-menu")
     }
     private func label(_ item: JSON) -> some View {
         HStack(spacing: 6) {

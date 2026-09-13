@@ -12,6 +12,17 @@ visual and hardware performance evidence. Shared changes must build on both.
 See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
 for the shared-code boundaries, milestone matrix and remaining work.
 
+Popup presentation follows the system design: native sheets, alerts and popovers
+retain their system background, and `EditorGlassSurface` gives custom overlays
+and the workspace pill switcher Liquid Glass on iPadOS/macOS 26 or later.
+The switcher retains its segment geometry and selected-workspace highlight.
+Native materials follow the editor theme. Older systems retain regular material;
+Reduce Transparency uses an opaque semantic background. Keep existing popup
+sizes and one effect per custom surface. Attach contextual presentations to the
+control or row that invoked them; layer menus use the pressed row and the footer
+action uses its own button. `testLayerContextMenuAnchors` exercises mask/content
+actions and retains iPad captures of the row and footer origins.
+
 [Performance workflows and measurements](PERFORMANCE.md) include five opt-in
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
 watercolor baseline on each. Current validation targets 90 Hz on Mac and 120 Hz

@@ -31,8 +31,8 @@ struct WorkspaceSwitcher: View {
                     }
             }
         }
-        .background { ZStack { Capsule().fill(palette["bg"]); Capsule().fill(Color.black.opacity(0.2)) } }
         .clipShape(Capsule())
+        .modifier(EditorGlassSurface(shape: Capsule()))
         .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
         .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
         .modifier(HeaderControlMeasurement(id: "workspace-switcher"))

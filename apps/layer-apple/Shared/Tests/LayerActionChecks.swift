@@ -44,6 +44,8 @@ extension XCTestCase {
         #endif
         let deleteMask = container.buttons["Delete mask"]
         XCTAssertTrue(deleteMask.waitForExistence(timeout: 5), "The mask context gesture must open its mask menu")
+        let menuCapture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        menuCapture.name = "layer-mask-context-anchor"; menuCapture.lifetime = .keepAlways; add(menuCapture)
         activate(deleteMask)
         expectation(for: NSPredicate(format: "exists == NO"), evaluatedWith: mask)
         waitForExpectations(timeout: 5)

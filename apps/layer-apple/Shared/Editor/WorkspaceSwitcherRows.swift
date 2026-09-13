@@ -96,7 +96,7 @@ struct WorkspaceSwitcherRows: View {
         if let id = interaction.menu, let row = rows.first(where: { $0["id"].string == id }) {
             menu(row).frame(width: interaction.menuBounds.width, alignment: .leading)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { interaction.menuSize = $0 }
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 8)))
                 .shadow(radius: 6, y: 2)
                 .offset(x: interaction.menuBounds.minX, y: interaction.menuBounds.minY)
                 .accessibilityElement(children: .contain).accessibilityLabel("Options for " + row["title"].string)
