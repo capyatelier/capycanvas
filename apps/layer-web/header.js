@@ -143,6 +143,9 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(!editing&&wasEditing)document.querySelector('#canvas').focus({preventScroll:true});
     }
     root.dataset.size=size.id;
+    const cssColor=rgba=>`rgb(${rgba.slice(0,3).map(v=>Math.round(v*255)).join(' ')} / ${rgba[3]})`;
+    root.style.setProperty('--header-foreground',cssColor(state().colors.foreground));
+    root.style.setProperty('--header-background',cssColor(state().colors.background));
     for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon})) {
       root.style.setProperty(`--header-${name}`,`${value}px`);
       bank.style.setProperty(`--header-${name}`,`${value}px`);
@@ -191,14 +194,23 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     });
   }
   function present(g, dragging=false) {
+    let focus;
     for(const [id,r] of records) {
       const b=g.items.find(i=>i.id===id)?.bounds;
+      if(!b&&!dragging) {
+        for(const menu of r.root.querySelectorAll('details[open]'))menu.open=false;
+        if(r.root.contains(document.activeElement))focus=editing?root:overflow[view.model.zones.findIndex(z=>z.some(e=>e.id===id))].firstChild;
+      }
       r.root.hidden=!b;
       if(b){place(r.root,b);if(r.compact){const compact=b.width-(editing?20:0)+.01<metrics.find(m=>m.id===id).width-(editing?20:0);switcher.hidden=compact;r.compact.hidden=!compact;}}
       r.root.style.visibility=dragging&&contact.source.kind==='item'&&contact.source.value===id?'hidden':'';
     }
     g.zones.forEach((b,i)=>{zones[i].hidden=!editing;place(zones[i],b);});
-    g.overflow.forEach((b,i)=>{overflow[i].hidden=!b;if(b)place(overflow[i],b);});
+    g.overflow.forEach((b,i)=>{
+      if(!b){overflow[i].open=false;if(overflow[i].contains(document.activeElement))focus=view.model.zones[i].map(e=>records.get(e.id)).find(r=>!r.root.hidden)?.content.querySelector('summary,button')||root;}
+      overflow[i].hidden=!b;if(b)place(overflow[i],b);
+    });
+    focus?.focus({preventScroll:true});
   }
   function allocate() {
     frame=0; if(!view)return;
@@ -238,6 +250,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       for(const n of ghost.querySelectorAll('[id]'))n.removeAttribute('id');
       ghost.classList.add('header-drag-preview');ghost.inert=true;ghost.hidden=false;
       ghost.style.setProperty('--header-tile',`${size.tile}px`);ghost.style.setProperty('--header-icon',`${size.icon}px`);
+      for(const name of ['--header-foreground','--header-background'])ghost.style.setProperty(name,root.style.getPropertyValue(name));
       workspace.append(ghost);root.classList.add('header-dragging');workspace.dataset.headerDragging='true';
     }
     const preview=app.header_drag_preview(...p);
@@ -250,6 +263,8 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   function end(e,cancel=false) {
     if(!contact||(e&&e.pointerId!==contact.id))return;
     const c=contact;contact=null;
+    cancel ||= root.clientWidth!==c.width || !c.node.isConnected || c.node.parentNode!==c.parent;
+    if(cancel)customization.dismissContext();
     const action=c.active?app.finish_header_drag(...(e?point(e):c.press),cancel):null;
     ghost?.remove();ghost=null;root.classList.remove('header-dragging');delete workspace.dataset.headerDragging;
     for(const z of zones)z.classList.remove('header-drop-zone');
@@ -266,6 +281,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   window.addEventListener('pointercancel',e=>end(e,true),{capture:true});
   workspace.addEventListener('lostpointercapture',e=>end(e,true));
   window.addEventListener('blur',()=>end(null,true));
+  window.addEventListener('resize',()=>{end(null,true);queue();});
   window.addEventListener('click',e=>{
     if(e.pointerId===suppressed||editing&&e.target.closest('.header-item-content,[data-header-component]')) {
       suppressed=null;e.preventDefault();e.stopImmediatePropagation();

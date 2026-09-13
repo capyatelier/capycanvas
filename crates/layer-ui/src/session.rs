@@ -4634,6 +4634,28 @@ mod tests {
     }
 
     #[test]
+    fn workspace_picker_cannot_adopt_an_uncommitted_header_baseline() {
+        for platform in [Platform::Gtk, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            let original = s.capture_workspace().unwrap();
+            s.dispatch(HeaderAction::Edit { editing: true }.action()).unwrap();
+            s.dispatch(HeaderAction::SetSize { size: HeaderSize::Large }.action()).unwrap();
+            s.dispatch(HeaderAction::CanvasInfo { visible: false }.action()).unwrap();
+            s.begin_workspace_transition().unwrap();
+            s.begin_workspace_layout_preview().unwrap();
+            s.preview_workspace_layout(&WorkspacePreset::Painter.layout(platform)).unwrap();
+            assert!(!s.state.customization.header_editing);
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            s.cancel_workspace_layout_preview();
+            s.end_workspace_transition();
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            assert_eq!(s.state.workspace.layout.header, original.history.layout().header);
+            assert_eq!(s.state.workspace.layout.canvas_info, original.history.layout().canvas_info);
+        }
+    }
+
+    #[test]
     fn workspace_bottom_clearance_is_runtime_state_across_history_and_switching() {
         let mut app = session();
         let initial = app.capture_workspace().unwrap();
