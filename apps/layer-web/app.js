@@ -8,6 +8,7 @@ import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
+import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
@@ -39,7 +40,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents, systemStatus;
+let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents, systemStatus, header;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
@@ -141,7 +142,7 @@ function commandButton(id, text) {
 const icons = new Map();
 async function loadIcons() {
   await Promise.all(
-    [...catalog.icons, "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
+    [...new Set([...catalog.icons, "colors"]), "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
       const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
       if (!response.ok) throw new Error(`Cannot load icon ${name}`);
       const svg = new DOMParser().parseFromString(
@@ -667,6 +668,7 @@ function update(regions) {
     layerPanel.refresh();
     effectPanels.refresh();
   }
+  if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 128)) persistWorkspace();
@@ -694,7 +696,7 @@ function update(regions) {
       }
   if (regions & 16) {
     applyTheme(state.theme, state.palette);
-    systemStatus?.setClockVisibility(state.settings.show_clock);
+    systemStatus?.sync();
     refreshPreferences(app.preferences());
   }
   if (regions & 32)
@@ -1079,75 +1081,13 @@ function updateZen() {
   editor?.queuePositions();
 }
 function buildHeader() {
-  const zen = iconButton("zen_mode");
-  zen.id = "zen-button"; zen.classList.add("chrome");
-  zen.dataset.context = JSON.stringify({ kind: "zen_mode" });
-  workspace.prepend(zen);
-  $("header-start").append(element("span", "zen-spacer"));
-  const labels = element("div", "header-menu-labels");
-  $("header-start").append(labels);
-  for (const spec of app.editor_models(workspace.clientWidth, workspace.clientHeight).application_menus) {
-    const details = element("details", "header-menu"); details.name = "workspace-menu"; details.dataset.menu = spec.id;
-    const summary = element("summary", "", spec.label); summary.setAttribute("aria-label", spec.label);
-    const contents = element("div", "popover"); contents.setAttribute("role","menu");
-    if(spec.id === "window") contents.id = "workspace-menu";
-    details.append(summary,contents);
-    details.addEventListener("toggle",()=>{if(details.open) refreshWorkspaceMenu(); updateZen();});
-    labels.append(details);
-  }
-  const overflow = element("details", "header-menu header-menu-overflow");
-  overflow.name = "workspace-menu"; overflow.dataset.menu = "all"; overflow.hidden = true;
-  const summary = element("summary"); summary.setAttribute("aria-label", "Menus"); summary.append(icon("menu"));
-  const contents = element("div", "popover"); contents.setAttribute("role", "menu");
-  overflow.append(summary, contents); $("header-start").append(overflow);
-  overflow.addEventListener("toggle", () => { if (overflow.open) refreshWorkspaceMenu(); updateZen(); });
   systemStatus = createSystemStatus({element, changed:fullscreen => {
     if(customization && state.fullscreen !== fullscreen) dispatch({type:"window_fullscreen",fullscreen});
+    header?.queue();
   }});
-  $("header-end").append(systemStatus.root, iconButton("fullscreen"), iconButton("settings"));
-  $("header-end").querySelector('[data-command="fullscreen"]').id = "fullscreen";
-  // Keep one set of menu nodes and their measured natural width. When the
-  // workspace/clock leaves insufficient room, all menus remain reachable from
-  // the same recursive menu renderer. No work runs in the drawing frame loop.
-  let layoutQueued = false;
-  const queueLayout = () => {
-    if (layoutQueued) return; layoutQueued = true;
-    requestAnimationFrame(() => {
-      layoutQueued = false;
-      const header = $("header"), start = $("header-start"), style = getComputedStyle(header);
-      const gap = parseFloat(style.columnGap) || 0;
-      const fixed = [...header.children].filter(node => node !== start && node.id !== "document-title" && getComputedStyle(node).display !== "none");
-      const titleVisible = getComputedStyle($("document-title")).display !== "none";
-      const available = header.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-        - fixed.reduce((width, node) => width + node.getBoundingClientRect().width, 0) - gap * (fixed.length + Number(titleVisible));
-      const natural = start.querySelector(".zen-spacer").getBoundingClientRect().width + gap + labels.getBoundingClientRect().width;
-      const collapsed = natural > available + 0.01;
-      if (labels.inert === collapsed) return;
-      const moveFocus = (collapsed ? labels : overflow).contains(document.activeElement);
-      for (const menu of start.querySelectorAll("details[open]")) menu.open = false;
-      labels.inert = collapsed; overflow.hidden = !collapsed;
-      if (moveFocus) (collapsed ? overflow : labels).querySelector('summary')?.focus({preventScroll:true});
-    });
-  };
-  const observer = new ResizeObserver(queueLayout);
-  observer.observe(labels);
-  const observeChildren = () => { observer.observe($("header")); for (const node of $("header").children) observer.observe(node); queueLayout(); };
-  new MutationObserver(observeChildren).observe($("header"), {childList:true});
-  observeChildren();
 }
 function refreshWorkspaceMenu() {
-  if(!customization || !document.querySelector(".header-menu[open]")) return;
-  const menus = app.editor_models(workspace.clientWidth,workspace.clientHeight).application_menus;
-  for(const spec of menus) {
-    if (!document.fullscreenEnabled) for (const item of spec.model.sections.flat())
-      if (item.action?.type === "invoke" && item.action.command === "fullscreen") item.enabled = false;
-    const details = document.querySelector(`[data-menu="${spec.id}"]`);
-    if(details?.open) customization.renderMenu(details.querySelector(".popover"),spec.model,()=>{details.open=false;updateZen();});
-  }
-  const overflow = document.querySelector('.header-menu-overflow');
-  if (overflow?.open) customization.renderMenu(overflow.querySelector('.popover'), {
-    title: "Menus", sections: [menus.map(spec => ({label:spec.label,enabled:true,sections:spec.model.sections}))],
-  }, () => { overflow.open=false; updateZen(); });
+  for(const menu of document.querySelectorAll('#header details[open]')) menu.refreshMenu?.();
 }
 function persistWorkspace() {
   workspaceManager?.observe();
@@ -1490,6 +1430,7 @@ try {
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
+  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);
   systemStatus.sync();
   $("status").textContent = "";

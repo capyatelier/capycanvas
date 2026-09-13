@@ -427,7 +427,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
-        if self.state.platform == Platform::Gtk {
+        if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) {
             // Keep the editor entry reachable above the long panel list, also
             // in the recovery menu on a short tablet-sized window.
             menu.sections
@@ -8181,7 +8181,7 @@ mod tests {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
             let mut menu = s.workspace_menu();
-            if platform == Platform::Gtk {
+            if CommandId::CustomizeWorkspaceUi.available_on(platform) {
                 assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
                 assert!(!format!("{menu:?}").contains("Show Menu Bar"));
                 menu.sections.remove(0);

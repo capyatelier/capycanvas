@@ -869,8 +869,8 @@ impl Settings {
                 },
             )],
         });
-        if platform == Platform::Gtk {
-            // GTK clock/battery visibility belongs to each workspace's window
+        if matches!(platform, Platform::Gtk | Platform::Web) {
+            // Clock/battery visibility belongs to each workspace's window
             // bar. Keep the legacy preference for hosts with the older chrome.
             for group in &mut groups[0] {
                 group.rows.retain(|row| row.id != ShowClock);
@@ -1343,9 +1343,11 @@ mod copy_tests {
     fn clock_visibility_defaults_round_trips_and_resets() {
         let original: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
+        for platform in [Platform::Gtk, Platform::Web] {
+            assert!(original.field(PreferenceId::ShowClock, platform).is_err());
+        }
         for platform in [
             Platform::Generic,
-            Platform::Web,
             Platform::Android,
             Platform::Ios,
             Platform::Mac,

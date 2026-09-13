@@ -13,7 +13,7 @@ export function createSystemStatus({element, changed}) {
   const fill = element("span", "battery-fill"), percent = element("span", "battery-percent");
   shell.append(fill, percent); battery.append(charging, shell); batteryTile.append(battery); root.append(clock, batteryTile);
   const displayMode = matchMedia("(display-mode: fullscreen)");
-  let timer, manager, active = false, clockVisibility = "fullscreen";
+  let timer, manager, active = false;
   function updateClock() {
     const now = new Date();
     clock.textContent = new Intl.DateTimeFormat(navigator.languages, {hour:"numeric", minute:"2-digit"}).format(now);
@@ -26,7 +26,7 @@ export function createSystemStatus({element, changed}) {
     timer = setTimeout(tick, 60000 - Date.now() % 60000 + 20);
   }
   function updateBattery() {
-    if (clock.hidden || !manager || !Number.isFinite(manager.level) || manager.level < 0 || manager.level > 1) {
+    if (!active || !manager || !Number.isFinite(manager.level) || manager.level < 0 || manager.level > 1) {
       batteryTile.hidden = battery.hidden = true; return;
     }
     const level = Math.round(manager.level * 100), low = level <= 15 && !manager.charging;
@@ -40,7 +40,7 @@ export function createSystemStatus({element, changed}) {
     battery.title = battery.getAttribute("aria-label"); batteryTile.hidden = battery.hidden = false;
   }
   function updateVisibility() {
-    clock.hidden = clockVisibility === "never" || (clockVisibility !== "always" && !active);
+    clock.hidden = !active;
     updateBattery();
     root.hidden = clock.hidden && battery.hidden;
     tick();
@@ -65,7 +65,7 @@ export function createSystemStatus({element, changed}) {
     updateVisibility();
   }).catch(() => { batteryTile.hidden = battery.hidden = true; });
   sync();
-  return {root, sync, setClockVisibility(value) { clockVisibility = value || "fullscreen"; updateVisibility(); }, async setFullscreen(enabled) {
+  return {root, clock, battery:batteryTile, sync, async setFullscreen(enabled) {
     if (enabled === (!!document.fullscreenElement || displayMode.matches)) return;
     if (enabled) await document.documentElement.requestFullscreen();
     else if (document.fullscreenElement) await document.exitFullscreen();
