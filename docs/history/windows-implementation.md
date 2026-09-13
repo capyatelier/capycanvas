@@ -2259,3 +2259,21 @@ package remained registered. Installed identity, launch, update, uninstall,
 clean-machine behavior and publisher signing remain unverified. The existing
 portable ZIP and its runtime acceptance are unchanged. Strict picker pixels,
 physical pen, GPU recovery and 120 Hz painting also remain open.
+
+### Color-wheel visual acceptance
+
+The wheel acceptance requirement now permits imperceptible differences and
+prioritizes implementation simplicity. Normal-size review of the existing native
+and production-browser captures at 128, 160, 226 and 360 logical pixels, in both
+themes at display scale 1.5, finds no material difference in the three wheel
+projections, hue guides or marker positions. The current Direct2D wheel is
+accepted for those conditions. The exact-difference measurements above remain
+valid diagnostics; exact pixel equality is no longer required for the wheel.
+
+The app retains its existing native renderer and dependency set. Experimental
+Skia rendering and canvas-export probes remain local research and are not part
+of the app. This review changes no production code, capture bounds, reference
+styles or comparator tolerances. The preceding interaction and build validation
+still applies to the unchanged implementation. Text/edge antialiasing differences
+remain visible under close comparison; additional physical display scales,
+digitizer behavior, device recovery and 120 Hz painting still need acceptance.

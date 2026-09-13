@@ -229,6 +229,13 @@ to keep formatting updates distinct from edits before close.
 
 ## Color panel checks
 
+Color-wheel acceptance is visual equivalence at normal viewing size, with
+imperceptible raster differences allowed. Keep the native implementation simple;
+do not add a rendering dependency or browser-specific pixel corrections solely
+to obtain exact equality. Preserve the shared colors, geometry and interactions.
+Review paired captures in both themes at the tested display scale; the strict
+pixel comparator remains a diagnostic, not a wheel release gate.
+
 The native Color panel and Brush color drawer use the shared compact picker:
 Okhsv circle, HSV square, HLS triangle, overlapping paint swatches, shape
 buttons, swap, and curved shape/RGB readouts. Rust owns layout, projection,
