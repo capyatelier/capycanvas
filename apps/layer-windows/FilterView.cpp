@@ -8,6 +8,8 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     std::shared_ptr<WorkspaceData> data;
     Grid root,header;
     ComboBox category;
+    Image categoryGlyph;
+    hstring categoryGlyphKey;
     TextBox search;
     StackPanel rows;
     ScrollView list;
@@ -52,7 +54,9 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
             if(index>=0&&uint32_t(index)<categories.Size())self->send(O({{L"op",S(L"category")},
                 {L"category",categories.GetObjectAt(index).GetNamedValue(L"id")}}));
         }});
-        header.Children().Append(category);
+        category.Margin({22,0,0,0});header.Children().Append(category);
+        categoryGlyph.Width(16);categoryGlyph.Height(16);categoryGlyph.IsHitTestVisible(false);
+        categoryGlyph.HorizontalAlignment(HorizontalAlignment::Left);header.Children().Append(categoryGlyph);
         search.MinWidth(0);search.MinHeight(32);search.FontSize(data->textSize());search.MaxLength(120);
         search.Background(data->brush(L"input"));search.Padding({6,4,6,4});search.BorderThickness({0});
         AutomationProperties::SetAutomationId(search,L"filter-search");header.Children().Append(search);
@@ -82,8 +86,11 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         if(key!=catalogKey){catalogKey=key;category.Items().Clear();for(auto value:categories)category.Items().Append(box_value(str(value.GetObject(),L"label")));}
         int selected=0;for(uint32_t i=0;i<categories.Size();i++)if(str(categories.GetObjectAt(i),L"id")==str(picker,L"category"))selected=i;
         category.SelectedIndex(selected);
+        auto glyph=selected>=0&&uint32_t(selected)<categories.Size()?str(categories.GetObjectAt(selected),L"icon",L"adjustments"):hstring(L"adjustments");
+        if(glyph!=categoryGlyphKey){categoryGlyphKey=glyph;categoryGlyph.Source(icon(glyph,data->theme()).Source());}
         bool open=picker.GetNamedValue(L"search",JsonValue::CreateNullValue()).ValueType()==JsonValueType::String;
         bool wasOpen=search.Visibility()==Visibility::Visible;
+        categoryGlyph.Visibility(open?Visibility::Collapsed:Visibility::Visible);
         category.Visibility(open?Visibility::Collapsed:Visibility::Visible);search.Visibility(open?Visibility::Visible:Visibility::Collapsed);
         search.PlaceholderText(str(picker,L"search_label"));AutomationProperties::SetName(search,str(picker,L"search_label"));
         auto query=str(picker,L"search");
@@ -94,8 +101,12 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         rows.Children().Clear();previews.clear();hstring section;
         for(auto value:choices){
             auto choice=value.GetObject();
-            if(section!=str(choice,L"category")){section=str(choice,L"category");auto heading=label(data,str(choice,L"category_label"),true);
-                heading.Opacity(.55);heading.Margin({8,8,8,4});rows.Children().Append(heading);}
+            if(section!=str(choice,L"category")){
+                section=str(choice,L"category");StackPanel heading;heading.Orientation(Orientation::Horizontal);heading.Spacing(6);
+                heading.Children().Append(icon(str(choice,L"category_icon",L"adjustments"),data->theme()));
+                heading.Children().Append(label(data,str(choice,L"category_label"),true));
+                heading.Opacity(.55);heading.Margin({8,8,8,4});rows.Children().Append(heading);
+            }
             auto pick=button(data,str(choice,L"label"),[data=data,action=object(choice,L"action")]{data->dispatch(action);});
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
             pick.Padding({6,3,6,3});
@@ -103,9 +114,11 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
             AutomationProperties::SetName(preview,str(choice,L"label")+L" preview");
             AutomationProperties::SetAutomationId(preview,L"filter-preview-"+str(choice,L"id"));
             content.Children().Append(preview);
-            Grid caption;ColumnDefinition mark;mark.Width({1,GridUnitType::Auto});caption.ColumnDefinitions().Append(mark);
+            Grid caption;caption.HorizontalAlignment(HorizontalAlignment::Right);ColumnDefinition mark;mark.Width({1,GridUnitType::Auto});caption.ColumnDefinitions().Append(mark);
             ColumnDefinition name;name.Width({1,GridUnitType::Star});caption.ColumnDefinitions().Append(name);
-            if(flag(choice,L"animated")){auto animation=icon(L"animation",data->theme(),12);animation.Opacity(.55);animation.Margin({0,0,4,0});caption.Children().Append(animation);}
+            StackPanel marks;marks.Orientation(Orientation::Horizontal);marks.Spacing(4);marks.Margin({0,0,4,0});
+            if(flag(choice,L"animated")){auto animation=icon(L"animation",data->theme(),12);animation.Opacity(.55);marks.Children().Append(animation);}
+            marks.Children().Append(icon(str(choice,L"icon",L"adjustments"),data->theme()));caption.Children().Append(marks);
             auto text=label(data,str(choice,L"label"));text.TextTrimming(TextTrimming::CharacterEllipsis);text.TextAlignment(TextAlignment::Right);
             Grid::SetColumn(text,1);caption.Children().Append(text);content.Children().Append(caption);pick.Content(content);
             previews.push_back({str(choice,L"id"),pick,preview});

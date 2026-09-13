@@ -18,7 +18,7 @@ menu-to-drag, cancellation, and undo/redo. Mouse tile holds only arm pickup.
 
 All platforms: collapsed-sidebar expand buttons use compact inward-pointing
 guillemets (`»` on the left, `«` on the right), matching the current GTK/Web
-controls. Apple and Android use the same directional glyphs; Windows still needs
-alignment. Keep the shared editor text size and bold weight.
+controls. Apple and Android use the same directional glyphs. Windows now uses
+the shared double-chevron SVGs, centered in the existing expand targets.
 
 Details: [convention](drag-and-reorder.md), [source inventory](drag-inventory.md).

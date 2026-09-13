@@ -150,6 +150,24 @@ impl ToolGroup {
             Self::Liquify => "Liquify",
         }
     }
+    /// Identity of the medium, independent of its parent drawing engine.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Pen => "pen",
+            Self::Marker => "marker",
+            Self::Pencil => "pencil",
+            Self::Pastel => "pastel",
+            Self::Paint => "paint",
+            Self::Watercolor => "watercolor",
+            Self::Oil => "oil-paint",
+            Self::Eraser => "eraser",
+            Self::Airbrush => "airbrush",
+            Self::Spray => "spray",
+            Self::Decoration => "decoration",
+            Self::Blend => "blend",
+            Self::Liquify => "liquify",
+        }
+    }
     fn default_preset(self) -> u32 {
         PRESETS.iter().find(|p| p.2 == self).unwrap().0 as u32
     }
@@ -249,11 +267,13 @@ pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
         id: preset as u32,
         label,
         category: group.label(),
+        icon: group.icon(),
     })
 }
 pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
     ToolGroup::ALL.into_iter().map(|group| BrushCategory {
         label: group.label(),
+        icon: group.icon(),
         brushes: brush_catalog()
             .filter(|b| b.category == group.label())
             .collect(),
@@ -317,12 +337,12 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
                 preview: None,
             }],
             subtools: [
-                ("Visible artwork", RegionSource::Visible),
-                ("Editing layer", RegionSource::Editing),
-                ("Reference layers", RegionSource::Reference),
+                ("Visible artwork", "eye", RegionSource::Visible),
+                ("Editing layer", "layers", RegionSource::Editing),
+                ("Reference layers", "reference", RegionSource::Reference),
             ]
             .into_iter()
-            .map(|(label, item_source)| ToolSetItem {
+            .map(|(label, icon, item_source)| ToolSetItem {
                 label,
                 icon,
                 action: UiAction::Layer {
@@ -364,7 +384,12 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
                 };
                 ToolSetItem {
                     label,
-                    icon: "gradient",
+                    icon: match (radial, transparent) {
+                        (false, false) => "gradient",
+                        (false, true) => "gradient-transparent",
+                        (true, false) => "gradient-radial",
+                        (true, true) => "gradient-radial-transparent",
+                    },
                     action: UiAction::Layer {
                         action: LayerAction::Tool { tool },
                     },
@@ -387,13 +412,13 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
                 preview: None,
             }],
             subtools: [
-                ("Visible color", LayerCanvasTool::PickVisible),
-                ("Layer color", LayerCanvasTool::PickLayer),
+                ("Visible color", "eye", LayerCanvasTool::PickVisible),
+                ("Layer color", "layers", LayerCanvasTool::PickLayer),
             ]
             .into_iter()
-            .map(|(label, tool)| ToolSetItem {
+            .map(|(label, icon, tool)| ToolSetItem {
                 label,
-                icon: "eyedropper",
+                icon,
                 action: UiAction::Layer {
                     action: LayerAction::Tool { tool },
                 },
@@ -406,7 +431,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {
             LayerCanvasTool::Select => ("Lasso", "lasso"),
-            LayerCanvasTool::LassoFill => ("Lasso fill", "lasso"),
+            LayerCanvasTool::LassoFill => ("Lasso fill", "lasso-fill"),
             LayerCanvasTool::Move | LayerCanvasTool::Transform => unreachable!(),
             LayerCanvasTool::Hand => ("Hand", "hand"),
             LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
@@ -436,7 +461,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
             .filter(|g| g.tool() == brush.tool)
             .map(|g| ToolSetItem {
                 label: g.label(),
-                icon: g.tool().command().icon().unwrap(),
+                icon: g.icon(),
                 action: UiAction::SelectToolGroup { group: g },
                 selected: g == active,
                 preview: None,
@@ -447,7 +472,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
             .filter(|p| p.2 == active)
             .map(|&(preset, label, group)| ToolSetItem {
                 label,
-                icon: group.tool().command().icon().unwrap(),
+                icon: group.icon(),
                 action: UiAction::SelectBrush { id: preset as u32 },
                 selected: preset as u32 == brush.preset,
                 preview: Some(preset as u32),
@@ -543,6 +568,52 @@ impl WorkspaceToolMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn medium_icons_survive_categories_subtools_and_toolbar_customization() {
+        let catalog = ui_catalog();
+        let icons: std::collections::BTreeSet<_> = ToolGroup::ALL.map(ToolGroup::icon).into();
+        assert_eq!(icons.len(), ToolGroup::ALL.len(), "Different media must remain distinguishable");
+        for category in &catalog.brush_categories {
+            assert!(catalog.icons.contains(&category.icon));
+            for choice in &category.brushes {
+                let group = group(choice.id);
+                let brush = BrushState { preset: choice.id, tool: group.tool(), diameter: 10., opacity: 1., color: [0., 0., 0., 1.] };
+                let view = view(&brush, LayerCanvasTool::Paint);
+                let selected = view.groups.iter().find(|g| g.selected).unwrap();
+                assert_eq!((selected.label, selected.icon), (category.label, category.icon));
+                assert_eq!(view.subtools.iter().find(|b| b.selected).unwrap().icon, choice.icon);
+                assert_eq!(crate::customization::tool_choice(ToolbarControl::Brush { id: choice.id }).icon, choice.icon);
+            }
+        }
+    }
+
+    #[test]
+    fn non_painting_modes_have_distinct_packaged_icons() {
+        let brush = BrushState { preset: Tool::Pen.default_preset(), tool: Tool::Pen, diameter: 10., opacity: 1., color: [0., 0., 0., 1.] };
+        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
+        let catalog = ui_catalog();
+        for tool in [
+            LayerCanvasTool::Gradient { radial: false, transparent: false },
+            LayerCanvasTool::Region { fill: true, source: RegionSource::Visible },
+            LayerCanvasTool::Region { fill: false, source: RegionSource::Visible },
+            LayerCanvasTool::PickVisible,
+            LayerCanvasTool::Figure { shape: FigureShape::Rectangle, paint: FigurePaint::Outline },
+            LayerCanvasTool::Figure { shape: FigureShape::Ellipse, paint: FigurePaint::Outline },
+            LayerCanvasTool::Ruler { kind: RulerKind::Straight },
+            LayerCanvasTool::Move,
+        ] {
+            let view = view(&brush, tool);
+            for items in [&view.groups, &view.subtools] {
+                let unique: std::collections::BTreeSet<_> = items.iter().map(|i| i.icon).collect();
+                assert_eq!(unique.len(), items.len(), "{tool:?}: each mode needs its own meaning");
+                for item in items {
+                    assert!(catalog.icons.contains(&item.icon));
+                    assert!(bank.join(format!("layer-{}-symbolic.svg", item.icon)).is_file());
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
         assert_eq!(PRESETS.len(), 24);

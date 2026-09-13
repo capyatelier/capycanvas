@@ -15,7 +15,7 @@ struct Column:std::enable_shared_from_this<Column>{
     uint32_t id=0;
     J geometry;
     std::map<std::wstring,Button> buttons;
-    hstring structure;
+    hstring structure,expandGlyph;
     double reported=0;
     bool applying=false;
     void init(){
@@ -27,7 +27,7 @@ struct Column:std::enable_shared_from_this<Column>{
             data->dispatch(O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"set_column_collapsed")},
                 {L"group",N(id)},{L"collapsed",B(false)}})}}));
         });
-        expand.Padding({0,0,0,0});expand.Content(icon(L"column-expand",data->theme()));
+        expand.Padding({0,0,0,0});
         AutomationProperties::SetAutomationId(expand,L"expand-column-"+to_hstring(id));
         frame.Children().Append(expand);
         scroll.Content(icons);scroll.HorizontalScrollMode(ScrollMode::Disabled);
@@ -53,6 +53,10 @@ struct Column:std::enable_shared_from_this<Column>{
     void apply(J const& next){
         applying=true;geometry=next;
         auto bounds=object(geometry,L"bounds"),content=object(geometry,L"content");place(background,bounds);
+        auto work=object(object(data->model,L"layout"),L"work_area");
+        hstring glyph=num(bounds,L"x")+num(bounds,L"width")*.5<num(work,L"x")+num(work,L"width")*.5?
+            L"chevron-double-right":L"chevron-double-left";
+        if(glyph!=expandGlyph){expandGlyph=glyph;expand.Content(icon(glyph,data->theme()));}
         place(expand,local(object(geometry,L"expand"),bounds));place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
         double offset=0;
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){

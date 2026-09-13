@@ -553,7 +553,8 @@ impl Panel {
     }
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => "menu",
+            Self::Toolbar | Self::CustomToolbar(_) => "toolbar",
+            Self::Commands => "menu",
             Self::Brushes => "brush",
             Self::ToolSettings => "settings",
             Self::Color => "color",

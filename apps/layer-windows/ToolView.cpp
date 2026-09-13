@@ -19,12 +19,12 @@ hstring itemSchema(A const& items){
             {L"action",object(item,L"action")},{L"preview",item.GetNamedValue(L"preview",JsonValue::CreateNullValue())}}));
     }return keys.Stringify();
 }
-Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item){
+Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item,bool bold=true){
     Grid row;row.ColumnSpacing(6);
     ColumnDefinition glyph;glyph.Width({16,GridUnitType::Pixel});row.ColumnDefinitions().Append(glyph);
     ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
     row.Children().Append(icon(str(item,L"icon"),data->theme()));
-    auto title=label(data,str(item,L"label"),true);title.TextTrimming(TextTrimming::CharacterEllipsis);
+    auto title=label(data,str(item,L"label"),bold);title.TextTrimming(TextTrimming::CharacterEllipsis);
     title.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(title,1);row.Children().Append(title);return row;
 }
 struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
@@ -145,7 +145,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 auto invoke=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
                     self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));};
                 if(flag(item,L"checkable")){
-                    CheckBox check;auto text=label(data,str(command,L"label"));text.TextTrimming(TextTrimming::CharacterEllipsis);text.Margin({6,0,0,0});check.Content(text);
+                    CheckBox check;auto text=toolLabel(data,command,false);text.Margin({6,0,0,0});check.Content(text);
                     check.MinWidth(0);check.MinHeight(32);check.Padding({0,0,0,0});check.HorizontalAlignment(HorizontalAlignment::Stretch);
                     AutomationProperties::SetName(check,str(command,L"label"));AutomationProperties::SetAutomationId(check,L"tool-action-"+id);
                     check.Click([invoke](auto&&,auto&&){invoke();});root.Children().Append(check);

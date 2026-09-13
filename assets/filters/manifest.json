@@ -428,7 +428,7 @@
     },
     {
       "category": "blur",
-      "icon": "adjustments",
+      "icon": "blur",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -469,7 +469,7 @@
     },
     {
       "category": "detail",
-      "icon": "adjustments",
+      "icon": "sharpen",
       "program": {
         "abi": 2,
         "entry": "capy_unsharp_mask",
@@ -521,7 +521,7 @@
     },
     {
       "category": "detail",
-      "icon": "adjustments",
+      "icon": "high-pass",
       "program": {
         "abi": 2,
         "entry": "capy_high_pass",
@@ -567,7 +567,7 @@
     },
     {
       "category": "blur",
-      "icon": "adjustments",
+      "icon": "motion-blur",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -600,7 +600,7 @@
     },
     {
       "category": "detail",
-      "icon": "adjustments",
+      "icon": "denoise",
       "program": {
         "abi": 2,
         "entry": "capy_denoise",
@@ -632,7 +632,7 @@
     },
     {
       "category": "detail",
-      "icon": "adjustments",
+      "icon": "edge-detect",
       "program": {
         "abi": 2,
         "entry": "capy_edge_detect",
@@ -670,7 +670,7 @@
     },
     {
       "category": "color",
-      "icon": "adjustments",
+      "icon": "white-balance",
       "preview": {"temperature":{"kind":"number","value":35}},
       "program": {
         "abi": 2,
@@ -704,7 +704,7 @@
     },
     {
       "category": "color",
-      "icon": "adjustments",
+      "icon": "split-tone",
       "program": {
         "abi": 2,
         "entry": "capy_split_tone",
@@ -742,7 +742,7 @@
     },
     {
       "category": "tone",
-      "icon": "adjustments",
+      "icon": "vignette",
       "program": {
         "abi": 2,
         "entry": "capy_vignette",
@@ -787,7 +787,7 @@
     },
     {
       "category": "texture",
-      "icon": "adjustments",
+      "icon": "grain",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -841,7 +841,7 @@
     },
     {
       "category": "blur",
-      "icon": "adjustments",
+      "icon": "bloom",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -891,7 +891,7 @@
     },
     {
       "category": "blur",
-      "icon": "adjustments",
+      "icon": "soft-focus",
       "program": {
         "abi": 2,
         "entry": "capy_soft_focus",
@@ -937,7 +937,7 @@
     },
     {
       "category": "artistic",
-      "icon": "adjustments",
+      "icon": "halftone",
       "program": {
         "abi": 2,
         "entry": "capy_halftone",
@@ -987,7 +987,7 @@
     },
     {
       "category": "artistic",
-      "icon": "adjustments",
+      "icon": "crosshatch",
       "program": {
         "abi": 2,
         "entry": "capy_crosshatch",
@@ -1031,7 +1031,7 @@
     },
     {
       "category": "detail",
-      "icon": "adjustments",
+      "icon": "emboss",
       "program": {
         "abi": 2,
         "entry": "capy_emboss",
@@ -1069,7 +1069,7 @@
     },
     {
       "category": "artistic",
-      "icon": "adjustments",
+      "icon": "mosaic",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -1096,7 +1096,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "chromatic-aberration",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -1129,7 +1129,7 @@
     },
     {
       "category": "artistic",
-      "icon": "adjustments",
+      "icon": "paint",
       "program": {
         "abi": 2,
         "entry": "capy_painterly",
@@ -1161,7 +1161,7 @@
     },
     {
       "category": "color",
-      "icon": "adjustments",
+      "icon": "solarize",
       "program": {
         "abi": 2,
         "entry": "capy_solarize",
@@ -1187,7 +1187,7 @@
     },
     {
       "category": "artistic",
-      "icon": "adjustments",
+      "icon": "pencil",
       "program": {
         "abi": 2,
         "entry": "capy_pencil",
@@ -1245,7 +1245,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "kaleidoscope",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -1286,7 +1286,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "liquify",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -1327,7 +1327,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "ripple",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -1395,7 +1395,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "glass",
       "program": {
         "abi": 2,
         "alpha": "filter",
@@ -1434,7 +1434,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "rainy-glass",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -1495,7 +1495,7 @@
     },
     {
       "category": "texture",
-      "icon": "adjustments",
+      "icon": "vhs",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -1556,7 +1556,7 @@
     },
     {
       "category": "texture",
-      "icon": "adjustments",
+      "icon": "crt",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -1612,7 +1612,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "heat-haze",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -1673,7 +1673,7 @@
     },
     {
       "category": "color",
-      "icon": "adjustments",
+      "icon": "iridescence",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,
@@ -1721,7 +1721,7 @@
     },
     {
       "category": "distort",
-      "icon": "adjustments",
+      "icon": "domain-warp",
       "preview": {"animate":{"kind":"toggle","value":false},"time":{"kind":"number","value":1.25}},
       "program": {
         "abi": 2,

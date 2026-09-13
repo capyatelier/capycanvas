@@ -963,6 +963,21 @@ tear-off independently exposed capture loss and remains a workspace acceptance
 gap. Physical digitizers, presentation cadence and input latency remain separate.
 Failed fixtures leave their owned app and local evidence available for inspection.
 
+## Shared icon updates
+
+Windows stages the audited shared SVG bank in both themes. Only `currentColor`
+is substituted; explicit swatch paints, opacity and vector geometry are preserved.
+Shared Rust supplies the distinct brush-medium, tool-mode, command and filter
+identities. Native filter categories/captions and checkable tool actions display
+these glyphs alongside their existing controls. New Layer uses the shared
+document-plus symbol; collapsed columns use centered double chevrons pointing
+toward the canvas.
+
+The updated build passes the shared catalog/asset checks and native tool,
+filter and drawer regressions. This establishes icon integration and control
+behavior; exact raster parity and physical input/performance acceptance remain
+separate.
+
 ## Matched editor captures
 
 The native capture fixture requires an isolated settings directory and
