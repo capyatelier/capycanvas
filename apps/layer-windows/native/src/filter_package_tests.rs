@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_os = "windows")]
+use layer_render::CanvasRenderer;
 use std::{
     fs,
     sync::atomic::{AtomicU64, Ordering},
@@ -263,7 +265,6 @@ fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
 #[test]
 #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
 fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
-    use layer_render::CanvasRenderer;
     use layer_ui::{EffectAction, UiAction};
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::DX12;
@@ -317,51 +318,6 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
         mode,
         library,
     };
-    fn finish(service: &mut FilterService, native: &mut NativeHost) {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while service.status.pending {
-            service.poll(native);
-            native.prepare_canvas_frame(0, 0, true).unwrap();
-            assert!(Instant::now() < deadline, "Package loading did not settle");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-    fn image(native: &mut NativeHost) -> Vec<u8> {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            native.prepare_canvas_frame(0, 0, true).unwrap();
-            if native.startup.brush_ready {
-                break;
-            }
-            assert!(Instant::now() < deadline, "Canvas did not become ready");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        native.session.renderer_mut().request_readback(1).unwrap();
-        native
-            .session
-            .renderer_mut()
-            .take_readback()
-            .unwrap()
-            .unwrap()
-            .bytes
-    }
-    fn radius(native: &NativeHost) -> layer_core::EffectValue {
-        let layer = native.session.engine().document().active_layer;
-        native
-            .session
-            .engine()
-            .document()
-            .layers
-            .iter()
-            .find(|l| l.id == layer)
-            .unwrap()
-            .effect
-            .as_ref()
-            .unwrap()
-            .value("radius")
-            .unwrap()
-            .clone()
-    }
     service
         .load(&mut native, request(EffectInstallMode::Add, false))
         .unwrap();
@@ -459,4 +415,104 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     assert_eq!(radius(&native), layer_core::EffectValue::Number(7.));
     assert_eq!(image(&mut native), replaced);
     service.stop();
+}
+
+#[cfg(target_os = "windows")]
+fn finish(service: &mut FilterService, native: &mut NativeHost) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while service.status.pending {
+        service.poll(native);
+        native.prepare_canvas_frame(0, 0, true).unwrap();
+        assert!(Instant::now() < deadline, "Package loading did not settle");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+#[cfg(target_os = "windows")]
+fn image(native: &mut NativeHost) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        native.prepare_canvas_frame(0, 0, true).unwrap();
+        if native.startup.brush_ready {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Canvas did not become ready");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    native.session.renderer_mut().request_readback(1).unwrap();
+    native
+        .session
+        .renderer_mut()
+        .take_readback()
+        .unwrap()
+        .unwrap()
+        .bytes
+}
+#[cfg(target_os = "windows")]
+fn radius(native: &NativeHost) -> layer_core::EffectValue {
+    let layer = native.session.engine().document().active_layer;
+    native
+        .session
+        .engine()
+        .document()
+        .layers
+        .iter()
+        .find(|l| l.id == layer)
+        .unwrap()
+        .effect
+        .as_ref()
+        .unwrap()
+        .value("radius")
+        .unwrap()
+        .clone()
+}
+
+#[cfg(target_os = "windows")]
+#[path = "filter_recovery_tests.rs"]
+mod recovery_tests;
+
+#[test]
+fn suspension_finishes_pending_reads_and_rejects_new_loads() {
+    for acquired in [false, true] {
+        let directory = Directory::new();
+        directory.example();
+        let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let mut service = FilterService::new(|| {});
+        let request = || Request {
+            directory: Some(directory.path.clone()),
+            mode: EffectInstallMode::Merge,
+            library: false,
+        };
+        service.load(&mut native, request()).unwrap();
+        if acquired {
+            finish_read(&mut service, &mut native);
+        } else {
+            service.poll(&mut native); // Start the real bounded file worker.
+        }
+        native.suspend_renderer().unwrap();
+        service.poll(&mut native);
+        assert!(!service.status.pending);
+        assert_eq!(service.status.phase, "failed");
+        assert!(
+            service
+                .status
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("unavailable")
+        );
+        assert!(service.acquired.is_none());
+        assert!(service.validating.is_none());
+        assert!(service.load(&mut native, request()).is_err());
+        // A late file completion cannot revive the failed request.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while service.task.busy() {
+            service.poll(&mut native);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(service.status.phase, "failed");
+        assert!(service.acquired.is_none());
+        assert_eq!(native.session.state().filter_catalog_revision, 0);
+        service.stop();
+    }
 }

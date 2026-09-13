@@ -38,3 +38,6 @@ pub use host::*;
 
 mod color;
 pub use color::*;
+
+#[cfg(all(test, target_os = "windows"))]
+mod gpu_recovery_tests;
