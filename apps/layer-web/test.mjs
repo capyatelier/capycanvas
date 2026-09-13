@@ -4,12 +4,16 @@ import {checkZen} from "./zen.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
+import {checkColumnStacks} from "./column-stacks.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkTitleBarState} from "./title-bar-state.test.mjs";
 import {checkTitleBar} from "./title-bar.test.mjs";
+import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
+import {checkTitleBarOverflow} from "./title-bar-overflow.test.mjs";
+import {checkMenuLabels} from "./menu-labels.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -205,6 +209,8 @@ try {
   });
   if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls") || process.argv.includes("--title-bar") || process.argv.includes("--title-bar-state")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
+  if (process.argv.includes("--title-bar-overflow")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
+    `window.__overflowEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{const value={type,id:e.pointerId,pointer:e.pointerType,target:e.target.tagName,source:e.target.closest('details')?.id};__overflowEvents.push(value);setTimeout(()=>{value.prevented=e.defaultPrevented},0);},true)`});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
@@ -219,6 +225,15 @@ try {
   } else if (process.argv.includes("--raster")) {
     await checkRaster({call,evaluate,settle,canvasPixels});
     checkRasterErrors();
+  } else if (process.argv.includes("--menu-labels")) {
+    await checkMenuLabels({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar-overflow")) {
+    await checkTitleBarOverflow({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar-feedback")) {
+    await checkTitleBarFeedback({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-state")) {
     await checkTitleBarState({call,evaluate,settle,reload});
     assert.deepEqual(errors,[]);
@@ -233,6 +248,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--column-stacks")) {
+    await checkColumnStacks({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--column-drops")) {
     await checkColumnDrops({call,evaluate,settle});

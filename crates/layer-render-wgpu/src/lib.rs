@@ -4054,13 +4054,7 @@ impl CanvasRenderer for WgpuRasterizer {
             .layers
             .iter()
             .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area))
-            .then(|| {
-                (
-                    packet.view,
-                    packet.layers.iter().cloned().collect(),
-                    packet.time_seconds,
-                )
-            });
+            .then(|| (packet.view, packet.layers.to_vec(), packet.time_seconds));
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
             scene.style_base = packet.dab_batches.len();

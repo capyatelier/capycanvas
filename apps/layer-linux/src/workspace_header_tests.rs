@@ -93,10 +93,10 @@ impl Driver {
         w.window.present();
         pump(1800);
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: WorkspaceState {
+            workspace: Box::new(WorkspaceState {
                 layout: WorkspacePreset::Painter.layout(Platform::Gtk),
                 ..WorkspaceState::default()
-            },
+            }),
         });
         pump(500);
         std::fs::write(dir.join("ready"), "ready").unwrap();
@@ -1219,10 +1219,10 @@ fn native_drawer_dismissal_input() {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for touch in [false, true] {
             d.w.dispatch(UiAction::RestoreWorkspace {
-                workspace: WorkspaceState {
+                workspace: Box::new(WorkspaceState {
                     layout: WorkspacePreset::Painter.layout(Platform::Gtk),
                     ..WorkspaceState::default()
-                },
+                }),
             });
             pump(250);
             let color = d.named(&d.header_tool(ToolbarControl::Color));
@@ -1318,10 +1318,10 @@ fn native_drawer_dismissal_input() {
                     .unwrap()
                     .id;
                 d.w.dispatch(UiAction::RestoreWorkspace {
-                    workspace: WorkspaceState {
+                    workspace: Box::new(WorkspaceState {
                         layout,
                         ..WorkspaceState::default()
-                    },
+                    }),
                 });
                 pump(250);
                 let color =
@@ -1457,10 +1457,10 @@ fn native_header_cancel_caption_input() {
         HeaderSize::Large.height()
     );
     d.w.dispatch(UiAction::RestoreWorkspace {
-        workspace: WorkspaceState {
+        workspace: Box::new(WorkspaceState {
             layout: WorkspacePreset::Painter.layout(Platform::Gtk),
             ..WorkspaceState::default()
-        },
+        }),
     });
     pump(250);
     let capy = state(&d.w)
@@ -1559,7 +1559,9 @@ fn native_header_drawer_controls_input() {
                 &[HeaderItem::Menu, HeaderItem::Tool { control }],
             )
             .unwrap();
-        d.w.dispatch(UiAction::RestoreWorkspace { workspace });
+        d.w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
         pump(160);
         let name = d.header_tool(control);
         d.click_name(&name);
@@ -1627,7 +1629,7 @@ fn native_header_hold_context_input() {
                     continue;
                 }
                 d.w.dispatch(UiAction::RestoreWorkspace {
-                    workspace: original.clone(),
+                    workspace: Box::new(original.clone()),
                 });
                 pump(160);
                 d.w.dispatch(HeaderAction::Edit { editing: true }.action());
@@ -2147,10 +2149,10 @@ fn native_header_builder_input() {
     w.window.present();
     pump(1800);
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: WorkspaceState {
+        workspace: Box::new(WorkspaceState {
             layout: WorkspacePreset::Painter.layout(Platform::Gtk),
             ..WorkspaceState::default()
-        },
+        }),
     });
     pump(600);
     let original = state(&w).workspace.layout.header;
@@ -2565,10 +2567,10 @@ fn native_header_window_actions_input() {
             .any(|e| e.item == HeaderItem::Fullscreen)
     );
     d.w.dispatch(UiAction::RestoreWorkspace {
-        workspace: WorkspaceState {
+        workspace: Box::new(WorkspaceState {
             layout: WorkspacePreset::Illustrator.layout(Platform::Gtk),
             ..WorkspaceState::default()
-        },
+        }),
     });
     pump(500);
     let model = state(&d.w).workspace.layout.header;

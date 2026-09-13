@@ -277,7 +277,7 @@ mod tests {
     fn host(platform: Platform) -> NativeHost {
         let mut host = NativeHost::new(platform).unwrap();
         host.dispatch(UiAction::RestoreWorkspace {
-            workspace: WorkspaceState::for_platform(platform),
+            workspace: Box::new(WorkspaceState::for_platform(platform)),
         })
         .unwrap();
         host.resize(2410, 1810, 2.).unwrap();
@@ -302,7 +302,7 @@ mod tests {
         layout["next_id"] = json!(100);
         workspace["zen_mode"] = json!(false);
         host.dispatch(UiAction::RestoreWorkspace {
-            workspace: serde_json::from_value(workspace).unwrap(),
+            workspace: Box::new(serde_json::from_value(workspace).unwrap()),
         })
         .unwrap();
     }
@@ -402,44 +402,24 @@ mod tests {
     }
 
     #[test]
-    fn group_panel_resize_publishes_layout_without_rebuilding_content() {
-        use layer_ui::{ColumnMode, ContactPhase::*, CustomizationAction, Panel};
+    fn open_column_resize_publishes_layout_without_rebuilding_content() {
+        use layer_ui::{ContactPhase::*, CustomizationAction, Panel};
         let mut host = host(Platform::Generic);
         workspace_fixture(&mut host);
         for action in [
-            CustomizationAction::SetColumnCollapsed {
-                group: 41,
-                collapsed: true,
-            },
-            CustomizationAction::SetColumnMode {
-                column: 41,
-                mode: ColumnMode::GroupPanel,
-            },
-            CustomizationAction::ToggleColumnDrawer {
-                group: 41,
-                panel: Panel::Brushes,
-            },
+            CustomizationAction::SetColumnCollapsed { group: 41, collapsed: true },
+            CustomizationAction::SetColumnDrawers { column: 41, drawers: false },
+            CustomizationAction::ToggleColumnDrawer { group: 41, panel: Panel::Brushes },
         ] {
             host.dispatch(UiAction::Customize { action }).unwrap();
         }
         let initial = layout_update(&mut host);
-        let panel = host.session.layout(host.logical).collapsed[0]
-            .group_panel
-            .clone()
-            .unwrap();
-        let start = [
-            panel.resize.x + panel.resize.width * 0.5,
-            panel.resize.y + 100.,
-        ];
+        let resolved = host.session.layout(host.logical);
+        let divider = resolved.dividers.iter().find(|d| resolved.open_column_at_divider(d.id) == Some(41)).unwrap();
+        let id = divider.id;
+        let start = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + 100.];
         let resize = |host: &mut NativeHost, phase, position| {
-            host.dispatch(UiAction::ResizeColumnPanel {
-                column: 41,
-                after: None,
-                phase,
-                position,
-                viewport: host.logical,
-            })
-            .unwrap();
+            host.dispatch(UiAction::DragDivider { id, phase, position, viewport: host.logical }).unwrap();
         };
         resize(&mut host, Down, start);
         let begun = layout_update(&mut host);
@@ -453,10 +433,7 @@ mod tests {
                 begun["workspace_update"]["content_revision"]
             );
             assert_eq!(packet["layout"], full["layout"]);
-            assert_eq!(
-                packet["workspace_layout"]["column_settings"],
-                full["state"]["workspace"]["layout"]["column_settings"]
-            );
+            assert_eq!(packet["workspace_layout"]["column_stacks"], full["state"]["workspace"]["layout"]["column_stacks"]);
         }
         resize(&mut host, Cancel, start);
         let cancelled = layout_update(&mut host);
@@ -749,7 +726,7 @@ mod tests {
             stream.session.set_platform(platform);
             stream
                 .dispatch(UiAction::RestoreWorkspace {
-                    workspace: WorkspaceState::for_platform(platform),
+                    workspace: Box::new(WorkspaceState::for_platform(platform)),
                 })
                 .unwrap();
             stream.resize(2410, 1810, 2.).unwrap();

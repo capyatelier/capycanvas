@@ -82,7 +82,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Some(layer_ui::ManagedWorkspace {
             id: current.id,
             name: current.metadata.name,
-            baseline,
+            baseline: *baseline,
             choices: items
                 .into_iter()
                 .map(|i| layer_ui::WorkspaceChoice {
@@ -561,7 +561,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(Entity::workspace(
             name,
             WorkspaceCapture::from_template(layout).map_err(StoreError::invalid)?,
-            layout.clone(),
+            layout.as_ref().clone(),
             Some(TemplateOrigin {
                 id: template.id.clone(),
                 version: current.id.clone(),
@@ -861,7 +861,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 unreachable!()
             };
             if duplicate {
-                Entity::workspace(name, capture, baseline, origin, now)
+                Entity::workspace(name, capture, *baseline, origin, now)
             } else {
                 let baseline = capture.history.layout().clone();
                 Entity::workspace(
@@ -897,7 +897,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             name,
             description,
             ReusableContent::Layout {
-                layout: current.capture()?.history.layout().clone(),
+                layout: Box::new(current.capture()?.history.layout().clone()),
             },
             now,
         );
@@ -976,7 +976,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let (baseline, origin) = match self.current().map(|e| e.content) {
             Some(ItemContent::Workspace {
                 baseline, origin, ..
-            }) => (baseline, origin),
+            }) => (*baseline, origin),
             _ => (capture.history.layout().clone(), None),
         };
         self.create_and_bind(

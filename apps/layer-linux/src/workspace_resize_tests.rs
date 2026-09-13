@@ -51,7 +51,9 @@ fn native_workspace_resize_input() {
                     *active = Panel::Navigator;
                 }
             }
-            w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(fixture),
+            });
             pump(350);
             let panel = if scenario == "left" {
                 Panel::Brushes

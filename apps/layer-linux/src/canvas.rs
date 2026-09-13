@@ -55,7 +55,9 @@ impl GpuCanvas {
         };
         session.set_platform(layer_ui::Platform::Gtk);
         session.dispatch(layer_ui::UiAction::RestoreWorkspace {
-            workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Gtk),
+            workspace: Box::new(layer_ui::WorkspaceState::for_platform(
+                layer_ui::Platform::Gtk,
+            )),
         })?;
         // Prefer installed/development resources. The same runtime loader can
         // replace these files without recompiling the executable.

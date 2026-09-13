@@ -183,24 +183,20 @@ final class EditorLaunchTests: XCTestCase {
 
 
 
-    @MainActor func testPartialZenToolbar() throws {
+    @MainActor func testZenHidesChromeAndTabRestoresIt() {
         let app = editorTestApplication()
-        #if os(iOS)
         XCUIDevice.shared.orientation = .landscapeLeft
-        #else
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]"#
         app.launch()
-        let section = app.descendants(matching: .any)["zen-toolbar-0"].firstMatch
-        XCTAssertTrue(section.waitForExistence(timeout: 20))
-        XCTAssertTrue(app.frame.contains(section.frame))
-        #if os(macOS)
-        app.buttons["zen-button"].click()
-        #else
-        app.buttons["zen-button"].tap()
-        #endif
-        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 5))
+        let canvas = app.otherElements["canvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["document-title"].exists)
+        XCTAssertFalse(app.buttons["zen-button"].exists)
+        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
+        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["document-title"].exists)
+        XCTAssertTrue(app.buttons["zen-button"].exists)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
@@ -363,5 +359,126 @@ final class EditorLaunchTests: XCTestCase {
         checkLayerControls(in: app)
         let layers = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         layers.name = "ipad-layer-added"; layers.lifetime = .keepAlways; add(layers)
+    }
+}
+
+// Opt-in native provider acceptance; each run owns a new UUID-named folder.
+extension EditorLaunchTests {
+    @MainActor private func nativeFilesTestFolder() throws -> String {
+        guard let token = ProcessInfo.processInfo.environment["CAPY_FILE_TEST_TOKEN"] else {
+            throw XCTSkip("Native Files acceptance requires an isolated CAPY_FILE_TEST_TOKEN")
+        }
+        _ = try XCTUnwrap(UUID(uuidString: token))
+        return "Capy Files " + token
+    }
+
+    @MainActor func testNativeFilesProjectRoundTrip() throws {
+        let folder = try nativeFilesTestFolder()
+        let app = editorTestApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"}]"#
+        func capture(_ name: String) {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = name + "-hierarchy"; tree.lifetime = .keepAlways; add(tree)
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            shot.name = name; shot.lifetime = .keepAlways; add(shot)
+        }
+        func command(_ id: String) {
+            workspaceActivate(app.buttons["menu-File"])
+            workspaceActivate(app.buttons["command-" + id])
+        }
+        func replace(_ field: XCUIElement, _ value: String) {
+            workspaceActivate(field)
+            field.typeKey("a", modifierFlags: .command)
+            field.typeText(value)
+        }
+        func folderTitle(_ label: String) -> XCUIElement {
+            app.navigationBars.descendants(matching: .any).matching(
+                NSPredicate(format: "label == %@ OR label == %@", label, label + ", Actions Menu")).firstMatch
+        }
+        func location() {
+            workspaceActivate(app.cells["DOC.sidebar.item.On My iPad"])
+            XCTAssertTrue(folderTitle("On My iPad").waitForExistence(timeout: 10))
+        }
+        func enterTestFolder() {
+            location()
+            workspaceActivate(app.cells[folder + ", Folder"])
+            XCTAssertTrue(folderTitle(folder).waitForExistence(timeout: 10))
+        }
+        let title = app.staticTexts["document-title"]
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let save = app.buttons["DOCPicker.actionButton"]
+        let name = app.textFields["DOCPicker.filenameTextField"]
+        app.launch()
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
+        command("save_document_as")
+        XCTAssertTrue(name.waitForExistence(timeout: 20))
+        location()
+        XCTAssertFalse(app.cells[folder + ", Folder"].exists, "Each native run must create a fresh test folder")
+        workspaceActivate(app.buttons["New Folder"])
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText(folder + "\n")
+        XCTAssertTrue(folderTitle(folder).waitForExistence(timeout: 10))
+        replace(name, "RoundTrip")
+        XCTAssertEqual(name.value as? String, "RoundTrip")
+        workspaceActivate(save)
+        XCTAssertTrue(save.waitForNonExistence(timeout: 20))
+        XCTAssertEqual(app.state, .runningForeground)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "RoundTrip"), evaluatedWith: title)
+        waitForExpectations(timeout: 30)
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        capture("project-saved")
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS")
+        app.launch()
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate { _, _ in rows.count == 2 }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
+        command("open_document")
+        enterTestFolder()
+        let project = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "RoundTrip.capy,")).firstMatch.images.firstMatch
+        workspaceActivate(project)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "RoundTrip"), evaluatedWith: title)
+        waitForExpectations(timeout: 30)
+        XCTAssertEqual(rows.count, 3, "The saved layer structure must survive a new process and native Open")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        capture("project-reopened")
+        command("export_document")
+        XCTAssertTrue(name.waitForExistence(timeout: 20))
+        enterTestFolder()
+        replace(name, "Render")
+        workspaceActivate(save)
+        XCTAssertTrue(save.waitForNonExistence(timeout: 20))
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(title.label.contains("RoundTrip"), "PNG delivery must retain the editable project location")
+        command("open_document")
+        enterTestFolder()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@ OR label == %@", "Render", "Render.png")).firstMatch.waitForExistence(timeout: 15))
+        capture("delivered-project-and-png")
+        workspaceActivate(app.buttons["Cancel"].firstMatch)
+        XCTAssertTrue(title.label.contains("RoundTrip"))
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func testNativeFilesProjectRoundTripCleanup() throws {
+        let folder = try nativeFilesTestFolder()
+        let files = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        files.activate()
+        workspaceActivate(files.cells["DOC.sidebar.item.On My iPad"])
+        let cell = files.cells[folder + ", Folder"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        guard cell.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", " - 2 items"))
+            .firstMatch.waitForExistence(timeout: 5) else {
+            XCTFail("Only the generated project and PNG may be present")
+            return
+        }
+        cell.press(forDuration: 0.8)
+        workspaceActivate(files.buttons["Delete"].firstMatch)
+        XCTAssertTrue(cell.waitForNonExistence(timeout: 10))
     }
 }

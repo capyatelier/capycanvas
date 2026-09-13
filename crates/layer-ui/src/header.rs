@@ -168,8 +168,11 @@ impl HeaderLayout {
 
     fn with_platform_controls(mut self, platform: Platform) -> Self {
         if platform == Platform::Web {
-            let settings = self.zones[2].last().unwrap().id;
-            self.add(HeaderZone::Right, Some(settings), &[HeaderItem::Fullscreen])
+            let settings = self.zones[2]
+                .iter()
+                .find(|entry| entry.item == HeaderItem::Settings)
+                .map(|entry| entry.id);
+            self.add(HeaderZone::Right, settings, &[HeaderItem::Fullscreen])
                 .unwrap();
         }
         self
@@ -305,7 +308,6 @@ impl HeaderLayout {
                     Tool {
                         control: ToolbarControl::Color,
                     },
-                    Settings,
                 ],
             ],
         )
@@ -468,9 +470,13 @@ impl HeaderLayout {
         let visible = |e: &&HeaderEntry| !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
         let metric = |e: &HeaderEntry, compact: bool| {
             let m = metrics.iter().find(|m| m.id == e.id);
-            m.map_or(tile, |m| if compact { m.compact } else { m.width })
-                .max(1.)
-                .min(4096.)
+            let width = m.map_or(tile, |m| if compact { m.compact } else { m.width });
+            // Invalid native measurements must not introduce NaN into geometry.
+            if width.is_nan() {
+                1.
+            } else {
+                width.clamp(1., 4096.)
+            }
         };
         let compact = |zone: usize| {
             self.zones[zone]
@@ -709,6 +715,49 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_measurement_limits_keep_geometry_finite_and_zero_width_hidden() {
+        let layout = HeaderLayout::painter();
+        let id = layout.zones[0][0].id;
+        for (input, bounded) in [
+            (f32::NAN, 1.),
+            (f32::NEG_INFINITY, 1.),
+            (f32::INFINITY, 4096.),
+            (-20., 1.),
+            (0., 0.),
+            (0.5, 1.),
+            (48., 48.),
+            (8192., 4096.),
+        ] {
+            for width in [320., 1600., 24000.] {
+                for editing in [false, true] {
+                    let resolve = |value| {
+                        layout.resolve(
+                            width,
+                            [0., 72.],
+                            &[HeaderMetric {
+                                id,
+                                width: value,
+                                compact: value,
+                            }],
+                            editing,
+                        )
+                    };
+                    let actual = resolve(input);
+                    let expected = resolve(bounded);
+                    assert_eq!(actual.items, expected.items);
+                    assert_eq!(actual.zones, expected.zones);
+                    assert_eq!(actual.overflow, expected.overflow);
+                    assert_eq!(actual.hidden, expected.hidden);
+                    if input == 0. {
+                        assert!(!actual.items.iter().any(|m| m.id == id));
+                        assert!(!actual.hidden.iter().flatten().any(|m| *m == id));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn unavailable_items_take_no_space_even_when_customizing() {
         let mut h = HeaderLayout::for_platform(Platform::Web);

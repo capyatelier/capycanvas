@@ -5,8 +5,8 @@
 mod color_panel;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
-#[path = "column_group_tests.rs"]
-mod column_group_tests;
+#[path = "column_stack_tests.rs"]
+mod column_stack_tests;
 #[path = "drag_pickup_tests.rs"]
 mod drag_pickup;
 #[path = "icon_tests.rs"]
@@ -56,7 +56,7 @@ fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
         #[weak]
         w,
         move |_| w.dispatch(UiAction::RestoreWorkspace {
-            workspace: layer_ui::WorkspaceState::default(),
+            workspace: Box::new(layer_ui::WorkspaceState::default()),
         })
     ));
     w
@@ -932,7 +932,9 @@ fn native_nested_tool_drawers() {
             .layout
             .add_toolbar(Some(group), "Long tools", &vec![ToolbarControl::Color; 180])
             .unwrap();
-        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         w.dispatch(UiAction::Invoke {
             command: CommandId::Pen,
@@ -1147,7 +1149,7 @@ fn native_collapsed_drop_and_resize() {
     ] {
         for slot in 0..3 {
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: original.clone(),
+                workspace: Box::new(original.clone()),
             });
             w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
             pump(180);
@@ -1277,7 +1279,7 @@ fn native_collapsed_drop_and_resize() {
     }
     for group in [5, 8] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original.clone(),
+            workspace: Box::new(original.clone()),
         });
         pump(150);
         let root = original.layout.column_for_group(group).unwrap();
@@ -1345,11 +1347,8 @@ fn native_collapsed_drop_and_resize() {
         pump(80);
         assert_eq!(state(&w).workspace, collapsed, "hold below the threshold");
         drag.end();
-        let expand = find_named(w.surface.upcast_ref(), &format!("expand-column-{root}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
-        click(&expand);
+        assert!(find_named(w.surface.upcast_ref(), &format!("expand-column-{root}")).is_none());
+        w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group: root, collapsed: false } });
         pump(180);
         assert!(!state(&w).workspace.layout.is_collapsed(root));
         assert!((width() - before_width).abs() < 1.);
@@ -1390,7 +1389,9 @@ fn native_column_width_double_click() {
                     continue;
                 }
             }
-            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(workspace),
+            });
             if collapsed {
                 w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
             }
@@ -1468,7 +1469,7 @@ fn native_collapsed_canvas_side_drop() {
     for right in [false, true] {
         for whole in [false, true] {
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: original.clone(),
+                workspace: Box::new(original.clone()),
             });
             let (target, source, panel) = if right {
                 (8, 5, Panel::Brushes)
@@ -1615,7 +1616,7 @@ fn native_collapsed_divider_expansion() {
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     for group in [5, 8] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original.clone(),
+            workspace: Box::new(original.clone()),
         });
         pump(150);
         let root = original.layout.column_for_group(group).unwrap();
@@ -1802,7 +1803,7 @@ fn native_collapsed_columns() {
     };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original_workspace.clone(),
+            workspace: Box::new(original_workspace.clone()),
         });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
@@ -1920,8 +1921,10 @@ fn native_collapsed_columns() {
         assert_eq!(state(&w).workspace.layout.collapsed.len(), 2);
         let r = w.resolved();
         assert!(r.collapsed.iter().find(|c| c.id == 4).unwrap().bounds.x > viewport[0] * 0.5);
-        press("expand-column-4");
-        press("expand-column-8");
+        for group in [4, 8] {
+            w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group, collapsed: false } });
+            pump(150);
+        }
         assert!(state(&w).workspace.layout.collapsed.is_empty());
         assert!(state(&w).customization.column_drawers.is_empty());
     }
@@ -1938,7 +1941,9 @@ fn native_collapsed_columns() {
         .layout
         .set_column_collapsed(8, true, viewport)
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(250);
     let scrolling = || {
         find_named(w.surface.upcast_ref(), "column-scroll-8")
@@ -2047,7 +2052,9 @@ fn native_tool_drawers() {
             },
         )
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(200);
     let output = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(output).unwrap();
@@ -2488,7 +2495,9 @@ fn native_connected_tools() {
         .layout
         .set_panel_visible(Panel::ToolSettings, true)
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     w.dispatch(UiAction::SelectBrush {
         id: layer_core::DefaultBrushPreset::GPen as u32,
     });
@@ -2695,7 +2704,9 @@ fn native_ruler_tools() {
             },
         )
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(100);
     w.dispatch(UiAction::Invoke {
         command: CommandId::FitCanvas,
@@ -2869,7 +2880,9 @@ fn native_operation_tool() {
             },
         )
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(100);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let divider = w
@@ -3187,7 +3200,9 @@ fn native_figure_tools() {
             },
         )
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(100);
     w.dispatch(UiAction::Invoke {
         command: CommandId::FitCanvas,
@@ -3362,7 +3377,9 @@ fn native_gradient_tool() {
         .layout
         .set_panel_visible(Panel::ToolSettings, true)
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     w.dispatch(UiAction::SetColor {
         rgba: [0.1, 0.25, 0.9, 1.0],
     });
@@ -3528,7 +3545,9 @@ fn native_navigation_tools() {
         .take(2)
         .map(|t| t.id)
         .collect();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     w.dispatch(UiAction::SelectBrush {
         id: layer_core::DefaultBrushPreset::GPen as u32,
     });
@@ -3703,7 +3722,9 @@ fn native_navigator_column_resize() {
             .unwrap();
         band.extent = 400.;
         let id = band.id;
-        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
         pump(400);
         assert_visible(true);
         let d = w
@@ -3845,7 +3866,9 @@ fn native_navigator() {
         .layout
         .select_tab(navigator, Panel::Navigator)
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(250);
     w.dispatch(UiAction::SetBrushSize { value: 96.0 });
     let mut sequence = 0;
@@ -4026,7 +4049,9 @@ fn native_navigator() {
         .last()
         .unwrap()
         .id;
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(150);
     click(
         &find_named(w.surface.upcast_ref(), &format!("tile-{tile}"))
@@ -4194,7 +4219,9 @@ fn native_tool_families() {
             },
         )
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(150);
     let output = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(output).unwrap();
@@ -4293,7 +4320,9 @@ fn native_tool_and_color_panels() {
             )
             .unwrap();
     }
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(200);
     for choice in layer_ui::brush_catalog() {
         w.dispatch(UiAction::SelectBrush { id: choice.id });
@@ -4442,7 +4471,9 @@ fn native_tool_and_color_panels() {
             float.position = [600.0, 120.0];
         }
     }
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(150);
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -5732,7 +5763,7 @@ fn native_toolbar_sizing() {
     };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         w.dispatch(UiAction::MovePanel {
@@ -6496,7 +6527,9 @@ fn native_zen_floating_targets() {
     f.position = [850.0, viewport[1] - 160.0];
     f.width = 200.0;
     f.height = Some(100.0);
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     let (drag, origin) = begin();
     let point = [950.0, viewport[1] - 10.0];
     drag.update([
@@ -6619,7 +6652,7 @@ fn native_floating_gestures() {
     let baseline = state(&w).workspace;
     let restore = || {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: baseline.clone(),
+            workspace: Box::new(baseline.clone()),
         });
         pump(120);
     };
@@ -7128,7 +7161,7 @@ fn native_workspace_management() {
 
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(180);
@@ -7903,9 +7936,11 @@ fn native_panel_customization() {
         pump(200);
         capture_reference(&w, &format!("{dir}/custom-workspace-{theme:?}.png"), 1.0);
         let saved = state(&w).workspace;
-        w.dispatch(UiAction::RestoreWorkspace { workspace: initial });
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: saved.clone(),
+            workspace: Box::new(initial),
+        });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(saved.clone()),
         });
         assert_eq!(state(&w).workspace, saved);
         w.dispatch(UiAction::Invoke {
@@ -7978,7 +8013,7 @@ fn native_panel_customization() {
             )
             .unwrap();
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: overflow,
+            workspace: Box::new(overflow),
         });
         pump(200);
         let strip = w.panel_widget(many);
@@ -8031,7 +8066,7 @@ fn native_toolbar_manager() {
     std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for name in ["Sketching", "Painting"] {
@@ -8359,7 +8394,7 @@ fn native_panel_expansion() {
         pump(250);
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: initial.clone(),
+                workspace: Box::new(initial.clone()),
             });
             w.dispatch(UiAction::MovePanel {
                 panel: Panel::Sizes,
@@ -8420,7 +8455,7 @@ fn native_panel_expansion() {
             assert_eq!(panel.parent().unwrap(), parent);
         }
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::MovePanel {
             panel: Panel::Sizes,
@@ -8612,7 +8647,9 @@ fn native_column_removal() {
                     .unwrap();
             }
             layout.bands[0].edge = edge;
-            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(workspace),
+            });
             pump(180);
             let before = state(&w).workspace;
             let original = placement(Panel::Sizes);
@@ -8742,7 +8779,7 @@ fn native_docked_handles() {
     for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
         for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: initial.clone(),
+                workspace: Box::new(initial.clone()),
             });
             w.dispatch(UiAction::Customize {
                 action: CustomizationAction::SetTileStyle {
@@ -8771,7 +8808,7 @@ fn native_docked_handles() {
                 .unwrap()
                 .extent += 120.0;
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: oversized,
+                workspace: Box::new(oversized),
             });
             pump(200);
             let root = w.panel_widget(Panel::Toolbar);
@@ -8818,7 +8855,7 @@ fn native_hidden_tabs() {
     std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         let panel = Panel::Sizes;
@@ -9063,7 +9100,9 @@ fn native_stacked_divider() {
     let mut json = serde_json::to_value(&workspace).unwrap();
     json["layout"]["next_id"] = 41.into();
     workspace = serde_json::from_value(json).unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(100);
     assert!(
         w.surface
@@ -10185,7 +10224,7 @@ fn native_workspace_restore() {
     fresh.window.present();
     pump(1000);
     fresh.dispatch(UiAction::RestoreWorkspace {
-        workspace: serde_json::from_str(&saved).unwrap(),
+        workspace: Box::new(serde_json::from_str(&saved).unwrap()),
     });
     pump(150);
     assert_eq!(
@@ -10352,7 +10391,9 @@ fn native_frame_pacing() {
                 },
             )
             .unwrap();
-        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
         w.dispatch(UiAction::RestoreSettings {
             settings: Settings::default(),
         });
@@ -10409,7 +10450,9 @@ fn native_frame_pacing() {
                 .layout
                 .set_panel_visible(Panel::ToolSettings, true)
                 .unwrap();
-            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(workspace),
+            });
             w.dispatch(UiAction::Invoke {
                 command: CommandId::FitCanvas,
             });
@@ -10832,7 +10875,7 @@ fn native_window_drag_input() {
             _ => (),
         }
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original.clone(),
+            workspace: Box::new(original.clone()),
         });
         pump(500);
         // Wayland does not expose global window positions to clients. Calibrate
@@ -11097,7 +11140,7 @@ fn native_long_press_drag_input() {
         "tool-cancel",
     ] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original.clone(),
+            workspace: Box::new(original.clone()),
         });
         pump(300);
         let group = original.layout.panel_group(Panel::Adjustments).unwrap();
@@ -11273,7 +11316,7 @@ fn native_long_press_drag_input() {
         assert_eq!(saved(), before, "the continued drag is one undo step");
     }
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: original.clone(),
+        workspace: Box::new(original.clone()),
     });
     for _ in 0..2 {
         w.dispatch(UiAction::Layer {
@@ -11365,7 +11408,7 @@ fn native_tab_slide_input() {
         (Panel::Adjustments, "detach"),
     ] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original.clone(),
+            workspace: Box::new(original.clone()),
         });
         pump(300);
         let group = original.layout.panel_group(panel).unwrap();
@@ -11569,7 +11612,7 @@ fn native_column_drawer_drag_input() {
     // This regression addresses the fixed fixture's group and tab IDs.
     let original = layer_ui::WorkspaceState::default();
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: original.clone(),
+        workspace: Box::new(original.clone()),
     });
     pump(250);
     let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
@@ -11613,7 +11656,7 @@ fn native_column_drawer_drag_input() {
     ] {
         for dock in [false, true] {
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: original.clone(),
+                workspace: Box::new(original.clone()),
             });
             w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
             let origin = if group == 8 {
@@ -11784,7 +11827,9 @@ fn native_column_drawer_drag_input() {
                 )
                 .unwrap();
         }
-        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
         w.dispatch(UiAction::DoubleClickPanelHandle {
             group: target_group,
             viewport,
@@ -11903,7 +11948,7 @@ fn native_column_drawer_drag_input() {
     }
     // A real header drag can also reorder tabs without leaving the drawer.
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: original,
+        workspace: Box::new(original),
     });
     w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
     w.dispatch(UiAction::Customize {
@@ -11972,7 +12017,7 @@ fn native_divider_cursor_input() {
     };
     for group in [5, 8] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: original.clone(),
+            workspace: Box::new(original.clone()),
         });
         w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
         pump(150);
@@ -12121,7 +12166,9 @@ fn native_divider_cursor_input() {
                     band.extent = 400.;
                 }
             }
-            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(workspace),
+            });
             pump(150);
             let root = state(&w).workspace.layout.column_for_group(group).unwrap();
             let (header, tab) = {
@@ -12233,7 +12280,7 @@ fn native_floating_click_input() {
     };
     for panel in [Panel::Sizes, Panel::Toolbar] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::MovePanel {
             panel,
@@ -12316,7 +12363,7 @@ fn native_collapsed_column_input() {
     // This test addresses the fixed fixture's group IDs and tab configuration.
     let initial = layer_ui::WorkspaceState::default();
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: initial.clone(),
+        workspace: Box::new(initial.clone()),
     });
     pump(250);
     let native = w.window.surface().unwrap();
@@ -12349,13 +12396,14 @@ fn native_collapsed_column_input() {
     };
     for group in [5, 8] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
         pump(250);
         let column = w.resolved().collapsed.into_iter().next().unwrap();
         let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-        assert_eq!(w.columns.background_at(&w, center(column.expand)), None);
+        assert_eq!(column.expand.height, 0.);
+        assert!(find_named(w.surface.upcast_ref(), &format!("expand-column-{}", column.id)).is_none());
         for icon in column.groups.iter().flat_map(|g| &g.icons) {
             let point = center(icon.bounds);
             assert_eq!(w.columns.background_at(&w, point), None);
@@ -12390,7 +12438,7 @@ fn native_collapsed_column_input() {
                 serde_json::to_value(&expanded).unwrap()
             );
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: collapsed.clone(),
+                workspace: Box::new(collapsed.clone()),
             });
             pump(250);
         }
@@ -12407,7 +12455,9 @@ fn native_collapsed_column_input() {
                     };
                 }
             }
-            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(workspace),
+            });
             w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
             if collapsed {
                 w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
@@ -12482,7 +12532,7 @@ fn native_collapsed_column_input() {
     }
     for blur in [false, true] {
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: initial.clone(),
+            workspace: Box::new(initial.clone()),
         });
         w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
         pump(250);

@@ -48,7 +48,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
         };
         let mut host = NativeHost::new(platform).ok()?;
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {
-            workspace: layer_ui::WorkspaceState::for_platform(platform),
+            workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
         })
         .ok()?;
         host.session.set_document_replacement(true);

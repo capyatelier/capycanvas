@@ -11,7 +11,7 @@ fn native_layer_hold_input() {
     w.window.present();
     pump(1600);
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: layer_ui::WorkspaceState::default(),
+        workspace: Box::new(layer_ui::WorkspaceState::default()),
     });
     for _ in 0..2 {
         w.dispatch(UiAction::Layer {

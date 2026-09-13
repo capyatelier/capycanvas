@@ -285,7 +285,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                   }
                 }
             }
-            if (!hidden) layout.array("dividers").objects().forEach { divider ->
+            if (!hidden) layout.array("dividers").objects().filterNot { it.optBoolean("fixed") }.forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 val horizontal = divider.getString("axis") == "horizontal"
                 val hit = JSONObject(rect.toString()).apply {

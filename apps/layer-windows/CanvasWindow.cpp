@@ -529,7 +529,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
 
 int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
     if(auto points=std::get_if<std::vector<CapyPointer>>(&item)){
-        if(points->empty())return 0;
+        if(retiring||points->empty())return 0;
         auto const& first=points->front();auto const& last=points->back();
         if(dialogOpen.load()){
             consumedContacts.insert(first.id);
@@ -540,14 +540,13 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
             first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load(),first.tool==3);
         if(result>=0){
             if(first.phase==1&&(result&1))consumedContacts.insert(first.id);
-            auto pointer=retiring?capy_retire_pointer:capy_pointer;
-            result=consumedContacts.contains(first.id)?0:pointer(host,points->data(),points->size());
+            result=consumedContacts.contains(first.id)?0:capy_pointer(host,points->data(),points->size());
             if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
         }
         return result;
     }
     if(auto scroll=std::get_if<CanvasScroll>(&item))
-        return dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
+        return retiring||dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
     auto const& command=std::get<CanvasCommand>(item);
     return retiring&&command.kind==CanvasCommandKind::DeviceLoss?0:DispatchCanvasCommand(host,command);
 }
@@ -753,14 +752,16 @@ void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
     {std::lock_guard lock(mutex);inputStopped=true;admitted=work.Take();pendingHover.reset();previewWork.Clear();}
     space.notify_all();
     capy_suspend(host);
+    if(capy_suspend_renderer(host)<0)throw std::runtime_error(capy_error());
+    // Raster recovery retains completed edits; queued contacts cannot be drawn
+    // without a renderer. Drain accepted commands after closing canvas input.
     for(auto& item:admitted){
         auto result=DispatchWork(item,true);
         if(result<0)throw std::runtime_error(capy_error());
         if(result>0)Fail(capy_error());
     }
-    if(capy_suspend_renderer(host)<0)throw std::runtime_error(capy_error());
     OutputDebugStringA(reason.c_str());
-    Fail("Painting is unavailable.\nUse File > Save or Save As, then reopen the drawing.");
+    Fail("Painting is unavailable. The interrupted stroke was canceled.\nUse File > Save or Save As to keep completed edits, then reopen the drawing.");
     CapyLifecycle("gpu_recovery_save_available");
     for(;;){
         std::deque<CanvasWork> pending;std::optional<CanvasQuery> query;

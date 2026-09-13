@@ -2,8 +2,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
-#else
-import UIKit
 #endif
 
 enum WorkspacePackageKind: String, CaseIterable {
@@ -137,31 +135,11 @@ struct WorkspacePackagePicker: ViewModifier {
     @ObservedObject var files: WorkspacePackageFiles
     func body(content: Content) -> some View {
         #if os(iOS)
-        content.sheet(item: $files.picker, onDismiss: { files.picked(nil) }) { picker in
-            WorkspaceDocumentPicker(picker: picker) { files.picked($0) }.ignoresSafeArea()
+        content.sheet(item: $files.picker) { picker in
+            NativeDocumentPicker(export: picker.export, contentType: picker.kind?.contentType ?? .data) { files.picked($0) }.ignoresSafeArea()
         }
         #else
         content
         #endif
     }
 }
-#if os(iOS)
-private struct WorkspaceDocumentPicker: UIViewControllerRepresentable {
-    let picker: WorkspacePackageFiles.Picker
-    let completion: (URL?) -> Void
-    func makeCoordinator() -> Coordinator { Coordinator(completion) }
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let controller = picker.export.map { UIDocumentPickerViewController(forExporting: [$0], asCopy: false) }
-            ?? UIDocumentPickerViewController(forOpeningContentTypes: [picker.kind?.contentType ?? .data], asCopy: false)
-        controller.allowsMultipleSelection = false; controller.delegate = context.coordinator
-        return controller
-    }
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let completion: (URL?) -> Void
-        init(_ completion: @escaping (URL?) -> Void) { self.completion = completion }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { completion(urls.first) }
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { completion(nil) }
-    }
-}
-#endif

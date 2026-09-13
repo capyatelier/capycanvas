@@ -91,6 +91,17 @@ The first covers real mouse/touch/pen bank and item dragging, cancellation,
 keyboard/context menus, tool pickers, drawers and action feedback. The second
 covers Save/Done/Cancel, durable workspace transitions, small windows, overflow,
 themes, all sizes, true 2× backing scale, fullscreen/status, footer and full Zen.
+Use `--title-bar-feedback` for both-theme mouse/touch/pen checks of selected-tool,
+open-drawer and action-press colors and the minimal Sketch default. The Android
+device runner also accepts this selector; use a dedicated test origin.
+Use `--title-bar-overflow` to reproduce the menu-label region collapsing as the
+window narrows, then drag its hidden items with mouse, touch and pen at every
+bar size. It checks real hit targets above the component bank, stable item IDs,
+collapsed drop destinations, cancellation and workspace undo/redo.
+Use `--menu-labels` for the fixed-width growth regression: add bank items after
+Menu Labels in the left region, verify that the labels compact inside the same
+item, and drag its still-visible body/grip and following neighbors. This runs
+mouse/touch/pen in both themes at all sizes without removing Capy.
 They can also run through `node apps/layer-web/test.mjs` against a running
 development server. See the [acceptance record](title-bar-web-acceptance.md) for
 captures, shared tests, existing regressions and device limitations.

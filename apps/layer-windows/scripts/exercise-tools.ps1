@@ -67,11 +67,12 @@ function Select-Tool([string]$Id){
     } "Tool did not activate: $Id"
 }
 function Check-Projection {
-    $state=(Model).state
-    # The shared snapshot can precede XAML publication. Reacquire controls while
-    # waiting: rebuilding a tool schema retires the old elements with the same IDs.
+    # Both the snapshot and XAML can advance while asynchronous raster work settles.
+    # Reacquire both: an old snapshot may describe a superseded transform schema.
     Wait-Until {
         try {
+            $state=(Model).state
+            if(!$state){return $false}
             foreach($set in @(@('groups','tool-group-'),@('subtools','tool-subtool-'))){
                 $items=@($state.tool_set.($set[0]))
                 for($i=0;$i -lt $items.Count;$i++){

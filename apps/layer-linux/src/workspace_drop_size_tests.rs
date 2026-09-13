@@ -109,7 +109,9 @@ fn native_workspace_drop_sizes() {
                         floating.width = width;
                         floating.height = Some(source_height);
                     }
-                    w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+                    w.dispatch(UiAction::RestoreWorkspace {
+                        workspace: Box::new(fixture),
+                    });
                     pump(250);
                     let source = w
                         .resolved()

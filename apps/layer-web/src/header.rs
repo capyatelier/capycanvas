@@ -1,6 +1,8 @@
 //! Browser measurements and capture feed the same title-bar policy as GTK.
 use super::*;
-use layer_ui::{HeaderDrag, HeaderDragSource, HeaderItem, HeaderMetric, HeaderSize, Platform};
+use layer_ui::{
+    HeaderDrag, HeaderDragSource, HeaderDragStart, HeaderItem, HeaderMetric, HeaderSize, Platform,
+};
 use serde_json::json;
 
 #[derive(Deserialize)]
@@ -26,6 +28,7 @@ impl WebApp {
                         let (enabled, selected) = layer_ui::tool_state(state, control);
                         (enabled, selected, layer_ui::tool_choice(control).icon)
                     }
+                    HeaderItem::Capy => (true, state.workspace.zen_mode, ""),
                     _ => (true, false, ""),
                 };
                 json!({"id":entry.id, "label":entry.item.label(), "enabled":enabled,
@@ -70,7 +73,16 @@ impl WebApp {
         let model = state.workspace.layout.header.projected_for(Platform::Web);
         let geometry = model.resolve(q.width, q.insets, &q.metrics, true);
         self.header_drag = HeaderDrag::new(
-            &model, q.source, geometry, q.metrics, q.width, q.insets, q.press, q.grab,
+            &model,
+            HeaderDragStart {
+                source: q.source,
+                geometry,
+                metrics: q.metrics,
+                width: q.width,
+                insets: q.insets,
+                press: q.press,
+                grab: q.grab,
+            },
         );
         Ok(self.header_drag.is_some())
     }

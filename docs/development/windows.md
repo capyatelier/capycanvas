@@ -335,11 +335,13 @@ Save As, canceled pickers, Cancel/Discard close decisions, retained preferences,
 and durable reopen with identical exported pixels. It also checks failure in Zen
 mode: File remains accessible without changing the saved Zen preference. A
 complete pen stroke and an unfinished tail are admitted during failed recovery;
-the saved/reopened drawing must contain only the complete stroke.
+both unrendered contacts are canceled, and the saved/reopened drawing must match
+the completed raster edits from before removal.
 
-When reconstruction fails, painting stops and the existing drawing remains
-saveable. Completed admitted strokes are retained; an unfinished stroke is
-canceled. Document/settings services stay alive until an approved close, and
+When reconstruction fails, painting stops and completed host-backed raster edits
+remain saveable. Queued and unfinished contacts are canceled; without a renderer,
+raw pointer samples cannot produce raster pixels. Document/settings services
+stay alive until an approved close, and
 GPU-dependent commands are disabled. An accepted save can finish; a PNG export
 that has not captured its image is canceled. Reopen the saved drawing in a new
 window to resume painting.

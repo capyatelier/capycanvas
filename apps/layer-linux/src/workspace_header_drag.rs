@@ -1,6 +1,7 @@
 //! Native capture and presentation for the shared window-bar drag policy.
 //! Widgets stay parented and the session stays unchanged until release.
 use super::*;
+use layer_ui::HeaderDragStart;
 
 struct Visual {
     widget: gtk::Widget,
@@ -117,13 +118,15 @@ impl Header {
         let metrics = self.metrics(model.size);
         let Some(mut policy) = HeaderDrag::new(
             &model,
-            source,
-            self.geometry.borrow().clone(),
-            metrics.clone(),
-            width,
-            insets,
-            press,
-            held.bounds,
+            HeaderDragStart {
+                source,
+                geometry: self.geometry.borrow().clone(),
+                metrics: metrics.clone(),
+                width,
+                insets,
+                press,
+                grab: held.bounds,
+            },
         ) else {
             return false;
         };

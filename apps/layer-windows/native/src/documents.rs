@@ -971,45 +971,41 @@ mod tests {
     }
 
     #[test]
-    fn suspended_renderer_saves_admitted_ink_and_keeps_close_decisions() {
-        use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+    fn suspended_renderer_saves_committed_raster_and_keeps_close_decisions() {
+        use layer_core::color::PixelDescriptor;
+        use layer_core::raster::{
+            RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey,
+        };
         let mut f = Fixture::new();
-        f.host.resize(512, 512, 1.).unwrap();
-        let view = f.host.session.state().camera.revision;
-        // This host has no GPU at any point; queue pressure must remain CPU-only.
-        for index in 0..8200 {
-            let phase = if index == 0 {
-                PenPhase::Down
-            } else if index == 8197 {
-                PenPhase::Up
-            } else if index == 8198 {
-                PenPhase::Down
-            } else {
-                PenPhase::Move
-            };
-            f.host
-                .retire_pointer_event(
-                    PenEvent {
-                        device_id: 1,
-                        sequence: index + 1,
-                        timestamp_ns: index * 1_000_000,
-                        view_revision: view,
-                        surface_position: layer_core::Point { x: 256., y: 256. },
-                        pressure: 0.5,
-                        tilt_radians: [0.; 2],
-                        twist_radians: 0.,
-                        distance: 0.,
-                        phase,
-                        tool: ToolKind::Pen,
-                        flags: SampleFlags::PRIMARY,
-                    },
-                    layer_ui::PointerButton::Primary,
-                )
-                .unwrap();
-        }
+        let mut project = layer_ui::new_drawing(256, 256).unwrap();
+        let bytes = [27, 89, 143, 255].repeat(256 * 256);
+        let tile =
+            RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap());
+        project.document.layers[0].raster = RasterRevision::backed(RasterData {
+            tiles: std::collections::BTreeMap::from([(
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [0, 0],
+                },
+                tile,
+            )]),
+            watercolor: None,
+        });
+        // Completed host-backed pixels stay saveable with no GPU at any point.
+        // Actual admitted pointer batches are covered by the native loss fixture.
+        f.host.session =
+            UiSession::from_project(Renderer(None), project, None, [256, 256]).unwrap();
+        f.host.session.set_platform(Platform::Windows);
+        f.host.session.set_document_replacement(true);
+        f.host.session.mark_recovered();
         f.host.suspend_renderer().unwrap();
         f.service.renderer_unavailable(&mut f.host).unwrap();
-        assert_eq!(f.host.session.engine().document().strokes().count(), 1);
+        assert!(
+            !f.host.session.engine().document().layers[0]
+                .raster
+                .is_empty(),
+            "suspension must retain completed raster edits"
+        );
         assert!(f.host.session.state().document_file.modified);
         assert!(f.host.session.command(CommandId::SaveDocumentAs).enabled);
         assert!(!f.host.session.command(CommandId::ExportDocument).enabled);
@@ -1035,8 +1031,28 @@ mod tests {
             "only durable completion clears dirty"
         );
         f.finish();
-        let project = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
-        assert_eq!(project.document.layers, source.layers);
+        let project = Project::read(File::open(&path).unwrap(), Default::default()).unwrap();
+        let mut expected = Vec::new();
+        Project {
+            document: source,
+            assets: Default::default(),
+        }
+        .write(&mut expected)
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        let saved = project.document.layers[0].raster.wait_data().unwrap();
+        assert_eq!(
+            saved
+                .tiles
+                .values()
+                .next()
+                .unwrap()
+                .wait_backing()
+                .unwrap()
+                .decode()
+                .unwrap(),
+            bytes
+        );
         assert!(!f.host.session.state().document_file.modified);
         f.act(DocumentAction::Close);
         assert!(f.host.session.state().document_file.close_ready);

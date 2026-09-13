@@ -1,8 +1,7 @@
 use super::*;
 use std::{
     future::Future,
-    sync::Arc,
-    task::{Context, Wake, Waker},
+    task::{Context, Waker},
     time::{Duration, Instant},
 };
 
@@ -530,7 +529,7 @@ fn photographer_size_upgrade_preserves_brush_edits_and_customized_layouts() {
             }
             let content = ItemContent::Workspace {
                 history,
-                baseline: previous,
+                baseline: Box::new(previous),
                 origin: None,
             };
             let metadata = stored.entity.metadata.clone();
@@ -573,10 +572,10 @@ fn photographer_size_upgrade_preserves_brush_edits_and_customized_layouts() {
                     panic!("Expected workspace");
                 };
                 assert_eq!(
-                    baseline,
+                    baseline.as_ref(),
                     &WorkspacePreset::Photographer.layout(Platform::Gtk)
                 );
-                assert_eq!(history.layout(), baseline);
+                assert_eq!(history.layout(), baseline.as_ref());
                 assert_eq!(history.revisions.len(), 1);
                 assert_eq!(history.generation, 0);
             }
@@ -612,7 +611,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
             "Default",
             "The standard editor layout.",
             ReusableContent::Layout {
-                layout: DockLayout::for_platform(Platform::Gtk),
+                layout: Box::new(DockLayout::for_platform(Platform::Gtk)),
             },
             400,
         );
@@ -718,7 +717,7 @@ fn legacy_scenes_migrate_atomically_once_with_fallback_aliases_and_original_base
             else {
                 panic!()
             };
-            assert_eq!(baseline, workspace.layout);
+            assert_eq!(*baseline, workspace.layout);
             assert!(origin.is_none());
             // A later legacy file cannot replace acknowledged database content.
             let mut stale = scenes.clone();
@@ -1242,7 +1241,7 @@ fn manager_recovery_library_and_backup_round_trip() {
         m.update_reusable(
             &template,
             ReusableContent::Layout {
-                layout: changed.clone(),
+                layout: Box::new(changed.clone()),
             },
             5_000,
         )
@@ -1296,7 +1295,7 @@ fn manager_recovery_library_and_backup_round_trip() {
         let ItemContent::Workspace { baseline, .. } = &restored.entity.content else {
             panic!()
         };
-        assert_eq!(baseline, &original);
+        assert_eq!(baseline.as_ref(), &original);
         m.release(&restored).await;
         m.restore_deleted(&template, 11_000).await.unwrap();
         let template_record = m.load(&template).await.unwrap();
@@ -1502,10 +1501,6 @@ fn failed_outgoing_save_prevents_switch_and_retains_accepted_edits_for_retry() {
         m.close().await.unwrap();
     });
 }
-struct Noop;
-impl Wake for Noop {
-    fn wake(self: Arc<Self>) {}
-}
 #[test]
 fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     let f = Fixture::new();
@@ -1516,8 +1511,7 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     let (open, gate) = async_channel::bounded(1);
     *m.store.gate.borrow_mut() = Some(gate);
     let mut saving = Box::pin(m.save_once());
-    let waker = Waker::from(Arc::new(Noop));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     let deadline = Instant::now() + Duration::from_secs(5);
     while !m.store.waiting.get() {
         assert!(saving.as_mut().poll(&mut context).is_pending());
@@ -1678,45 +1672,49 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
 #[test]
 fn illustrator_column_upgrade_only_changes_untouched_builtin_layouts() {
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk);
-    let mut previous = layout.clone();
-    previous.column_settings.clear();
-    for customized in [false, true] {
-        let mut history = layer_ui::LayoutHistory::new(&previous);
-        if customized {
-            let mut edited = previous.clone();
-            edited.bands[0].extent += 25.;
-            history.append(&edited, "Resize toolbar");
+    for stacks in [false, true] {
+        let mut previous = layer_ui::DockLayout::for_platform(Platform::Gtk);
+        if stacks {
+            previous.column_stacks = layout.column_stacks.clone();
         }
-        let mut entity = Entity::workspace(
-            "My Illustration",
-            WorkspaceCapture {
-                history,
-                working: layer_ui::WorkspacePreset::Illustrator.working_state(),
-            },
-            previous.clone(),
-            None,
-            1000,
-        );
-        entity.id = DEFAULT_WORKSPACES[1].0.into();
-        entity.metadata.builtin = true;
-        let updated = migration::updated_illustrator_default(&entity, Platform::Gtk);
-        if customized {
-            assert!(updated.is_none());
-        } else {
-            let ItemContent::Workspace {
-                history, baseline, ..
-            } = updated.unwrap()
-            else {
-                panic!("workspace")
-            };
-            assert_eq!(baseline, layout);
-            assert_eq!(history.layout(), &layout);
-            entity.content = ItemContent::Workspace {
-                history,
-                baseline,
-                origin: None,
-            };
-            assert!(migration::updated_illustrator_default(&entity, Platform::Gtk).is_none());
+        for customized in [false, true] {
+            let mut history = layer_ui::LayoutHistory::new(&previous);
+            if customized {
+                let mut edited = previous.clone();
+                edited.bands[0].extent += 25.;
+                history.append(&edited, "Resize toolbar");
+            }
+            let mut entity = Entity::workspace(
+                "My Illustration",
+                WorkspaceCapture {
+                    history,
+                    working: layer_ui::WorkspacePreset::Illustrator.working_state(),
+                },
+                previous.clone(),
+                None,
+                1000,
+            );
+            entity.id = DEFAULT_WORKSPACES[1].0.into();
+            entity.metadata.builtin = true;
+            let updated = migration::updated_illustrator_default(&entity, Platform::Gtk);
+            if customized {
+                assert!(updated.is_none());
+            } else {
+                let ItemContent::Workspace {
+                    history, baseline, ..
+                } = updated.unwrap()
+                else {
+                    panic!("workspace")
+                };
+                assert_eq!(baseline.as_ref(), &layout);
+                assert_eq!(history.layout(), &layout);
+                entity.content = ItemContent::Workspace {
+                    history,
+                    baseline,
+                    origin: None,
+                };
+                assert!(migration::updated_illustrator_default(&entity, Platform::Gtk).is_none());
+            }
         }
     }
 }

@@ -178,7 +178,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_history.gesture_start().is_some()
             || self.workspace_drag.is_some()
             || self.divider_drag.is_some()
-            || self.column_panel_drag.is_some()
             || self.floating_resize.is_some()
             || self.interaction.pointer.is_some()
             || self.navigator_drag.is_some()
@@ -302,6 +301,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let bottom_inset = self.state.workspace.layout.bottom_inset;
         let header_presentation = self.state.workspace.layout.header_presentation.clone();
         self.state.workspace.layout = durable_layout(layout);
+        self.state.workspace.layout.open_default_columns(self.state.platform);
         self.state.workspace.zen_mode = false;
         self.state.workspace.layout.titlebar_insets = insets;
         self.state.workspace.layout.bottom_inset = bottom_inset;
@@ -355,6 +355,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             layout: capture.history.layout().clone(),
             zen_mode: working.zen_mode,
         };
+        self.state.workspace.layout.open_default_columns(self.state.platform);
         self.state.workspace.layout.titlebar_insets = titlebar_insets;
         self.state.workspace.layout.bottom_inset = bottom_inset;
         self.state.workspace.layout.header_presentation = header_presentation;
@@ -417,6 +418,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         layout.validate()?;
         let before = self.state.workspace.clone();
         self.state.workspace.layout = durable_layout(&layout);
+        self.state.workspace.layout.open_default_columns(self.state.platform);
         self.state.workspace.layout.titlebar_insets = before.layout.titlebar_insets;
         self.state.workspace.layout.bottom_inset = before.layout.bottom_inset;
         self.state.workspace.layout.header_presentation = before.layout.header_presentation.clone();

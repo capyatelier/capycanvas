@@ -129,16 +129,11 @@ impl App {
             self.gpu_failure = Default::default();
             let lost = self.gpu_failure.clone();
             device.set_device_lost_callback(move |reason, message| {
-                lost.lock()
-                    .unwrap()
-                    .get_or_insert_with(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
+                lost.get_or_init(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
             });
             let errors = self.gpu_failure.clone();
             device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
-                errors
-                    .lock()
-                    .unwrap()
-                    .get_or_insert_with(|| error.to_string());
+                errors.get_or_init(|| error.to_string());
             }));
             let renderer = WgpuRasterizer::from_wgpu_staged_cached(
                 adapter,
@@ -208,10 +203,7 @@ impl App {
             // Device loss callbacks may be pending when a queued thumbnail asks
             // for resources. Deliver them before either preview or frame work.
             if let Err(error) = gpu.device().poll(wgpu::PollType::Poll) {
-                self.gpu_failure
-                    .lock()
-                    .unwrap()
-                    .get_or_insert_with(|| error.to_string());
+                self.gpu_failure.get_or_init(|| error.to_string());
             }
         }
         if let Err(error) = self.check_gpu() {
@@ -226,9 +218,7 @@ impl App {
     }
     fn check_gpu(&self) -> Result<(), String> {
         self.gpu_failure
-            .lock()
-            .unwrap()
-            .as_ref()
+            .get()
             .map_or(Ok(()), |error| Err(error.clone()))
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
@@ -333,8 +323,9 @@ impl App {
         }
         self.blank_presented = true;
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
-        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-        self.frame_cost[4] = elapsed() - self.frame_cost[..4].iter().sum::<i64>();
+        // Poll once before resource use, not again after submission. The next
+        // frame/readback worker services completion; initial surface readiness
+        // has its own poll while its first finished buffer is awaited.
         self.check_gpu()?;
         Ok(self.host.dirty)
     }
@@ -613,8 +604,12 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     presentation: jlong,
 ) -> jboolean {
     let app = unsafe { app(handle) };
+    let clock = app.profiling.then(std::time::Instant::now);
     app.observe_gpu_failure(true);
-    match app.render(now.max(0) as u64, presentation.max(now).max(0) as u64) {
+    let poll = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
+    let result = app.render(now.max(0) as u64, presentation.max(now).max(0) as u64);
+    app.frame_cost[4] = poll;
+    match result {
         Ok(wake) => wake as jboolean,
         Err(e) => {
             if !app.host.session.rendering_suspended() {

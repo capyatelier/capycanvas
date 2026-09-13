@@ -120,9 +120,58 @@ Three runs include concurrent private recovery writes on the new backend. Tests
 wake the tablet before Activity launch and keep the screen on; interrupted/sleeping
 runs were rejected. This is not a dense-layer or total mobile memory qualification.
 
+Android's release native/debug APK builds and lint passed with JDK 25. The
+private JNI acceptance test passed exact indexed tile hashes and full PNGs after
+save/reopen, active-contact save, undo/redo, controlled device destruction and
+Restart Canvas, stale-device candidate rejection, corrupt archive rejection,
+Activity/surface recreation, and recovery through the production dialog. Native
+job tests suppress automatic SAF pickup because the test owns each descriptor;
+the system file picker is tested independently.
+
+The first merged tablet batch showed a +0.408 ms median frame-creation p99
+increase. Removing per-call failure mutexes (one-time publication instead) and
+duplicate device polling reduced that tail. Callbacks are now polled once before
+frame resource use; initial surface readiness and file readbacks still drive their
+own completion. The optimized build passes the complete raster/device-loss and
+SAF file-picker journeys again; the merged kernel-lock exclusivity test also passes.
+
+Final optimized runs measured 2322 display callbacks: frame-creation p95 was
+2.330/1.961/1.853 ms and p99 2.719/2.394/2.133 ms; maximum 3.688 ms.
+Concurrent recovery publication took 13.45/9.03/9.61 ms on the file worker. Native
+host render/present submission p99 was 5.656/4.961/4.624 ms.
+
+The two baseline batches measured 4625 callbacks. Old frame-creation p95 ranged
+1.750–2.286 ms and p99 1.931–3.107 ms. Median p95 across the baseline batches was
+1.867 ms versus 1.961 ms in the final batch (+0.094 ms); median p99 was 2.242
+versus 2.394 ms (+0.152 ms). Both differences are inside the established 0.20 ms
+noise allowance. Final frames remained below 8.33 ms, including contact completion
+and concurrent new recovery work. Host render/present p99 remains separately
+reported, with scheduling/presentation costs beyond native paint creation.
+These measurements qualify the stated workload, not every brush or device.
+Local data is in `android-before-frame-times.json`,
+`android-before-repeat-frame-times.json`, `android-merged-frame-times.json`, and
+`android-optimized-frame-times.json` under `artifacts/color-m1/`; final complete
+journeys are in `android-optimized-tests.txt`, `android-saf-final.txt`, and
+`android-merged-tests.txt`.
+
+Reproduce the native build using `ANDROID_HOME`, JDK 25 and:
+
+```sh
+cd apps/layer-android
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug \
+  -PcapyAbi=arm64-v8a -PcapyApplicationId=art.capycanvas.rastertest
+```
+
+Install both APKs in this isolated application ID and run AndroidJUnitRunner
+with `AndroidRasterTest`, `AndroidWorkspaceOwnershipTest`,
+`AndroidRasterBenchmarkTest`, and
+`AndroidFeatureParityTest#documentSafSaveReopenAndExportPreservePaint`.
+Benchmark reports go to that app's external files directory. Lint passed with
+JDK 25; the initially selected newer JDK crashed the upstream opt-in detector.
+
 ## Shared regression checks after the ports
 
-Release checks passed: 45 core, 49 engine, 356 UI/session, 25 native host and
+Release checks passed: 45 core, 49 engine, 366 UI/session, 25 native host and
 86 native workspace tests. The hardware renderer passed 123 library tests
 (18 separate hardware workloads remain ignored) and all three GPU project tests.
 GTK's atomic-write failure/PNG test, both recovery failure/cancellation tests,
@@ -144,3 +193,13 @@ lifecycle and rendering performance were not qualified here. Comments at the
 Apple renderer-assignment/recovery barriers and Windows retirement/document
 paths identify deprecated assumptions and the current APIs to use. Existing
 Windows `replace_renderer` and shared project calls are explicitly retained.
+
+The final integration merges main through `bc5615e`. Its stopgap browser
+compression/encoding on the event loop was replaced by the qualified dedicated
+workers, and the parallel Android lock fixes were consolidated with EINTR retry.
+Healthy renderer replacement retains main's bounded active-contact reconstruction;
+explicit suspension still discards unsubmitted input. Replacement while a prepared
+frame awaits raster dependencies now fails without changing either renderer or
+consuming more input; the engine test verifies successful retry after submission.
+The final packaged Web raster/recovery journey, merged GTK file workflow, and
+all seven merged native GTK pacing workloads pass.

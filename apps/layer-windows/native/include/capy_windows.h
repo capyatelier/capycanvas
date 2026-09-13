@@ -37,7 +37,6 @@ __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
 /* Device loss is observed by the render owner. A poisoned host cannot recover. */
 __declspec(dllimport) bool capy_device_lost(const CapyHost*);
 /* CPU retirement after input admission stops; keep document services alive. */
-__declspec(dllimport) int32_t capy_retire_pointer(CapyHost*, const CapyPointer*, size_t count);
 __declspec(dllimport) int32_t capy_suspend_renderer(CapyHost*);
 /* UI-thread replacement: worker parked, no acquired image, old swap chain detached. */
 __declspec(dllimport) int32_t capy_reset_surface(CapyHost*, void* panel);

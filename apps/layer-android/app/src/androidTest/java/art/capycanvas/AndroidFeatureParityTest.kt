@@ -18,6 +18,17 @@ import java.util.concurrent.TimeUnit
 
 /** Device coverage for native projections of the evolving shared GTK/core models. */
 class AndroidFeatureParityTest {
+    companion object {
+        @JvmStatic @BeforeClass fun isolateStorage() {
+            val root = java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,"parity-${System.nanoTime()}")
+            CanvasHost.workspaceDirectoryForTest = java.io.File(root,"workspace").absolutePath
+            RecoveryController.directoryForTest = java.io.File(root,"recovery")
+        }
+        @JvmStatic @AfterClass fun restoreStorage() {
+            CanvasHost.workspaceDirectoryForTest = null
+            RecoveryController.directoryForTest = null
+        }
+    }
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private val host get() = compose.activity.host
     private fun state() = host.snapshot!!.getJSONObject("state")
@@ -32,6 +43,7 @@ class AndroidFeatureParityTest {
         compose.activity.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
         assertNull(host.failure)
+        compose.waitUntil(60_000) { host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
         savedWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         savedSettings = JSONObject(state().getJSONObject("settings").toString())
         val native = Native.create(false)
@@ -227,7 +239,8 @@ class AndroidFeatureParityTest {
         compose.waitUntil(10_000) { state().getJSONObject("customization").objectOrNull("drawer") == null }
         assertEquals(1, state().getJSONObject("customization").array("column_drawers").length())
         shown("column-drawer-$column")
-        compose.onNodeWithTag("expand-column-$column").performTouchInput { click() }
+        compose.onNodeWithTag("expand-column-$column").assertDoesNotExist()
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to column, "collapsed" to false)))
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().none { it.getInt("id") == column } }
         compose.onNodeWithTag("tile-toolbar-$pen").assertIsDisplayed()
     }

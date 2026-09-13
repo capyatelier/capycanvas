@@ -414,7 +414,7 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     else {
         panic!()
     };
-    let original = baseline.clone();
+    let original = baseline.as_ref().clone();
     let mut first = original.clone();
     first.bands[0].extent += 20.;
     history.append(&first, "First");
@@ -476,7 +476,7 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     else {
         panic!()
     };
-    assert_eq!(baseline, &original);
+    assert_eq!(baseline.as_ref(), &original);
     assert_eq!(history.layout(), &second);
     assert_eq!(
         (&history.current, &history.undo, &history.redo),

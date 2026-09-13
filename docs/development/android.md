@@ -117,7 +117,12 @@ input in [`WorkspaceInput.kt`](../../apps/layer-android/app/src/main/java/art/ca
 and [`WorkspaceRows.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceRows.kt),
 then host publication in [`CanvasHost.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/CanvasHost.kt).
 Shared drag/drop policy and history live in `crates/layer-ui`; workspace storage
-and ownership live in `crates/layer-workspace`.
+and ownership live in `crates/layer-workspace`. Android uses Bionic `flock` for
+workspace liveness because `std::fs::File::try_lock` is unsupported on this
+target. The file stays open for the claim and releases its lock on close;
+database owner/epoch/fence validation still governs writes.
+`AndroidWorkspaceOwnershipTest` verifies independent native sessions cannot
+take an active workspace and can acquire it after its owner closes.
 
 Interaction tests dispatch typed mouse/touch/stylus `MotionEvent`s through native
 views; `AndroidInteractionTest` optionally accepts `-e systemInput true` where OS

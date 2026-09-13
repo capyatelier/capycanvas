@@ -70,8 +70,8 @@ pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,
 };
 pub use layout::{
-    Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, ColumnGroupPanel,
-    ColumnIcon, ColumnMode, ColumnPanelHeight, ColumnSettings, Divider, DockBand, DockItem,
+    Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,
+    ColumnIcon, ColumnStack, Divider, DockBand, DockItem,
     DockLayout, DockNode, DockTarget, Edge, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
     PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
@@ -970,7 +970,7 @@ pub enum UiAction {
         tile: u32,
     },
     RestoreWorkspace {
-        workspace: WorkspaceState,
+        workspace: Box<WorkspaceState>,
     },
     Invoke {
         command: CommandId,
@@ -1048,13 +1048,6 @@ pub enum UiAction {
     /// Divider center in logical workspace units, for mouse/touch or keyboard.
     ResizeDock {
         id: u32,
-        position: [f32; 2],
-        viewport: [f32; 2],
-    },
-    ResizeColumnPanel {
-        column: u32,
-        after: Option<Panel>,
-        phase: ContactPhase,
         position: [f32; 2],
         viewport: [f32; 2],
     },
@@ -1151,6 +1144,23 @@ mod icon_tests {
             assert_ne!(filter.icon.as_ref(), "adjustments", "{} must not use the picker icon", filter.program.label);
             assert!(meanings.insert(filter.icon.as_ref()), "Different filters need recognizable identities");
         }
+    }
+
+    #[test]
+    fn workspace_restore_action_preserves_the_host_json_contract() {
+        let workspace = WorkspaceState::default();
+        let expected = serde_json::json!({
+            "type": "restore_workspace",
+            "workspace": workspace,
+        });
+        let action = UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        };
+        assert_eq!(serde_json::to_value(&action).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<UiAction>(expected).unwrap(),
+            action
+        );
     }
 
     #[test]

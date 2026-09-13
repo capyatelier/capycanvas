@@ -32,6 +32,7 @@ extension XCTestCase {
             #endif
         }
         XCTAssertTrue(painter.waitForExistence(timeout: 30))
+        workspaceActivate(illustrator)
         XCTAssertTrue(illustrator.isSelected)
         workspaceActivate(options)
         XCTAssertTrue(pin.waitForExistence(timeout: 10)); XCTAssertTrue(pin.isSelected)

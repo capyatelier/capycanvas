@@ -1,5 +1,21 @@
 use super::*;
 
+fn normalize_paint_revisions(app: &App, snapshot: &mut Value) {
+    // Each publication must match its own live state before comparing two
+    // sessions, whose immutable raster identities are independently allocated.
+    assert_eq!(snapshot["state"], app.state());
+    let state = &mut snapshot["state"];
+    for layer in state["layers"].as_array_mut().unwrap() {
+        assert!(layer["paint_revision"].is_u64());
+        layer["paint_revision"] = json!(0);
+    }
+    let editing = &mut state["layer_tools"]["editing_layer"];
+    if editing.is_object() {
+        assert!(editing["paint_revision"].is_u64());
+        editing["paint_revision"] = json!(0);
+    }
+}
+
 // Separate sessions keep the compatibility and incremental acknowledgement
 // policies independent while identical actions establish the expected models.
 #[test]
@@ -20,8 +36,10 @@ fn incremental_apple_abi_moves_retained_models_and_preserves_completion() {
             app.action(value);
         };
         let full = || {
-            let (old, _) = publish(&legacy, 3);
+            let (mut old, _) = publish(&legacy, 3);
             let (mut next, _) = publish(&app, 5);
+            normalize_paint_revisions(&legacy, &mut old);
+            normalize_paint_revisions(&app, &mut next);
             assert!(next["workspace_update"].is_object());
             let motion = next
                 .as_object_mut()
@@ -128,8 +146,10 @@ fn layout_apple_abi_resizes_retained_content_and_matches_legacy_geometry() {
                         "target":{"kind":"float","position":[600,300]},"viewport":[1200,900]}));
                 }
                 let full = || {
-                    let old = publish(&legacy, 3).unwrap().0;
+                    let mut old = publish(&legacy, 3).unwrap().0;
                     let mut next = publish(&app, 7).unwrap().0;
+                    normalize_paint_revisions(&legacy, &mut old);
+                    normalize_paint_revisions(&app, &mut next);
                     let update = next
                         .as_object_mut()
                         .unwrap()

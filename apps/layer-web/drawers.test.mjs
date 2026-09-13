@@ -153,11 +153,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       for(const [group,panel] of [[41,'brushes'],[43,'layers']]) {
         await customize({type:'set_column_collapsed',group,collapsed:true});
         const expandSelector=`.collapsed-column[data-column="${group}"] .column-expand`;
-        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)}).querySelector('svg').dataset.asset`),
-          group===41?'chevron-double-right':'chevron-double-left','Shared expand chevrons point toward the canvas');
-        const expandBounds=await rect(expandSelector),glyphBounds=await rect(`${expandSelector} .column-expand-glyph`);
-        assert.ok(Math.abs(glyphBounds.x+glyphBounds.width/2-expandBounds.x-expandBounds.width/2)<.01,'Expand icon is horizontally centered');
-        assert.ok(Math.abs(glyphBounds.y+glyphBounds.height/2-expandBounds.y-expandBounds.height/2)<.01,'Expand icon is vertically centered');
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)})`),null,'Expand caret is retired');
         const selector=`.collapsed-column [data-panel="${panel}"]`;
         assert.equal((await style(selector)).background,'rgba(0, 0, 0, 0)','Closed buttons have no selection tint');
         const b=await rect(selector);
@@ -176,8 +172,8 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         assert.equal((await style(alternateSelector)).selected,'true','Sidebar selection follows the drawer tab');
         await check(alternateSelector,group,`${theme}-switched-column-${group}`);
         await click(alternateSelector);assert.equal((await style(alternateSelector)).background,'rgba(0, 0, 0, 0)');
-        await click(expandSelector);
-        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)})`),null,'Expand button still opens the column');
+        await customize({type:'set_column_collapsed',group,collapsed:false});
+        assert.equal(await evaluate(`document.querySelector('.collapsed-column[data-column="${group}"]')`),null,'Shared expand action opens the column');
         await customize({type:'set_column_collapsed',group,collapsed:true});
       }
       for(const edge of ['top','bottom','left','right']) {
@@ -208,19 +204,18 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       await send({type:'set_theme',theme});await send({type:'restore_workspace',workspace:divided});
       await customize({type:'set_column_collapsed',group:46,collapsed:true});
       const a=await rect('.column-tab[data-panel="brushes"]'),b=await rect('.column-tab[data-panel="sizes"]');
-      const expand=await rect('.collapsed-column[data-column="46"] .column-expand');
-      assert.ok(Math.abs(a.top-expand.bottom-6)<.01,'Leading divider only retains the space below its line');
-      assert.ok(Math.abs((await rect('.column-divider')).top-expand.bottom)<.01,'Leading line touches the expand button');
+      const strip=await rect('.collapsed-column[data-column="46"]');
+      assert.ok(Math.abs(a.top-strip.top-6)<.01,'First tile retains the standard top padding');
+      assert.equal(await evaluate('document.querySelectorAll(".collapsed-column .column-divider").length'),1,'Only the divider between groups is painted');
       assert.ok(Math.abs(b.top-a.bottom-12)<.01,'Collapsed groups use the toolbar divider plus its two gaps');
       const line=async(selector,horizontal,name)=>{
         const r=await rect(selector),p=[r.x+r.width/2,r.y+r.height/2];
-        assert.ok(Math.abs((horizontal?r.height:r.width)-(name==='column-divider'?1:8))<.01,'Only the leading divider omits its top padding');
+        assert.ok(Math.abs((horizontal?r.height:r.width)-8)<.01,'Dividers retain their standard slot');
         const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${theme}-${name}.png`,Buffer.from(shot.data,'base64'));
         const colors=await sample(shot.data,[p,horizontal?[p[0],p[1]+2]:[p[0]+2,p[1]]]);
         assert.notDeepEqual(colors[0],colors[1],`${theme} ${name}: separator line is visible`);
       };
       await line('.column-divider',true,'column-divider');
-      await line('.column-divider ~ .column-divider',true,'column-group-divider');
       await line('.toolbar-controls .tile-divider',false,'toolbar-divider-horizontal');
       await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge:'right',outer:true}});
       await line('.toolbar-controls .tile-divider',true,'toolbar-divider-vertical');

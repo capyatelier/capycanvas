@@ -3,6 +3,8 @@
 use crate::color::PixelDescriptor;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     sync::{
@@ -15,7 +17,7 @@ pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 4) as usize;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
-const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_PUBLICATION: AtomicU64 = AtomicU64::new(1);
 
 /// Awaitable single publication, with errors preserved for every consumer.
@@ -48,23 +50,22 @@ impl<T> Publication<T> {
     fn get(&self) -> Option<Result<Arc<T>, String>> {
         self.value.lock().ok()?.clone()
     }
+    #[cfg(target_arch = "wasm32")]
+    fn wait(&self) -> Result<Arc<T>, String> {
+        // Blocking would prevent WebGPU's map callbacks from publishing.
+        self.get().ok_or("Raster capture is still pending")?
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait(&self) -> Result<Arc<T>, String> {
         if let Some(value) = self.get() {
             return value;
         }
-        // Browser owners must yield and preflight their frame dependencies.
-        // Even a zero-duration Condvar wait uses unsupported Wasm OS clocks.
-        #[cfg(target_arch = "wasm32")]
-        return Err("Raster backing is pending; yield before retrying".into());
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let state = self.value.lock().map_err(|_| "Raster publication failed")?;
-            let (state, _) = self
-                .ready
-                .wait_timeout_while(state, CAPTURE_TIMEOUT, |v| v.is_none())
-                .map_err(|_| "Raster publication failed")?;
-            state.clone().ok_or("Raster capture did not complete")?
-        }
+        let state = self.value.lock().map_err(|_| "Raster publication failed")?;
+        let (state, _) = self
+            .ready
+            .wait_timeout_while(state, CAPTURE_TIMEOUT, |v| v.is_none())
+            .map_err(|_| "Raster publication failed")?;
+        state.clone().ok_or("Raster capture did not complete")?
     }
 }
 
@@ -264,17 +265,16 @@ impl RasterData {
     /// Validate topology without awaiting unrelated tile captures. Restoration
     /// checks each replacement's representation when it decodes that tile.
     pub fn validate_index(&self, extent: [u32; 2], mask: bool) -> Result<(), String> {
-        if let Some(w) = self.watercolor {
-            if mask
+        if let Some(w) = self.watercolor
+            && (mask
                 || ![w.wet_edge, w.burnt_edge, w.edge_width]
                     .into_iter()
                     .all(f32::is_finite)
                 || !(0.0..=1.0).contains(&w.wet_edge)
                 || !(0.0..=1.0).contains(&w.burnt_edge)
-                || !(1.0..=16.0).contains(&w.edge_width)
-            {
-                return Err("Invalid raster watercolor state".into());
-            }
+                || !(1.0..=16.0).contains(&w.edge_width))
+        {
+            return Err("Invalid raster watercolor state".into());
         }
         for key in self.tiles.keys() {
             if key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)

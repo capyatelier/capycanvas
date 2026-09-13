@@ -70,7 +70,9 @@ fn native_workspace_drag_edges() {
                         )
                         .unwrap();
                 }
-                w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+                w.dispatch(UiAction::RestoreWorkspace {
+                    workspace: Box::new(fixture),
+                });
                 pump(250);
                 if matches!(scenario, "drawer" | "icon") {
                     w.dispatch(UiAction::DoubleClickPanelHandle {

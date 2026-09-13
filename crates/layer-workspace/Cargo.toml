@@ -6,7 +6,7 @@ license.workspace = true
 description = "Shared workspace records, management policy and asynchronous persistence"
 
 [features]
-native = ["dep:rusqlite", "dep:async-channel"]
+native = ["dep:rusqlite", "dep:async-channel", "dep:libc"]
 
 [dependencies]
 layer-ui = { path = "../layer-ui" }
@@ -18,9 +18,9 @@ uuid = { version = "1", features = ["v4", "js"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"], optional = true }
 async-channel = { version = "2", optional = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+libc = { version = "0.2", optional = true }
+
 [dev-dependencies]
 pollster = "0.4"
 layer-host = { path = "../layer-host" }
-
-[target.'cfg(target_os = "android")'.dependencies]
-libc = "0.2"

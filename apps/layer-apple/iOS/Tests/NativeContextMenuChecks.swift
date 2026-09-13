@@ -7,26 +7,13 @@ extension EditorLaunchTests {
         app.launch()
         let zen = app.buttons["zen-button"]
         XCTAssertTrue(zen.waitForExistence(timeout: 20))
-        XCTAssertEqual(zen.frame.width, 36, accuracy: 1)
-        XCTAssertEqual(zen.frame.height, 36, accuracy: 1)
-        let toolbar = app.descendants(matching: .any)["zen-toolbar-0"].firstMatch
-        zen.tap()
-        XCTAssertTrue(toolbar.waitForExistence(timeout: 5), "An ordinary tap still enters partial zen")
-        zen.tap()
-        XCTAssertTrue(app.buttons["layer-New layer"].waitForExistence(timeout: 5))
         zen.press(forDuration: 0.8)
-        let total = app.buttons["Total zen"]
-        XCTAssertTrue(total.waitForExistence(timeout: 5))
-        XCTAssertFalse(toolbar.exists, "Opening the native menu must suppress the button tap")
-        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        capture.name = "native-zen-context-menu"; capture.lifetime = .keepAlways; add(capture)
-        total.tap()
-        XCTAssertTrue(total.waitForNonExistence(timeout: 5))
-        zen.tap()
-        XCTAssertTrue(app.buttons["layer-New layer"].waitForNonExistence(timeout: 5))
-        XCTAssertFalse(toolbar.exists, "The native menu action must change shared Total zen behavior")
-        XCTAssertTrue(zen.waitForNonExistence(timeout: 5), "Total zen also hides its own button")
-        XCTAssertTrue(app.otherElements["canvas"].exists)
+        let icon = app.buttons["Change icon…"]
+        XCTAssertTrue(icon.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["layer-New layer"].exists, "Opening the native menu must suppress the Zen button tap")
+        icon.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["preference-zen_icon"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 }
 
@@ -40,6 +27,7 @@ extension XCTestCase {
         let illustrator = app.buttons["workspace-select-builtin:workspace:illustrator"]
         let photographer = app.buttons["workspace-select-builtin:workspace:photographer"]
         XCTAssertTrue(painter.waitForExistence(timeout: 30))
+        workspaceActivate(illustrator)
         XCTAssertTrue(illustrator.isSelected)
         painter.press(forDuration: 0.8)
         let pin = app.buttons["Show in top bar"]

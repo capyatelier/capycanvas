@@ -122,11 +122,6 @@ pub unsafe extern "C" fn capy_apple_project_task(
     };
     app.perform(|app| {
         let session = &mut app.host.session;
-        // DEPRECATED for Save/Recovery: requiring an idle contact predates
-        // immutable raster snapshots. Use capture_project_save/recovery at the
-        // committed boundary and await tile backing only in the file worker.
-        // Keep the idle/stale-edit checks for document replacement and PNG.
-        session.require_document_idle()?;
         let epoch = session.state().document_file.epoch;
         let mut save_request = None;
         let payload = if opening == 0 {
@@ -158,6 +153,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 project: None,
             }
         } else if opening == 1 {
+            session.require_document_idle()?;
             let gpu = session
                 .engine()
                 .backend()

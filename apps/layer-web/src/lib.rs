@@ -381,7 +381,9 @@ impl WebApp {
         session.set_document_replacement(true);
         session
             .dispatch(UiAction::RestoreWorkspace {
-                workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Web),
+                workspace: Box::new(layer_ui::WorkspaceState::for_platform(
+                    layer_ui::Platform::Web,
+                )),
             })
             .map_err(js)?;
         Ok(Self {
