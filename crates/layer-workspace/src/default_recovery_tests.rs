@@ -130,7 +130,7 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn included_name_updates_allow_only_canonical_names_on_both_backends() {
+fn included_name_maintenance_defers_live_owners_and_keeps_rename_protection() {
     let mut f = Fixture::new(Platform::Gtk);
     for (id, preset) in DEFAULT_WORKSPACES {
         f.corrupt(id, |e| {
@@ -153,12 +153,45 @@ fn included_name_updates_allow_only_canonical_names_on_both_backends() {
                 }],
             )
             .unwrap();
-            let result = f.both(StoreRequest::Commit { batch });
-            if name == "Arbitrary rename" {
-                assert_eq!(result.unwrap_err().kind, ErrorKind::InvalidData);
-            } else {
-                result.unwrap();
-            }
+            assert_eq!(
+                f.both(StoreRequest::Commit { batch }).unwrap_err().kind,
+                ErrorKind::InvalidData
+            );
+        }
+        let maintain = |f: &mut Fixture, apply| {
+            let request = StoreRequest::Maintenance {
+                owner: None,
+                clear_older: false,
+                apply,
+            };
+            f.sqlite.handle(request.clone()).unwrap();
+            f.browser.execute(request, f.clock.now_ms()).unwrap();
+        };
+        maintain(&mut f, true);
+        assert_eq!(
+            f.claim(id).unwrap().entity.metadata.name,
+            saved.entity.metadata.name
+        );
+        f.both(StoreRequest::Release {
+            id: id.into(),
+            owner: f.owner.clone(),
+            fence: saved.claim.as_ref().unwrap().fence.to_string(),
+        })
+        .unwrap();
+        maintain(&mut f, false);
+        let StoreResponse::Entity(unchanged) =
+            f.both(StoreRequest::Load { id: id.into() }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(unchanged.entity.metadata.name, saved.entity.metadata.name);
+        maintain(&mut f, true);
+        if let StoreResponse::Entity(updated) =
+            f.both(StoreRequest::Load { id: id.into() }).unwrap()
+        {
+            assert!(updated.claim.is_none());
+        } else {
+            panic!();
         }
         let updated = f.claim(id).unwrap();
         assert_eq!(updated.entity.metadata.name, preset.name());

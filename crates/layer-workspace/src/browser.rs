@@ -452,7 +452,9 @@ impl BrowserDatabase {
                 report.database_bytes = self.encoded()?.len() as u64;
                 report.component_bytes = self.components.values().map(|v| v.len() as u64).sum();
                 if apply {
-                    for entity in plan.changed {
+                    for mut entity in plan.changed {
+                        entity.metadata =
+                            self.resolve_name(entity.metadata, &entity.id, NamePolicy::Unique)?;
                         let s = self.items.get_mut(&entity.id).unwrap();
                         let old = s.stored()?;
                         if old.entity.metadata != entity.metadata {
@@ -599,10 +601,7 @@ impl BrowserDatabase {
                     return Err(StoreError::conflict());
                 }
                 if let Some(m) = &w.metadata {
-                    if s.entity.metadata.builtin
-                        && m.name != s.entity.metadata.name
-                        && crate::model::default_workspace_name(&w.id) != Some(m.name.as_str())
-                    {
+                    if s.entity.metadata.builtin && m.name != s.entity.metadata.name {
                         return Err(StoreError::invalid(
                             "Included workspaces cannot be renamed.",
                         ));

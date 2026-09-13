@@ -86,6 +86,47 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn included_name_write_failure_is_atomic_and_retryable_without_claims() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        m.close().await.unwrap();
+        let id = DEFAULT_WORKSPACES[0].0;
+        let before = m.load(id).await.unwrap();
+        let mut metadata = before.entity.metadata.clone();
+        metadata.name = "Painter".into();
+        rusqlite::Connection::open(f.directory.join("workspaces.sqlite3"))
+            .unwrap()
+            .execute(
+                "UPDATE items SET metadata=?1,name=?2,name_key=?3 WHERE id=?4",
+                rusqlite::params![
+                    serde_json::to_string(&metadata).unwrap(),
+                    metadata.name,
+                    name_key(&metadata.name),
+                    id
+                ],
+            )
+            .unwrap();
+        let db = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        db.execute_batch("CREATE TRIGGER fail_catalog_name BEFORE UPDATE OF name ON items BEGIN SELECT RAISE(ABORT, 'Test catalog write failure'); END;").unwrap();
+        assert!(m.initialize_catalog(2_000).await.is_err());
+        assert!(!m.has_failed_operation());
+        assert!(m.load(id).await.unwrap().claim.is_none());
+        assert_eq!(m.load(id).await.unwrap().entity.metadata.name, "Painter");
+        db.execute_batch("DROP TRIGGER fail_catalog_name;").unwrap();
+        m.initialize_catalog(3_000).await.unwrap();
+        let saved = m.load(id).await.unwrap();
+        assert_eq!(saved.entity.metadata.name, "Paint");
+        assert_eq!(saved.entity.content, before.entity.content);
+        assert_eq!(saved.entity.working, before.entity.working);
+        assert!(
+            saved.claim.is_none(),
+            "catalog name maintenance never acquires a claim"
+        );
+    });
+}
+
+#[test]
 fn included_names_refresh_without_resetting_workspaces_or_rewriting_on_reopen() {
     pollster::block_on(async {
         let f = Fixture::new();

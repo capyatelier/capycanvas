@@ -340,3 +340,55 @@ IDs are under `/tmp/capy-workspace-motion.<ID>`. Visually inspected wide strips
 in both themes, the full palette at minimum size, and the widened drop targets.
 Tests use private Mutter mouse/virtual-touch/keyboard input; physical pen and
 other hosts were not revalidated. No existing user workspace was reset.
+
+## Consistent defaults and fullscreen status — 2026-09-13
+
+Scope confirmed as consistent title-bar defaults, not full workspace-layout
+parity or a Web port of the GTK builder. Settings remains the trailing default
+control. Full Screen is Web-only; native menus/shortcuts still enter fullscreen.
+Shared preset tests compare every title-bar region across all six hosts,
+including Paint, allowing only the Web fullscreen component to differ. Hosts
+without the customizable-header projection still keep their existing rendering
+and toolbar fallback; no tools are removed from those hosts.
+GTK projects portable bars through shared platform filtering, so a saved Web
+fullscreen item creates neither a gap, overflow entry nor invisible keyboard
+reorder step. The palette and context menus use the same availability policy.
+The fixed Windows header no longer creates its fullscreen button; its native
+fullscreen request handler remains intact. Windows GUI execution was not
+available here; no Apple/tablet/physical-pen acceptance is inferred.
+
+GTK clock/battery components require actual fullscreen. Windowed geometry omits
+them without spacing; customization retains labeled placeholders. Battery
+absence still hides the value without removing the customizable component.
+
+Built-in names refresh to Sketch, Paint and Photo through existing shared
+catalog maintenance, not workspace reset or user-write replay. SQLite applies
+names, name indexes and metadata generations in the same transaction; browser
+storage follows the same plan. Live other-window owners are deferred. Custom
+names, collision suffixes, working tools and layout history survive unchanged.
+Ordinary built-in rename protection remains unchanged. A forced database write
+failure rolls back, acquires no lease, and retries successfully.
+
+Validation: 444 shared tests pass (344 UI, 25 host, 75 workspace; one separate
+hardware host test ignored). GTK release and Web Wasm builds pass. Native input
+runs use private Mutter and temporary profiles:
+
+- Settings/F11, all sizes, status values/placeholders and saved Web-only tile:
+  `eHy3H2`; true 2× display scale: `8cVvnJ`.
+- Every palette component and empty-bar recovery: `9eA7sB`.
+- Full palette at 640×480, keyboard Done: `40YtnA`.
+- Save/switch/reopen/Cancel: `3E1jKv`; repeated after atomic name maintenance:
+  `FVlIx6`.
+- Native fullscreen, locale clock and simulated battery states: `rezL28`
+  (in-memory desktop settings, no changes to the user's clock preferences).
+- Editor keyboard/context/region boundaries: `DhEVSZ`.
+- Live mouse/touch slide, detach, remove and cancel: `BuzJxH`.
+- Web fullscreen API/menu, browser fullscreen, locale and absent/denied battery:
+  `9bmGkT`. The reload fixture now waits for workspace readiness before clicking
+  the button. Initial test-server ports were occupied; tests used a free port.
+
+IDs are under `/tmp/capy-workspace-motion.<ID>`. Inspected windowed/fullscreen
+captures, managed Paint and the narrow full palette. Strict Clippy is not clean:
+the unchanged manual-clamp expression, eight-argument HeaderDrag constructor and
+large UiAction enum trigger existing warnings. No warning suppression or unrelated
+API refactor was added. Checkpoints are local only; nothing was pushed.

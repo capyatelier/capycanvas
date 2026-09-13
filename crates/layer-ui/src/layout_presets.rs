@@ -46,7 +46,11 @@ impl WorkspacePreset {
         let command = |command| ToolbarControl::Command { command };
         let drawer = |panel| ToolbarControl::Panel { panel };
         let mut layout = DockLayout::editor_default();
-        layout.header = HeaderLayout::for_platform(platform);
+        layout.header = if self == Self::Painter {
+            HeaderLayout::painter_for_platform(platform)
+        } else {
+            HeaderLayout::for_platform(platform)
+        };
         let tile_style = if self == Self::Painter {
             TileStyle::Medium
         } else {
@@ -150,7 +154,6 @@ impl WorkspacePreset {
         if self == Self::Painter {
             if platform == crate::Platform::Gtk {
                 layout.bands.clear();
-                layout.header = crate::HeaderLayout::painter();
                 layout.canvas_info.visible = false;
                 return layout;
             }
@@ -202,7 +205,7 @@ impl WorkspacePreset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HeaderItem, Platform};
+    use crate::{HeaderItem, HeaderZone, Platform};
 
     #[test]
     fn preset_title_bar_controls_follow_the_host_platform() {
@@ -232,11 +235,25 @@ mod tests {
                 assert!(
                     items.contains(&HeaderItem::Capy) && items.contains(&HeaderItem::Workspaces)
                 );
-                let minimal = preset == WorkspacePreset::Painter && platform == Platform::Gtk;
+                let minimal = preset == WorkspacePreset::Painter;
                 assert_eq!(items.contains(&HeaderItem::Clock), !minimal);
                 assert_eq!(items.contains(&HeaderItem::Battery), !minimal);
                 assert_eq!(items.contains(&HeaderItem::MenuLabels), !minimal);
                 assert_eq!(items.contains(&HeaderItem::Menu), minimal);
+                let native = preset.layout(Platform::Gtk).header;
+                for zone in HeaderZone::ALL {
+                    assert_eq!(
+                        layout.header.zones[zone.index()]
+                            .iter()
+                            .filter(|e| e.item != HeaderItem::Fullscreen)
+                            .map(|e| e.item)
+                            .collect::<Vec<_>>(),
+                        native.zones[zone.index()]
+                            .iter()
+                            .map(|e| e.item)
+                            .collect::<Vec<_>>()
+                    );
+                }
             }
         }
     }

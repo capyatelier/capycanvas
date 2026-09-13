@@ -43,6 +43,24 @@ pub(crate) fn retention_plan(
         if elsewhere {
             report.deferred_open_items += 1;
         }
+        // Included labels are derived catalog data, not user edits. Refresh
+        // them inside the existing atomic maintenance transaction, without
+        // acquiring leases or creating recoverable user-write deliveries.
+        if !elsewhere
+            && entity.metadata.builtin
+            && entity.metadata.deleted_at_ms.is_none()
+            && let Some(name) = model::default_workspace_name(&entity.id)
+        {
+            let current = &entity.metadata.name;
+            let collision_suffix = current
+                .strip_prefix(&format!("{name} ("))
+                .and_then(|s| s.strip_suffix(')'))
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|n| n >= 2);
+            if current != name && !collision_suffix {
+                entities[index].metadata.name = name.into();
+            }
+        }
         if entity
             .metadata
             .deleted_at_ms

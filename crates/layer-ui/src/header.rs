@@ -159,14 +159,20 @@ impl HeaderLayout {
     }
 
     pub fn for_platform(platform: Platform) -> Self {
-        let mut header = Self::default();
+        Self::default().with_platform_controls(platform)
+    }
+
+    pub fn painter_for_platform(platform: Platform) -> Self {
+        Self::painter().with_platform_controls(platform)
+    }
+
+    fn with_platform_controls(mut self, platform: Platform) -> Self {
         if platform == Platform::Web {
-            let settings = header.zones[2].last().unwrap().id;
-            header
-                .add(HeaderZone::Right, Some(settings), &[HeaderItem::Fullscreen])
+            let settings = self.zones[2].last().unwrap().id;
+            self.add(HeaderZone::Right, Some(settings), &[HeaderItem::Fullscreen])
                 .unwrap();
         }
-        header
+        self
     }
 
     pub fn context_menu(&self, id: Option<u32>, editing: bool) -> Result<ContextMenu, String> {

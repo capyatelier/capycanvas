@@ -38,15 +38,19 @@ impl SqliteStore {
             |r| r.get::<_, i64>(0),
         )? as u64;
         if apply {
-            for entity in plan.changed {
+            for mut entity in plan.changed {
+                entity.metadata =
+                    resolve_name(&tx, entity.metadata, &entity.id, NamePolicy::Unique)?;
                 let old = items.iter().find(|s| s.entity.id == entity.id).unwrap();
                 if old.entity.metadata != entity.metadata {
                     tx.execute(
-                        "UPDATE items SET metadata=?2,metadata_generation=?3 WHERE id=?1",
+                        "UPDATE items SET metadata=?2,metadata_generation=?3,name=?4,name_key=?5 WHERE id=?1",
                         params![
                             entity.id,
                             serde_json::to_string(&entity.metadata)?,
-                            advance(old.generations.metadata)?.to_string()
+                            advance(old.generations.metadata)?.to_string(),
+                            entity.metadata.name,
+                            name_key(&entity.metadata.name)
                         ],
                     )?;
                 }
