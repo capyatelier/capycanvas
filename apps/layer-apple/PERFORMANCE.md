@@ -17,6 +17,230 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Metal presentation notification diagnostic — 2026-09-13
+
+No renderer change was adopted from this diagnostic. Apple's
+[drawable presentation contract](https://developer.apple.com/documentation/metal/mtldrawable/present())
+tracks writes after command buffers are scheduled. Its
+[command-buffer presentation convenience method](https://developer.apple.com/documentation/metal/mtlcommandbuffer/present(_:))
+notifies the drawable from a scheduled handler. A direct call immediately after
+`commit()` can run too early. The separate
+[CAMetalDisplayLink deadline](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update/targettimestamp)
+allows GPU work to continue after the required presentation notification.
+
+An isolated native fixture compared direct presentation after
+`waitUntilScheduled()` with a separate presentation command buffer, as used by
+wgpu. The corrected Mac runs used a 90 Hz Metal display link, a 1920 × 1440
+drawable, two seconds of warm-up, twelve measured seconds and two seconds of
+continued rendering before invalidating the link. A calibrated compute pass and
+delayed CPU submission placed GPU completion after the CPU deadline but before
+the presentation target. Compute calibration is per process; these are contract
+checks, not matched application performance measurements.
+
+| Corrected Mac mode | Admitted / actual presentations | Zero-time presentations | Long intervals |
+| --- | ---: | ---: | ---: |
+| Direct, clear only | 1079 / 1079 | 0 | 0 |
+| Separate command buffer, clear only | 1080 / 1078 | 2 | 2 |
+| Direct, compute | 1080 / 1080 | 0 | 0 |
+| Separate command buffer, compute | 1080 / 1080 | 0 | 0 |
+
+Both compute modes submitted their presentation requests before the deadline
+on every admitted frame. The direct scheduling wait and queued presentation
+buffer's scheduled callback also completed before that deadline on every frame.
+GPU completion crossed the CPU deadline while remaining before the display
+target on 1080 direct frames and 1076 queued frames. Neither mode presented
+before its GPU work finished, and both completed without GPU errors or missing
+callbacks. This does not support the hypothesis that a separate presentation
+buffer necessarily waits for rendering to finish before notifying Core Animation.
+The clear-only losses remain recorded; the fixture does not establish sustained
+application cadence or drawing latency.
+
+The earlier fixture revisions are retained as failed diagnostics. A shared-event
+wait delayed command scheduling; direct presentation without a scheduling wait
+could show content before rendering and produced GPU timeouts on iPad during
+warm-up. That entire comparison is invalid for adoption. A second Mac revision
+used real compute work and correct scheduling, but its CPU timers woke too late
+to test the intended deadline condition. The corrected revision increases the
+submission margin and retains a running postlude.
+
+A separate audit of all six retained application display-link traces finds
+that all 49, 54 and 57 skipped iPad presentations had completed CPU owner service
+before their deadlines, with at least 3.012 ms remaining across the three runs.
+Those traces do not record the actual Metal scheduling time. Late CPU owner
+completion alone does not explain the skips, and the old supplied-drawable
+adapter remains rejected.
+
+The corrected iPad executable subsequently completed all four cases under the
+separate disposable component-test identity. This preserved the installed review
+editor and artist app. Each case used a 2752 × 2064 drawable, a requested 120 Hz
+rate, two seconds of warm-up, twelve measured seconds and a running postlude.
+
+| Corrected iPad mode | Admitted / actual presentations | Zero / missing presentations | GPU completed after deadline, before target |
+| --- | ---: | ---: | ---: |
+| Direct, clear only | 1440 / 1440 | 0 / 0 | 0 |
+| Separate command buffer, clear only | 1440 / 1440 | 0 / 0 | 0 |
+| Direct, compute | 1440 / 1440 | 0 / 0 | 1425 |
+| Separate command buffer, compute | 1440 / 1440 | 0 / 0 | 1440 |
+
+Each case retains one zero-time presentation during warm-up, outside its
+designated measurement interval. The full trace audit records those four skips;
+they are not missing callbacks or zero-latency frames.
+
+Every measured presentation request and scheduling observation arrived before
+the CPU deadline. All qualifying GPU-deadline crossings presented successfully;
+there were no GPU errors, incomplete render buffers or presentations before GPU
+completion, including warm-up/postlude error checks. Measured intervals had
+p99 8.334 ms and a maximum of 8.342 ms across the four cases. The compute modes'
+GPU duration p99 values were 3.610 ms direct and 3.511 ms queued. Calibration is
+per process, so that difference is not an application performance comparison.
+These results extend the Mac contract finding to the physical iPad; they do not
+explain the actual application's retained cadence failures or establish drawing
+latency, instrumentation overhead or ten-minute acceptance.
+
+The first runner failed while listing the export directory. Its same live
+process was observed, the original export recovered directly, and that process
+closed without repeating the case. The remaining runs retrieved exports directly.
+All four owned processes were verified closed, the disposable diagnostic removed,
+and the current owned test runner restored. The review editor was not updated or
+restarted. Private results and the retained runner failure are under
+`artifacts/performance/metal-notification-ipad-isolated-v1/`; earlier fixtures,
+binaries and connection logs remain under `metal-notification-2447108*`.
+The production renderer is unchanged. Both-host application performance acceptance
+remains open; actual viewport command scheduling/completion is the next observation
+needed beyond CPU owner service and GPU queue-span timings.
+
+A subsequent viewport-observer experiment was rejected and fully reverted.
+It attempted to attach a completion handler to the existing viewport command
+buffer through wgpu's `CommandEncoder::as_hal_mut`. Both Release builds and
+standalone Metal callback checks passed, but the real Mac editor rejected mixing
+normal wgpu encoding with raw encoder access before any measured drawing began.
+The first runner's successful export exit did not represent a successful workload;
+the retained trace contains 448 frame errors and no viewport submissions. A
+second diagnostic captured the wgpu mode error and verified its owned process
+closed. No iPad deployment occurred. All nine affected source/test files were
+restored byte-for-byte to their pre-experiment state, preserving the compact
+Color changes. The rejected builds and patch are retained under
+`artifacts/performance/viewport-commands-v1/` and must not be used for measurement.
+Existing Instruments captures remain the available source of actual GPU
+execution observations; they do not supply unprofiled scheduling acceptance.
+
+## Compact color fields and hue guide — 2026-09-13
+
+The native compact wheel retains separate field and guide images. Color picking
+updates the field only when its hue changes; marker, readout and unrelated
+editor updates reuse it. Shape/size changes regenerate the guide from the same
+adaptive sRGB gradient stops used by Web. The first implementation evaluated the
+perceptual hue curve for every guide pixel; replacing that with the shared stops
+reduces the largest measured circle-guide p99 from 16.519 to 4.803 ms.
+
+The CPU-only Release benchmark uses 100 warm-up and 1,000 retained generations
+per case, across all three fields/guides at 184, 260 and 396 physical pixels.
+No compiler, UI automation or GPU profiler runs during measurement. The largest
+case corresponds to the wheel in a 226-point panel at 2x scale:
+
+| Shape | Field p99, ms | Guide p99, ms |
+| --- | ---: | ---: |
+| Okhsv circle | 1.308 | 4.803 |
+| HSV square | 0.519 | 3.099 |
+| HLS triangle | 0.213 | 3.155 |
+
+The guide is static during color drags. These Mac measurements exclude host
+allocation, image upload, drawing and presentation; they do not establish iPad
+cost, complete interaction latency or sustained editor cadence. The source
+benchmark is `crates/layer-ui/examples/color_field_benchmark.rs`; raw runs and
+the earlier implementation remain in `artifacts/apple-compact-color-v1/`.
+
+## Reserved drawable slot experiment — 2026-09-13
+
+A lower admission limit was **not adopted**. In the retained ten-minute iPad
+4K watercolor trace, all 898 drawable acquisitions exceeding 1 ms began with
+two pending presentation callbacks. The experimental owner reserved one of the
+three drawable slots for onscreen contents, using the existing callback retry.
+Its capacity/lifecycle tests passed, but physical cadence regressed.
+
+Eight fresh Release measurements compare `232cd2b` with only that admission
+change. Each uses 45 measured seconds, the normal ten-second warm-up/postlude,
+unchanged synthetic input and brush fidelity, and disabled GPU timestamps.
+Both builds are archived per host. The measured viewports remain 2400 × 1740
+on Mac and 2752 × 2064 on iPad, at 2x scale and 90/120 Hz respectively. Mac
+startup size changes are retained separately; neither measured viewport changes.
+Compilers, UI automation and GPU profilers were idle during measurement.
+
+| Host / workload | CPU p99 before / candidate, ms | CPU frames over host budget before / candidate | Long continuous intervals before / candidate |
+| --- | ---: | ---: | ---: |
+| Mac ink | 3.512 / 3.315 | 0 / 0 | 84/3676 / 216/3559 |
+| Mac 4K watercolor | 5.611 / 6.643 | 0 / 0 | 54/3702 / 868/2901 |
+| iPad ink | 4.421 / 3.356 | 25 / 0 | 27/5048 / 35/5025 |
+| iPad 4K watercolor | 9.136 / 4.930 | 95 / 7 | 89/4892 / 734/4315 |
+
+All intervals complete with the expected input workload, no renderer errors,
+missing or zero-time measured presentations, or recorder overflow. Each exported
+PID matches its launch and each owned workload app closes afterward. The regular
+artist apps/data are preserved, and the validated iPad review build is restored.
+The candidate improves iPad CPU tails while making sustained presentation worse;
+the production scheduler and its tests are restored. Shorter owner service is
+insufficient evidence of smoother drawing. No ten-minute candidate pass is claimed.
+The ignored `artifacts/performance/drawable-reserve-232cd2b` directory contains
+the archived binaries, source patches, raw traces and reproducible comparison.
+
+## Retry after presentation capacity returns — 2026-09-13
+
+The shared frame driver can now retry a capacity-denied tick once when Metal
+reports a presentation. Registration checks capacity under the same lock as
+ticket retirement, so a callback just before registration cannot lose the wake.
+The callback runs outside that lock and schedules the retry on the main queue.
+A newer display tick, detach/replacement, pending frame or expired original
+target rejects it. A retry that encounters a full pool does not register another
+retry. Resize, resume and detach discard capacity waiters with their old tickets.
+The ordinary display-link preference and idle pause remain unchanged.
+
+This addresses a measured scheduling race, without treating presentation as a
+guarantee that Core Animation has recycled the drawable. In the previous Mac
+ten-minute watercolor trace, capacity-denied ticks preceded 1,878 of 3,651 long
+continuous presentation intervals. The median delay from such a tick to the next
+presentation callback was 0.055 ms; the driver previously waited for another
+display tick. The corresponding iPad trace had no capacity-denied ticks, so this
+diagnosis does not explain its acquisition stalls. These are temporal associations.
+
+Two fresh 45-second `wet-watercolor-4k` Release runs on source `008b646`, before
+and after the retry change, used the same 2400 × 1740 Mac viewport, 90 Hz target,
+240 Hz synthetic input, prediction and disabled GPU queue timestamps. Both
+complete with no rejected input, frame errors, missing/zero-time presentations
+during measurement, or CPU service over 11.11 ms.
+
+| Mac measured result | Before | Retry |
+| --- | ---: | ---: |
+| Actual presentations | 3,568 | 3,737 |
+| CPU owner p99 / max, ms | 5.875 / 8.436 | 5.584 / 7.695 |
+| Long continuous intervals / total | 225 / 3,539 (6.36%) | 46 / 3,708 (1.24%) |
+| Admission-to-presentation p99, ms | 32.940 | 32.829 |
+
+The same candidate then completed 600.001 measured seconds: 49,416 actual
+presentations, CPU p50/p95/p99/max 3.444/4.912/5.722/9.139 ms, and zero CPU
+service samples over the Mac budget. Continuous presentation p50/p95/p99/max
+was 11.111/11.111/22.222/44.445 ms. Its 1,329 long intervals out of 49,040
+(2.71%) still fail sustained cadence acceptance. Of 30,676 capacity-denied ticks,
+29,946 received an admitted retry; these callbacks are recorded separately from
+display ticks. Admission-to-presentation p99/max was 33.616/44.076 ms.
+
+The measured interval has no rejected input, renderer errors, missing callbacks,
+zero-time presentations or recorder overflow. The full trace retains three
+zero-time presentations outside measurement. Measured peak footprint was
+1,761.19 MiB, with 140.80 MiB first-to-last growth and nominal thermal samples.
+The recorder and workload both contribute memory; this does not isolate a leak.
+Builds, UI automation and GPU profiling were idle throughout measurement.
+Each exported process identity matched its launch, and owned apps closed after
+export. The short pair supports this scheduling improvement; the ten-minute
+candidate is not an identical-source ten-minute before/after comparison.
+
+Both physical Release targets compile. Direct shared-driver and real Metal
+gate/owner checks cover atomic registration, concurrent duplicate callbacks,
+deadline expiry, newer ticks, cancellation and surface lifecycle on both Apple
+presets. All 29 trace-analysis tests pass. This is not new physical iPad timing
+evidence. The complete workload matrix, iPad stalls, residual Mac cadence gaps,
+isolated GPU work, calibrated instrumentation overhead and physical input latency
+remain open. Raw traces and local signing/device information remain ignored.
+
 ## Owner lifetime and presentation admission — 2026-09-12
 
 Both native targets now drain autoreleased objects after every asynchronous
@@ -208,6 +432,88 @@ The ten new correlation checks cover clock conversion, overlapping execution,
 partial/ambiguous identities, execution ordering, presentation endpoints and
 capture pairing. The existing 17 trace checks also pass. Raw traces, identifiers
 and reports remain in ignored local artifacts.
+
+The same retained recordings were later exported with
+`metal-application-command-buffer-submissions` and `ca-client-present-request`.
+Pass them together as `--submissions-xml` and `--present-requests-xml` to
+`metal_frames.py`. The command-buffer table's start means **Creation**. Its
+entire creation-to-submission interval must fit inside one native serial frame;
+the actual Core Animation request can follow CPU owner completion. Requests join
+by process and command-buffer identity. Missing, duplicated, out-of-order and
+multiple-per-frame observations remain counted and cannot supply unique timing
+endpoints. Display endpoints still come from the native drawable's
+`presentedTime`, not the request's optional `at-time` field.
+
+| Retained request observation | Mac | Physical iPad |
+| --- | ---: | ---: |
+| Requests associated with one native frame | 6 / 6 | 122 / 122 |
+| Request before frame target, range in ms | 8.382–9.115 | 6.385–8.269 |
+| Last observed GPU end before frame target, range in ms | 7.709–8.353 | 4.361–6.090 |
+| Actual presentation after frame target, range in ms | 11.131–11.133 | 8.337–8.349 |
+
+Every matched request preceded the last observed GPU completion. No request
+identity/order conflicts or multiple-request frames were found. A separate
+clock audit joins all 8 Mac and 121 iPad Instruments presented callbacks to
+native drawable identities; corresponding callback observations differ by at
+most 0.0102 ms and 0.0168 ms respectively. These clocks were joined using the
+same capture's rational Mach timebase and epoch.
+
+In this small profiled sample, neither a late presentation request nor the
+last observed GPU completion explains presentation one refresh after the native
+frame target. The frame target is a requested display time, not a measured CPU
+commit deadline, and a request event is not a kernel scheduling timestamp.
+Capture loss can omit both requests and GPU work, so this is not proof of full
+surface coverage, physical input latency or current application performance.
+These recordings are from the earlier `4a0a808` run and its recorded cadence
+candidate; repeat the observation on current source before adopting a change.
+Seven additional correlation checks cover request clock/identity joins,
+duplicates, invalid order, missing targets and independent GPU/display coverage;
+all 22 Metal analysis checks pass. The new exports, reports and initial denied
+analysis-cache access are retained under
+`artifacts/performance/retained-command-timeline-v1/`.
+
+Current-source follow-up recordings use the restored runtime at `2f27544` with
+the compact Color changes, separate Release identities and GPU queue timestamps
+disabled. Each host completed a sixty-second ink workload with the ordinary
+warm-up and postlude. A five-second Metal recording requested a two-second
+rolling window. The actual target GPU extents retained only 89.236 ms on Mac and
+916.941 ms on iPad; every associated request and encoder frame falls inside its
+native measured workload phase. Both native traces report no renderer errors,
+overflow, rejected input batches or missing callbacks. Their measured intervals
+contain no zero-time presentations, but the complete traces retain one on Mac
+and five on iPad outside measurement; see the local completion audit.
+
+| Current profiled observation | Mac | Physical iPad |
+| --- | ---: | ---: |
+| Unambiguous requests associated with frames | 9 / 9 | 97 / 97 |
+| Request and last observed GPU end before frame target | 9 | 95 |
+| Request before frame target, range in ms | 7.199–9.515 | -4.451–8.353 |
+| Last observed GPU end before frame target, range in ms | 5.464–8.920 | -5.547–7.298 |
+| Presentations one / two / three refreshes after target | 0 / 6 / 3 | 92 / 2 / 3 |
+
+The two late iPad requests coincide with native drawable-acquisition costs of
+13.197 ms and 8.692 ms; their complete CPU owner services take 13.640 ms and
+9.530 ms. The other observed frames still show presentation delay despite early
+requests and early observed GPU completion. This identifies two distinct timing
+conditions to investigate; it does not establish their root cause. The profiled
+samples do not prove uninstrumented cadence, complete frame coverage or physical
+input latency, and are not a matched performance comparison with the older run.
+Do not repeat a smaller drawable pool or lower admission limit on this evidence
+alone: the earlier two-drawable pilot and reserved-slot comparison both regressed
+cadence. No renderer change is adopted.
+
+The first current iPad workload completed, but Instruments rejected its
+CoreDevice identifier. The corrected recording uses the hardware UDID obtained
+from the same device. A subsequent launch guard observed a new process for the
+disposable app after the original process had closed; it stopped before launching
+another run. That process was recorded and closed, with two clean process checks
+before the successful run. Its reappearance is unexplained. The first optional
+iPad presented-callback export failed silently; a separate export succeeded and
+retains all 96 callbacks. The original failed outputs remain. All owned diagnostic
+processes are closed, the disposable iPad app is removed, and the owned test
+runner is restored. Both existing editor descriptors remain unchanged. Full
+results, source/build hashes and cleanup evidence are under
+`artifacts/performance/current-command-timeline-v1/`.
 
 ### Earlier standalone GPU probe
 
@@ -1031,6 +1337,7 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
+| 13 presentation retry | attempt time, original display target, admitted flag, denial reason using kind 0 values |
 
 The analyzer also retains local scheduling experiment records: kind 12 contains
 frame ID, CPU commit deadline, presentation target and drawable admission status

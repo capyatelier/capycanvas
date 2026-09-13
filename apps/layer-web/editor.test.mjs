@@ -7,9 +7,18 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   const show=async panel=>{
     await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("${panel}"));if(group.active!=="${panel}")layerApp.dispatch({type:"select_panel_tab",group:group.id,panel:"${panel}"});})()`);await settle();
   };
-  const pointer=async(selector,fx,fy,move)=>{
+  const pointer=async(selector,fx,fy,move,pointerType="mouse")=>{
     const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width*${fx},y:r.y+r.height*${fy}}})()`);
-    for(const [type,x,y,buttons]of [["mousePressed",p.x,p.y,1],...(move?[["mouseMoved",p.x+move[0],p.y+move[1],1]]:[]),["mouseReleased",p.x+(move?.[0]||0),p.y+(move?.[1]||0),0]])await call("Input.dispatchMouseEvent",{type,x,y,button:"left",buttons,clickCount:1});
+    const appearance=()=>evaluate(`([...document.querySelectorAll('.tool-tile > button[data-command]')].map(n=>({command:n.dataset.command,disabled:n.disabled,opacity:getComputedStyle(n).opacity})))`);
+    const before=selector==="#canvas"?await appearance():null;
+    if(before)assert.ok(before.length>0,"Check actual toolbar command buttons");
+    for(const [type,x,y,buttons]of [["mousePressed",p.x,p.y,1],...(move?[["mouseMoved",p.x+move[0],p.y+move[1],1]]:[]),["mouseReleased",p.x+(move?.[0]||0),p.y+(move?.[1]||0),0]]){
+      await call("Input.dispatchMouseEvent",{type,x,y,button:"left",buttons,clickCount:1,pointerType,force:buttons ? 0.6 : 0});
+      if(before&&buttons){
+        await settle();
+        assert.deepEqual(await appearance(),before,`${pointerType} ${type}: canvas contact must not dim toolbar icons`);
+      }
+    }
     await settle();
   };
   await invoke("reset_layout");
@@ -64,9 +73,8 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await call("Input.dispatchMouseEvent",{type:"mouseMoved",...await evaluate('({x:innerWidth/2,y:innerHeight/2})'),buttons:0});
   await settle();
   assert.ok(await evaluate('document.querySelector("#workspace").classList.contains("zen-hidden")'));
-  assert.ok(await evaluate('[...document.querySelectorAll(".zen-toolbar")].some(n=>n.getClientRects().length)'),"Partial Zen retains edge toolbars");
-  // Activate the shared tile action through the projected DOM toolbar.
-  assert.ok(await evaluate('document.querySelectorAll(".zen-toolbar .tile-button button").length>3'));
+  assert.equal(await evaluate('document.querySelector(".zen-toolbar")'),null,"Total Zen has no alternate toolbar projection");
+  assert.equal(await evaluate('"total_zen" in layerApp.state().settings'),false,"Legacy partial-Zen setting is discarded");
   await invoke("zen_mode");
   await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));window.editorColumnGroup=group.id;layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:group.id,collapsed:true}});})()`);
   await settle();
@@ -105,12 +113,12 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
     window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value)},async close(){editorFiles.set(options.suggestedName,bytes)},async abort(){}}}});
     window.showOpenFilePicker=async()=>[{name:"roundtrip.capy",async getFile(){return new File([editorFiles.get([...editorFiles.keys()].find(k=>k.endsWith(".capy")))],"roundtrip.capy")}}];`);
   await invoke("fit_canvas");
-  await pointer("#canvas",.50,.50,[65,20]);
+  await pointer("#canvas",.50,.50,[65,20],"pen");
   assert.ok(await evaluate('layerApp.state().document_file.modified'));
   await evaluate('(()=>{const effect=layerApp.state().adjustments.find(a=>a.id.includes("domain_warp"));if(!effect)throw Error("Domain Warp missing");layerApp.dispatch(effect.action);})()');
   await settle();
   await invoke("save_document_as");
-  await wait('!layerApp.state().document_file.busy');
+  await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
   assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
   assert.ok(await evaluate('[...editorFiles.entries()].some(([name,bytes])=>name.endsWith(".capy")&&bytes.length>100)'));
   await invoke("export_document");
@@ -129,6 +137,9 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('layerApp.state().tabs[0].width>320'));
   await evaluate('layerApp.dispatch({type:"select_layer",id:layerApp.state().layers.find(l=>l.label==="Current ink").id})');
   await settle();
+  // Selecting the paint layer can prepare a different brush target. Wait for
+  // that target, not just the brush that was ready before selecting the layer.
+  await wait('layerApp.app.brush_ready()');
   // Use untouched paper: painting the same opaque stroke again can be a no-op.
   await pointer("#canvas",.4,.65,[30,0]);
   await wait('layerApp.state().document_file.modified');
@@ -147,8 +158,16 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await wait('!layerApp.state().document_file.close_ready && layerApp.state().document_file.location==null && !layerApp.state().document_file.modified');
   await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:editorWorkspace}); layerApp.dispatch({type:"restore_settings",settings:editorSettings}); [window.showSaveFilePicker,window.showOpenFilePicker]=editorSavedPickers;');
   await settle();
-  await evaluate('window.dispatchEvent(new Event("pagehide"))');
-  assert.ok(await evaluate('!!layerApp.app.workspace_persistence().layout.panels.find(p=>p.id==="commands")'),"Restored workspace retains its commands panel");
+  // Workspace persistence now uses the shared database controller; the old
+  // localStorage key is only a migration input. Verify the Commands panel
+  // remains available after a completed save/reload. The profile is isolated.
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
+  await call("Page.reload", {ignoreCache: true});
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  await wait('window.layerApp?.startupTimes.complete != null');
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy');
+  assert.ok(await evaluate('!!layerApp.app.workspace_persistence().layout.panels.find(p=>p.id==="commands")'));
+  assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
   await mkdir(directory,{recursive:true});
   const image=await call("Page.captureScreenshot",{format:"png"});

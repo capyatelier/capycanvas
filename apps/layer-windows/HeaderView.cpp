@@ -51,7 +51,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     hstring switchActive;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
     TextBlock title;
-    Button zen,settings,screen;
+    Button zen,settings;
     bool fullscreenActive=false;
     std::vector<std::pair<Button,hstring>> commands;
     hstring theme,palette;
@@ -164,11 +164,6 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         zen.HorizontalAlignment(HorizontalAlignment::Left);zen.VerticalAlignment(VerticalAlignment::Top);
         settings=command(L"settings",16);
         AutomationProperties::SetAutomationId(settings,L"settings-button");
-        screen=button(data,L"Full screen",fullscreen);style(screen,data);screen.Width(36);screen.Padding({0});
-        AutomationProperties::SetAutomationId(screen,L"fullscreen");
-        screen.Content(icon(fullscreenActive?L"fullscreen-exit":L"fullscreen-enter",data->theme()));
-        auto screenLabel=fullscreenActive?L"Exit full screen":L"Full screen";
-        AutomationProperties::SetName(screen,screenLabel);ToolTipService::SetToolTip(screen,box_value(screenLabel));
         switcher=ScrollViewer();switches=StackPanel();switcher.UseLayoutRounding(false);switches.UseLayoutRounding(false);switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
         switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
         switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
@@ -180,7 +175,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetName(switcher,L"Task workspaces");
         switcher.HorizontalAlignment(HorizontalAlignment::Left);switcher.VerticalAlignment(VerticalAlignment::Top);
         systemStatus=std::make_unique<HeaderStatus>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->reflow();});
-        end.Children().Append(systemStatus->Root());end.Children().Append(screen);end.Children().Append(settings);
+        end.Children().Append(systemStatus->Root());end.Children().Append(settings);
         title=label(data,L"");title.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
         title.VerticalAlignment(VerticalAlignment::Center);title.IsTextSelectionEnabled(true);
         title.TextAlignment(TextAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -354,7 +349,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             AutomationProperties::SetItemStatus(item,flag(state,L"selected")?L"On":L"Off");
             ToolTipService::SetToolTip(item,box_value(str(state,L"tooltip")));
         }
-        hidden=flag(snapshot,L"chrome_hidden");keepZen=flag(snapshot,L"keep_zen_button",true);
+        hidden=flag(snapshot,L"chrome_hidden")&&!flag(snapshot,L"windows_rendering_suspended");keepZen=flag(snapshot,L"keep_zen_button",true);
         applyWorkspaces();reflow();requests();
     }
     std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const {
@@ -409,9 +404,6 @@ void HeaderView::SetFullscreen(bool active){
     if(active==impl->fullscreenActive)return;
     impl->fullscreenActive=active;
     if(impl->built){
-        impl->screen.Content(icon(active?L"fullscreen-exit":L"fullscreen-enter",impl->data->theme()));
-        AutomationProperties::SetName(impl->screen,active?L"Exit full screen":L"Full screen");
-        ToolTipService::SetToolTip(impl->screen,box_value(active?L"Exit full screen":L"Full screen"));
         impl->reflow();
     }
 }

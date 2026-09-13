@@ -314,7 +314,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   const manager = element("dialog", "toolbar-manager"); manager.id = "toolbar-manager";
   const managerHeader = element("header", "dialog-header"), managerTitle = element("h2");
   const closeManager = () => send({ type: "close_toolbar_manager" });
-  const managerClose = button("×", closeManager, "dialog-close");
+  const managerClose = button("", closeManager, "dialog-close"); managerClose.append(icon("close"));
   managerHeader.append(managerTitle, managerClose);
   const managerBody = element("div", "toolbar-manager-body"), managerDescription = element("p");
   const managerScroll = element("div", "toolbar-manager-scroll"), managerList = element("div", "managed-toolbars"), managerEmpty = element("p", "toolbar-manager-empty");

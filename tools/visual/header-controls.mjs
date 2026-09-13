@@ -27,6 +27,10 @@ export async function captureHeaderControls({manifest, output, evaluate, call}) 
     background.style.cssText='position:absolute;inset:0 0 auto;height:48px;z-index:999;pointer-events:none';
     document.getElementById('workspace').append(background);
   })()`);
+  await call('DOM.enable'); await call('CSS.enable');
+  const document = await call('DOM.getDocument', {depth:0});
+  const label = await call('DOM.querySelector', {nodeId:document.root.nodeId, selector:'.workspace-switcher button'});
+  const platformFonts = await call('CSS.getPlatformFontsForNode', {nodeId:label.nodeId});
   const reports = [];
   for (const fixture of manifest.fixtures) {
     const [width, height] = fixture.viewport;
@@ -57,18 +61,23 @@ export async function captureHeaderControls({manifest, output, evaluate, call}) 
     }`);
     await evaluate(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
     const metrics = await evaluate(`(()=>{
-      const elements={}, rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};};
+      const elements={}, text_metrics={}, rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};};
+      const textMetric=node=>{const style=getComputedStyle(node), canvas=document.createElement('canvas'), context=canvas.getContext('2d');
+        context.font=style.font;return {text:node.textContent,font:style.font,font_size:style.fontSize,font_weight:style.fontWeight,
+          letter_spacing:style.letterSpacing,canvas_width:context.measureText(node.textContent).width};};
       for(const menu of document.querySelectorAll('.header-menu')){
         const summary=menu.querySelector('summary');if(summary.getBoundingClientRect().width&&getComputedStyle(summary).visibility!=='hidden')
           elements[menu.dataset.menu==='all'?'application-menus':'menu-'+summary.textContent]=rect(summary);
       }
       elements['workspace-switcher']=rect(document.querySelector('.workspace-switcher'));
-      for(const button of document.querySelectorAll('.workspace-switcher button')) elements['workspace-switch-'+button.dataset.workspaceId]=rect(button);
+      for(const button of document.querySelectorAll('.workspace-switcher button')) {
+        const id='workspace-switch-'+button.dataset.workspaceId;elements[id]=rect(button);text_metrics[id]=textMetric(button);
+      }
       for(const [id,selector] of Object.entries({'document-title':'#document-title','system-clock':'#system-clock',
         'system-battery':'#system-battery','settings-button':'#header-end [data-command="settings"]','zen-button':'#zen-button'})){
         const node=document.querySelector(selector);if(node&&node.getBoundingClientRect().width)elements[id]=rect(node);
       }
-      return {elements,clock:document.getElementById('system-clock').textContent,title:document.getElementById('document-title').textContent,
+      return {elements,text_metrics,clock:document.getElementById('system-clock').textContent,title:document.getElementById('document-title').textContent,
         active_workspace:JSON.parse(layerApp.app.workspace_view()).id,scale:devicePixelRatio};
     })()`);
     if (fixture.clock_visible) assert.equal(metrics.clock, fixture.clock);
@@ -95,7 +104,7 @@ export async function captureHeaderControls({manifest, output, evaluate, call}) 
   }
   await writeFile(`${output}/header-geometry.json`,JSON.stringify(reports,null,2));
   const maximum = key => Math.max(...reports.flatMap(report=>report.differences.map(difference=>difference[key])));
-  await writeFile(`${output}/chrome-header-capture.json`,JSON.stringify({adapter,fixtures:reports.length,
+  await writeFile(`${output}/chrome-header-capture.json`,JSON.stringify({adapter,platform_fonts:platformFonts.fonts,fixtures:reports.length,
     maximum_position_or_size_error:maximum('maximum_error'),maximum_edge_error:maximum('maximum_edge_error'),
     scope:manifest.scope},null,2));
   console.log(`Captured ${reports.length} live Chrome header references with explicit Apple adaptations`);

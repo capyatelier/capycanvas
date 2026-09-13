@@ -36,7 +36,7 @@ void ZenToolbars::Apply(){
             native.signature=signature;
             native.body=std::make_unique<PanelBody>(data,panel,geometry,[] {},gestures);
             native.frame.Child(native.body->Root());
-            for(auto const& [id,element]:native.body->tileElements)
+            for(auto const& [id,element]:native.body->tileControls)
                 AutomationProperties::SetAutomationId(element,L"zen-tile-"+panelId+L"-"+to_hstring(id));
         }
         place(native.frame,object(section,L"bounds"));

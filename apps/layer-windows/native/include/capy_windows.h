@@ -34,6 +34,15 @@ __declspec(dllimport) CapyHost* capy_create(void* panel, uint32_t width, uint32_
 /* Prepare on the render worker, then park it for the first UI-thread capy_resize.
    Every subsequent resize also requires exclusive ownership on the UI thread. */
 __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
+/* Device loss is observed by the render owner. A poisoned host cannot recover. */
+__declspec(dllimport) bool capy_device_lost(const CapyHost*);
+/* CPU retirement after input admission stops; keep document services alive. */
+__declspec(dllimport) int32_t capy_retire_pointer(CapyHost*, const CapyPointer*, size_t count);
+__declspec(dllimport) int32_t capy_suspend_renderer(CapyHost*);
+/* UI-thread replacement: worker parked, no acquired image, old swap chain detached. */
+__declspec(dllimport) int32_t capy_reset_surface(CapyHost*, void* panel);
+/* Isolated CAPY_SMOKE_TEST only; removes the process's D3D12 device, never the adapter. */
+__declspec(dllimport) int32_t capy_test_device_loss(CapyHost*);
 /* Start/load on the render owner before queued user actions. Wake runs on the
    storage thread and must only signal owned synchronization state. */
 __declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void (*wake)(void*));
@@ -49,8 +58,13 @@ __declspec(dllimport) int32_t capy_load_filter_directory(CapyHost*, const char* 
 __declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
 /* Pure shared image bounds for the native cutout; output has four floats. */
 __declspec(dllimport) bool capy_navigator_image(float width, float height, uint32_t document_width, uint32_t document_height, float* output);
-/* Stateless shared color hit policy: 0 none, 1 hue, 2 field; space 0 HSV / 1 HLS. */
-__declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t space);
+/* Stateless shared color presentation: projection 0 square, 1 triangle, 2 circle.
+   Hit result: 0 none, 1 hue, 2 field. Free returned strings with capy_string_free.
+   Field output is exactly side*side*4 writable RGBA8 bytes, side in 1..=2048. */
+__declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t projection);
+__declspec(dllimport) char* capy_color_layout(float size);
+__declspec(dllimport) char* capy_color_hue_stops(uint32_t projection);
+__declspec(dllimport) bool capy_color_field(uint32_t side, float hue, uint32_t projection, uint8_t* output, size_t length);
 /* Flush/join on the render owner before destroying the callback context.
    Cleanup is required even after a renderer failure. */
 __declspec(dllimport) int32_t capy_finish_services(CapyHost*);

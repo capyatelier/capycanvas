@@ -2,6 +2,7 @@
 
 mod documents;
 mod editor;
+mod header;
 mod workspaces;
 
 use layer_core::{AssetId, Point};
@@ -21,6 +22,7 @@ pub struct WebApp {
     startup: StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
     overviews: std::collections::BTreeMap<u32, editor::NavigatorSurface>,
+    header_drag: Option<layer_ui::HeaderDrag>,
 }
 
 #[derive(Deserialize)]
@@ -377,6 +379,7 @@ impl WebApp {
             startup: StartupProgress::default(),
             deferred_contacts: Default::default(),
             overviews: Default::default(),
+            header_drag: None,
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -957,7 +960,7 @@ impl WebApp {
             &target.texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(js)?;
         gpu.renderer.queue().present(target);
         gpu.blank_presented = true;
         serialize(&change)

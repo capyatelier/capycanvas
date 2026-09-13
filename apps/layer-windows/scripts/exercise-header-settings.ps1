@@ -56,7 +56,12 @@ function Open-Preferences {
     $script:settingsScope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences {
-    Invoke-Control 'Close'
+    # The shortcut list also has a command row named Close. Address the native
+    # ContentDialog footer, not a same-named shortcut or nested editor action.
+    $close=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'CloseButton'))
+    if(!$close){throw 'Preferences footer Close button is missing'}
+    $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     $script:settingsScope=$root
     Wait-Until {!(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }
@@ -110,15 +115,13 @@ Wait-Until {(Read-Model).state.settings.zen_icon -eq $originalIcon} 'Icon restor
 
 Invoke-Control 'Search preferences'
 Edit-Text 'Search preferences' 'prediction'
-Wait-Until {Find-Control 'Prediction time' ([System.Windows.Automation.ControlType]::Button)} 'Shared search results missing'
-Invoke-Control 'Prediction time'
-Wait-Until {Find-Control 'Prediction time' ([System.Windows.Automation.ControlType]::Edit)} 'Search result did not reveal the numeric preference'
+Wait-Until {Find-Control 'Prediction amount' ([System.Windows.Automation.ControlType]::Button)} 'Shared search results missing'
+Invoke-Control 'Prediction amount'
+Wait-Until {Find-Control 'Prediction amount slider' ([System.Windows.Automation.ControlType]::Slider)} 'Search result did not reveal the prediction slider'
 $feedback=(Read-Model).state.settings.feedback
 Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -ne $feedback} 'Preview toggle did not reach shared settings'
-foreach($name in @('Prediction time','Pen tip tracking')){
-    Wait-Until {(Control $name ([System.Windows.Automation.ControlType]::Edit)).Current.IsEnabled -eq !$feedback} 'Dependent numeric editor has the wrong enabled state'
-}
+Wait-Until {(Control 'Prediction amount slider' ([System.Windows.Automation.ControlType]::Slider)).Current.IsEnabled -eq !$feedback} 'Prediction slider has the wrong enabled state'
 Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -eq $feedback} 'Preview restoration failed'
 Close-Preferences

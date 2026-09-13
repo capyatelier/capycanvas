@@ -6,7 +6,7 @@ extension XCTestCase {
         func reveal(_ element: XCUIElement) {
             XCTAssertTrue(element.waitForExistence(timeout: 5))
             guard scroll.exists else { return }
-            // Scroll the panel's padding, outside the wheel/slider contact area.
+            // Scroll the panel's padding, outside the wheel contact area.
             // A fully visible wheel is necessary for normalized picker contacts.
             for _ in 0..<8 {
                 let viewport = scroll.frame.insetBy(dx: 0, dy: 2), frame = element.frame
@@ -24,6 +24,17 @@ extension XCTestCase {
         }
         func activate(_ element: XCUIElement) {
             reveal(element)
+            // The readout's rectangular AX frame includes the excluded wheel.
+            // Activate its visible label, which lies inside the curved button.
+            if element.identifier == "color-readout" {
+                let label = element.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.06))
+                #if os(macOS)
+                label.click()
+                #else
+                label.tap()
+                #endif
+                return
+            }
             #if os(macOS)
             element.click()
             #else
@@ -41,52 +52,64 @@ extension XCTestCase {
             point(x,y).tap()
             #endif
         }
-        func expect(_ index: Int, _ value: String) {
-            expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: app.buttons["number-value-color-\(index)"])
+        let panel = app.descendants(matching: .any)["color-panel-controls"].firstMatch
+        let wheel = app.descendants(matching: .any)["color-wheel"].firstMatch
+        func state() -> [String: Any] {
+            guard let encoded = wheel.value as? String,
+                  let decoded = try? JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any] else { return [:] }
+            return decoded
+        }
+        func expect(_ index: Int, _ value: Double) {
+            let predicate = NSPredicate { _, _ in
+                guard let values = state()["components"] as? [Double], values.indices.contains(index) else { return false }
+                return abs(values[index] - value) < 0.2
+            }
+            expectation(for: predicate, evaluatedWith: panel)
             waitForExpectations(timeout: 5)
         }
-        let wheel = app.descendants(matching: .any)["color-wheel"].firstMatch
-        func captureColor(_ space: String) {
-            let panel = app.descendants(matching: .any)["color-panel-controls"].firstMatch
-            guard let encoded = panel.value as? String,
-                  let state = try? JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any],
-                  state["space"] as? String == space,
-                  (state["rgba"] as? [Double])?.count == 4, state["hue"] is NSNumber else {
-                XCTFail("Missing accepted Rust color for the pixel oracle"); return
+        func captureColor(_ shape: String) {
+            let accepted = state()
+            guard accepted["shape"] as? String == shape,
+                  (accepted["rgba"] as? [Double])?.count == 4, accepted["hue"] is NSNumber else {
+                XCTFail("Missing accepted Rust color for \(shape): \(String(describing: wheel.value))"); return
             }
-            capture(space, wheel.frame, state)
+            capture(shape, wheel.frame, accepted)
         }
         XCTAssertTrue(wheel.waitForExistence(timeout: 10))
         XCTAssertEqual(wheel.frame.width, wheel.frame.height, accuracy: 1)
-        tap(0.95,0.5); expect(0,"150")
-        captureColor("hsv")
-        activate(app.buttons["color-space"])
-        expectation(for: NSPredicate(format: "value == %@", "HLS"), evaluatedWith: app.buttons["color-space"])
+        XCTAssertEqual(app.buttons["color-readout"].value as? String, "OKLCH")
+        captureColor("circle")
+        let paint = state()["rgba"] as? [Double]
+        activate(app.buttons["color-readout"])
+        expectation(for: NSPredicate(format: "value == %@", "RGB"), evaluatedWith: app.buttons["color-readout"])
         waitForExpectations(timeout: 5)
-        tap(0.5,0.5); expect(1,"50"); expect(2,"33")
-        captureColor("hls")
-        activate(app.buttons["number-value-color-0"])
-        let hue = app.textFields["number-entry-color-0"]
-        XCTAssertTrue(hue.waitForExistence(timeout: 5))
-        hue.typeText("90 + 90\n"); expect(0,"180")
-        activate(app.buttons["color-background"]); expect(1,"100")
+        XCTAssertEqual(state()["rgba"] as? [Double], paint, "Changing readout must not change paint")
+        activate(app.buttons["color-shape-square"])
+        tap(0.95,0.5); expect(0,150)
+        captureColor("square")
+        activate(app.buttons["color-shape-triangle"])
+        tap(0.5,0.5); expect(1,50); expect(2,100.0/3)
+        captureColor("triangle")
+        tap(0.8897114,0.725); expect(0,180)
+        activate(app.buttons["color-background"]); expect(1,100)
         activate(app.buttons["color-transparent"])
         XCTAssertTrue(app.buttons["color-transparent"].isSelected)
-        // Starting in the hue ring must keep editing hue through the field;
-        // picking exits transparency without cancelling this same contact.
+        // A hue contact remains latched through the field and transparent exit.
         reveal(wheel)
         point(0.95,0.5).press(forDuration: 0.05, thenDragTo: point(0.5,0.95))
-        expect(0,"240")
+        expect(0,240)
         XCTAssertTrue(app.buttons["color-background"].isSelected)
-        tap(0.02,0.02); expect(0,"240")
-        activate(app.buttons["color-swap"]); expect(0,"180")
+        tap(0.02,0.02); expect(0,240)
+        activate(app.buttons["color-swap"]); expect(0,180)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func attachColorFixture(name: String, space: String, state: [String: Any], screenshot: XCUIScreenshot, viewport: CGRect, wheel: CGRect) {
+    @MainActor func attachColorFixture(name: String, state: [String: Any], screenshot: XCUIScreenshot, viewport: CGRect, wheel: CGRect) {
         let shot = XCTAttachment(screenshot: screenshot)
         shot.name = name; shot.lifetime = .keepAlways; add(shot)
-        let metadata: [String: Any] = ["space": space,
+        let metadata: [String: Any] = ["space": state["space"]!, "shape": state["shape"]!,
+            "marker_radius": min(10, max(6, wheel.width * 0.04)),
+            "field_corner_radius": state["shape"] as? String == "square" ? min(6, wheel.width * 0.02) : 0,
             "rgba": state["rgba"]!, "hue": state["hue"]!,
             "viewport": [viewport.width,viewport.height],
             "wheel": [wheel.minX-viewport.minX,wheel.minY-viewport.minY,wheel.width,wheel.height]]

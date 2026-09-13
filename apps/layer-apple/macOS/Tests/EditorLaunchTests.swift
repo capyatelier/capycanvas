@@ -3,6 +3,8 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
+
     @MainActor func testWorkspaceSwitcher() {
         checkWorkspaceSwitcher(in: editorTestApplication())
     }
@@ -154,7 +156,7 @@ final class EditorLaunchTests: XCTestCase {
         app.launch()
         checkColorControls(in: app) { mode, wheel, state in
             let window = app.windows.firstMatch
-            attachColorFixture(name: "mac-color-" + mode, space: mode, state: state,
+            attachColorFixture(name: "mac-color-" + mode, state: state,
                 screenshot: window.screenshot(), viewport: window.frame, wheel: wheel)
         }
     }

@@ -9,13 +9,13 @@ struct Column:std::enable_shared_from_this<Column>{
     std::shared_ptr<WorkspaceData> data;
     std::shared_ptr<WorkspaceGestures> gestures;
     Canvas workspace{nullptr},frame,icons;
-    Border background,grip;
+    Border background,grip,activeGroup;
     ScrollViewer scroll;
     Button expand{nullptr};
     uint32_t id=0;
     J geometry;
     std::map<std::wstring,Button> buttons;
-    hstring structure;
+    hstring structure,expandGlyph;
     double reported=0;
     bool applying=false;
     void init(){
@@ -27,9 +27,10 @@ struct Column:std::enable_shared_from_this<Column>{
             data->dispatch(O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"set_column_collapsed")},
                 {L"group",N(id)},{L"collapsed",B(false)}})}}));
         });
-        expand.Padding({0,0,0,0});expand.Content(icon(L"column-expand",data->theme()));
+        expand.Padding({0,0,0,0});
         AutomationProperties::SetAutomationId(expand,L"expand-column-"+to_hstring(id));
         frame.Children().Append(expand);
+        activeGroup.Background(data->brush(L"panel"));activeGroup.IsHitTestVisible(false);icons.Children().Append(activeGroup);
         scroll.Content(icons);scroll.HorizontalScrollMode(ScrollMode::Disabled);
         scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
         scroll.VerticalScrollMode(ScrollMode::Enabled);scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);
@@ -42,7 +43,7 @@ struct Column:std::enable_shared_from_this<Column>{
         frame.Children().Append(scroll);
         grip.Background(clear());grip.Child(panelGrip(data->theme()));
         auto item=O({{L"kind",S(L"column")},{L"column",N(id)}});
-        gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}));
+        gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item);
         AutomationProperties::SetAutomationId(grip,L"column-grip-"+to_hstring(id));
         AutomationProperties::SetName(grip,L"Move column");frame.Children().Append(grip);workspace.Children().Append(background);
     }
@@ -53,6 +54,14 @@ struct Column:std::enable_shared_from_this<Column>{
     void apply(J const& next){
         applying=true;geometry=next;
         auto bounds=object(geometry,L"bounds"),content=object(geometry,L"content");place(background,bounds);
+        auto attached=object(geometry,L"group_panel");
+        background.Background(data->brush(attached.Size()?L"tabbar":L"panel"));activeGroup.Visibility(Visibility::Collapsed);
+        bool opensLeft=attached.Size()&&str(attached,L"direction")==L"left";
+        background.CornerRadius(attached.Size()?(opensLeft?CornerRadius{0,8,8,0}:CornerRadius{8,0,0,8}):CornerRadius{8,8,8,8});
+        auto work=object(object(data->model,L"layout"),L"work_area");
+        hstring glyph=num(bounds,L"x")+num(bounds,L"width")*.5<num(work,L"x")+num(work,L"width")*.5?
+            L"chevron-double-right":L"chevron-double-left";
+        if(glyph!=expandGlyph){expandGlyph=glyph;expand.Content(icon(glyph,data->theme()));}
         place(expand,local(object(geometry,L"expand"),bounds));place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
         double offset=0;
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
@@ -61,6 +70,11 @@ struct Column:std::enable_shared_from_this<Column>{
         std::set<std::wstring> current;double bottom=num(content,L"height");
         for(auto value:array(geometry,L"groups")){
             auto group=value.GetObject();auto groupBounds=object(group,L"bounds");
+            bool open=attached.Size()&&num(attached,L"group")==num(group,L"group");
+            if(open){
+                place(activeGroup,local(groupBounds,content,offset));activeGroup.Visibility(Visibility::Visible);
+                activeGroup.CornerRadius(opensLeft?CornerRadius{0,6,6,0}:CornerRadius{6,0,0,6});
+            }
             bottom=std::max(bottom,num(groupBounds,L"y")+num(groupBounds,L"height")-num(content,L"y")+offset);
             for(auto iconValue:array(group,L"icons")){
                 auto tile=iconValue.GetObject();auto panelId=str(tile,L"panel");std::wstring key=panelId.c_str();current.insert(key);
@@ -68,7 +82,7 @@ struct Column:std::enable_shared_from_this<Column>{
                 auto found=buttons.find(key);
                 if(found==buttons.end()){
                     auto pick=button(data,str(panel,L"title"),[weak=weak_from_this(),panelId]{
-                        if(auto self=weak.lock())for(auto value:array(self->geometry,L"groups")){
+                        if(auto self=weak.lock();self&&!self->gestures->SuppressClick())for(auto value:array(self->geometry,L"groups")){
                             auto group=value.GetObject();
                             for(auto iconValue:array(group,L"icons"))if(str(iconValue.GetObject(),L"panel")==panelId){
                                 self->data->dispatch(O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"toggle_column_drawer")},
@@ -78,14 +92,14 @@ struct Column:std::enable_shared_from_this<Column>{
                     });
                     pick.Padding({0,0,0,0});pick.Content(icon(str(panel,L"icon"),data->theme()));
                     auto target=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
-                    gestures->Source(pick,J{},target);
+                    gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",target}}),target,false,{},WorkspaceGestures::Pickup::Hold);
                     AutomationProperties::SetAutomationId(pick,L"column-icon-"+panelId);
                     ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
                     icons.Children().Append(pick);found=buttons.emplace(key,pick).first;
                 }
                 auto pick=found->second;place(pick,local(object(tile,L"bounds"),content,offset));
                 AutomationProperties::SetName(pick,str(panel,L"title"));ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
-                pick.Background(str(group,L"active")==panelId?selected():clear());
+                pick.Background(!open&&str(group,L"active")==panelId?selected():clear());
             }
         }
         for(auto it=buttons.begin();it!=buttons.end();)if(!current.contains(it->first)){

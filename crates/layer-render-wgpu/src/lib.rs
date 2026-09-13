@@ -121,8 +121,8 @@ impl Uploads {
         queue: &wgpu::Queue,
         target: &wgpu::Buffer,
         bytes: &[u8],
-    ) {
-        self.write_at(encoder, queue, target, 0, bytes);
+    ) -> Result<(), GpuRasterError> {
+        self.write_at(encoder, queue, target, 0, bytes)
     }
     fn write_at(
         &mut self,
@@ -131,24 +131,36 @@ impl Uploads {
         target: &wgpu::Buffer,
         offset: u64,
         bytes: &[u8],
-    ) {
+    ) -> Result<(), GpuRasterError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = queue;
-            self.belt
-                .write_buffer(
-                    encoder,
-                    target,
-                    offset,
-                    wgpu::BufferSize::new(bytes.len() as u64).unwrap(),
-                )
+            let size =
+                wgpu::BufferSize::new(bytes.len() as u64).ok_or(GpuRasterError::SizeOverflow)?;
+            // StagingBelt::write_buffer unwraps mapping failures. Allocate the
+            // same reusable slice and let device-loss errors reach the host.
+            let slice = self.belt.allocate(
+                size,
+                wgpu::BufferSize::new(wgpu::COPY_BUFFER_ALIGNMENT).unwrap(),
+            );
+            slice
+                .get_mapped_range_mut()
+                .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?
                 .copy_from_slice(bytes);
+            encoder.copy_buffer_to_buffer(
+                slice.buffer(),
+                slice.offset(),
+                target,
+                offset,
+                size.get(),
+            );
         }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = encoder;
             queue.write_buffer(target, offset, bytes);
         }
+        Ok(())
     }
     fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -898,11 +910,13 @@ impl WgpuRasterizer {
             .max(mem::size_of::<TargetGpu>() as u32) as u64;
         let target_capacity = INITIAL_TARGET_RECORDS;
         let target_buffer = create_target_buffer(&device, target_stride, target_capacity);
-        use wgpu::util::DeviceExt;
-        let unclipped = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        // wgpu initializes new buffers to zero. Mapping merely to write zeros
+        // adds no data and can panic when device removal races construction.
+        let unclipped = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("unrestricted brush coverage"),
-            contents: &[0; 48],
+            size: 48,
             usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
         });
         let target_bind_group =
             create_target_bind_group(&device, &target_layout, &target_buffer, &unclipped);
@@ -1945,7 +1959,7 @@ impl WgpuRasterizer {
                 &self.queue,
                 &self.dab_buffer,
                 dab_bytes(packet.dabs),
-            );
+            )?;
         }
         let used = self.style_stride as usize * (background_index + 1);
         self.style_upload.clear();
@@ -1991,7 +2005,7 @@ impl WgpuRasterizer {
         self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
             .copy_from_slice(style_bytes(&background));
         self.uploads
-            .write(encoder, &self.queue, &self.style_buffer, &self.style_upload);
+            .write(encoder, &self.queue, &self.style_buffer, &self.style_upload)?;
         Ok(background_index)
     }
 

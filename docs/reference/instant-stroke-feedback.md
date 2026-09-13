@@ -135,7 +135,7 @@ is not saved into a brush or document. The C ABI exposes the same fields through
 | finalization lag | 8 ms | Size of the replaceable real-input suffix |
 | prediction horizon | 8 ms | Engine future interval; native samples have a separate 64 ms safety cap |
 | maximum prediction distance | 96 physical px | Zoom-independent runaway clamp |
-| tip lock | 1.0 | Endpoint correction strength |
+| tip lock | 1.0 | Endpoint correction strength; automatic at full strength in preferences |
 | correction easing | 1.5 | Distribution of correction behind the endpoint |
 | minimum prediction speed | 12 physical px/s | Suppresses stationary noise |
 | corner suppression | 1.0 | Stops extrapolation at right-angle turns and reversals |
@@ -146,22 +146,27 @@ monotonic timebase. `now` alone advances time-driven paint; `presentation`
 selects the speculative endpoint. The older timed entry point uses the
 configured horizon.
 
+The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
+existing saved values are preserved.
+
 The native-prediction switch appears directly below **Enable stroke prediction** on
 every host. Android reports framework `MotionPredictor` availability for the
 connected stylus; Web checks for `getPredictedEvents`; iPadOS uses UIKit predicted
 touches. Linux, Windows and macOS currently show a disabled switch. Capability
 is transient and never overwrites the saved choice. When supported native
-prediction is selected, **Prediction time** and **Pen tip tracking** (including
-their reset actions) are disabled. Native timing comes from its sample timestamps
-and presentation time; tracking is full strength. If native samples are absent,
+prediction is selected, the **Prediction amount** slider and its reset action are
+disabled. Native timing comes from its sample timestamps and presentation time.
+Endpoint tracking is always full strength for both native and shared prediction;
+the retired `tip_lock` preference still loads but no longer affects rendering.
+If native samples are absent,
 the engine uses its automatic 8 ms fallback. Turning native prediction off, or
-losing support, restores the saved manual controls.
+losing support, restores the saved prediction time.
 
 ## Lead stability and impending lift
 
 Each active stroke owns a small preview-only history. The predicted distance from
-the latest real position is filtered using elapsed presentation time, with 24 ms
-extension and 10 ms retreat time constants, and extension limited to 1 physical
+the latest real position is filtered using elapsed presentation time, with 32 ms
+extension and 14 ms retreat time constants, and extension limited to 0.8 physical
 pixels per millisecond. Stops, strong deceleration, sharp turns and lift handling
 bypass that filter so it cannot retain a dangerous old lead. Native and shared
 predictions share the same limits, including bounds on intermediate native points.

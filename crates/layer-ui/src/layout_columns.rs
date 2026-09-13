@@ -1121,6 +1121,7 @@ mod tests {
             panel: Panel::Brushes,
             tab_width: 600.,
             content_height: 0.,
+            scroll: None,
         });
         layout.reset_column_width(40, VIEW).unwrap();
         assert_eq!(
@@ -1234,6 +1235,7 @@ mod tests {
             panel: Panel::Brushes,
             tab_width: 300.,
             content_height: 0.,
+            scroll: None,
         });
         assert_collapse_threshold(&layout, 3, 4, false, 320. - TILE_SIZE, true);
         assert_eq!(layout.collapse_at_divider(4, [0., 0.], VIEW), None);
@@ -1271,13 +1273,13 @@ mod tests {
         assert_eq!(geometry(&layout).collapsed.len(), 1);
         assert_eq!(layout.collapsed_column_for_group(child), Some(4));
         let drawer = crate::ContentDrawer::for_column(&layout, child, Panel::Properties).unwrap();
-        assert!(drawer.placement(&layout, VIEW, &[200.], false).is_some());
+        assert!(drawer.placement(&layout, VIEW, &[200.]).is_some());
         layout.set_column_collapsed(4, false, VIEW).unwrap();
         assert_eq!(layout.collapsed_column_for_group(child), Some(child));
         assert!(
             crate::ContentDrawer::for_column(&layout, child, Panel::Properties)
                 .unwrap()
-                .placement(&layout, VIEW, &[200.], false)
+                .placement(&layout, VIEW, &[200.])
                 .is_some()
         );
     }

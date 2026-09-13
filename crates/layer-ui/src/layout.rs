@@ -553,7 +553,8 @@ impl Panel {
     }
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => "menu",
+            Self::Toolbar | Self::CustomToolbar(_) => "toolbar",
+            Self::Commands => "menu",
             Self::Brushes => "brush",
             Self::ToolSettings => "settings",
             Self::Color => "color",
@@ -703,7 +704,8 @@ pub struct FloatingGroup {
     /// Width inherited on tear-off, retained when manually resizing.
     #[serde(default)]
     pub default_width: Option<f32>,
-    /// None sizes to the active content; resizing supplies an explicit height.
+    /// None sizes to active content; a preserved tear-off size or manual resize
+    /// supplies an explicit height.
     pub height: Option<f32>,
     /// Default-size cycle and flow direction for a standalone floating toolbar.
     #[serde(default)]
@@ -739,15 +741,38 @@ impl FloatingToolbarLayout {
 
 /// Native measurements only. Rust owns sizing rules and resulting geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PanelScrollMeasurement {
+    /// Controls and padding outside the scrolling content, excluding workspace chrome.
+    pub fixed_height: f32,
+    /// One complete row (including spacing), or zero for continuous content.
+    pub unit_height: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PanelMeasurement {
     pub panel: Panel,
     pub tab_width: f32,
-    /// Zero means the body has not been measured; use the default floating height.
+    /// Natural body height including all scroll content and fixed controls, but
+    /// excluding the workspace tab bar/footer grip. Zero means not yet measured.
     pub content_height: f32,
+    /// None means the content should keep its natural height, e.g. a square picker.
+    /// Older hosts can omit this until they opt into content-aware drop sizing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll: Option<PanelScrollMeasurement>,
 }
+
+#[cfg(test)]
+#[path = "floating_drop_tests.rs"]
+mod floating_drop_tests;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockLayout {
+    #[serde(default)]
+    pub header: crate::HeaderLayout,
+    #[serde(default)]
+    pub canvas_info: crate::CanvasInfoLayout,
+    #[serde(skip)]
+    pub header_presentation: crate::HeaderPresentation,
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
     #[serde(
@@ -1096,7 +1121,7 @@ impl DockLayout {
     /// The complete editor preset is enabled as hosts finish their native UI.
     /// This selects initial/reset geometry, never migrates a saved workspace.
     pub fn for_platform(platform: crate::Platform) -> Self {
-        if matches!(
+        let mut layout = if matches!(
             platform,
             crate::Platform::Gtk
                 | crate::Platform::Android
@@ -1108,7 +1133,9 @@ impl DockLayout {
             Self::editor_default()
         } else {
             Self::default()
-        }
+        };
+        layout.header = crate::HeaderLayout::for_platform(platform);
+        layout
     }
 
     pub fn editor_default() -> Self {
@@ -1414,6 +1441,9 @@ impl Default for DockLayout {
         };
         Self {
             panels: PanelConfig::defaults(),
+            header: Default::default(),
+            canvas_info: Default::default(),
+            header_presentation: Default::default(),
             floating: Vec::new(),
             collapsed: Vec::new(),
             column_settings: Vec::new(),
@@ -1463,6 +1493,7 @@ impl DockLayout {
     /// Visible panels occur exactly once; hidden panels retain their registry entry.
     /// globally unique IDs, finite dimensions, and valid active tabs/ratios.
     pub fn validate(&self) -> Result<(), String> {
+        self.header.validate()?;
         let mut ids = std::collections::BTreeSet::new();
         let mut panels = Vec::new();
         fn node(
@@ -2737,9 +2768,15 @@ impl DockLayout {
         if (coordinate - center).abs() < 0.001 {
             return Ok(());
         }
-        let base = self.column_settings.iter().any(|s| self.open_column_group(s.column).is_some())
+        let base = self
+            .column_settings
+            .iter()
+            .any(|s| self.open_column_group(s.column).is_some())
             .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false));
-        let original = base.as_ref().and_then(|base| base.dividers.iter().find(|b| b.id == id)).unwrap_or(d);
+        let original = base
+            .as_ref()
+            .and_then(|base| base.dividers.iter().find(|b| b.id == id))
+            .unwrap_or(d);
         let dimension = usize::from(d.axis == Axis::Vertical);
         let original_center = if dimension == 0 {
             original.bounds.x + original.bounds.width * 0.5
@@ -2911,6 +2948,17 @@ impl DockLayout {
     /// Hosts supply measured native chrome in logical units. All panel and
     /// divider coordinates remain relative to the full-window canvas.
     pub fn workspace(&self, width: f32, height: f32, top: f32, bottom: f32) -> ResolvedLayout {
+        let native_header = self.header_presentation.height > 0.;
+        let top = if native_header {
+            self.header_presentation.height
+        } else {
+            top
+        };
+        let bottom = if native_header && !self.canvas_info.visible {
+            0.
+        } else {
+            bottom
+        };
         let viewport = [width, height];
         let height = self.workspace_height(height);
         // The header already includes bottom padding. Keep the outer inset on
@@ -2932,7 +2980,9 @@ impl DockLayout {
             width: result.work_area.width,
             height: hud_height,
         };
-        result.work_area.height -= hud_height;
+        if !native_header {
+            result.work_area.height -= hud_height;
+        }
         for group in &mut result.groups {
             offset(&mut group.bounds);
         }
@@ -3062,6 +3112,105 @@ impl DockLayout {
             ),
         ];
         Ok(())
+    }
+
+    /// Settle a floating drag once, inside its existing history transaction. The host
+    /// measures content at the floating width; the held preview never uses this
+    /// policy. Subsequent content updates do not resize the established window.
+    pub(crate) fn settle_floating_drop(
+        &mut self,
+        group: u32,
+        viewport: [f32; 2],
+        preview: Bounds,
+        source_height: Option<f32>,
+        newly_floating: bool,
+    ) -> Result<(), String> {
+        let placement = self
+            .workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+            .groups
+            .into_iter()
+            .find(|g| g.id == group && g.floating)
+            .ok_or("Unknown floating group")?;
+        // Toolbars already have an exact compact grid and wrap to fit the window.
+        if placement.panels.len() == 1 && placement.active.kind() == PanelKind::Tiles {
+            return self.move_floating(group, [preview.x, preview.y], viewport);
+        }
+        let top = crate::HEADER_HEIGHT;
+        let bottom = self.workspace_height(viewport[1]) - WORKSPACE_SPACING;
+        let usable = (bottom - top).max(1.0);
+        let chrome = if placement.tabs_visible {
+            TAB_BAR_HEIGHT
+        } else {
+            PANEL_GRIP_HEIGHT
+        };
+        let measurement = self
+            .measurements
+            .iter()
+            .find(|m| m.panel == placement.active);
+        let natural = measurement
+            .filter(|m| m.content_height > 0.0)
+            .map_or(preview.height, |m| m.content_height + chrome)
+            .max(TAB_BAR_HEIGHT)
+            .min(usable);
+        let scroll = measurement.and_then(|m| m.scroll);
+        let minimum = scroll.map_or(natural, |m| {
+            (chrome
+                + m.fixed_height
+                + 4.0
+                    * if m.unit_height > 0.0 {
+                        m.unit_height
+                    } else {
+                        TILE_SIZE
+                    })
+            .min(natural)
+        });
+        let budget = 400.0_f32.min(usable * 0.5).max(minimum).min(usable);
+        let preferred = if !newly_floating {
+            preview.height.min(usable)
+        } else if scroll.is_none() || natural <= budget {
+            natural
+        } else {
+            source_height
+                .filter(|h| *h >= minimum && *h <= budget)
+                .unwrap_or(budget)
+        };
+        // Compact controls stay whole. Scrollable content can lose rows, down to
+        // four (or all rows if fewer exist), before its grab edge moves inward.
+        let minimum = if !newly_floating && scroll.is_none() {
+            preferred
+        } else {
+            minimum.min(preferred)
+        };
+        let footer = !placement.tabs_visible;
+        let anchor = if footer {
+            (preview.y + preview.height).min(bottom)
+        } else {
+            preview.y.max(top)
+        };
+        let room = if footer {
+            anchor - top
+        } else {
+            bottom - anchor
+        };
+        let height = preferred
+            .min(room.max(minimum))
+            .max(TAB_BAR_HEIGHT)
+            .min(usable);
+        self.floating
+            .iter_mut()
+            .find(|f| f.root.id() == group)
+            .unwrap()
+            .height = Some(height);
+        self.move_floating(
+            group,
+            [preview.x, if footer { anchor - height } else { anchor }],
+            viewport,
+        )
     }
 
     pub fn resize_floating(
@@ -4151,10 +4300,9 @@ mod tests {
             crate::Platform::Android,
             crate::Platform::Web,
         ] {
-            assert_eq!(
-                DockLayout::for_platform(platform),
-                DockLayout::editor_default()
-            );
+            let mut expected = DockLayout::editor_default();
+            expected.header = crate::HeaderLayout::for_platform(platform);
+            assert_eq!(DockLayout::for_platform(platform), expected);
             assert!(Panel::Commands.available_on(platform));
         }
         use crate::CommandId::*;
@@ -4783,6 +4931,7 @@ mod tests {
             panel: Panel::Sizes,
             tab_width: 80.0,
             content_height: 100.0,
+            scroll: None,
         });
         layout.bands[0].extent = 50.0;
         let resolved = layout.workspace(1600.0, 2000.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
@@ -5676,6 +5825,7 @@ mod tests {
                 panel,
                 tab_width: 140.0,
                 content_height: 0.0,
+                scroll: None,
             });
             assert_eq!(height(&layout), default_height);
             layout.measurements[0].content_height = 180.0;
@@ -5700,11 +5850,13 @@ mod tests {
                     panel: Panel::Brushes,
                     tab_width: 200.0,
                     content_height: 1000.0,
+                    scroll: None,
                 },
                 PanelMeasurement {
                     panel: Panel::Layers,
                     tab_width: 140.0,
                     content_height: 100.0,
+                    scroll: None,
                 },
             ],
             ..Default::default()
@@ -5883,11 +6035,13 @@ mod tests {
                 panel: Panel::Brushes,
                 tab_width: 150.0,
                 content_height: 200.0,
+                scroll: None,
             },
             PanelMeasurement {
                 panel: Panel::Layers,
                 tab_width: 180.0,
                 content_height: 200.0,
+                scroll: None,
             },
         ];
         layout.add_panel_to_group(Panel::Brushes, 8).unwrap();
@@ -6941,8 +7095,10 @@ mod tests {
     #[test]
     fn workspace_bottom_clearance_keeps_controls_inside_the_full_canvas() {
         for viewport in [[375., 486.], [1200., 900.]] {
-            let mut layout = DockLayout::default();
-            layout.bottom_inset = TILE_SIZE;
+            let mut layout = DockLayout {
+                bottom_inset: TILE_SIZE,
+                ..Default::default()
+            };
             let bottom = viewport[1] - TILE_SIZE - WORKSPACE_SPACING;
             let resolved = layout.workspace(
                 viewport[0],
@@ -6976,13 +7132,6 @@ mod tests {
                 .chain([resolved.status])
             {
                 assert!(bounds.y + bounds.height <= bottom + 0.001, "{bounds:?}");
-            }
-            for section in layout.zen_toolbars(viewport).sections {
-                assert!(
-                    section.bounds.y + section.bounds.height <= bottom + 0.001,
-                    "{:?}",
-                    section.bounds
-                );
             }
             layout
                 .move_panel(

@@ -12,16 +12,16 @@ visual and hardware performance evidence. Shared changes must build on both.
 See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
 for the shared-code boundaries, milestone matrix and remaining work.
 
-Popup presentation follows the system design: native sheets, alerts and popovers
-retain their system background, and `EditorGlassSurface` gives custom overlays
-and the workspace pill switcher Liquid Glass on iPadOS/macOS 26 or later.
-The switcher retains its segment geometry and selected-workspace highlight.
-Native materials follow the editor theme. Older systems retain regular material;
-Reduce Transparency uses an opaque semantic background. Keep existing popup
-sizes and one effect per custom surface. Attach contextual presentations to the
-control or row that invoked them; layer menus use the pressed row and the footer
-action uses its own button. `testLayerContextMenuAnchors` exercises mask/content
-actions and retains iPad captures of the row and footer origins.
+Popup text uses opaque shared-theme surfaces, including the workspace pill.
+`EditorPopupSurface` pairs the shared text and panel colors for custom overlays;
+`EditorPopupPresentation` fills app-owned popovers and sheets, including their
+margins and arrows. Settings retain an opaque native semantic background.
+Keep existing sizes and attach contextual presentations to the invoking control
+or row. Layer menus use the pressed row; the footer uses its own button.
+Editor menus share an opaque vertical action list and an anchor overlay at the
+editor or sheet root. The overlay inherits the root's current palette; copying
+the invoking control's whole environment can override menu text colors.
+Mac system menus retain AppKit appearance and accessibility behavior.
 
 [Performance workflows and measurements](PERFORMANCE.md) include five opt-in
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
@@ -175,13 +175,29 @@ text adapters use tabular digits. The
 includes both Apple presets/themes, width and endpoint cases, plus mounted-field
 checks of actual editor actions. Full UIKit and editor pixel parity remain open.
 
-The Color panel provides the shared HSV square / HLS triangle,
-foreground/background/transparent paint slots, swap and component expressions.
-Rust owns color conversion, hue memory, normalized geometry, hit regions and
-drag clamping. Both native hosts share the gradient drawing and controls; their
-small input views latch the starting region for each mouse, Pencil or touch
-contact. Picking a color exits transparent paint using the previous paint slot.
-Channel edits update the current Rust state, preserving other queued changes.
+The compact Color panel follows the shared layout down to 128 logical points:
+an Okhsv circle, HSV square or HLS triangle; overlapping foreground/background
+swatches; transparent paint; Swap; two alternate shape buttons; and a curved
+OKLCH/HSB/HLS readout that toggles to RGB. Rust owns the layout, conversion,
+readout text, hue memory, hit regions and drag clamping. Both hosts use shared
+RGBA8 fields and hue-guide stops, retaining separate field/guide images across
+marker changes. Native clips, markers and controls remain at display resolution.
+Wheel painting follows Web's rounded destination edges, with the field/guide
+raster sized to those physical bounds to avoid extra interpolation. Swatch
+selection borders sit behind their paint interiors. Each styled swatch has a
+circular hit region so the foreground's empty corners do not intercept taps on
+the overlapping background swatch. Native button styles match
+the shared swatch, shape and Swap hover/press feedback while retaining ordinary
+activation and cancellation. The readout uses the shared accent and label outline
+when its native focus binding is active.
+Curved text uses the shared native font metrics and fractional CoreText glyph
+positions, retaining normal font smoothing instead of rounding each rotated glyph.
+The two Mac shape icons composite before rotation to keep their outlines smooth.
+This standard SwiftUI drawing step is limited to macOS, where complete-panel
+captures show an improvement; UIKit uses its validated existing rendering.
+The input views latch the starting region for each mouse, Pencil or touch contact.
+Picking exits transparent paint through the previous paint slot; changing shape
+or paint slot cancels the old contact.
 
 For reproducible Debug editor fixtures, `CAPY_INITIAL_ACTIONS` accepts a JSON
 array of shared actions at launch. For example, this opens the Tool panel without
@@ -208,17 +224,18 @@ cargo test -p layer-apple apple_transform_settings
 cargo test -p layer-apple apple_color_
 ```
 
-The focused `testColorControls` test checks native wheel contacts, color-space
-and paint-slot controls and expression entry on both targets. It retains full
+The focused `testColorControls` test checks native wheel contacts, shapes,
+readout switching, paint slots, Swap and continuous dragging. It retains full
 captures plus measured wheel geometry for the shared
 [color sampling check](../../tools/visual/README.md). The headless ABI tests
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
-The Color panel shares the web layout on both Apple targets: three paint slots
-with a checkerboard/selected background, labeled Swap and color-space buttons,
-and three full numeric slider controls. Its fast
+The Color panel shares the Web layout, vector icons and readout spacing on both
+Apple targets. Its
 [complete-panel fixture](../../tools/visual/README.md#complete-color-panels)
-compares 48 native/Chrome cases without visible native windows. The focused UI
+compares 216 cases per host: both presets/themes, three shapes, two readouts,
+three paint slots and three widths. The same source has AppKit and UIKit capture
+entry points. The focused UI
 workflow records the actual accepted Rust color through opt-in debug metadata,
 so its color oracle does not assume ideal touch coordinates.
 
@@ -288,6 +305,10 @@ CAPY_PROPERTY_INVENTORY=/tmp/capy-inventory.json \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-menu-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-appearance.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/native-context-menu.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/native-context-source.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-menu-keyboard.swift
 ```
 
 The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
@@ -318,6 +339,44 @@ and coordinator workflows. These macOS-hosted checks do not exercise UIKit
 widgets. Passing the audit establishes catalog coverage; complete native
 workflows, dynamic controls, visual states and hardware performance still
 require their own evidence. Save/Load Layout remains excluded.
+
+`editor-appearance.swift` checks explicit Light/Dark, returning to System and
+native application appearance changes with an isolated AppKit editor window.
+`testPopupThemeFollowsExplicitAndSystem` runs the Settings workflow on either
+Apple target and attaches captures for reviewing sheet and popup colors.
+
+The native context-menu checks invoke actual AppKit menu items and verify shared
+actions/Undo, availability, checks and shortcuts. The source check opens one
+temporary window, waits for native menu dismissal between actions, and verifies
+that removing a source retires its pending query; keep that fixture in the
+foreground. `testNativeZenContextAction` checks the UIKit source and resulting
+Zen layout. `testNativeWorkspaceContextAction` checks the UIKit row menu and its
+persisted move action. None of these checks uses Mac system-menu coordinates.
+For quick UIKit contact/scroll checks with one booted iPad Simulator, run
+`python3 apps/layer-apple/scripts/test-native-rows.py` (use `--simulator` to choose
+among several). It builds a disposable callback fixture, requires its completion
+marker even if `simctl` exits successfully, and removes its own app afterward.
+The fixture covers real scroll-view edge movement in both directions and shared
+contact policies; it does not synthesize physical finger/Pencil gestures.
+`EditorLaunchTests/testLayerMenuDragUpward` and `EditorMenuChecks` exercise the
+UIKit editor on simulator or device destinations with disposable persistence.
+The connected iPad passes upward layer dragging with exact Undo/Redo, layer
+menu anchors/actions, main menus in both themes, submenus/shortcuts and workspace
+menu actions followed by held dragging in both directions. Mac's focused
+`testBlendChoices` verifies both blend controls and Undo/Redo in an isolated app.
+Both hosts also pass `testWorkspaceSwitcher`, `testToolbarStylesAndActions` and
+`testToolbarCustomization`. Toolbar grips include their names in accessibility
+labels; Mac's Select All command respects the focused native text editor.
+The direct menu keyboard check uses native events in its own Mac window for
+arrows, Return, Escape, disabled rows and shifted shortcuts. Menus reuse
+`ShortcutKeyCapture`; UIKit restores the preceding responder when a menu closes.
+The iPad workflow verifies arrows and command shortcuts. XCTest Escape produced
+no UIKit press or key-command callback in a traced first-responder probe; Return
+also did not execute the menu action. Those device key checks remain open and
+are not inferred from Mac results. Use `EditorActionMenu` and
+`editorPopover` for editor menus; install `EditorPopoverHost` at an editor/sheet
+root outside clipped panels. Keep input on the existing native hold/pan path;
+do not add UIKit menu/drag-session handoffs or per-menu presenters.
 
 Tool Settings renders checkable and ordinary actions with the same shared
 button component on both Apple targets. Labels use the shared bold text size,
@@ -396,6 +455,14 @@ joins exported Instruments GPU work to recorded drawing frames on both physical
 Apple hosts, retaining unmatched work and incomplete capture windows.
 See [INPUT.md](INPUT.md) for Pencil corrections, shared stroke/history handling,
 fast input checks and the physical-device evidence still required.
+
+For UI tests using already installed iPad apps, set `UseDestinationArtifacts`
+in the `.xctestrun` target with `TestHostBundleIdentifier`,
+`UITargetAppBundleIdentifier` and `TestBundleDestinationRelativePath`.
+Omit `TestHostPath`, `TestBundlePath`, `UITargetAppPath` and
+`DependentProductPaths`: retained local dependencies can make XCTest attempt
+to install an unavailable bundle during `app.launch()`. Tests launch their own
+isolated namespaces; no separate prelaunch/attach path is needed.
 
 Check editor behavior directly without driving system menus:
 
@@ -662,6 +729,21 @@ dispatch, reordered presentation, restored drop targets and closing input retire
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-drawers.swift
 ```
+
+For native AppKit mouse/tablet contacts, run these fixtures one at a time; each
+owns a temporary foreground window and isolated storage:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-native-input.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/layer-row-input.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-switcher-input.swift
+```
+
+The workspace check covers held tiles, immediate drawer tabs, continuous moves,
+menus, cancellation and exact Undo/Redo on both Apple presets. It includes
+repeated injected event numbers: pan and press share the mouse-down event object,
+while separate contacts must reclassify their visible source. These fixtures do
+not establish physical Pencil or tablet-sensor acceptance.
 
 Debug-only `CAPY_INITIAL_ACTIONS` fixtures run once after restoration and the first
 native surface size, so layout actions use the editor's viewport instead of the

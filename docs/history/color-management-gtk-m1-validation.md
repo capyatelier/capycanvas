@@ -5,7 +5,7 @@ Other hosts require the user's approval before work continues. This report recor
 the implemented contracts and measured limits; the proposed milestone document
 was evaluated against the code, numerical references and hardware results.
 
-The final source is the commit containing this report, following `e746d6e`.
+The originally qualified source is `cac7b48`, following `e746d6e`.
 Significant intermediate commits were `3fe5e76` (contracts and baseline),
 `abc523a` (immutable tiles and indexed container), `290c760` (production GTK
 activation and predecessor removal), and `e746d6e` (bounded capture and retained
@@ -348,6 +348,25 @@ are selected by `recovery::tests` without `--ignored`.
 Paths under `artifacts/` and `/tmp` name local outputs, not shipped files. Key
 measurements are retained in this tracked report; executable workloads and numeric
 references are committed with the implementation.
+
+## Integration with newer main
+
+Before publication, this work was merged with `origin/main` at `62b842c`.
+The shared renderer replacement APIs were consolidated: source preparation and
+surface resizing fail before adoption, committed raster roots/history survive,
+and unsubmitted input is discarded instead of being committed by CPU-only replay.
+Input queue pressure now submits through a real frame boundary. Pending filter
+validation and GPU query reset retain the newer shared lifecycle behavior.
+
+Integration checks passed: 45 core, 48 engine, 356 UI/session and 25 host tests;
+123 physical-GPU renderer tests (18 separate workloads ignored); the native GTK
+file/recovery/surface workflow; and the physical-GPU host late-correction test.
+The latter checks changed pixels and save checkpoint identity with one undo entry.
+The GTK workflow targets the visible dialog's Cancel button because the newer
+title-bar customization UI also retains a hidden button with that label.
+Local records are `artifacts/color-m1/merged-gpu-tests.txt`,
+`merged-gtk-files-final.txt` and `merged-host-correction-final.txt`. The detailed
+performance distributions above remain measurements of `cac7b48`.
 
 ## Original rendering baseline
 

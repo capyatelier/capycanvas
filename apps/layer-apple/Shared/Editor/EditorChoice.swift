@@ -51,21 +51,11 @@ struct EditorChoice: View {
             .modifier(ChoiceMeasurement(id: identifier))
             .accessibilityLabel(label).accessibilityValue(options.indices.contains(selected) ? options[selected] : "")
             .accessibilityIdentifier(identifier)
-            .popover(isPresented: $choosing) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(options.indices, id: \.self) { index in
-                            Button { choosing = false; select(index) } label: {
-                                HStack(spacing: 6) {
-                                    SharedIcon(name: "check").opacity(index == selected ? 1 : 0)
-                                    Text(options[index])
-                                    Spacer(minLength: 0)
-                                }.padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
-                            }.buttonStyle(.plain).accessibilityIdentifier(identifier + "-option-\(index)")
-                        }
-                    }.padding(6)
-                }.frame(width: 230, height: min(400, CGFloat(options.count) * 28 + 12))
-                    .presentationCompactAdaptation(.popover)
+            .editorPopover(isPresented: $choosing) {
+                EditorActionMenu(model: AppleContextMenu(JSON(["sections": [options.indices.map { index in
+                    ["label": options[index], "enabled": true, "selected": index == selected,
+                     "identifier": identifier + "-option-\(index)", "action": ["index": index]]
+                }]])) { select(Int($0["index"].uint)) }, width: 230) { choosing = false }
             }
     }
 }

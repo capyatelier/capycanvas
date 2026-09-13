@@ -3,6 +3,123 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNativeWorkspaceContextAction() { checkNativeWorkspaceContextAction() }
+
+    @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
+
+    @MainActor func testLayerGripAndChildActions() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launch()
+        let add = app.buttons["layer-New layer"]
+        XCTAssertTrue(add.waitForExistence(timeout: 20))
+        add.tap()
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let addedID = rows.element(boundBy: 0).identifier
+        let originalID = rows.element(boundBy: 1).identifier
+        let original = app.otherElements[originalID]
+        original.buttons["Select layer without changing drawing target"].tap()
+        XCTAssertTrue(original.buttons["Select layer without changing drawing target"].isSelected)
+        XCTAssertTrue(app.otherElements[addedID].buttons["Edit layer content"].isSelected)
+        let grip = app.descendants(matching: .any)[addedID.replacingOccurrences(of: "layer-row-", with: "layer-grip-")].firstMatch
+        grip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.01,
+            thenDragTo: original.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.85)))
+        expectation(for: NSPredicate { _, _ in rows.element(boundBy: 0).identifier == originalID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        func command(_ label: String) {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch.tap()
+        }
+        command("Undo")
+        expectation(for: NSPredicate { _, _ in rows.element(boundBy: 0).identifier == addedID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        command("Redo")
+        expectation(for: NSPredicate { _, _ in rows.element(boundBy: 0).identifier == originalID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
+    @MainActor func testLayerMenuDragUpward() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_ROW_MENU_PROBE"] = "1"
+        app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
+        let actions = (0..<10).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let list = app.descendants(matching: .any)["layer-rows"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 20))
+        func order() -> [String] { (list.value as? String ?? "").split(separator: ",").map(String.init) }
+        expectation(for: NSPredicate { _, _ in order().count == 12 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let initial = order(), movedID = initial[6]
+        let row = app.otherElements["layer-row-" + movedID]
+        XCTAssertTrue(row.isHittable)
+        let destination = list.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0)).withOffset(CGVector(dx: 0, dy: 8))
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).press(forDuration: 0.8,
+            thenDragTo: destination, withVelocity: .slow, thenHoldForDuration: 0.3)
+        expectation(for: NSPredicate { _, _ in order().first == movedID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let moved = order()
+        XCTAssertEqual(moved.filter { $0 != movedID }, initial.filter { $0 != movedID })
+        func command(_ label: String) {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch.tap()
+        }
+        command("Undo")
+        expectation(for: NSPredicate { _, _ in order() == initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        command("Redo")
+        expectation(for: NSPredicate { _, _ in order() == moved }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
+    @MainActor func testLayerListScrolling() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
+        let actions = (0..<22).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let list = app.descendants(matching: .any)["layer-rows"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 20))
+        func order() -> [String] { (list.value as? String ?? "").split(separator: ",").map(String.init) }
+        expectation(for: NSPredicate { _, _ in order().count == 24 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let initial = order(), movedID = initial[0]
+        let first = app.descendants(matching: .any)["layer-grip-" + movedID].firstMatch
+        let initialFrame = first.frame
+        list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.8)).press(forDuration: 0.01,
+            thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.2)))
+        XCTAssertTrue(!first.exists || first.frame.maxY < initialFrame.maxY - 20,
+            "Early touch movement must scroll the rows")
+        XCTAssertEqual(order(), initial, "Early touch scrolling must preserve document order")
+        list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.15)).press(forDuration: 0.01,
+            thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.9)))
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(first.isHittable, "The source grip must be back inside the viewport")
+        let edge = list.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 1)).withOffset(CGVector(dx: 0, dy: -10))
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.01,
+            thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 1.2)
+        expectation(for: NSPredicate { _, _ in order() != initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let moved = order()
+        XCTAssertEqual(moved.filter { $0 != movedID }, initial.filter { $0 != movedID })
+        XCTAssertGreaterThan(moved.firstIndex(of: movedID) ?? -1, Int(list.frame.height / 40),
+            "Holding at the edge must move the source beyond the initial visible rows")
+        func command(_ label: String) {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch.tap()
+        }
+        command("Undo")
+        expectation(for: NSPredicate { _, _ in order() == initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        command("Redo")
+        expectation(for: NSPredicate { _, _ in order() == moved }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
     @MainActor func testLayerContextMenuAnchors() {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
@@ -12,13 +129,14 @@ final class EditorLaunchTests: XCTestCase {
         let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let row = rows.element(boundBy: 1)
         row.buttons["Edit layer content"].press(forDuration: 0.6)
-        let menu = app.descendants(matching: .any)["layer-context-menu"].firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        let nativeMenuItem = app.buttons["Rename layer…"]
+        XCTAssertTrue(nativeMenuItem.waitForExistence(timeout: 5))
         attachLayerMenu("layer-content-context-anchor")
         // Dismiss through the app canvas, then check the separate footer origin.
         app.otherElements["canvas"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(nativeMenuItem.waitForNonExistence(timeout: 5))
         app.buttons["layer-Layer actions"].tap()
+        let menu = app.descendants(matching: .any)["layer-context-menu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         attachLayerMenu("layer-footer-context-anchor")
     }
@@ -175,7 +293,7 @@ final class EditorLaunchTests: XCTestCase {
         app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
         app.launch()
         checkColorControls(in: app) { mode, wheel, state in
-            attachColorFixture(name: "ipad-color-" + mode, space: mode, state: state,
+            attachColorFixture(name: "ipad-color-" + mode, state: state,
                 screenshot: XCUIScreen.main.screenshot(), viewport: app.frame, wheel: wheel)
         }
     }

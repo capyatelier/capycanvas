@@ -1123,7 +1123,7 @@ impl Scene {
                 &self.buffer,
                 (base * self.stride) as u64,
                 &self.upload,
-            );
+            )?;
         }
         let mut source_bindings = std::collections::HashMap::new();
         let mut mask_bindings = std::collections::HashMap::new();

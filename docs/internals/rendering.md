@@ -29,6 +29,12 @@ zoom and rotation. The shared
 composed image into the platform's target. Panning the view does not, by itself,
 require repainting committed raster tiles.
 
+Viewport presentation and staging uploads return mapping failures to their host.
+A device removed during buffer allocation must not unwind the render owner; the
+host can reconstruct its GPU while retaining the shared document session. Uploads
+continue to reuse the staging belt and never wait for GPU completion on the UI
+thread.
+
 ## Incremental composition
 
 The *compositor* combines paint and image layers, groups, masks, clipping and

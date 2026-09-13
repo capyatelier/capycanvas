@@ -16,7 +16,7 @@ mod tool_settings;
 mod tools;
 pub use color::{
     ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
-    ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_hls_field, render_okhsv_disc,
+    ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};
 use tools::preset;
@@ -26,13 +26,15 @@ pub use tools::{
 };
 mod cursor;
 mod customization;
+mod header;
+pub use header::*;
+mod header_drag;
+pub use header_drag::*;
 mod drawers;
-mod zen;
 pub use drawers::{
     ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
     DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor,
 };
-pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
 mod layout;
 mod tab_drag;
@@ -44,7 +46,7 @@ mod shortcuts;
 mod theme;
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{LayerAction, LayerCanvasTool, LayersView, RegionSource};
+pub use session::{LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{
@@ -72,7 +74,8 @@ pub use layout::{
     ColumnIcon, ColumnMode, ColumnPanelHeight, ColumnSettings, Divider, DockBand, DockItem,
     DockLayout, DockNode, DockTarget, Edge, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
-    PanelExpansion, PanelMeasurement, ResizeEdge, ResolvedLayout, WorkspacePreset,
+    PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
+    WorkspacePreset,
 };
 pub use layout::{
     DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
@@ -118,6 +121,7 @@ pub struct BrushChoice {
     pub id: u32,
     pub label: &'static str,
     pub category: &'static str,
+    pub icon: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +230,7 @@ pub struct PanelChoice {
 #[derive(Clone, Debug, Serialize)]
 pub struct BrushCategory {
     pub label: &'static str,
+    pub icon: &'static str,
     pub brushes: Vec<BrushChoice>,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -264,10 +269,43 @@ pub fn ui_catalog() -> UiCatalog {
             "open-document",
             "save-document",
             "export-document",
+            "save-as",
+            "close-document",
+            "clear",
+            "transform",
+            "close",
+            "select-all",
+            "deselect",
+            "invert-selection",
+            "fill-selection",
+            "lasso-fill",
+            "add-layer",
+            "toolbar",
+            "new-toolbar",
+            "reset-layout",
+            "new-window",
+            "website",
+            "source-code",
             "adjustments",
             "properties",
             "stats",
             "brush",
+            "paint",
+            "watercolor",
+            "oil-paint",
+            "marker",
+            "pastel",
+            "spray",
+            "gradient-transparent",
+            "gradient-radial",
+            "gradient-radial-transparent",
+            "rectangle-fill",
+            "rectangle-both",
+            "ellipse-fill",
+            "ellipse-both",
+            "reset",
+            "chevron-double-left",
+            "chevron-double-right",
             "pen",
             "pencil",
             "airbrush",
@@ -428,6 +466,7 @@ pub enum CommandId {
     RedoWorkspace,
     NewToolbar,
     ManageToolbars,
+    CustomizeWorkspaceUi,
     FitCanvas,
     ZoomIn,
     ZoomOut,
@@ -455,6 +494,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::CustomizeWorkspaceUi => matches!(platform, Platform::Gtk | Platform::Web),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac),
             Self::NewDocument
             | Self::OpenDocument
@@ -515,8 +555,10 @@ impl CommandId {
         Some(match self {
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
-            Self::SaveDocument | Self::SaveDocumentAs => "save-document",
+            Self::SaveDocument => "save-document",
+            Self::SaveDocumentAs => "save-as",
             Self::ExportDocument => "export-document",
+            Self::CloseDocument => "close-document",
             Self::Pen => "pen",
             Self::Pencil => "pencil",
             Self::Brush => "brush",
@@ -527,9 +569,10 @@ impl CommandId {
             Self::Liquify => "liquify",
             Self::Lasso => "lasso",
             Self::Move => "move",
-            Self::ScaleRotate => "fit",
+            Self::ScaleRotate => "transform",
             Self::ApplyTransform => "check",
-            Self::CancelTransform => "undo",
+            Self::CancelTransform => "close",
+            Self::TransformAspect => "link",
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
@@ -541,9 +584,13 @@ impl CommandId {
             Self::Fill => "fill",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
-            Self::ClearLayer => "eraser",
-            Self::FillSelection => "fill",
-            Self::SelectAll | Self::Deselect | Self::InvertSelection => "lasso",
+            Self::ClearLayer => "clear",
+            Self::FillSelection => "fill-selection",
+            Self::SelectAll => "select-all",
+            Self::Deselect => "deselect",
+            Self::InvertSelection => "invert-selection",
+            Self::NewToolbar => "new-toolbar",
+            Self::ManageToolbars | Self::CustomizeWorkspaceUi => "toolbar",
             Self::FitCanvas => "fit",
             Self::ZoomIn => "plus",
             Self::ZoomOut => "minus",
@@ -554,14 +601,20 @@ impl CommandId {
             Self::ZenMode => ZenIcon::LookingUp.icon(),
             Self::Fullscreen => "fullscreen-enter",
             Self::Settings => "settings",
-            Self::AddLayer => "plus",
-            Self::DeleteLayer => "minus",
+            Self::ToggleTheme => "appearance",
+            Self::AddLayer => "add-layer",
+            Self::DeleteLayer => "delete",
             Self::RaiseLayer => "up",
             Self::LowerLayer => "down",
-            _ => return None,
+            Self::ResetLayout => "reset-layout",
+            Self::NewWindow => "new-window",
+            Self::KeyboardShortcuts => "keyboard",
+            Self::About => "info",
+            Self::Website => "website",
+            Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::SaveDocument,
@@ -603,6 +656,7 @@ impl CommandId {
         Self::RedoWorkspace,
         Self::NewToolbar,
         Self::ManageToolbars,
+        Self::CustomizeWorkspaceUi,
         Self::FitCanvas,
         Self::ZoomIn,
         Self::ZoomOut,
@@ -694,6 +748,7 @@ impl CommandId {
             Self::RedoWorkspace => "Redo Layout Change",
             Self::NewToolbar => "New Toolbar…",
             Self::ManageToolbars => "Manage Toolbars…",
+            Self::CustomizeWorkspaceUi => "Customize Title Bar…",
             Self::FitCanvas => "Fit canvas",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",
@@ -807,6 +862,8 @@ pub struct UiState {
     pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
     pub document_file: DocumentFileState,
+    /// Retained control presentation. Enabled states stay steady during canvas
+    /// input; use `UiSession::command` for live execution availability.
     pub commands: Vec<CommandState>,
     pub settings: Settings,
     /// Resolved appearance for widgets, previews and GPU canvas surround.
@@ -826,6 +883,13 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    ActivateHeaderItem {
+        id: u32,
+    },
+    MeasureHeader {
+        height: f32,
+        items: Vec<HeaderItemBounds>,
+    },
     WorkspaceManager {
         command: WorkspaceCommand,
     },
@@ -1068,5 +1132,68 @@ pub fn srgb_to_linear(value: f32) -> f32 {
         value / 12.92
     } else {
         ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_filters_have_specific_icons_and_catalog_assets_ship() {
+        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
+        let catalog = ui_catalog();
+        for icon in &catalog.icons {
+            assert!(bank.join(format!("layer-{icon}-symbolic.svg")).is_file(), "{icon}: missing asset");
+        }
+        let mut meanings = std::collections::BTreeSet::new();
+        for filter in layer_core::bundled_effect_catalog().filters() {
+            assert_ne!(filter.icon.as_ref(), "adjustments", "{} must not use the picker icon", filter.program.label);
+            assert!(meanings.insert(filter.icon.as_ref()), "Different filters need recognizable identities");
+        }
+    }
+
+    #[test]
+    fn every_command_has_a_packaged_icon_and_distinct_editing_semantics() {
+        let catalog = ui_catalog();
+        let bank =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/layer-web/icons");
+        for command in CommandId::ALL {
+            let icon = command
+                .icon()
+                .expect("toolbar commands need meaningful icons");
+            assert!(
+                catalog.icons.contains(&icon),
+                "{command:?}: {icon} missing from catalog"
+            );
+            assert!(
+                bank.join(format!("layer-{icon}-symbolic.svg")).is_file(),
+                "{command:?}: missing SVG"
+            );
+        }
+        // These actions previously shared misleading glyphs in both hosts.
+        for commands in [
+            &[
+                CommandId::ClearLayer,
+                CommandId::Eraser,
+                CommandId::DeleteLayer,
+            ][..],
+            &[
+                CommandId::Lasso,
+                CommandId::SelectAll,
+                CommandId::Deselect,
+                CommandId::InvertSelection,
+            ],
+            &[CommandId::FitCanvas, CommandId::ScaleRotate],
+            &[CommandId::Fill, CommandId::FillSelection],
+            &[CommandId::Undo, CommandId::CancelTransform],
+        ] {
+            let icons: std::collections::BTreeSet<_> = commands.iter().map(|c| c.icon()).collect();
+            assert_eq!(
+                icons.len(),
+                commands.len(),
+                "different operations need distinct symbols"
+            );
+        }
     }
 }

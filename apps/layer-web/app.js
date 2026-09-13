@@ -8,6 +8,7 @@ import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
+import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
@@ -39,7 +40,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents, systemStatus;
+let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents, systemStatus, header;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
@@ -141,7 +142,7 @@ function commandButton(id, text) {
 const icons = new Map();
 async function loadIcons() {
   await Promise.all(
-    [...catalog.icons, "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
+    [...new Set([...catalog.icons, "colors"]), "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
       const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
       if (!response.ok) throw new Error(`Cannot load icon ${name}`);
       const svg = new DOMParser().parseFromString(
@@ -521,52 +522,67 @@ function queuePanelMeasurements() {
   measuringPanels = true;
   requestAnimationFrame(() => {
     measuringPanels = false;
-    const pending = [];
-    // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
-    // copy per content revision, so width changes reflow it without cloning.
-    for (const config of state.workspace.layout.panels) {
-      const view = customization.view(config.id);
-      const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
-      const key = JSON.stringify([String(workspaceContentRevision), view.title, view.tab, view.icon, view.controls, view.tile_style]);
-      let cached = panelMeasurements.get(config.id);
-      if (cached?.key !== key) {
-        invalidatePanelMeasurement(config.id);
-        const root = element("div");
-        const tab = element("button", "dock-tab");
-        tab.style.width = "max-content";
-        tabLabel(tab, view);
-        root.append(tab);
-        const content = config.content.kind === "toolbar" ? null : panels.get(config.id).cloneNode(true);
-        if (content) {
-          content.style.height = "auto"; content.style.width = "100%";
-          root.append(content);
-        }
-        cached = { key, root, tab, content };
-        panelMeasurements.set(config.id, cached); measurementRoot.append(root);
+    measurePanels();
+  });
+}
+function measurePanels() {
+  const pending = [];
+  // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
+  // copy per content revision, so width changes reflow it without cloning.
+  for (const config of state.workspace.layout.panels) {
+    const view = customization.view(config.id);
+    const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
+    const key = JSON.stringify([String(workspaceContentRevision), view.title, view.tab, view.icon, view.controls, view.tile_style]);
+    let cached = panelMeasurements.get(config.id);
+    if (cached?.key !== key) {
+      invalidatePanelMeasurement(config.id);
+      const root = element("div");
+      const tab = element("button", "dock-tab");
+      tab.style.width = "max-content";
+      tabLabel(tab, view);
+      root.append(tab);
+      const content = config.content.kind === "toolbar" ? null : panels.get(config.id).cloneNode(true);
+      if (content) {
+        content.style.height = "auto"; content.style.width = "100%";
+        root.append(content);
       }
-      // Toolbar intrinsic height is fixed at zero and its tab width is
-      // independent of the available column width.
-      if (cached.value && !cached.content) continue;
-      if (cached.width !== width) {
-        cached.width = width; cached.root.style.width = `${width}px`;
-        pending.push([config.id, cached]);
-      }
+      cached = { key, root, tab, content };
+      panelMeasurements.set(config.id, cached); measurementRoot.append(root);
     }
-    for (const [id, cached] of pending) cached.value = {
+    // Toolbar intrinsic height is fixed at zero and its tab width is
+    // independent of the available column width.
+    if (cached.value && !cached.content) continue;
+    if (cached.width !== width) {
+      cached.width = width; cached.root.style.width = `${width}px`;
+      pending.push([config.id, cached]);
+    }
+  }
+  for (const [id, cached] of pending) {
+    const content_height = cached.content?.getBoundingClientRect().height || 0;
+    // The unconstrained copy lays out every row, including offscreen rows.
+    // Subtract the list itself to keep headers/footers outside the scroll budget.
+    const list = cached.content?.querySelector(".layer-rows, .filter-picker-list");
+    const row = list?.querySelector(".layer-row, .filter-row");
+    cached.value = {
       panel: id,
       tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
-      content_height: cached.content?.getBoundingClientRect().height || 0,
+      content_height,
+      ...(cached.content && id !== "color" ? { scroll: {
+        fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
+        unit_height: row?.getBoundingClientRect().height || 0,
+      }} : {}),
     };
-    for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
-    const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
-    // Compare against the shared publication, not a second authoritative cache.
-    // Full restores omit these transient facts and therefore measure again.
-    const current = state.workspace.layout.measurements;
-    if (!current || current.length !== measurements.length || measurements.some((m, i) =>
-      m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height)) {
-      dispatch({ type: "measure_panels", measurements });
-    }
-  });
+  }
+  for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
+  const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
+  // Compare against the shared publication, not a second authoritative cache.
+  // Full restores omit these transient facts and therefore measure again.
+  const current = state.workspace.layout.measurements;
+  if (!current || current.length !== measurements.length || measurements.some((m, i) =>
+    m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height ||
+    m.scroll?.fixed_height !== current[i].scroll?.fixed_height || m.scroll?.unit_height !== current[i].scroll?.unit_height)) {
+    dispatch({ type: "measure_panels", measurements });
+  }
 }
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect(),
@@ -652,6 +668,7 @@ function update(regions) {
     layerPanel.refresh();
     effectPanels.refresh();
   }
+  if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 128)) persistWorkspace();
@@ -679,7 +696,7 @@ function update(regions) {
       }
   if (regions & 16) {
     applyTheme(state.theme, state.palette);
-    systemStatus?.setClockVisibility(state.settings.show_clock);
+    systemStatus?.sync();
     refreshPreferences(app.preferences());
   }
   if (regions & 32)
@@ -817,13 +834,19 @@ function queueWorkspaceLayout(presentation) {
     Object.assign(state.workspace.layout, packet.workspace_layout);
     state.workspace.layout.measurements = packet.panel_measurements;
     arrange(packet.layout, true);
+    queueWorkspacePresentation(update);
   });
 }
 workspace.addEventListener("scroll", () => { if (workspaceGesture) workspaceGesture.hits = null; }, true);
-const workspacePlacements = new Set();
+const workspacePlacements = new Map();
 const deviceAligned = value => Math.round(value * devicePixelRatio) / devicePixelRatio;
 function clearWorkspacePlacement() {
-  for (const node of workspacePlacements) node.style.removeProperty("transform");
+  for (const [node, original] of workspacePlacements) {
+    node.style.removeProperty("transform");
+    node.style.width = original.width;
+    node.style.height = original.height;
+    node.style.setProperty("--panel-body-height", original.bodyHeight);
+  }
   workspacePlacements.clear();
 }
 function queueWorkspacePresentation(presentation) {
@@ -843,13 +866,29 @@ function flushWorkspacePresentation() {
   if (!update || update.model_revision !== workspaceModelRevision) return false;
   const drag = update.drag, moving = drag?.group;
   if (moving) {
-    const base = layout.groups.find(g => g.id === moving.id)?.bounds;
+    const group = layout.groups.find(g => g.id === moving.id), base = group?.bounds;
     if (base) {
-      const transform = `translate(${deviceAligned(moving.bounds.x) - base.x}px, ${deviceAligned(moving.bounds.y) - base.y}px)`;
+      const dw = moving.bounds.width - base.width, dh = moving.bounds.height - base.height;
       const nodes = [groups.get(moving.id), ...[...dividers.values()].filter(n => n.dragAction.group === moving.id)];
       for (const node of nodes.filter(Boolean)) {
+        if (!workspacePlacements.has(node)) workspacePlacements.set(node, {
+          width: node.style.width, height: node.style.height,
+          bodyHeight: node.style.getPropertyValue("--panel-body-height"),
+        });
+        const original = workspacePlacements.get(node), edge = node.dataset.edge;
+        const x = deviceAligned(moving.bounds.x) - base.x + (edge?.includes("right") ? dw : 0);
+        const y = deviceAligned(moving.bounds.y) - base.y + (edge?.includes("bottom") ? dh : 0);
+        const transform = `translate(${x}px, ${y}px)`;
         if (node.style.transform !== transform) node.style.transform = transform;
-        workspacePlacements.add(node);
+        // Freeze native allocation too, without scaling the retained controls.
+        const width = `${parseFloat(original.width) + (!edge || edge === "top" || edge === "bottom" ? dw : 0)}px`;
+        const height = `${parseFloat(original.height) + (!edge || edge === "left" || edge === "right" ? dh : 0)}px`;
+        if (node.style.width !== width) node.style.width = width;
+        if (node.style.height !== height) node.style.height = height;
+        if (!edge) {
+          const bodyHeight = `${moving.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0)}px`;
+          if (node.style.getPropertyValue("--panel-body-height") !== bodyHeight) node.style.setProperty("--panel-body-height", bodyHeight);
+        }
       }
     }
   } else clearWorkspacePlacement();
@@ -861,6 +900,7 @@ function workspaceGestureEvent(phase, e) {
   if (!drag) return;
   if (phase === "down" || phase === "up") {
     workspaceChrome?.measureColumnDrawers();
+    if (phase === "up") measurePanels();
     drag.hits = null;
   }
   dispatch({ ...drag.action, phase, position: [e.clientX, e.clientY],
@@ -1000,8 +1040,6 @@ function input(event) {
   try {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
-    workspace.classList.toggle("zen-hide-floating", reply.hide_floating_panels);
-    workspace.classList.toggle("zen-keep-button", reply.keep_zen_button);
     canvas.style.cursor = reply.pan_cursor ? "grab" : "";
     if (reply.dismiss_popups) {
       for (const popup of document.querySelectorAll(
@@ -1043,75 +1081,13 @@ function updateZen() {
   editor?.queuePositions();
 }
 function buildHeader() {
-  const zen = iconButton("zen_mode");
-  zen.id = "zen-button"; zen.classList.add("chrome");
-  zen.dataset.context = JSON.stringify({ kind: "zen_mode" });
-  workspace.prepend(zen);
-  $("header-start").append(element("span", "zen-spacer"));
-  const labels = element("div", "header-menu-labels");
-  $("header-start").append(labels);
-  for (const spec of app.editor_models(workspace.clientWidth, workspace.clientHeight).application_menus) {
-    const details = element("details", "header-menu"); details.name = "workspace-menu"; details.dataset.menu = spec.id;
-    const summary = element("summary", "", spec.label); summary.setAttribute("aria-label", spec.label);
-    const contents = element("div", "popover"); contents.setAttribute("role","menu");
-    if(spec.id === "window") contents.id = "workspace-menu";
-    details.append(summary,contents);
-    details.addEventListener("toggle",()=>{if(details.open) refreshWorkspaceMenu(); updateZen();});
-    labels.append(details);
-  }
-  const overflow = element("details", "header-menu header-menu-overflow");
-  overflow.name = "workspace-menu"; overflow.dataset.menu = "all"; overflow.hidden = true;
-  const summary = element("summary"); summary.setAttribute("aria-label", "Menus"); summary.append(icon("menu"));
-  const contents = element("div", "popover"); contents.setAttribute("role", "menu");
-  overflow.append(summary, contents); $("header-start").append(overflow);
-  overflow.addEventListener("toggle", () => { if (overflow.open) refreshWorkspaceMenu(); updateZen(); });
   systemStatus = createSystemStatus({element, changed:fullscreen => {
     if(customization && state.fullscreen !== fullscreen) dispatch({type:"window_fullscreen",fullscreen});
+    header?.queue();
   }});
-  $("header-end").append(systemStatus.root, iconButton("fullscreen"), iconButton("settings"));
-  $("header-end").querySelector('[data-command="fullscreen"]').id = "fullscreen";
-  // Keep one set of menu nodes and their measured natural width. When the
-  // workspace/clock leaves insufficient room, all menus remain reachable from
-  // the same recursive menu renderer. No work runs in the drawing frame loop.
-  let layoutQueued = false;
-  const queueLayout = () => {
-    if (layoutQueued) return; layoutQueued = true;
-    requestAnimationFrame(() => {
-      layoutQueued = false;
-      const header = $("header"), start = $("header-start"), style = getComputedStyle(header);
-      const gap = parseFloat(style.columnGap) || 0;
-      const fixed = [...header.children].filter(node => node !== start && node.id !== "document-title" && getComputedStyle(node).display !== "none");
-      const titleVisible = getComputedStyle($("document-title")).display !== "none";
-      const available = header.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-        - fixed.reduce((width, node) => width + node.getBoundingClientRect().width, 0) - gap * (fixed.length + Number(titleVisible));
-      const natural = start.querySelector(".zen-spacer").getBoundingClientRect().width + gap + labels.getBoundingClientRect().width;
-      const collapsed = natural > available + 0.01;
-      if (labels.inert === collapsed) return;
-      const moveFocus = (collapsed ? labels : overflow).contains(document.activeElement);
-      for (const menu of start.querySelectorAll("details[open]")) menu.open = false;
-      labels.inert = collapsed; overflow.hidden = !collapsed;
-      if (moveFocus) (collapsed ? overflow : labels).querySelector('summary')?.focus({preventScroll:true});
-    });
-  };
-  const observer = new ResizeObserver(queueLayout);
-  observer.observe(labels);
-  const observeChildren = () => { observer.observe($("header")); for (const node of $("header").children) observer.observe(node); queueLayout(); };
-  new MutationObserver(observeChildren).observe($("header"), {childList:true});
-  observeChildren();
 }
 function refreshWorkspaceMenu() {
-  if(!customization || !document.querySelector(".header-menu[open]")) return;
-  const menus = app.editor_models(workspace.clientWidth,workspace.clientHeight).application_menus;
-  for(const spec of menus) {
-    if (!document.fullscreenEnabled) for (const item of spec.model.sections.flat())
-      if (item.action?.type === "invoke" && item.action.command === "fullscreen") item.enabled = false;
-    const details = document.querySelector(`[data-menu="${spec.id}"]`);
-    if(details?.open) customization.renderMenu(details.querySelector(".popover"),spec.model,()=>{details.open=false;updateZen();});
-  }
-  const overflow = document.querySelector('.header-menu-overflow');
-  if (overflow?.open) customization.renderMenu(overflow.querySelector('.popover'), {
-    title: "Menus", sections: [menus.map(spec => ({label:spec.label,enabled:true,sections:spec.model.sections}))],
-  }, () => { overflow.open=false; updateZen(); });
+  for(const menu of document.querySelectorAll('#header details[open]')) menu.refreshMenu?.();
 }
 function persistWorkspace() {
   workspaceManager?.observe();
@@ -1454,6 +1430,7 @@ try {
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
+  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);
   systemStatus.sync();
   $("status").textContent = "";

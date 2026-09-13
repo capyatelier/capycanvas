@@ -36,7 +36,7 @@ class MetalFrameChecks(unittest.TestCase):
         return [value("start-time", start), value("duration", duration), process(pid),
                 value("encoder-id", identity), value("buffer-id", buffer)]
 
-    def report(self, gpu=None, cpu=None):
+    def report(self, gpu=None, cpu=None, **request_paths):
         if gpu is None:
             # GPU runs after CPU frame completion; clip-to-CPU would be wrong.
             gpu = [gpu_row(2000, 1000, process(42), 1, 10),
@@ -45,7 +45,26 @@ class MetalFrameChecks(unittest.TestCase):
         table(self.gpu, "metal-gpu-intervals", ["start", "duration", "process", "state", "channel-name", "encoder-id", "cmdbuffer-id", "start-latency"], gpu)
         table(self.cpu, "metal-application-encoders-list", ["start", "duration", "process", "encoder-id", "cmdbuffer-id"], cpu if cpu is not None else [self.encoder()])
         self.native.write_text("\n".join(json.dumps(row) for row in [self.header, *self.events]) + "\n")
-        return correlate(self.gpu, self.cpu, self.clock, self.native, 42)
+        return correlate(self.gpu, self.cpu, self.clock, self.native, 42, **request_paths)
+
+    @staticmethod
+    def submission(start=500, duration=250, buffer=30, pid=42):
+        return [value("start-time", start), value("duration", duration), process(pid), value("buffer-id", buffer)]
+
+    @staticmethod
+    def request(timestamp=1500, buffer=30, pid=42):
+        # A requested at-time is deliberately unrelated to the real endpoint.
+        return [value("start-time", timestamp), value("sentinel") if buffer is None else value("buffer-id", buffer),
+                process(pid), value("start-time", 999999)]
+
+    def request_report(self, submissions=None, requests=None, **options):
+        submission_path, request_path = self.root / "submissions.xml", self.root / "requests.xml"
+        table(submission_path, "metal-application-command-buffer-submissions",
+              ["start", "duration", "process", "cmdbuffer-id"],
+              [self.submission()] if submissions is None else submissions)
+        table(request_path, "ca-client-present-request", ["timestamp", "cmdbuffer-id", "process", "at-time"],
+              [self.request()] if requests is None else requests)
+        return self.report(submission_path=submission_path, request_path=request_path, **options)["presentation_requests"]
 
     def test_clock_identity_union_and_execution_after_cpu_return(self):
         report = self.report()
@@ -125,6 +144,72 @@ class MetalFrameChecks(unittest.TestCase):
         report = self.report()
         self.assertTrue(any("no PID" in message for message in report["warnings"]))
         self.assertTrue(any("overflow" in message for message in report["warnings"]))
+
+    def test_request_clock_join_uses_callback_and_native_display_endpoint(self):
+        report = self.request_report(requests=[self.request(), self.request(pid=99)])
+        self.assertEqual(report["counts"]["mapped_requests"], 1)
+        self.assertEqual(report["counts"]["other_or_unattributed_requests"], 1)
+        row = report["frames"][0]
+        self.assertAlmostEqual(row["request_after_owner_ms"], .0005)
+        self.assertAlmostEqual(row["request_to_frame_target_ms"], -.0004)
+        self.assertAlmostEqual(row["request_to_present_ms"], .0065)
+        self.assertAlmostEqual(row["request_to_last_observed_gpu_end_ms"], .0025)
+
+    def test_duplicate_submission_or_multiple_requests_cannot_select_an_endpoint(self):
+        report = self.request_report(submissions=[self.submission(), self.submission()])
+        self.assertEqual(report["counts"]["requests_with_ambiguous_submission"], 1)
+        self.assertEqual(report["frames"], [])
+        self.assertIsNone(report["distributions_ms"]["request_to_present_ms"]["p50"])
+        for requests in [[self.request(), self.request()], [self.request(), self.request(1600, buffer=31)]]:
+            report = self.request_report(submissions=[self.submission(), self.submission(buffer=31)], requests=requests)
+            self.assertEqual(report["counts"]["frames_with_multiple_requests"], 1)
+            self.assertEqual(report["frames"][0]["request_count"], 2)
+            self.assertIsNone(report["frames"][0]["request_to_present_ms"])
+
+    def test_missing_foreign_or_straddling_submission_does_not_join(self):
+        for submissions in [[], [self.submission(pid=99)]]:
+            report = self.request_report(submissions=submissions)
+            self.assertEqual(report["counts"]["requests_without_submission"], 1)
+        report = self.request_report(submissions=[self.submission(start=900, duration=300)])
+        self.assertEqual(report["counts"]["requests_outside_native_frames"], 1)
+        self.assertEqual(report["frames"], [])
+
+    def test_invalid_request_or_submission_order_is_not_a_timing_sample(self):
+        for request in [self.request(timestamp=-1), self.request(buffer=0), self.request(buffer=None)]:
+            report = self.request_report(requests=[request])
+            self.assertEqual(report["counts"]["invalid_requests"], 1)
+        for submission in [self.submission(duration=-1), self.submission(duration=2000)]:
+            report = self.request_report(submissions=[submission])
+            self.assertEqual(report["counts"]["requests_with_invalid_submission_order"], 1)
+        report = self.request_report(requests=[self.request(timestamp=9000)])
+        self.assertEqual(report["counts"]["frames_presented_before_request"], 1)
+        self.assertIsNone(report["frames"][0]["request_to_present_ms"])
+
+    def test_partial_gpu_and_missing_display_have_separate_request_coverage(self):
+        report = self.request_report(cpu=[self.encoder(), self.encoder(500, identity=2)])
+        self.assertFalse(report["frames"][0]["all_observed_encoders_have_valid_gpu"])
+        self.assertIsNone(report["frames"][0]["request_to_last_observed_gpu_end_ms"])
+        self.assertAlmostEqual(report["frames"][0]["request_to_present_ms"], .0065)
+        # The request is valid even when the trace omitted this frame's encoders.
+        report = self.request_report(cpu=[self.encoder(2100, identity=2)])
+        self.assertAlmostEqual(report["frames"][0]["request_to_present_ms"], .0065)
+        for extra in [[], [[4, 10100, 0, 18010, 1, 0, 0, 0, 0, 0, 0]], [self.events[2], self.events[2]]]:
+            self.events = self.events[:2] + extra
+            report = self.request_report()
+            self.assertIsNone(report["frames"][0]["request_to_present_ms"])
+            self.assertAlmostEqual(report["frames"][0]["request_after_owner_ms"], .0005)
+
+    def test_optional_request_tables_must_be_paired(self):
+        for paths in [{"submission_path": self.root / "missing.xml"}, {"request_path": self.root / "missing.xml"}]:
+            with self.assertRaisesRegex(ValueError, "supplied together"):
+                self.report(**paths)
+
+    def test_missing_native_target_is_not_a_negative_deadline_sample(self):
+        self.events[0][2] = 0
+        report = self.request_report()
+        self.assertIsNone(report["frames"][0]["request_to_frame_target_ms"])
+        self.assertEqual(report["counts"]["frames_without_target"], 1)
+        self.assertAlmostEqual(report["frames"][0]["request_to_present_ms"], .0065)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ struct WorkspaceDialogs: ViewModifier {
     }
     func body(content: Content) -> some View {
         content.sheet(isPresented: Binding(get: { open }, set: { _ in })) {
-            WorkspaceDialog(store: store).interactiveDismissDisabled()
+            WorkspaceDialog(store: store).interactiveDismissDisabled().modifier(EditorPopupPresentation())
         }
     }
 }
@@ -33,11 +33,11 @@ private struct WorkspaceDialog: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(view["title"].string).font(.headline)
             if !view["name"].isNull {
-                WorkspaceTextField(view["name_label"].string, value: view["name"].string) { store.customize(["type": "picker_name", "name": $0]) }
-                    .accessibilityIdentifier("toolbar-name")
+                EditorTextField(view["name_label"].string, value: view["name"].string) { store.customize(["type": "picker_name", "name": $0]) }
+                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("toolbar-name")
             }
-            WorkspaceTextField(view["search_hint"].string, value: view["query"].string) { store.customize(["type": "picker_search", "query": $0]) }
-                .accessibilityIdentifier("tool-picker-search")
+            EditorTextField(view["search_hint"].string, value: view["query"].string) { store.customize(["type": "picker_search", "query": $0]) }
+                .textFieldStyle(.roundedBorder).accessibilityIdentifier("tool-picker-search")
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(view["choices"].array, id: \.workspaceChoiceKey) { choice in
@@ -50,7 +50,7 @@ private struct WorkspaceDialog: View {
                                     Text(choice["label"].string).fontWeight(.medium)
                                     Text(choice["description"].string).font(.caption).foregroundStyle(.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
-                                Image(systemName: choice["selected"].bool ? "checkmark.square.fill" : "square")
+                                SharedIcon(name: choice["selected"].bool ? "selection-checked" : "selection-empty")
                             }.frame(minHeight: 50).padding(.horizontal, 8).contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("tool-choice-" + choice["label"].string)
                             .accessibilityAddTraits(choice["selected"].bool ? .isSelected : [])
@@ -74,8 +74,8 @@ private struct WorkspaceDialog: View {
             Text(view["title"].string).font(.headline)
             if !view["message"].string.isEmpty { Text(view["message"].string) }
             if !view["name"].isNull {
-                WorkspaceTextField(view["name_label"].string, value: view["name"].string) { store.customize(["type": "toolbar_name", "name": $0]) }
-                    .accessibilityIdentifier("toolbar-name")
+                EditorTextField(view["name_label"].string, value: view["name"].string) { store.customize(["type": "toolbar_name", "name": $0]) }
+                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("toolbar-name")
             }
             error(view)
             HStack {

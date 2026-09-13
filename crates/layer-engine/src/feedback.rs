@@ -224,10 +224,10 @@ impl PredictionState {
                 && limited == requested
             {
                 let dt = requested.saturating_sub(time).min(32_000) as f32;
-                let tau = if distance > old { 24_000.0 } else { 10_000.0 };
+                let tau = if distance > old { 32_000.0 } else { 14_000.0 };
                 let filtered = old + (distance - old) * (1.0 - (-dt / tau).exp());
                 lead = filtered
-                    .min(old + dt * 0.001)
+                    .min(old + dt * 0.0008)
                     .min(config.max_prediction_distance_px);
             }
         }
@@ -591,7 +591,7 @@ mod tests {
                         .unwrap();
                     let lead = surface_distance(latest.position, tip.point.position, transform);
                     if let Some(&old) = filtered_leads.last() {
-                        assert!(lead <= old + step as f32 * 0.001 + 0.001);
+                        assert!(lead <= old + step as f32 * 0.0008 + 0.001);
                     }
                     raw_leads.push(surface_distance(
                         latest.position,

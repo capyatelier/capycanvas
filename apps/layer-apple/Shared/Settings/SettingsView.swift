@@ -7,8 +7,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             VStack {
-                TextField("Search settings", text: Binding(get: { model["query"].string },
-                    set: { action(["type": "search", "query": $0]) }))
+                EditorTextField("Search settings", value: model["query"].string) {
+                    action(["type": "search", "query": $0])
+                }
                     .textFieldStyle(.roundedBorder).padding(.horizontal).accessibilityIdentifier("settings-search")
                 List(selection: Binding<String?>(get: { model["page"].string }, set: { if let next = $0 { action(["type": "page", "page": next]) } })) {
                     ForEach(model["pages"].array.indices, id: \.self) { index in
@@ -102,6 +103,11 @@ private struct PreferenceText: View {
     @State private var text = ""
     @FocusState private var editing: Bool
     var body: some View {
+        // iPad TextField titles are placeholders and disappear once populated.
+        // Keep the setting name visible beside its value on both Apple hosts.
+        LabeledContent(label) { field.labelsHidden().multilineTextAlignment(.trailing) }
+    }
+    private var field: some View {
         TextField(label, text: $text).focused($editing).onSubmit { commit(text) }
             .onAppear { text = value }.onChange(of: value) { _, next in if !editing { text = next } }
             .onChange(of: editing) { old, next in if old && !next { commit(text) } }

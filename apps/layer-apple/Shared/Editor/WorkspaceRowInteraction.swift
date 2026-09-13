@@ -34,19 +34,32 @@ struct WorkspaceRowMeasurement: ViewModifier {
     struct Hint { let before: String?; let y: CGFloat }
     let contact = ReorderContact()
     @Published private(set) var menu: String?
-    @Published private(set) var menuPoint = CGPoint.zero
     @Published private(set) var drag: Drag?
     @Published private(set) var hint: Hint?
-    @Published var menuSize = CGSize(width: 240, height: 180)
+    @Published private(set) var nativeDragging = false
     var frames: [String: WorkspaceRowFrame] = [:]
     var viewport = CGRect.zero
     var enabled = true
     var items: [JSON] = []
     var commit: (String, String?) -> Void = { _, _ in }
-    var menuBounds: CGRect {
-        let width = min(240, viewport.width), height = min(menuSize.height, viewport.height)
-        return CGRect(x: max(viewport.minX, min(menuPoint.x, viewport.maxX - width)),
-            y: max(viewport.minY, min(menuPoint.y, viewport.maxY - height)), width: width, height: height)
+    var activate: (JSON) -> Void = { _ in }
+    func nativeDragChanged(_ active: Bool) { if nativeDragging != active { nativeDragging = active } }
+    func nativeMenu(at point: CGPoint) -> NativeReorderMenu? {
+        guard enabled, viewport.contains(point),
+              let (id, frame) = frames.first(where: { $0.value.row.contains(point) }),
+              let row = items.first(where: { $0["id"].string == id }) else { return nil }
+        let sections = [row["switcher_actions"].array,
+            row["actions"].array.filter { !$0["primary"].bool }].map { section in
+                section.map { item in
+                    ["label": item["label"].raw, "enabled": item["enabled"].raw,
+                     "selected": item["checked"].raw, "action": item["action"].raw]
+                }
+            }
+        return NativeReorderMenu(id: id, bounds: frame.row,
+            content: AppleContextMenu(JSON(["sections": sections])) { [weak self] action in
+                guard let self, enabled, items.contains(where: { $0["id"].string == id }) else { return }
+                closeMenu(); activate(action)
+            })
     }
     func update(items: [JSON], enabled: Bool) {
         self.items = items; self.enabled = enabled
@@ -55,12 +68,11 @@ struct WorkspaceRowMeasurement: ViewModifier {
     }
     func showMenu(_ id: String, at point: CGPoint? = nil) {
         guard enabled, items.contains(where: { $0["id"].string == id }) else { return }
-        menuPoint = point ?? CGPoint(x: frames[id]?.options.minX ?? 0, y: frames[id]?.row.maxY ?? 0)
         menu = id
     }
     func closeMenu() { if menu != nil { menu = nil } }
     func cancel() {
-        contact.cancel()
+        contact.cancel(); nativeDragChanged(false)
         if drag != nil { drag = nil }; if hint != nil { hint = nil }; closeMenu()
     }
     func acceptsContext(at point: CGPoint) -> Bool {
@@ -68,7 +80,6 @@ struct WorkspaceRowMeasurement: ViewModifier {
     }
     func source(at point: CGPoint) -> ReorderTarget? {
         guard enabled, viewport.contains(point) else { closeMenu(); return nil }
-        if menu != nil && menuBounds.contains(point) { return nil }
         closeMenu()
         guard let (id, frame) = frames.first(where: { $0.value.row.contains(point) }),
             items.contains(where: { $0["id"].string == id }), !frame.options.contains(point) else { return nil }
@@ -85,7 +96,7 @@ struct WorkspaceRowMeasurement: ViewModifier {
                 drag = nil; hint = nil
                 if let before { commit(id, before.before) }
             },
-            cancel: { [weak self] in self?.drag = nil; self?.hint = nil })
+            cancel: { [weak self] in self?.drag = nil; self?.hint = nil; self?.nativeDragChanged(false) })
     }
     func context(at point: CGPoint) {
         guard !contact.dragging, viewport.contains(point),

@@ -1,6 +1,13 @@
 // Host-independent lifecycle/race checks for the real Metal presentation gate.
 import Foundation
 
+private final class CallbackCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+}
+
 @main struct PresentationGateChecks {
     static func main() {
         let gate = FramePresentationGate()
@@ -24,6 +31,33 @@ import Foundation
         gate.reset()
         _ = gate.acquired(); assert(gate.hasCapacity)
         _ = gate.acquired(); assert(!gate.hasCapacity, "Resuming preserves the configured drawable limit")
+        checkNotification()
         print("Presentation gate checks passed: capacity, completion, cancellation, replacement and concurrent duplicate callbacks")
+    }
+    static func checkNotification() {
+        let gate = FramePresentationGate(), count = CallbackCount()
+        gate.reset(capacity: 1)
+        let first = gate.acquired()
+        gate.whenAvailable { assert(gate.hasCapacity); count.increment() }
+        assert(count.value == 0)
+        DispatchQueue.concurrentPerform(iterations: 64) { _ in gate.retired(first) }
+        assert(count.value == 1, "Retirement notifies exactly once, outside the lock")
+        gate.whenAvailable { count.increment() }
+        assert(count.value == 2, "Retirement before registration must not lose a wake")
+        let second = gate.acquired()
+        gate.whenAvailable { count.increment() }
+        gate.whenAvailable(nil)
+        gate.retired(second)
+        assert(count.value == 2, "Explicit cancellation retires the waiter")
+        let third = gate.acquired()
+        gate.whenAvailable { count.increment() }
+        gate.reset()
+        let fourth = gate.acquired()
+        gate.whenAvailable { count.increment() }
+        gate.retired(third)
+        assert(count.value == 2, "Surface reset discards the old waiter and ticket")
+        gate.retired(fourth)
+        assert(count.value == 3)
+        print("Capacity notification checks passed: registration race, duplicate callbacks, cancellation and reset")
     }
 }

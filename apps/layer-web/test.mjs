@@ -1,11 +1,15 @@
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
+import {checkZen} from "./zen.test.mjs";
+import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkTitleBarState} from "./title-bar-state.test.mjs";
+import {checkTitleBar} from "./title-bar.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -30,7 +34,7 @@ import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
 import { checkMediumTiles } from "./tiles.test.mjs";
-import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
+import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager, checkToolPicker } from "./customization.test.mjs";
 import { checkWorkspaceMotion } from "./workspace-motion.test.mjs";
 import { checkWorkspaceResize } from "./workspace-resize.test.mjs";
 import { checkResizeRendering } from "./workspace-resize-rendering.test.mjs";
@@ -188,7 +192,7 @@ try {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
+  if (process.argv.includes("--fullscreen") || process.argv.includes("--header-controls") || process.argv.includes("--title-bar") || process.argv.includes("--title-bar-state")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
@@ -198,7 +202,19 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--header-controls")) {
+  if (process.argv.includes("--title-bar-state")) {
+    await checkTitleBarState({call,evaluate,settle,reload});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar")) {
+    await checkTitleBar({call,evaluate,settle,reload});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--zen")) {
+    await checkZen({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--icons")) {
+    await checkIcons({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--column-drops")) {
@@ -313,6 +329,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace")) {
     await checkWorkspace({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--tool-picker")) {
+    await checkToolPicker({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--customization")) {
     await checkCustomization({ call, evaluate, settle, canvasPixels });

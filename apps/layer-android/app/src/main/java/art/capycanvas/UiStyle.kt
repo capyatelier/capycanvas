@@ -1,8 +1,5 @@
 package art.capycanvas
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,7 +41,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -56,8 +52,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.node.DrawModifierNode
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -75,7 +69,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupPositionProvider
-import com.caverock.androidsvg.SVG
 
 internal class Palette(val dark: Boolean, private val source: org.json.JSONObject) {
     private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
@@ -103,12 +96,16 @@ internal val HeaderTextPadding = 6.dp
 /** Tab colors never depend on hover/press. A focus-only indication also avoids
  * Android's native ripple layer changing the rasterization of tab joins. */
 @Composable internal fun PanelHeaderFeedback(content: @Composable () -> Unit) {
-    val accent = LocalPalette.current.accent
-    val indication = remember(accent) { PanelHeaderIndication(accent) }
-    CompositionLocalProvider(LocalRippleConfiguration provides null, LocalIndication provides indication, content = content)
+    CompositionLocalProvider(LocalRippleConfiguration provides null,
+        LocalIndication provides rememberChromeFocusIndication(), content = content)
 }
 
-private data class PanelHeaderIndication(val color: Color) : IndicationNodeFactory {
+@Composable internal fun rememberChromeFocusIndication(): IndicationNodeFactory {
+    val accent = LocalPalette.current.accent
+    return remember(accent) { ChromeFocusIndication(accent) }
+}
+
+private data class ChromeFocusIndication(val color: Color) : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): Modifier.Node = object : Modifier.Node(), DrawModifierNode {
         var focused by mutableStateOf(false)
         override fun onAttach() {
@@ -182,24 +179,6 @@ private data class PanelHeaderIndication(val color: Color) : IndicationNodeFacto
                 }
             })
     }
-}
-
-/** The same bank GTK and web ship; no duplicated/redrawn icon definitions. */
-@Composable internal fun SharedIcon(name: String, description: String?, modifier: Modifier = Modifier,
-    tint: Color = LocalPalette.current.text, fill: Color? = null) {
-    val context = LocalContext.current
-    val bitmap = remember(name, fill, if (fill != null) tint else null) {
-        context.assets.open("layer-$name-symbolic.svg").bufferedReader().use { source ->
-            fun hex(color: Color) = "#%06x".format(color.toArgb() and 0xffffff)
-            val svg = SVG.getFromString(source.readText().replace("currentColor", if (fill == null) "#ffffff" else hex(tint))
-                .replace("#33d17a", fill?.let(::hex) ?: "none"))
-            Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).also { image ->
-                svg.documentWidth = 96f; svg.documentHeight = 96f
-                svg.renderToCanvas(Canvas(image))
-            }.asImageBitmap()
-        }
-    }
-    Image(bitmap, description, modifier.size(16.dp), colorFilter = if (fill == null) ColorFilter.tint(tint) else null)
 }
 
 @Composable internal fun PanelGrip(description: String, vertical: Boolean = false) {

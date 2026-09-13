@@ -64,26 +64,33 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 auto item=O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}});
                 auto attach=[&](FrameworkElement const& element){
                     tileElements.emplace(uint32_t(id),element);tileOrder.push_back(uint32_t(id));
-                    if(gestures)gestures->Source(element,O({{L"type",S(L"tile_drag")},{L"item",item}}),item);
+                    if(gestures)gestures->Source(element,O({{L"type",S(L"tile_drag")},{L"item",item}}),item,false,{},WorkspaceGestures::Pickup::Hold);
                 };
                 if(kind==L"divider"){
-                    auto bounds=rects.GetObjectAt(i);Border slot;slot.Background(clear());place(slot,bounds);
+                    auto bounds=rects.GetObjectAt(i);auto slot=button(data,str(tile,L"label"),[]{});place(slot,bounds);
                     Border line;line.Background(data->brush(L"settings_secondary"));line.Opacity(.3);
                     bool horizontal=num(bounds,L"width")>num(bounds,L"height");
                     line.Width(horizontal?num(bounds,L"width")*.7:1);
                     line.Height(horizontal?1:num(bounds,L"height")*.7);
                     line.HorizontalAlignment(HorizontalAlignment::Center);line.VerticalAlignment(VerticalAlignment::Center);
-                    slot.Child(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
+                    slot.Content(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
+                    tileControls.emplace(uint32_t(id),slot);
                     AutomationProperties::SetAutomationId(slot,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                     continue;
                 }
-                auto pick=button(data,str(tile,L"label"),[data=data,id,panelId]{
+                auto pick=button(data,str(tile,L"label"),[data=data,id,panelId,weak=std::weak_ptr<WorkspaceGestures>(gestures)]{
+                    if(auto gestures=weak.lock();gestures&&gestures->SuppressClick())return;
                     data->dispatch(O({{L"type",S(L"activate_tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                 });
-                attach(pick);
+                // A disabled command remains disabled and accessible as such;
+                // its surrounding tile still accepts customization gestures.
+                Border slot;slot.Background(clear());slot.Child(pick);attach(slot);
+                tileControls.emplace(uint32_t(id),pick);
+                pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
+                AutomationProperties::SetAutomationId(slot,L"tile-hit-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 pick.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"text"));
                 pick.Content(icon(str(tile,L"icon",L"brush"),data->theme(),num(panel,L"tile_icon_size",16)));
-                ToolTipService::SetToolTip(pick,box_value(str(tile,L"tooltip")));place(pick,rects.GetObjectAt(i));tiles.Children().Append(pick);
+                ToolTipService::SetToolTip(pick,box_value(str(tile,L"tooltip")));place(slot,rects.GetObjectAt(i));tiles.Children().Append(slot);
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 if(kind==L"color"||kind==L"opacity")anchors.insert_or_assign(kind==L"color"?L"brush_color":L"brush_opacity",pick);
                 if(kind==L"color"){
@@ -132,6 +139,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             double inset=panelId==L"stats"||panelId==L"properties"?6:8;
             contentHeight=[content]{return content.ActualHeight();};
             content.Padding(Thickness{inset,inset,inset,inset});
+            FrameworkElement fittedColor{nullptr};size_t visibleControls=0;
+            for(auto value:array(panel,L"controls"))if(flag(value.GetObject(),L"visible_in_panel"))visibleControls++;
             auto brushValue=[data=data](wchar_t const* key){return num(object(data->state,L"brush"),key);};
             for(auto value:array(panel,L"controls")){
                 auto control=value.GetObject();if(!flag(control,L"visible_in_panel"))continue;
@@ -139,7 +148,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 if(kind==L"brushes")content.Children().Append(ToolSetPanel(data,bindings));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
-                else if(kind==L"color_wheel")content.Children().Append(ColorPanel(data,bindings));
+                else if(kind==L"color_wheel"){
+                    auto picker=ColorPanel(data,bindings,visibleControls==1);
+                    if(visibleControls==1)fittedColor=picker;else content.Children().Append(picker);
+                }
                 else if(kind==L"properties")content.Children().Append(PropertiesPanel(data,bindings));
                 else if(kind==L"stats")content.Children().Append(StatsPanel(data,bindings));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
@@ -164,7 +176,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     }content.Children().Append(actions);
                 }
             }
-            if(!scrollable)root=content;
+            if(fittedColor){
+                Grid fitted;fitted.Padding({inset,inset,inset,inset});fitted.Children().Append(fittedColor);root=fitted;
+                contentHeight=[fittedColor,inset]{return fittedColor.ActualHeight()+2*inset;};
+            }else if(!scrollable)root=content;
             else if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);

@@ -241,8 +241,8 @@ impl NumberControl {
             control.imp().stack.set(stack).unwrap();
             let track = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             track.add_css_class("number-track");
-            let minus = gtk::Button::from_icon_name("layer-minus-symbolic");
-            let plus = gtk::Button::from_icon_name("layer-plus-symbolic");
+            let minus = crate::icons::button("layer-minus-symbolic");
+            let plus = crate::icons::button("layer-plus-symbolic");
             for (button, steps, verb) in [(&minus, -1.0, "Decrease"), (&plus, 1.0, "Increase")] {
                 button.add_css_class("flat");
                 button.add_css_class("number-step");

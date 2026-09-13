@@ -25,7 +25,10 @@ commits.
 ## Build
 
 See the [Windows development guide](../../docs/development/windows.md) for prerequisites,
-NuGet setup, build commands and output locations.
+NuGet setup, build commands and output locations. The guide also documents the
+unsigned portable ZIP packager, extracted-package validation, and reproducible
+MSIX assembly with a separate local test identity. MSIX installation and
+publisher signing remain acceptance gates.
 
 ## Diagnostics and privacy
 
@@ -226,26 +229,113 @@ to keep formatting updates distinct from edits before close.
 
 ## Color panel checks
 
-The Window menu's Color panel and the toolbar's Brush color popup project the shared
-HSV/HLS model with native controls and GPU gradients. Pointer-region selection
-and all color edits go through Rust. The image uses Windows'
-[Direct2D gradient meshes](https://learn.microsoft.com/en-us/windows/win32/api/d2d1_3/ns-d2d1_3-d2d1_gradient_mesh_patch)
-through WinUI image-surface interop; the main canvas retains its independent
-D3D12 presentation path.
+Color-wheel acceptance is visual equivalence at normal viewing size, with
+imperceptible raster differences allowed. Keep the native implementation simple;
+do not add a rendering dependency or browser-specific pixel corrections solely
+to obtain exact equality. Preserve the shared colors, geometry and interactions.
+Review paired captures in both themes at the tested display scale; the strict
+pixel comparator remains a diagnostic, not a wheel release gate.
 
-Build the shared pixel oracle and run against a fresh, isolated review instance
-with CAPY_TRACE_UI=1. Pass a Python interpreter with Pillow installed:
+The native Color panel and Brush color drawer use the shared compact picker:
+Okhsv circle, HSV square, HLS triangle, overlapping paint swatches, shape
+buttons, swap, and curved shape/RGB readouts. Rust owns layout, projection,
+hue guides, field pixels and edits. WinUI owns buttons, native context menus
+and mouse/pen/touch capture. A solo docked Color panel fits the available
+height. Rotated shape icons retain shared SVG geometry as native vectors; the
+swap button uses the native SVG loader. DirectWrite rasterizes readout glyphs
+at their final transform, using the shared canvas's integral backing size.
+Labels preserve pair kerning and quarter-pixel glyph positions; font metrics
+use the reference's hundredth-pixel font size. The hue brush strokes a single
+ellipse, and the transparency checker preserves conic-gradient boundaries.
+The circular field retains a bitmap brush and fills its ellipse directly;
+field changes invalidate the brush together with the shared pixel cache.
+Glyph images and text correction tables are retained across updates; size,
+scale, text and ink changes invalidate the corresponding images. The native
+readout button retains the complete accessible color description.
+
+The text rasterizer follows the reference's default Windows canvas rendering:
+[Skia's DirectWrite modes and font hinting](https://github.com/google/skia/blob/main/src/ports/SkScalerContext_win_dw.cpp),
+[font-size precision](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/fonts/font_description.cc),
+[font-cache transform precision](https://github.com/google/skia/blob/main/src/core/SkScalerContext.cpp),
+[glyph position rounding](https://github.com/google/skia/blob/main/src/core/SkGlyph.h),
+and [sRGB coverage correction](https://github.com/google/skia/blob/main/src/core/SkMaskGamma.cpp).
+The sRGB/contrast defaults come from [Chromium's Windows Skia configuration](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/skia/BUILD.gn).
+These references explain the rendering rules; no browser renderer is embedded.
+Comparisons use the normal system text configuration. Custom ClearType tuning
+and additional native display scales require separate paired captures.
+
+Run the isolated input fixture after a normal build:
 
 ~~~powershell
-cargo build --locked -p layer-ui --example color_wheel_reference
-./apps/layer-windows/scripts/exercise-color.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json -Python <python-executable>
+./apps/layer-windows/scripts/exercise-compact-color.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
 ~~~
 
-The fixture opens Color, checks native actions and popup synchronization, then
-captures the entire app window. Rust classifies sampled wheel pixels and computes
-expected colors. Four HSV/HLS cases include remembered hue with black paint.
-Reports remain under ignored artifacts/windows/color. This does not validate
-physical pointer capture, full-window visual parity or presentation performance.
+It checks all three shapes with synthetic mouse, pen and touch, the curved
+readout's hue-ring hit area, cancellation, native keyboard activation,
+retained buttons, paint selection/swap, native swatch menus, and the negative
+mouse-hold menu case. Picker edits must leave the document unchanged. A failed
+live instance is retained for inspection; successful instances must exit zero.
+Drawer input waits for stable wheel bounds and for the previous native contact
+to release; visibility and the first paint update can precede those events.
+
+For a complete native/browser component comparison, generate synthetic models
+at the actual display scale (1.5 below), then build the separate review app:
+
+~~~powershell
+cargo run --locked -p layer-ui --example compact_color_fixture -- artifacts/windows/compact-color-parity 1.5
+./apps/layer-windows/scripts/build.ps1 -Configuration Debug -ControlFixture Color -OutputDirectory artifacts/windows/ColorFixture
+foreach ($theme in @('dark','light')) {
+    foreach ($size in @(128,160,226,360)) {
+        ./apps/layer-windows/scripts/capture-compact-color.ps1 -Executable artifacts/windows/ColorFixture/CapyCanvas.exe -FixtureFile "artifacts/windows/compact-color-parity/$theme-$size.json"
+    }
+}
+~~~
+
+Each surface contains all three projections and both readouts. The review
+rejects a mismatched display scale or an incomplete surface and retains the raw
+client image. The production browser capture uses the same Rust models and
+CPU field bytes. Assemble its manifest from the native geometry reports:
+
+~~~powershell
+node -e "const fs=require('fs'),p='artifacts/windows/compact-color-parity',m=JSON.parse(fs.readFileSync(p+'/manifest.json'));m.fixtures=m.fixtures.map(f=>JSON.parse(fs.readFileSync(p+'/native-'+f.name+'.json')));fs.writeFileSync(p+'/capture-manifest.json',JSON.stringify(m));"
+$env:CAPY_CHROME='<absolute-path-to-chrome.exe>'
+node tools/visual/chrome-capture.mjs 512 344 1.5 artifacts/windows/compact-color-parity dark color-panel artifacts/windows/compact-color-parity/capture-manifest.json
+python tools/visual/compare.py artifacts/windows/compact-color-parity/web-dark-160.png artifacts/windows/compact-color-parity/native-dark-160.png --output artifacts/windows/compact-color-parity/diff-dark-160
+~~~
+
+The fixture also accepts an optional `capture_state` and `capture_target`.
+Use `readout-focus` / `color-readout`, `shape-focus` or `shape-hover` /
+`color-shape-0`, `swatch-focus` or `swatch-hover` / `color-background`,
+and `swap-focus` or `swap-hover` / `color-swap`. The target is in the first
+picker. Put each state in a separate directory alongside copies of the original
+field files; retain the original fixture name and dimensions. For example:
+
+~~~powershell
+$source='artifacts/windows/compact-color-parity'
+$output=Join-Path $source 'shape-hover'
+New-Item -ItemType Directory -Force -Path $output | Out-Null
+$fixture=Get-Content "$source/dark-160.json" -Raw | ConvertFrom-Json
+$fixture | Add-Member -NotePropertyName capture_state -NotePropertyValue 'shape-hover'
+$fixture | Add-Member -NotePropertyName capture_target -NotePropertyValue 'color-shape-0'
+foreach($item in $fixture.items) {
+    if($item.field_file) { Copy-Item -LiteralPath (Join-Path $source $item.field_file) -Destination $output }
+}
+$fixture | ConvertTo-Json -Depth 80 | Set-Content "$output/dark-160.json"
+./apps/layer-windows/scripts/capture-compact-color.ps1 -Executable artifacts/windows/ColorFixture/CapyCanvas.exe -FixtureFile "$output/dark-160.json"
+$native=Get-Content "$output/native-dark-160.json" -Raw | ConvertFrom-Json
+@{schema=2;fixtures=@($native)} | ConvertTo-Json -Depth 80 | Set-Content "$output/capture-manifest.json"
+node tools/visual/chrome-capture.mjs 512 344 1.5 $output dark color-panel "$output/capture-manifest.json"
+~~~
+
+Native hover uses guarded OS mouse input; moving only the cursor does not
+reliably enter WinUI's pointer-over state. Focus uses the native keyboard focus
+state and browser focus-visible behavior. No reference styles are overridden.
+
+Compare every captured surface with the same unchanged whole-image comparator.
+Geometry, input and pixel results are separate evidence. Passing the first two
+does not establish an exact pixel match, physical digitizer behavior, or painting
+performance. Artifacts remain local and ignored. Build normally again for the
+editor; the Color fixture contains no document or painting surface.
 
 ## Tool controls checks
 
@@ -550,6 +640,39 @@ and targeted opacity, Escape, toolbar insertion and theme changes through
 Preferences. Its app-only pixel check verifies a GPU overview over an opaque
 lower panel and restoration after closing configuration.
 
+## Attached column groups
+
+Collapsed columns honor the shared Drawers and Group panel settings. The
+Illustrator preset uses attached groups: every member occupies a resizable
+vertical slot beside its icon strip. Width and split handles use native cursors,
+immediate pickup and stable workspace capture. Rust owns placement, cancellation
+and one-step history; native bodies and scrolling remain retained during resize.
+The column menu also exposes Auto-hide and Apply to all columns. Widths, split
+weights and preferences persist; the currently open group is transient.
+
+Attached groups preserve their allocated content while opening Preferences or
+other customization dialogs. They hide with workspace chrome in Zen mode and
+return afterward. Layers uses its native virtualized viewport at the allocated
+height; Navigator keeps the shared GPU overview and clipped background opening.
+
+~~~powershell
+foreach ($device in 'mouse','pen','touch') {
+    ./apps/layer-windows/scripts/exercise-column-panels.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
+}
+~~~
+
+This disposable-profile fixture checks physical arranged bounds against shared
+allocations, both sides, retained width/split resize, cancellation and history,
+mode switching, auto-hide without painting, all-column preferences, Navigator,
+Layers, Zen, both themes and restart. It measures the Win32 client origin and
+current DPI; UI Automation container bounds can omit empty margins. Snapshots
+and arranged views must agree before input and history assertions.
+
+The workspace and layer pickup fixtures also accept
+`-ColumnMode drawers` or `-ColumnMode group_panel` to exercise the same native
+controllers in both retained presentations. Synthetic pen/touch results remain
+separate from physical-device and presentation-performance acceptance.
+
 ## Full editor and Zen checkpoint
 
 Windows initializes the same complete editor preset as Android and Web:
@@ -729,7 +852,9 @@ Manage Workspaces and Layout History preview arrangements in the editor behind
 the dialog. Selection, double-click and Enter do not commit the preview. Explicit
 confirmation applies it; Cancel, Escape and dismissal restore the original.
 New Workspace asks only for a name and copies the current arrangement and tool
-settings. Restore Starting Layout preserves current tool settings. Reset All
+settings. Restore Starting Layout previews its saved baseline before confirmation;
+Cancel and window close restore the current arrangement, while confirmation
+creates one workspace Undo/Redo step and preserves current tool settings. Reset All
 Brushes confirms once and saves the shared brush reset without layout history.
 There is no Save Layout or Load Layout UI.
 
@@ -894,6 +1019,98 @@ handled: Windows briefly reports a negative caption inset even after IsIconic
 clears. Keep the last valid caption geometry and retry the measurement while
 allowing the canvas to resize. The lifecycle fixture now checks restored caption
 measurements and visible error status, after normal startup messages settle.
+
+## Workspace tile and icon pickup
+
+Toolbar tiles (including dividers, disabled commands and drawer instances) and
+collapsed-column icons require a native stationary hold with mouse, touch and
+pen. Pen/touch holds can open a menu without replacing the captured contact;
+movement closes it and starts the shared drag, while release retains it. Mouse
+holds only arm pickup. Grips and title/tab strips keep immediate pickup after
+system movement slop. Before a hold wins, native scrolling remains available.
+
+~~~powershell
+foreach ($device in 'mouse','touch','pen') {
+    ./apps/layer-windows/scripts/exercise-workspace-pickup.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
+}
+~~~
+
+The fixture uses a disposable profile and OS-delivered input, checks the actual
+source/device and stable arranged bounds, then verifies early rejection, held
+release, same-contact movement, native cancellation and one-step Undo/Redo. It
+also exercises floating toolbars, divider/disabled tiles, collapsed-icon tear-off,
+toolbar drawers, nested drawer origins, native submenus, keyboard menus and
+minimization. Zen retains ordinary mouse button presses and pen/touch hold menus;
+its projected toolbars remain immovable and keep their native button identities.
+Existing `exercise-tab-drag.ps1`
+checks immediate tab movement and retained shared workspace publication.
+
+Pass `-DebuggerPath` with an installed matching-architecture `cdb.exe` to attach
+before fixture input and capture an access-violation stack/dump in the ignored run
+directory. The [Windows development guide](../../docs/development/windows.md#debugging-and-visual-checks)
+explains manual diagnosis. A failed fixture saves evidence and leaves its owned
+app available for inspection; close it before rebuilding. Captures, debugger logs,
+dumps and profiles stay local. These fixtures do not establish physical digitizer
+behavior, painting cadence or input latency.
+
+## Native layer-row pickup
+
+Layer rows use `LayerRowDrag` for native mouse/touch/pen arbitration, including
+whitespace, selection, visibility, thumbnails, names and mask-link controls.
+Mouse bodies drag after system slop; pen/touch bodies hold first, with native
+scrolling available before the hold. The trailing grip is immediate for every
+device. Held pen/touch menus keep the same contact for dragging and remain open
+on release; recognized holds/drags suppress child clicks. Native name editing
+keeps its own input. Capture, source removal, Escape and focus loss cancel.
+
+The retained layer surface owns capture across virtualization and edge scrolling.
+Grips claim before ScrollPresenter redirects Down. After a hold wins, the
+controller disables and later restores native scroll axes as well as input
+redirection: ignoring new input alone does not retire an already registered
+InteractionTracker contact. The native scrollbar has its own column so it cannot
+cover the trailing row grip.
+
+Rust owns the read-only `layer_drop` query and final drop validation, including
+locks, cycles, clipping and world-space offsets. Invalid and no-op placements
+have no indicator or history entry. A completed move is one Undo/Redo step.
+
+~~~powershell
+foreach ($device in 'mouse','pen','touch') {
+    ./apps/layer-windows/scripts/exercise-layer-pickup.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
+}
+~~~
+
+Use `-ColumnMode group_panel` for attached column bodies and `-ColumnMode drawers`
+for tabbed drawers in both pickup fixtures. Each presentation reuses the same
+device arbitration and shared history path.
+
+The isolated fixture checks docked rows, floating panels and column drawers,
+menus, child controls, whitespace, immediate grips, group drops, scrolling,
+source removal, renaming, cancellation and exact Undo/Redo. It arranges floating
+panels with mouse input before testing rows with the requested device. A physical
+pen check confirmed that Layers follows the pen through tear-off until release.
+The focused `exercise-tab-pickup.ps1 -Executable <native-exe> -Device mouse` fixture
+passes short tab selection, direct/gradual tear-off, continued movement,
+cancellation and exact workspace Undo/Redo. Its OS-injected pen and touch runs
+still lose capture during direct tear-off; that discrepancy remains unresolved.
+These observations do not establish all physical input features, presentation
+cadence or latency acceptance.
+Failed fixtures leave their owned app and local evidence available for inspection.
+
+## Shared icon updates
+
+Windows stages the audited shared SVG bank in both themes. Only `currentColor`
+is substituted; explicit swatch paints, opacity and vector geometry are preserved.
+Shared Rust supplies the distinct brush-medium, tool-mode, command and filter
+identities. Native filter categories/captions and checkable tool actions display
+these glyphs alongside their existing controls. New Layer uses the shared
+document-plus symbol; collapsed columns use centered double chevrons pointing
+toward the canvas.
+
+The updated build passes the shared catalog/asset checks and native tool,
+filter and drawer regressions. This establishes icon integration and control
+behavior; exact raster parity and physical input/performance acceptance remain
+separate.
 
 ## Matched editor captures
 

@@ -88,6 +88,12 @@ adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e class art.capycanvas.And
 ```
 
 Use `ClassName#methodName` in the fully qualified test selector for one regression.
+`AndroidInteractionTest#detachedPanelsKeepBodiesAndWiderResizeTargets` covers
+mouse/finger/stylus panel and group tear-off, fixed-size clipped native allocation,
+compact and scrolling release heights, squashed and usable sidebar heights,
+footer anchors, widened resize targets, cancellation, and undo/redo. Lazy lists
+report fixed controls and full row-count height without realizing every row.
+
 Read the instrumentation result (`OK` or `FAILURES`); the shell exit status alone
 does not establish success. Start with
 [`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt)

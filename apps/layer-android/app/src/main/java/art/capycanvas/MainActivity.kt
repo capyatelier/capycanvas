@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
 
 /** Both the Activity and native dialog windows forward the same key schema. */
 internal fun CanvasHost.key(event: KeyEvent) {
+    if (colorControlFocus != null && event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) return
     val key = when (event.keyCode) {
             KeyEvent.KEYCODE_SPACE -> " "
             KeyEvent.KEYCODE_ESCAPE -> "escape"

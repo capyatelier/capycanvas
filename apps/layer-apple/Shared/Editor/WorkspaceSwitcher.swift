@@ -12,7 +12,7 @@ struct WorkspaceSwitcher: View {
     private var choices: [JSON] { library.status["switcher_display"].array }
     private var naturalWidth: CGFloat {
         8 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
-            width + min(compact ? 80 : 110, HeaderTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium))
+            width + min(compact ? 80 : 110, EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium))
                 + (compact ? 10 : 20)
         }
     }
@@ -32,7 +32,9 @@ struct WorkspaceSwitcher: View {
             }
         }
         .clipShape(Capsule())
-        .modifier(EditorGlassSurface(shape: Capsule()))
+        .background {
+            ZStack { Capsule().fill(palette["bg"]); Capsule().fill(Color.black.opacity(0.2)) }
+        }
         .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
         .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
         .modifier(HeaderControlMeasurement(id: "workspace-switcher"))
@@ -40,9 +42,9 @@ struct WorkspaceSwitcher: View {
     private func choice(_ workspace: JSON) -> some View {
         let selected = workspace["id"].string == library.status["active_id"].string
         return Button { manager.activate(JSON(["type": "switch", "value": workspace["id"].raw])) } label: {
-            WorkspaceNameWidth(natural: HeaderTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium),
+            WorkspaceNameWidth(natural: EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium),
                 maximum: compact ? 80 : 110) {
-                Text(workspace["name"].string).font(.system(size: textSize, weight: .medium)).lineLimit(1)
+                Text(workspace["name"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
             }.padding(.horizontal, compact ? 5 : 10).frame(height: 26)
                 .foregroundStyle(palette["text"])
                 .background {

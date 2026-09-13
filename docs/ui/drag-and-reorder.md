@@ -12,6 +12,7 @@ floating, collapsed-column, and drawer presentations. The convention was set on
 | Surface under the contact | Mouse | Touch | Pen |
 | --- | --- | --- | --- |
 | Reorderable button or tile body | Hold, then drag | Hold, then drag | Hold, then drag |
+| Customize Title Bar: entire editable item or component-bank chip | Drag without a hold | Drag without a hold | Drag without a hold |
 | Grab handle, including a handle inside a tile or list row | Drag without a hold | Drag without a hold | Drag without a hold |
 | Title bar, panel/tab strip, individual workspace tab, unused draggable header space | Drag without a hold | Drag without a hold | Drag without a hold |
 | Reorderable list-row body, such as a layer row | Drag without a hold | Hold, then drag | Hold, then drag |
@@ -28,6 +29,14 @@ claims the contact. Title/tab bars use the immediate rule even when a tab looks
 like an icon button. A collapsed-column icon outside a tab bar uses the tile rule
 if it supports dragging. Classify by the visible hit surface, not only by the
 Rust drag payload: `DockItem::Panel` can originate at a tab, grip, or icon tile.
+
+In **Customize Title Bar**, the whole item is a placement surface, not an active
+tool button. Its body and decorative grip both drag immediately after slop.
+The component bank has no click, tap or keyboard activation: a component must
+be dropped into the bar, and Add Tools opens its picker only on a valid drop.
+Selecting an existing bar item still supports keyboard move/remove and context
+menus. Outside this editor, ordinary tile holds and native window movement keep
+their existing rules. This explicit exception was requested on 2026-09-13.
 
 Pen includes stylus contacts such as Apple Pencil. Do not infer mouse behavior
 from “not touch,” the absence of a touch sequence, or synthesized mouse events
@@ -96,6 +105,32 @@ not add holds to drawing, selection/transform handles, canvas/navigation drags,
 color wheels, curve/gradient handles, sliders, scrollbars, or resize handles.
 It also does not make every button, picker result, or library row reorderable;
 the control must already offer or deliberately gain that capability.
+
+## Floating preview and release size
+
+GTK, Web, and Android keep a dragged panel's visible width and height frozen.
+Its grab point follows the contact past workspace edges, and the host clips the
+preview at the application surface. A collapsed icon has no visible body to
+preserve, so its preview uses the measured/default floating size. Toolbars keep
+their compact grid layout.
+
+On a floating release, Rust uses native content measurements at the final width:
+
+- Compact content (such as the Color square) and short lists fit their content.
+- Long scrollable content uses a budget of 400 logical pixels or half the usable
+  workspace height, whichever is smaller. Retain a sidebar's height when it fits
+  between the useful minimum and that budget; expand a squashed sidebar.
+- Near an edge, scrolling panels shrink down to fixed controls plus four rows
+  (or all content when shorter). Continuous scrollers use four 36-pixel units.
+  The budget never goes below that useful minimum, within the usable workspace.
+  Then move the panel inward as needed. Compact content stays whole.
+- Established floating panels retain their size unless edge fitting requires a
+  smaller scrolling viewport. Header drags anchor the top; footer drags anchor
+  the bottom. Docked releases use the destination's allocator.
+
+The result is stored once in the drag's undo step. Later content changes do not
+resize an established float. Hosts report natural content height, fixed control
+height, and a native row height; they do not implement their own sizing policy.
 
 ## Required validation when implementing
 

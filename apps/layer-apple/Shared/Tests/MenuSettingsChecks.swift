@@ -12,6 +12,8 @@ extension XCTestCase {
         }
         let search = app.textFields["shortcut-search"]
         activate(search); search.typeText("Zen")
+        expectation(for: NSPredicate(format: "value == %@", "Zen"), evaluatedWith: search)
+        waitForExpectations(timeout: 10)
         activate(app.buttons["shortcut-command.ZenMode"])
         activate(app.buttons["shortcut-add"])
         XCTAssertTrue(app.staticTexts["shortcut-captured"].waitForExistence(timeout: 10))

@@ -57,7 +57,7 @@ struct Row {
     grip: gtk::Image,
 }
 fn button(icon: &str, tooltip: &str) -> gtk::Button {
-    let b = gtk::Button::from_icon_name(icon);
+    let b = crate::icons::button(icon);
     b.add_css_class("flat");
     b.add_css_class("layer-icon");
     b.set_tooltip_text(Some(tooltip));
@@ -119,7 +119,7 @@ fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::Dr
 }
 fn toggle(icon: &str, tooltip: &str) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
-    button.set_icon_name(icon);
+    crate::icons::set_button(&button, icon);
     button.add_css_class("flat");
     button.add_css_class("layer-icon");
     button.set_tooltip_text(Some(tooltip));
@@ -448,7 +448,7 @@ impl LayerPanel {
                 lock.set_pixel_size(12);
                 lock.set_size_request(12, -1);
                 root.append(&lock);
-                let grip = gtk::Image::from_icon_name("layer-grip-symbolic");
+                let grip = crate::icons::image("layer-grip-symbolic");
                 grip.set_pixel_size(12);
                 grip.add_css_class("dim-label");
                 root.append(&grip);
@@ -801,7 +801,7 @@ impl LayerPanel {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
-            .min_content_height(72)
+            .min_content_height(0)
             .child(&view)
             .build();
         root.append(&list);
@@ -835,6 +835,32 @@ impl LayerPanel {
             updating: Cell::new(false),
         }
     }
+    /// The virtual ListView's request describes its viewport, not all rows.
+    /// Layer rows have a uniform height; sample realized rows and multiply by
+    /// the visible model count, without instantiating a large document's rows.
+    pub fn content_measurement(&self, width: i32) -> (f32, layer_ui::PanelScrollMeasurement) {
+        let fixed_height = (self.root.measure(gtk::Orientation::Vertical, width).1
+            - self.list.measure(gtk::Orientation::Vertical, width).1)
+            .max(0) as f32;
+        let unit_height = self
+            .rows
+            .borrow()
+            .values()
+            .filter(|row| row.id.get() != 0)
+            .map(|row| row.root.measure(gtk::Orientation::Vertical, width).1)
+            .max()
+            .unwrap_or(layer_ui::TILE_SIZE as i32) as f32;
+        let content_height =
+            (fixed_height + unit_height * self.model.n_items() as f32).min(999_999.0);
+        (
+            content_height,
+            layer_ui::PanelScrollMeasurement {
+                fixed_height,
+                unit_height,
+            },
+        )
+    }
+
     pub fn bind(&self, w: &Rc<Workspace>) {
         *self.owner.borrow_mut() = Rc::downgrade(w);
         w.watch_popover(self.context.upcast_ref());
@@ -861,7 +887,7 @@ impl LayerPanel {
         }
         for (icon, label, a) in [
             (
-                "layer-plus-symbolic",
+                "layer-add-layer-symbolic",
                 "New layer",
                 A::New {
                     group: false,
@@ -1327,7 +1353,7 @@ impl Row {
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
         self.effect_icon.set_visible(s.content_icon.is_some());
         self.content_image.set_visible(s.content_icon.is_none());
-        self.effect_icon.set_icon_name(s.content_icon.as_deref());
+        crate::icons::set(&self.effect_icon, s.content_icon.as_deref());
         self.name.set_text(&s.label);
         self.name.set_tooltip_text(Some(&s.label));
         self.thumbnails
@@ -1341,7 +1367,7 @@ impl Row {
             .set_visible(s.editing && !s.mask_selected);
         self.mask_frame.set_visible(s.mask_selected);
         let drawing_target = s.editing && (s.editable || s.mask_selected);
-        self.selection.set_icon_name(s.selection_icon);
+        crate::icons::set_button(&self.selection, s.selection_icon);
         self.selection
             .set_tooltip_text(Some(if drawing_target && s.reference {
                 "Drawing target · Reference layer · Click to select"
@@ -1353,11 +1379,14 @@ impl Row {
                 "Select layer without changing drawing target"
             }));
         self.clipping.set_opacity(if s.clipped { 1. } else { 0. });
-        self.eye.set_icon_name(if s.visible {
-            "layer-eye-symbolic"
-        } else {
-            "layer-eye-hidden-symbolic"
-        });
+        crate::icons::set_button(
+            &self.eye,
+            if s.visible {
+                "layer-eye-symbolic"
+            } else {
+                "layer-eye-hidden-symbolic"
+            },
+        );
         self.eye.set_tooltip_text(Some(if s.visible {
             "Hide layer"
         } else {
@@ -1365,7 +1394,7 @@ impl Row {
         }));
         self.link.set_visible(s.has_mask);
         self.mask.set_visible(s.has_mask);
-        self.link.set_icon_name("layer-link-symbolic");
+        crate::icons::set_button(&self.link, "layer-link-symbolic");
         self.link.set_opacity(if s.mask_linked { 1. } else { 0.35 });
         self.link.set_tooltip_text(Some(if s.mask_linked {
             "Unlink mask from layer"
@@ -1377,11 +1406,14 @@ impl Row {
         self.grip.set_visible(s.can_drop_below);
         if s.group {
             self.content.add_css_class("layer-folder");
-            self.content.set_icon_name(if s.collapsed {
-                "layer-folder-symbolic"
-            } else {
-                "layer-folder-open-symbolic"
-            });
+            crate::icons::set_button(
+                &self.content,
+                if s.collapsed {
+                    "layer-folder-symbolic"
+                } else {
+                    "layer-folder-open-symbolic"
+                },
+            );
             self.content.set_tooltip_text(Some(if s.collapsed {
                 "Expand group"
             } else {
@@ -1396,11 +1428,14 @@ impl Row {
                 "Select paper"
             }));
         }
-        self.lock.set_icon_name(Some(if s.locked {
-            "layer-lock-symbolic"
-        } else {
-            "layer-alpha-lock-symbolic"
-        }));
+        crate::icons::set(
+            &self.lock,
+            Some(if s.locked {
+                "layer-lock-symbolic"
+            } else {
+                "layer-alpha-lock-symbolic"
+            }),
+        );
         self.lock
             .set_opacity(if s.locked || s.alpha_locked { 1. } else { 0. });
         self.lock.set_tooltip_text(Some(if s.locked {

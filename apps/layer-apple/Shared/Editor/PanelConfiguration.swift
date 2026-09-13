@@ -11,7 +11,7 @@ struct PanelConfiguration: View {
                 HStack(alignment: .top) {
                     Text(panel["configuration_title"].string).fontWeight(.bold)
                     Spacer(minLength: 4)
-                    Button { store.customize(["type": "close_expanded"]) } label: { Image(systemName: "xmark") }
+                    Button { store.customize(["type": "close_expanded"]) } label: { SharedIcon(name: "close") }
                         .buttonStyle(.plain).accessibilityLabel("Close configuration").accessibilityIdentifier("close-panel-configuration")
                 }
                 Text(panel["configuration_hint"].string).opacity(0.55)

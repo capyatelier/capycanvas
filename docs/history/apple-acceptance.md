@@ -13,6 +13,12 @@ semantics, application behavior, brush dynamics, UI state/actions/layout and
 GPU rendering in the shared Rust crates used by the other ports. Maintain one
 implementation of each shared behavior and visual component; platform adapters
 handle input, windowing, lifecycle and system services.
+Keep the codebase simple: prefer established SwiftUI, UIKit and AppKit patterns
+and one shared menu/popup helper across editor surfaces. Do not compensate for
+an unsuitable component with gesture overrides, contact handoff machinery or
+presentation hacks. Productivity ergonomics are required: fast menus, readable
+opaque theme colors, minimal animation and no distracting glass shine. Retain
+native control, keyboard and accessibility conventions.
 
 Achieve visual and behavioral parity with every feature exposed by the shared
 and existing-host UI: all menus, actions, commands, tools, brushes, layers,
@@ -42,6 +48,13 @@ against local Chrome at matching content dimensions, scale, state and sRGB
 handling. Retain full pixel differences and geometry checks within one logical
 pixel, tighter where exact alignment is possible. Permit only narrowly
 documented platform rasterization differences and system-control accommodations.
+
+The user's 2026-09-13 clarification makes perceptual parity the visual acceptance
+criterion: exact pixel identity is unnecessary when differences are imperceptible
+at normal viewing size. Fix visible differences and straightforward mismatches;
+do not add complexity to eliminate insignificant rasterization differences.
+Keep the full comparisons as diagnostic evidence. Simplicity and removal of
+dead, deprecated or unnecessary paths are explicit goals alongside functionality.
 
 For the current validation scope, demonstrate sustained **90 Hz drawing on Mac
 and 120 Hz on iPad**, using representative simple and complex brushes, prediction
@@ -85,17 +98,483 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
-The user also requests native Apple context menus and Liquid Glass for modals
-and popups on both platforms where supported, preserving their approximate
-design, layout and complete actions. Native menu migration must preserve the
-confirmed held-contact transition into dragging. System sheets, alerts and
-popovers keep their platform presentation; custom overlays use a shared glass
-surface with an older-system material fallback and an opaque Reduce Transparency
-appearance. This presentation accommodation does not relax editor geometry or
-performance acceptance.
-The same requested Liquid Glass treatment includes the header's workspace pill
-switcher, retaining its segment layout and selected-workspace highlight. Its
-glass pixels are an intentional platform accommodation from the shared track.
+Editor menus remain vertical, anchored to their source, and permit a held
+finger/Pencil contact to transition directly into dragging. Horizontal edit
+bars are not acceptable. The 2026-09-13 productivity review supersedes the
+blanket Liquid Glass request and the earlier native row-menu experiment.
+Native styling does not take precedence over readability, fast interaction or
+maintainability. Settings and the macOS system menu bar retain platform patterns.
+
+## Native docking and contact identity — 2026-09-13
+
+Both hosts pass drawer-tab reorder, tear-off, redock and whole-group tear-off,
+collapsed/nested drawer navigation, and panel configuration followed by a live
+group drag. The connected iPad also passes held toolbar tiles with exact
+Undo/Redo and attached-column width/split resizing with history. Resulting panel
+captures retain readable controls and the accepted compact Color appearance.
+
+The original Mac drawer test failed at its first reorder. Native event tracing
+showed consecutive injected mouse-down events with the same event number zero;
+the adapter reused the preceding collapsed icon's hold policy for the drawer
+tab. AppKit now compares the mouse-down event object shared by its pan and press
+recognizers. This preserves native hold/slop and shared Rust drag/history rules.
+An unreachable event-type branch is removed; tablet subtype classification
+remains. Temporary diagnostic code is removed and the unchanged full Mac
+drawer workflow passes with zero failures or skips.
+
+The AppKit workspace fixture covers mouse and pen with both increasing and
+repeated zero event counters, immediate drawer-tab movement through intermediate
+points, exact Undo/Redo, held tile menus/release, collapsed-icon tear-off and
+focus cancellation on both Apple presets. It now mounts the shared popup host.
+Event round-trip checks tolerate only sub-millionth-point floating-point
+rounding; button, event, window and tablet-subtype checks remain. Separate full
+editor and real-canvas diagnostic fixtures also pass. Injected AppKit tablet
+events do not establish physical digitizer acceptance.
+
+Native layer and workspace-list checks pass on both presets. They retain pen
+hold/menu continuation, immediate mouse rows and pen grips, shared order/history,
+covered-row rejection, keyboard menus, scrolling, focus loss and source-removal
+checks. The workspace-list fixture now mounts the shared popup host, resolving
+its earlier keyboard-menu failure without changing product menu behavior.
+The final signed Mac batch passes all four workflows with zero failures or
+skips: drawer docking, panel configuration/live dragging, collapsed/nested
+drawers and workspace-switcher order/pin persistence across restart.
+
+The panel-control test now scopes duplicate Color controls to their popup and
+finds the current group through the visible Brush Size tab. It no longer relies
+on an obsolete preset group ID. Both signed iteration-28 builds pass; the iPad
+production executable is identical to the validated, installed iteration-23 app.
+All original failures, later passes, diagnostic cleanup and restored review
+state remain under `artifacts/apple-docking-workflows-v1/`. After the user
+opened Files, the `files-unlocked-v28` follow-up reached the visible export
+picker without an authentication prompt. XCTest reported no usable hit point
+for its remote Cancel element; tapping did not dismiss the picker and the test
+failed. The review namespace was restored and the artist descriptor is
+unchanged. Cancellation remains unverified, with no unlock question pending.
+The full feature, visual, physical-input, lifecycle and sustained-performance
+gates remain open.
+
+Before publication, main advanced through `688fd76`; the clean integration
+preserves milestone `d520d49` and all recovery stashes. Shared GPU upload
+mapping failures now propagate to the host, including Apple's initial blank
+presentation. Both signed iteration-29 builds pass. Mac mouse drawing,
+Undo/Redo and layers, and iPad Metal launch/layers each pass their native test
+with no failures or skips. The current iPad review app and runner are installed,
+the saved namespace is restored and the artist descriptor is unchanged.
+
+The merged suites pass 42 Apple, 25 host, 344 UI and 118 GPU checks, with 19
+existing hardware/benchmark skips. The strict filter-reference check still
+fails at maximum channel error 47. Its input, output and reference images and
+per-case error table exactly match the retained Metal baseline; no new pixel
+regression is observed and no oracle or tolerance is changed. Evidence is under
+`artifacts/apple-main-integration-688fd76/` and the docking folder's
+`integrated-v29/`.
+
+## Workspace recovery and editor workflows — 2026-09-13
+
+Fast native restarts now reclaim abandoned workspace ownership once every prior
+client has exited. A shared OS file lock protects live clients; the first new
+opener clears abandoned claims transactionally without shortening leases or
+adding a platform retry. A real killed-process regression covers saved contents,
+concurrent owners and stale fencing. The lock sidecar is protected from backup
+overwrite. Built-in Layout History now enables restoration while retaining
+name/deletion protections and owner/current/busy checks.
+
+Mac and the connected iPad pass settings/workspace restart, completed artwork
+recovery and independent windows. Mac also passes New/Export cancellation;
+the iPad export check awaits user input at the system Files prompt. Interrupted
+background/expiration and provider-delivery acceptance remain open.
+
+Both hosts pass Navigator/Diagnostics, numeric tool controls, system status,
+Layout History, filters and shortcut editing. Native curve/gradient labels now
+include point/stop counts; ineffective separate value attributes are removed.
+Shortcut search initially lost a character while typing. Settings, shortcut and
+filter search now reuse the existing local-draft text helper; the old
+workspace-only helper is removed. The full shortcut workflow now captures an
+existing accelerator, replaces its binding and executes the new action in the
+editor. Toolbar search, creation, rename, duplication and deletion also pass.
+
+After integrating main through `b56bca3`, both signed builds pass and each host
+passes six focused workflows with no failures or skips: Color, filters,
+shortcuts, toolbar editing, restart and history. The shared regression passes
+476 tests, with one existing hardware-only host check ignored. Six live Color
+captures pass the unchanged oracle, with guide error at most one channel level
+and field error zero. A final pull through `65a9855` retains steady command styling
+while drawing; the 410 Apple/host/UI regressions and both signed builds pass.
+Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers also pass their
+focused native follow-ups. The subsequent integration through `19d6722` also
+passes both signed builds, both native follow-ups, 411 Apple/host/UI checks and
+the focused CPU input-retirement regression. This retains the accepted Color
+appearance; full-editor visual and physical-input/performance acceptance remain open.
+
+Installed-device XCTest now uses the documented destination-artifact setup;
+normal launch/relaunch works and the obsolete Color attach branch is removed.
+The latest review app and runner are installed on the iPad, its saved namespace
+is restored, and artist app data remains intact. Private evidence and earlier
+failures remain under `artifacts/apple-lifecycle-workflows-v1/` and
+`artifacts/apple-feature-workflows-v1/`.
+
+## Compact Color panel — 2026-09-13
+
+Both Apple editors now project the shared compact Color layout: Okhsv circle,
+HSV square, HLS triangle, overlapping paint swatches, transparency, Swap, shape
+icons and curved shape/RGB readouts. Rust owns color conversion, picking,
+geometry and text. Native field/guide caches replace the old HLS-only cache and
+bridge; header and readout font metrics use one shared helper. Native contact
+adapters retain the starting wheel region and cancel on shape/slot changes.
+
+The connected iPad workflow exposed foreground hit testing extending into the
+visible background swatch. Adding the standard circular content shape to each
+styled swatch fixes the original center tap; the same unchanged workflow passes
+on Mac and iPad. Both final signed builds include main's latest shared docking
+changes. Each host passes its full Color workflow with no skips, including all
+shapes, readouts, slots, Swap, empty corners and continuous dragging. All six
+live color oracles pass, with guide error at most one channel level and field
+error zero. The iPad review namespace is restored; artist data remains intact.
+
+The 216-case component matrix on each host passes color checks at the unchanged
+two-level tolerance. Native control frames agree exactly, with Chrome differing
+by at most 0.00521 points. Eighteen Mac hover/press/cancel captures also pass their
+interaction checks. Complete PNG differences remain available. Representative
+normal-size review, including the largest mean-error UIKit case, finds no
+material geometry or color mismatch; residual native rasterization is acceptable
+under the user's perceptual-parity criterion. This does not close whole-editor
+visual, physical Pencil, lifecycle or sustained-performance acceptance.
+
+Fractional native text positioning and standard Mac icon compositing improve
+alignment without an additional renderer. UIKit icon compositing and alternative
+primitive drawing methods were rejected because they did not help. No further
+compositing experiment was adopted. The integrated shared regression passes
+407 tests (42 Apple, 25 host, 340 UI), with one existing hardware-only host check
+ignored. All 22 Metal-analysis tests pass; presentation stalls and the complete
+performance workload matrix remain open. Private captures, deployment metadata
+and failures are retained under `artifacts/apple-color-milestone-v1/` and the
+preceding Color artifact directories.
+
+## Shared flat editor menus — 2026-09-13
+
+The shared flat menus, attached column panels and icon integration form one
+editor milestone. The main-menu trigger and dark text are fixed; the connected
+iPad and an isolated Mac editor pass the focused workflows below. The overall
+Apple goal remains incomplete; resume from the [handoff](../development/apple-handoff.md).
+
+The user confirmed a real upward-drag failure in the native iPad row menu;
+the local probe recorded UIKit reoffering/cancelling the original contact during
+menu presentation. Moving the native menu alone would not remove its lift
+animation or input ownership change. Retired the native context-menu/drag-session
+adapter and its attempted supplementary pan handoff.
+
+`EditorActionMenu` now renders the shared menu model with native SwiftUI buttons,
+vertical sections, checkmarks, disabled states, submenu navigation and keyboard
+support. `EditorMenuButton` and `editorPopover` serve main menus, layers,
+workspace rows/context menus and editor choices. A standard anchor preference
+and root overlay keep popups outside clipped panels while retaining the source
+contact. There is no extra window, presentation controller, drag-session bridge,
+preview lift or blur. The existing UIKit hold/pan recognizers and shared
+`ReorderContact` handle pickup, scrolling, cancellation and one completed drop.
+Menus open inward where space permits and use opaque shared palette colors,
+a thin border and a small shadow. Removed the editor-window contrast override.
+macOS retains its OS application menus and native secondary-click menu adapter.
+
+The main-menu buttons now give their entire padded labels an explicit hit shape.
+Tracing showed UIKit delivering the center tap while SwiftUI never activated the
+button; its state was not disappearing and no popup dismissal occurred. Removing
+`ViewThatFits` did not help, so the responsive layout is retained. The shared
+popup also inherits the editor root's environment instead of copying the source
+control's whole environment, which had overridden dark-menu text colors.
+The embedded UIKit context source transfers only appearance and enabled state;
+copying its entire environment had hidden the Zen button from the connected
+iPad's accessibility tree.
+
+Menus reuse the existing native keyboard capture component for shared arrow,
+submenu, activation and shortcut handling. UIKit returns focus to the preceding
+responder on dismissal. A Mac fixture delivers actual app-local keys for submenu
+entry/back, disabled-row skipping, Return, Escape and a shifted shortcut.
+The iPad simulator and connected-device workflow pass arrow navigation, a menu
+Undo shortcut and subsequent editor Redo after dismissal. XCTest's Escape and
+Return checks remain open: a UIKit simulator probe received a printable key but
+no Escape press or key-command callback despite owning first responder; the
+connected-device Escape check also failed, and simulator Return did not execute
+the action. No hardware-keyboard Escape/Return pass is inferred from Mac.
+
+Five focused workflows pass on the connected iPad: light/dark main menus and
+Undo; layer/mask/footer anchors and actions; upward layer dragging with exact
+Undo/Redo; submenus, shortcuts and restored keyboard routing; workspace menu
+actions and held dragging in both directions. The Zen test initially failed
+because its button was absent from accessibility. After the explicit-environment
+fix, its separate device run passes ordinary taps, hold/tap suppression, vertical
+menu presentation and the resulting Total Zen action. No test was skipped.
+Light/dark physical main-menu captures were inspected for opaque readable colors.
+The isolated Mac editor passes both blend choices and Undo/Redo. Its native
+keyboard fixture and the final UIKit touch/pen/mouse callback suite pass.
+These checks do not claim a new physical Pencil pass or drawing-performance pass.
+
+Final review also updates the existing workflow tests to the shared menu's
+identifiers and selected traits. Both physical hosts pass workspace pinning,
+reordering and persistence; toolbar styles and Zen; and toolbar creation,
+renaming, duplication and deletion. Mac's Select All menu action now forwards
+to the focused AppKit text editor before canvas dispatch, fixing Command-A
+replacement in the picker. Toolbar grip labels include the toolbar name because
+Mac does not expose a generic grip's accessibility value. The shared test uses
+native Select All before typing instead of caret-dependent backspace counts.
+The final customization checks pass separately on each host after these fixes.
+
+Both signed Debug hosts build. The current shared regression run passes 41 Apple
+bridge, 25 host and 306 UI checks; one existing hardware-only host check is ignored.
+The complete visual, feature, input/lifecycle and sustained-performance acceptance
+remains open. Local result bundles, traces, device/signing details and captures
+stay under ignored artifacts. Source and documentation are published together.
+
+## Attached column panels — 2026-09-13
+
+Both Apple presets expose the shared Group panel mode and render attached
+stacked bodies, connected column backgrounds and the published chevron icons.
+The shared engine owns nested geometry, width and panel weights, resize
+transactions and auto-hide. Apple projects the real divider rectangles and
+keeps the width grip above split grips where they intersect. Motion projection
+now includes `column_settings`, so live widths/weights agree with their geometry.
+
+Four native fixture cases pass across both presets and both column sides,
+covering geometry, immediate pen-classified resize, live publication, cancellation,
+Undo/Redo, close/reopen, auto-hide and ordinary drawer mode. The iPad simulator
+width/split resize workflow passes (one test, no skips); 306 shared UI tests,
+snapshot projection, drawer and workspace-motion regressions pass. Both signed
+Debug targets build. Physical performance acceptance remains separate.
+
+## Shared icon integration — 2026-09-13
+
+Integrated the published 157-icon bank and its shared command, tool, category
+and filter mappings. Both Apple hosts retain brush stroke previews while showing
+each preset's medium icon; filter categories and choices now expose their shared
+icons. New Layer and custom close/check/more/plus controls use the canonical
+assets. Filename normalization preserves internal words such as `add-layer`.
+Tool-setting action buttons now include their command icons and match the
+browser's text wrapping beside a leading glyph. All 96 AppKit button bounds
+match Chrome exactly across both themes, two widths and enabled/selected states.
+
+Both signed Debug targets build. Six SVG conversion tests, 306 shared UI tests
+and 41 Apple bridge tests pass. Compiled AppKit/SwiftUI and isolated Chrome grids
+cover all 157 icons in 18 combinations of size, theme, tint and disabled opacity.
+All 216 flat paint samples pass with at most 1/255 channel error. Full unmasked
+pixel differences remain visible; the [icon audit](../ui/icon-audit.md#apple-integration--2026-09-13)
+records their bounds and distinguishes AppKit components from UIKit and whole
+editor acceptance. A separate UIKit simulator capture now covers the same
+157 icons and 18 cases using the production view and compiled assets. Its
+216 flat paint samples match exactly; full-image comparisons retain residual
+rasterization differences. Both signed targets build with the action-button
+changes. The isolated physical iPad editor includes the new icon bank; its
+completed upward gesture session prompted the flat-menu replacement above.
+
+## Presentation-capacity retry — 2026-09-13
+
+The shared Apple driver now makes one deadline-bounded retry when a presentation
+callback frees capacity just after a denied display tick. Atomic waiter
+registration, cancellation and old-surface retirement retain the serial owner's
+single-frame admission. Retries have separate trace records, so they do not
+inflate display-link counts. Direct driver/gate tests and actual owner/Metal
+resize/resume/detach checks pass on both presets; both physical Release builds
+compile, and all 29 trace-analysis tests pass.
+
+A matched 45-second Mac watercolor pair reduced long continuous presentation
+intervals from 225/3,539 to 46/3,708, with no CPU-budget exceedances. The candidate
+then completed ten measured minutes: CPU p99/max 5.722/9.139 ms, no rejected
+input, frame errors, overflow or missing/zero-time presentations during
+measurement. It still has 1,329/49,040 long continuous intervals (2.71%).
+The [performance report](../../apps/layer-apple/PERFORMANCE.md#retry-after-presentation-capacity-returns--2026-09-13)
+retains the complete observations and limits. Physical iPad timing, residual Mac
+cadence, the workload matrix and the broader parity/performance goal remain open.
+This milestone does not claim new iPad hardware performance evidence.
+
+## Header font and background alignment — 2026-09-12
+
+A fresh 96-case comparison of both Apple presets against rebuilt local Chrome
+reproduced the header allocation error: the widest title differed by 1.220
+logical points and the largest edge difference was 1.078. Native font inspection
+showed that the system Medium instance uses weight 510, while the web requests
+CSS 500. Apple's shared header now measures and draws workspace labels using
+that public variation axis at 500, retaining the native font when unsupported.
+The workspace pill also uses the shared opaque 80%-background/20%-black track
+color. Font and text-width caches stay bounded.
+
+The same reference inputs now yield a maximum position/size difference of 0.603
+points and edge difference of 0.578, meeting the one-point component geometry
+bound across all 96 cases. Full sRGB differing-pixel fractions improve from
+13.05–25.62% to 3.15–11.65%; maximum channel error is 214. All corresponding
+full differences remain retained with the original comparison thresholds.
+The geometry result does not close full pixel acceptance, whole-editor
+composition, UIKit/device rasterization or the performance gates.
+
+Both signed Apple builds pass. The physical iPad remains on its prepared layer
+input fixture while awaiting feedback; this header change has not interrupted
+that check. The [header capture guide](../../tools/visual/README.md#complete-header-components)
+now describes recorded CSS/canvas metrics and the resolved browser font. Chrome's
+[system font matcher](https://chromium.googlesource.com/codesearch/chromium/src/%2B/refs/tags/142.0.7402.2/third_party/blink/renderer/platform/fonts/mac/font_matcher_mac.mm)
+applies the requested CSS weight as a variable-font weight value. Raw font,
+geometry and capture artifacts remain ignored.
+
+## Layer scrolling and interruption validation — 2026-09-12
+
+A native 24-layer fixture exposed a stationary-capture bug: deleting the dragged
+layer left its contact active until another pointer event arrived. Both hosts
+now validate layer contacts when the document revision or active name editor
+changes, cancelling an invalid source immediately. The native fixture fails
+before this change and passes afterwards on both Apple presets.
+
+Actual AppKit pen events retain the menu contact through edge scrolling after
+the source leaves view; the completed drop matches its measured indicator and
+one Undo/Redo restores it. Mouse checks cover source deletion, entering rename,
+late release, list removal/remount and new-document replacement. The latter
+uses the real Metal document owner and verifies cancellation of both capture
+and deferred menus even when the replacement document reuses the layer ID.
+Native group drops cover both group-interval boundaries and shared rejection of
+locked sources/destinations or descendant cycles without changing document
+revision or adding a history entry.
+
+The iPad simulator independently passes ordinary touch scrolling before a hold,
+immediate grip pickup, edge scrolling past the initially visible rows, preservation
+of every other layer's order and actual toolbar Undo/Redo. A Debug-only opt-in
+probe exposes complete order to this isolated test; normal scroll accessibility
+values are unchanged. Both final signed builds pass. The isolated physical iPad
+contains the cancellation fix and a disposable long layer list; its physical
+finger/Pencil menu-to-drag and edge-scrolling check is still awaiting feedback.
+
+Reproduce with `tests/layer-row-lifecycle.swift` through the existing Swift fixture
+script and `EditorLaunchTests/testLayerListScrolling` in the iPad scheme. The
+command-coverage references now include these layer workflows; the audit passes
+against the retained schema-4 inventory and remains an inventory check. Complete
+native workflow, visual, physical-input and sustained-performance gates remain
+open. Raw fixtures, logs, captures, devices and signing details remain ignored.
+
+## Whole-layer-row pickup and workspace footer — 2026-09-12
+
+Both Apple hosts now route layer-row bodies and their grips through the retained
+native input adapter. Mouse bodies and every grip drag immediately after native
+movement slop; touch/pen bodies preserve scrolling before a hold. iPad rows use
+native vertical context menus with a preview of the source row. Mac keeps the
+row-anchored vertical popover, whose same-contact pen continuation passes the
+owned-window fixture. The separate footer action keeps its existing popover.
+Rust still owns mask/content context selection, menu capabilities, hierarchy
+changes and the one completed drop/Undo transaction. Menu queries are deferred
+until presentation, and removed sources cannot supply a deferred menu.
+
+Measured row, grip, name and mask bounds distinguish pickup, native name editing
+and mask actions. Paper keeps its context menu without becoming draggable.
+Drag previews do not publish duplicate row measurements. Window-root recognizers
+check which scroll view actually received the contact, so a floating panel
+cannot accidentally pick a layer underneath it. The Mac regression reproduced
+that covered-row failure before the guard and passes after it.
+
+The direct AppKit fixture covers immediate mouse bodies and pen grips, early
+pen rejection, retained hold/menu/drag contact, shared drop/Undo/Redo, covered
+rows and focus cancellation on both presets. Separate model checks cover Paper,
+rename ownership, checked multiselection and removed deferred-menu sources.
+The iPad simulator passes mask creation/selection/deletion, content and footer
+menus, short checkbox actions, immediate touch grip dragging and actual toolbar
+Undo/Redo. The native UIKit callback fixture checks contact admission for all
+three devices alongside existing session/cancellation/edge-scrolling coverage.
+These are targeted checks: physical layer-row finger/Pencil continuation, long
+layer lists, group/locked/descendant drops and the wider interruption matrix
+still need coverage. Workspace physical input evidence below is separate.
+
+Manage Workspaces now gives Cancel and Switch equal-width 40pt buttons with an
+8pt gap, a subdued secondary fill and a solid shared-blue primary action.
+The same shared style serves both hosts and follows the editor's text palette;
+disabled and pressed states remain distinct. Actual component captures were
+reviewed in light and dark themes. This changes appearance without changing
+workspace selection or switching behavior. Final signed builds pass on both
+hosts, and the isolated physical iPad app installs and launches with its existing
+workspace list and order retained. The direct workspace row regression also
+passes after the common native contact-admission change.
+
+Reproduce the owned-window layer fixture through
+`bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/layer-row-input.swift`.
+The focused iPad tests are `EditorLaunchTests/testLayerContextMenuAnchors` and
+`EditorLaunchTests/testLayerGripAndChildActions`. Use the existing portable
+`test-native-rows.py` runner for UIKit delegate checks; it does not synthesize a
+physical Pencil. Results, captures, destinations and signing details remain in
+ignored local artifacts. Full visual and hardware performance gates remain open.
+
+## Native context menus and workspace rows — 2026-09-12
+
+The Apple targets now share a menu projection of Rust sections, availability,
+checks, hints and action payloads. UIKit and AppKit provide native presentation
+for non-draggable context sources such as Zen. Queries are deferred until
+activation and retired when their source or document changes. Controls that
+open a picker/form on an ordinary tap retain their existing popovers.
+
+On iPad, Manage Workspaces attaches native context-menu and drag/drop
+interactions to its existing scroll view. The preview belongs to the held row
+and has an opaque backing so the original label cannot show through it. UIKit
+retains the finger/Pencil contact across the vertical menu and drag. Mouse and
+explicit grips retain the existing immediate pickup path. Native session and
+contact identities reject stale callbacks and duplicate drops; teardown retires
+native callbacks before deferring SwiftUI publication. Native edge scrolling
+reuses the grip path and schedules display callbacks only while an edge can
+scroll. Workspace order remains an application preference outside layout Undo.
+
+Both Apple hosts now use 56pt workspace row minima, matching Android's 56dp
+minimum and the web manager's 55px content plus divider. Measured default rows
+and grips are 56pt high on both AppKit-hosted presets; options targets are
+34pt wide and fill the row height. Native Settings text fields now retain
+explicit labels when populated, including the base-color hex fields.
+
+Validation includes native AppKit menu actions and shared Undo/Redo, asynchronous
+source loading and removal, and existing mouse/tablet row checks on both presets.
+The UIKit row-menu action passes and its move persists after restart. A 27-row
+Simulator workflow passes ordinary scrolling before a hold, menu dismissal,
+immediate grip dragging, offscreen capture and persisted order. Direct UIKit
+delegate checks exercise native-session edge scrolling, leaving/reentering the
+viewport, the resulting insertion target, cancelled lifts, old/new sessions and
+deferred teardown. The user confirmed the production finger/Pencil hold-to-drag
+workflow and subsequently confirmed the 27-row edge-scrolling check with both
+finger and Pencil: the same held contact scrolls at the list edge and drops at
+the indicated position without changing the selected workspace. Signed builds
+pass on both hosts. These checks do not establish complete visual parity or
+sustained drawing performance.
+
+Mac workspace row menus retain the working vertical custom surface. An owned
+AppKit context-menu probe posted tablet-subtype drag events during native menu
+tracking; the app-local event monitor did not receive them. Native row handoff
+therefore remains unaccepted on Mac; a native replacement must preserve the
+same held contact. This does not affect the native non-row source/action checks.
+The subsequent whole-layer-row milestone above extends the shared input adapter
+to layer bodies and grips; its physical coverage remains separate.
+
+## Readable popup surfaces — 2026-09-12
+
+Custom overlays, popovers, app-owned sheets and the workspace pill now use
+opaque colors. Popup foregrounds and backgrounds come from the same shared
+palette; settings keep a native opaque semantic surface. Popup presentation
+backgrounds also cover native margins and arrows. Action hints are stronger,
+while disabled actions retain their disabled state and existing appearance.
+Default configured sRGB popup text contrast is 9.79:1 dark and 11.55:1 light;
+the 75%-opacity hint ratios are 6.34:1 and 5.54:1. These calculations cover the
+default shared colors, not arbitrary user themes or native materials.
+
+Both Apple targets build, including the signed device target. The user confirmed
+that the updated full iPad editor is readable, then reported backgrounds that did
+not follow Dark mode. Native window appearance now follows the explicit editor
+setting while observing the underlying system separately. Returning to System
+therefore works even after an explicit override. Presented sheets and popovers
+read the live shared palette/theme instead of retaining their opening values.
+
+The focused Settings workflow passes on Mac and iPad Simulator: choose the theme
+opposite the system, then return to System with the sheet still open. Reviewed
+captures show matching sheet, editor and layer-popup colors in both themes.
+A direct AppKit fixture also verifies explicit choices, returning to System and
+application appearance changes without UI automation. Earlier iPad layer-popup
+and native Zen-menu captures established the opaque/increased-contrast surfaces;
+these native-menu captures included uncommitted source-adapter work and do not
+establish production row-menu acceptance. Direct AppKit captures confirm opaque
+shared popup content in both themes; they do not measure native NSMenu pixels.
+The final milestone also passes both focused UI workflows and the signed device
+build with unfinished native-menu sources excluded. The isolated physical iPad
+app is installed and launched with the theme correction.
+The existing 96-case header fixture passes on both Apple presets; all 1,044
+control rectangles match the previous geometry within floating-point noise.
+The production native row menu/drag adapter still requires interaction validation.
+These checks do not close full accessibility, visual parity or performance gates.
+Raw captures, local identifiers and signing information remain in ignored artifacts.
 
 ## Glass surfaces and layer origins — 2026-09-12
 

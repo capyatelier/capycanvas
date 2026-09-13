@@ -33,13 +33,8 @@ extension XCTestCase {
     }
     @MainActor private func workspaceText(_ field: XCUIElement, _ value: String) {
         workspaceActivate(field)
-        #if os(macOS)
         field.typeKey("a", modifierFlags: .command)
         field.typeText(value)
-        #else
-        let length = (field.value as? String)?.count ?? 0
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: length) + value)
-        #endif
     }
     @MainActor func checkCollapsedColumnsDrawersAndZen(in app: XCUIApplication) {
         workspaceActivate(app.buttons["column-icon-toolbar"])
@@ -78,14 +73,14 @@ extension XCTestCase {
             workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tool-choice-" + query)).firstMatch)
         }
         workspaceActivate(app.buttons["tool-picker-confirm"])
-        let created = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND value == %@", "toolbar-options-", "Toolbar 1")).firstMatch
+        let created = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-options-", "Toolbar options for Toolbar 1")).firstMatch
         XCTAssertTrue(created.waitForExistence(timeout: 10))
         let identifier = created.identifier
         let panel = String(identifier.dropFirst("toolbar-options-".count))
         let options = app.descendants(matching: .any)[identifier].firstMatch
         func menu(_ prefix: String) {
             workspaceActivate(options)
-            workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-action-" + prefix)).firstMatch)
+            workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "menu-action-" + prefix)).firstMatch)
         }
         menu("Rename ")
         workspaceText(app.textFields["toolbar-name"], "Quick tools")
@@ -93,7 +88,7 @@ extension XCTestCase {
         menu("Duplicate ")
         workspaceText(app.textFields["toolbar-name"], "Copy tools")
         workspaceActivate(app.buttons["toolbar-prompt-confirm"])
-        let copied = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND value == %@", "toolbar-options-", "Copy tools")).firstMatch
+        let copied = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-options-", "Toolbar options for Copy tools")).firstMatch
         XCTAssertTrue(copied.waitForExistence(timeout: 10))
         let copyIdentifier = copied.identifier
         let copyPanel = String(copyIdentifier.dropFirst("toolbar-options-".count))
@@ -133,9 +128,9 @@ extension XCTestCase {
         workspaceActivate(app.buttons["configuration-brush-color"])
         let popup = app.descendants(matching: .any)["toolbar-control-popup"].firstMatch
         XCTAssertTrue(popup.waitForExistence(timeout: 5))
-        workspaceActivate(app.buttons["color-background"])
-        XCTAssertTrue(app.buttons["color-background"].isSelected)
-        workspaceActivate(app.buttons["Done"])
+        workspaceActivate(popup.buttons["color-background"])
+        XCTAssertTrue(popup.buttons["color-background"].isSelected)
+        workspaceActivate(popup.buttons["Done"])
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
         waitForExpectations(timeout: 5)
         workspaceActivate(toggle)
@@ -145,7 +140,11 @@ extension XCTestCase {
         let size = app.buttons["number-value-Brush size"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: size)
         waitForExpectations(timeout: 5)
-        let grip = app.descendants(matching: .any)["group-options-9"].firstMatch
+        let group = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-group-"))
+            .containing(.button, identifier: "panel-tab-sizes").firstMatch
+        let grip = group.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "group-options-")).firstMatch
         XCTAssertTrue(grip.waitForExistence(timeout: 5))
         let original = grip.frame
         let target = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.48))
@@ -156,7 +155,7 @@ extension XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: target)
         #endif
         XCTAssertTrue(grip.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(grip.frame.minX, original.maxX + 30, "Tearing off a panel must retain its gesture across the new floating group, including a hidden tab")
+        XCTAssertGreaterThan(grip.frame.minX, original.maxX + 30, "The configured group must retain its drag contact while becoming floating")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachWorkspaceScreen(app, name: "panel-configuration-drag")
     }

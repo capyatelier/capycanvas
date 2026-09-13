@@ -31,7 +31,8 @@ struct ToolSetControls: View {
                             if !item["preview"].isNull {
                                 Image("preview-\(item["preview"].uint)-\(store.state["theme"].string)")
                                     .resizable().scaledToFit().frame(width: 82, height: 32)
-                            } else { SharedIcon(name: item["icon"].string) }
+                            }
+                            SharedIcon(name: item["icon"].string)
                             Text(item["label"].string).fontWeight(.bold)
                                 .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66, alignment: .leading)
                         }

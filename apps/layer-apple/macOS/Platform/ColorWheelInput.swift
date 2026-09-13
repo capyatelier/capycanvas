@@ -4,16 +4,18 @@ import AppKit
 /// Only the shared hit regions capture mouse/tablet input. Empty wheel corners
 /// remain available to the enclosing scroll view.
 struct ColorWheelInput: NSViewRepresentable {
-    let space: UInt32
+    let shape: UInt32
     let context: String
+    let value: String
     let pick: (UInt32, CGPoint, CGFloat) -> Void
     func makeNSView(context: Context) -> ContactView { ContactView() }
     func updateNSView(_ view: ContactView, context: Context) {
         if view.colorContext != self.context { view.part = 0 }
-        view.space = space; view.colorContext = self.context; view.pick = pick
+        view.shape = shape; view.colorContext = self.context; view.pick = pick
+        view.setAccessibilityValue(value)
     }
     final class ContactView: NSView {
-        var space: UInt32 = 0
+        var shape: UInt32 = 0
         var colorContext = ""
         var part: UInt32 = 0
         var pick: (UInt32, CGPoint, CGFloat) -> Void = { _, _, _ in }
@@ -30,7 +32,7 @@ struct ColorWheelInput: NSViewRepresentable {
             return hit(local) == 0 ? nil : self
         }
         private func hit(_ point: CGPoint) -> UInt32 {
-            capy_apple_color_hit(Float(point.x), Float(point.y), Float(size), space)
+            capy_apple_color_hit(Float(point.x), Float(point.y), Float(size), shape)
         }
         override func mouseDown(with event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)

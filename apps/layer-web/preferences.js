@@ -98,7 +98,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   const title = element("h2"); title.id = "settings-title";
   const back = button("‹", () => root.classList.remove("show-content"), "preferences-back");
   back.setAttribute("aria-label", "Preferences categories");
-  const exit = button("×", close, "dialog-close"); exit.setAttribute("aria-label", "Close preferences");
+  const exit = button("", close, "dialog-close"); exit.append(icon("close")); exit.setAttribute("aria-label", "Close preferences");
   exit.id = "close-settings";
   header.append(back, title, exit);
   const search = element("input", "preferences-search");
@@ -127,7 +127,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   const capture = element("dialog", "shortcut-capture"); capture.id = "shortcut-capture";
   capture.setAttribute("aria-label", "Set Shortcut");
   const captureHeader = element("header", "dialog-header"); captureHeader.append(element("h2", "", "Set Shortcut"));
-  const captureClose = button("×", () => send({ type: "cancel_shortcut" }), "dialog-close");
+  const captureClose = button("", () => send({ type: "cancel_shortcut" }), "dialog-close"); captureClose.append(icon("close"));
   captureClose.setAttribute("aria-label", "Cancel shortcut recording"); captureHeader.append(captureClose);
   const captureLabel = element("p"), captureKey = element("p", "shortcut-key"), captureError = element("p", "preferences-error");
   const captureFooter = element("footer");
@@ -350,7 +350,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
       if (editorSignature !== signature) {
         editor.replaceChildren();
         const header = element("header", "dialog-header"); header.append(element("h2", "", spec.label));
-        const exit = button("×", closeEditor, "dialog-close"); exit.setAttribute("aria-label", "Close shortcut editor"); header.append(exit);
+        const exit = button("", closeEditor, "dialog-close"); exit.append(icon("close")); exit.setAttribute("aria-label", "Close shortcut editor"); header.append(exit);
         const body = element("div", "shortcut-editor-body");
         body.append(element("p", "settings-description", spec.group));
         const list = element("div", "preference-group");

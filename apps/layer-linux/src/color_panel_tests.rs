@@ -110,6 +110,16 @@ fn native_color_panel_input() {
                         hit == button || hit.is_ancestor(&button),
                         "{name} unobscured"
                     );
+                    if name.starts_with("color-shape-") || name == "color-swap" {
+                        let image = button
+                            .downcast_ref::<gtk::Button>()
+                            .unwrap()
+                            .child()
+                            .and_downcast::<gtk::Image>()
+                            .unwrap();
+                        assert!(image.paintable().unwrap().is::<gtk::Svg>(),
+                            "{name} uses the shared vector renderer");
+                    }
                 }
                 let fg = find_named(root.upcast_ref(), "color-Foreground")
                     .unwrap()

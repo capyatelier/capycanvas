@@ -26,6 +26,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
         case CanvasCommandKind::Overviews:return capy_overviews(host,json);
         case CanvasCommandKind::Action:return capy_action(host,json);
         case CanvasCommandKind::Filters:return capy_load_filter_directory(host,json);
+        case CanvasCommandKind::DeviceLoss:return capy_test_device_loss(host);
     }
     return -1;
 }
@@ -59,7 +60,17 @@ void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     auto name=std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json";
     auto pending=name+".pending";
     {std::ofstream stream(pending);stream<<value;if(!stream)return;}
-    MoveFileExW(to_hstring(pending).c_str(),to_hstring(name).c_str(),MOVEFILE_REPLACE_EXISTING);
+    // Local tracing is opt-in. A transient file scanner or diagnostic reader
+    // can deny replacement; do not silently leave the previous state forever.
+    auto source=to_hstring(pending),destination=to_hstring(name);
+    for(unsigned attempt=0;;++attempt){
+        if(MoveFileExW(source.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))break;
+        auto error=GetLastError();
+        if(attempt==4||(error!=ERROR_SHARING_VIOLATION&&error!=ERROR_ACCESS_DENIED)){
+            OutputDebugStringW((std::wstring(L"Capy trace replacement failed: ")+std::to_wstring(error)+L"\n").c_str());break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     // Preserve the initial window's paths for existing single-window fixtures.
     if(primaryWindow)std::ofstream(std::string(kind)+".json")<<value;
 }
@@ -114,6 +125,10 @@ void CanvasWindow::Open() {
         reload.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
             self->Send(R"({"mode":"merge"})",CanvasCommandKind::Filters);});
         toolbar.Children().Append(reload);
+        Button recover;recover.Content(box_value(L"Test GPU loss"));
+        recover.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
+            self->Send("",CanvasCommandKind::DeviceLoss);});
+        toolbar.Children().Append(recover);
     }
     root.Children().Append(toolbar);
     status.Text(L"Preparing canvas…");
@@ -130,7 +145,14 @@ void CanvasWindow::Open() {
     window.Activated([weak=weak_from_this()](auto&&, WindowActivatedEventArgs const& e) {
         if(auto self=weak.lock()){
             if(e.WindowActivationState()==WindowActivationState::Deactivated){
-                if(self->workspace)self->workspace->CancelGesture();self->heldKeys.clear();
+                // A WinUI submenu can deactivate the main HWND while focus
+                // stays inside its owned popup tree. Check after activation
+                // settles before retiring the workspace contact or menu.
+                self->dispatcher.TryEnqueue([weak]{if(auto self=weak.lock();self&&!self->closed&&self->workspace){
+                    auto owner=self->Handle();
+                    if(IsIconic(owner)||GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)!=owner)self->workspace->CancelGesture();
+                }});
+                self->heldKeys.clear();
                 self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
             }else{self->Resize();self->RefreshWorkspaceSwitcher();}
         }
@@ -286,7 +308,7 @@ void CanvasWindow::Start() {
 }
 bool CanvasWindow::RequestPreviews(CanvasQueryKind kind,std::string json,PreviewReply reply) {
     {std::lock_guard lock(mutex);
-        if(closing||!host||rendererDone.load()||transportFailed)return false;
+        if(closing||!host||rendererDone.load()||transportFailed||(inputStopped&&kind!=CanvasQueryKind::Workspace))return false;
         if(!previewWork.Push(CanvasQuery{kind,std::move(json),std::move(reply)}))return false;
     }
     wake.notify_one();return true;
@@ -307,8 +329,8 @@ bool CanvasWindow::SendIndependent(CanvasWork item) {
     std::unique_lock lock(mutex);
     if(!work.CanPush(item)&&GetEnvironmentVariableW(L"CAPY_TRACE_TRANSPORT",nullptr,0))
         std::ofstream("input-transport.log",std::ios::app) << "waiting for bounded queue capacity\n";
-    space.wait(lock,[&]{return closing||rendererDone.load()||transportFailed||work.CanPush(item);});
-    if(closing||rendererDone.load()||transportFailed)return false;
+    space.wait(lock,[&]{return closing||rendererDone.load()||transportFailed||inputStopped||work.CanPush(item);});
+    if(closing||rendererDone.load()||transportFailed||inputStopped)return false;
     work.Push(std::move(item));
     lock.unlock();wake.notify_one();
     return true;
@@ -493,6 +515,30 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(!editing)e.Handled(true);
 }
 
+int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
+    if(auto points=std::get_if<std::vector<CapyPointer>>(&item)){
+        if(points->empty())return 0;
+        auto const& first=points->front();auto const& last=points->back();
+        if(dialogOpen.load()){
+            consumedContacts.insert(first.id);
+            if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
+            return 0;
+        }
+        auto result=capy_chrome(host,first.phase==1?2:first.phase==4?3:1,
+            first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load(),first.tool==3);
+        if(result>=0){
+            if(first.phase==1&&(result&1))consumedContacts.insert(first.id);
+            auto pointer=retiring?capy_retire_pointer:capy_pointer;
+            result=consumedContacts.contains(first.id)?0:pointer(host,points->data(),points->size());
+            if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
+        }
+        return result;
+    }
+    if(auto scroll=std::get_if<CanvasScroll>(&item))
+        return dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
+    auto const& command=std::get<CanvasCommand>(item);
+    return retiring&&command.kind==CanvasCommandKind::DeviceLoss?0:DispatchCanvasCommand(host,command);
+}
 void CanvasWindow::Run() {
     try {
         struct Apartment {
@@ -522,7 +568,17 @@ void CanvasWindow::Run() {
         bool brushReady=false;
         bool probe=GetEnvironmentVariableW(L"CAPY_PRESENT_PROBE",nullptr,0)!=0;
         bool probeReady=false;
+        unsigned recoveryAttempts=0;
         for(;prepared;) {
+            if(capy_device_lost(host)){
+                try {
+                    if(++recoveryAttempts>3)throw std::runtime_error("GPU recovery failed repeatedly");
+                    if(!RecoverGpu())break;
+                    dirty=true;probeReady=false;brushReady=false;
+                } catch(std::exception const& error) {
+                    SaveAfterGpuFailure(error.what());break;
+                }
+            }
             bool pollServices=false;
             {
                 std::unique_lock lock(mutex);
@@ -540,7 +596,7 @@ void CanvasWindow::Run() {
             }
             if(pollServices){
                 auto serviceResult=capy_poll_services(host);
-                if(serviceResult<0){Fail(capy_error());break;}
+                if(serviceResult<0){if(capy_device_lost(host))continue;Fail(capy_error());break;}
                 dirty|=serviceResult!=0;
                 if(auto snapshot=capy_snapshot(host)){
                     std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
@@ -552,7 +608,7 @@ void CanvasWindow::Run() {
             {std::lock_guard lock(mutex);if(!dirty&&!transportFailed&&work.Empty()&&!pendingHover&&previewWork.Empty())continue;}
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
             auto acquired=capy_acquire(host);
-            if(acquired<0) {Fail(capy_error());break;}
+            if(acquired<0) {if(capy_device_lost(host))continue;Fail(capy_error());break;}
             if(acquired==2) {std::lock_guard lock(mutex);resize=true;continue;}
             if(acquired==0) {
                 std::unique_lock lock(mutex);
@@ -566,38 +622,17 @@ void CanvasWindow::Run() {
             bool failed=false;
             if(hover&&capy_chrome(host,hover->leave?3:1,hover->x,hover->y,false,menuOpen.load(),hover->touch)<0){Fail(capy_error());break;}
             for(auto& item:pending) {
-                int result;
-                if(auto points=std::get_if<std::vector<CapyPointer>>(&item)){
-                    if(points->empty())continue;
-                    auto const& first=points->front();auto const& last=points->back();
-                    if(dialogOpen.load()){
-                        consumedContacts.insert(first.id);
-                        if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
-                        continue;
-                    }
-                    result=capy_chrome(host,first.phase==1?2:first.phase==4?3:1,
-                        first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load(),first.tool==3);
-                    if(result>=0){
-                        if(first.phase==1&&(result&1))consumedContacts.insert(first.id);
-                        result=consumedContacts.contains(first.id)?0:capy_pointer(host,points->data(),points->size());
-                        if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
-                    }
-                }
-                else if(auto scroll=std::get_if<CanvasScroll>(&item))
-                    result=dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
-                else {
-                    auto& command=std::get<CanvasCommand>(item);
-                    result=DispatchCanvasCommand(host,command);
-                    if(result>0)Fail(capy_error()); // A rejected UI action leaves the canvas running.
-                }
+                auto result=DispatchWork(item,false);
+                if(result>0)Fail(capy_error()); // A rejected UI action leaves the canvas running.
                 if(result<0) {Fail(capy_error());failed=true;break;}
             }
             if(failed) break;
             if((!pending.empty()||hover)&&capy_chrome(host,0,0,0,false,menuOpen.load(),false)<0){Fail(capy_error());break;}
             if(overflow&&capy_input(host,R"({"type":"blur"})")<0){Fail(capy_error());break;}
+            if(capy_device_lost(host))continue;
             auto now=Now();
             auto result=capy_frame(host,now,now);
-            if(result<0){Fail(capy_error());break;}
+            if(result<0){if(capy_device_lost(host))continue;Fail(capy_error());break;}
             dirty=result!=0;
             if(!inputStarted){inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->StartInput();});}
             {std::lock_guard lock(mutex);revision=capy_view_revision(host);}
@@ -608,6 +643,7 @@ void CanvasWindow::Run() {
                 if(model.HasKey(L"brush_ready")) {
                     bool ready=model.GetNamedBoolean(L"brush_ready");
                     brushReady=ready;
+                    if(ready)recoveryAttempts=0;
                 }
                 if(!captured && !dirty && GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
                     TraceState("canvas-state",snapshot);
@@ -634,7 +670,7 @@ void CanvasWindow::Run() {
                     preview->kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:
                     preview->kind==CanvasQueryKind::LayerMenu?capy_layer_menu:capy_workspace_query;
                 PreviewPacket packet(request(host,preview->json.c_str()),capy_preview_free);
-                if(!packet)Fail(capy_error());
+                if(!packet&&!capy_device_lost(host))Fail(capy_error());
                 preview->reply(std::move(packet));
             }
             // Opt-in baseline only: present unchanged content at DXGI cadence.
@@ -667,11 +703,100 @@ void CanvasWindow::Run() {
         if(auto self=weak.lock()) { if(self->closing) self->Finish(); }
     });
 }
+bool CanvasWindow::RecoverGpu() {
+    CapyLifecycle("gpu_recovery_started");
+    if(capy_suspend(host)<0)throw std::runtime_error(capy_error());
+    {
+        std::lock_guard lock(mutex);
+        if(closing)return false;
+        paused=true;
+    }
+    if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
+        if(auto self=weak.lock())self->ResetSurface();
+    }))throw std::runtime_error("GPU recovery could not reach the window dispatcher");
+    {
+        std::unique_lock lock(mutex);
+        wake.wait(lock,[&]{return !paused||closing;});
+        if(closing)return false;
+    }
+    {std::lock_guard lock(mutex);if(!surfaceError.empty())throw std::runtime_error(surfaceError);}
+    CapyLifecycle("gpu_recovery_preparing");
+    // Retired shader/document jobs and other windows can still own the removed
+    // D3D12 singleton briefly. Yield between bounded attempts; close wakes us.
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(capy_prepare_gpu(host)<0){
+        if(std::chrono::steady_clock::now()>=deadline)throw std::runtime_error(capy_error());
+        std::unique_lock lock(mutex);
+        if(wake.wait_for(lock,std::chrono::milliseconds(250),[&]{return closing;}))return false;
+    }
+    // The normal resize handshake attaches the new swap chain on XAML's thread.
+    {std::lock_guard lock(mutex);resize=true;}
+    CapyLifecycle("gpu_recovery_prepared");
+    return true;
+}
+void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
+    std::deque<CanvasWork> admitted;
+    {std::lock_guard lock(mutex);inputStopped=true;admitted=work.Take();pendingHover.reset();previewWork.Clear();}
+    space.notify_all();
+    capy_suspend(host);
+    for(auto& item:admitted){
+        auto result=DispatchWork(item,true);
+        if(result<0)throw std::runtime_error(capy_error());
+        if(result>0)Fail(capy_error());
+    }
+    if(capy_suspend_renderer(host)<0)throw std::runtime_error(capy_error());
+    OutputDebugStringA(reason.c_str());
+    Fail("Painting is unavailable.\nUse File > Save or Save As, then reopen the drawing.");
+    CapyLifecycle("gpu_recovery_save_available");
+    for(;;){
+        std::deque<CanvasWork> pending;std::optional<CanvasQuery> query;
+        {
+            std::unique_lock lock(mutex);
+            wake.wait_for(lock,std::chrono::milliseconds(250),[&]{return closing||resize||servicesReady||!work.Empty()||!previewWork.Empty();});
+            if(closing)return;
+            servicesReady=false;
+            if(resize){
+                paused=true;resize=false;
+                if(!dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();}))
+                    throw std::runtime_error("Could not resize the suspended canvas");
+                wake.wait(lock,[&]{return !paused||closing;});
+                if(closing)return;
+            }
+            pending=work.Take();query=previewWork.Take();
+        }
+        space.notify_all();
+        for(auto& item:pending)if(auto command=std::get_if<CanvasCommand>(&item)){
+            auto result=DispatchCanvasCommand(host,*command);
+            if(result!=0)Fail(capy_error());
+        }
+        if(capy_poll_services(host)<0)throw std::runtime_error(capy_error());
+        if(auto snapshot=capy_snapshot(host)){
+            std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
+            Publish(snapshot,Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
+        }
+        if(query){
+            PreviewPacket packet(query->kind==CanvasQueryKind::Workspace?capy_workspace_query(host,query->json.c_str()):nullptr,capy_preview_free);
+            query->reply(std::move(packet));
+        }
+    }
+}
+void CanvasWindow::ResetSurface() {
+    {std::lock_guard lock(mutex);if(closing)return;}
+    auto native=panel.as<ISwapChainPanelNative>();
+    auto detached=native->SetSwapChain(nullptr);
+    if(FAILED(detached)||capy_reset_surface(host,native.get())<0){
+        std::lock_guard lock(mutex);
+        surfaceError=FAILED(detached)?"Could not detach the lost GPU surface":capy_error();
+    }
+    {std::lock_guard lock(mutex);paused=false;}
+    wake.notify_one();
+}
+
 void CanvasWindow::ApplyResize() {
     Size next;
     {std::lock_guard lock(mutex);if(closing)return;next=desired;resize=false;}
     int result=capy_resize(host,next.width,next.height,next.scale);
-    if(result<0) {status.Text(to_hstring(capy_error()));Stop();return;}
+    if(result<0&&!capy_device_lost(host)) {status.Text(to_hstring(capy_error()));Stop();return;}
     {std::lock_guard lock(mutex);revision=capy_view_revision(host);inputScale=next.scale;paused=false;}
     wake.notify_one();
 }
@@ -811,7 +936,7 @@ void CanvasWindow::UpdatePopup() {
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
     bool open=headerPopupOpen||workspacePopupOpen||blocked;
-    auto facts=workspace?workspace->ChromeFacts(open):CapyUi::O({{L"held",CapyUi::B(false)},{L"dragging",CapyUi::B(false)}});
+    auto facts=workspace?workspace->ChromeFacts(headerPopupOpen||blocked):CapyUi::O({{L"held",CapyUi::B(false)},{L"dragging",CapyUi::B(false)}});
     if(menuOpen.exchange(open)==open)return;
     using namespace CapyUi;
     A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));
@@ -846,7 +971,16 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
     if(!workspace->Apply(model))return;
     lastModel=model;
+    auto suspended=flag(model,L"windows_rendering_suspended");
+    workspace->Root().Visibility(suspended?Visibility::Collapsed:Visibility::Visible);
+    panel.Visibility(suspended?Visibility::Collapsed:Visibility::Visible);
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
+    if(suspended)root.Background(SolidColorBrush(color(str(object(state,L"palette"),L"bg",L"#323232"))));
+    else root.Background(nullptr);
+    status.VerticalAlignment(suspended?VerticalAlignment::Center:VerticalAlignment::Bottom);
+    status.TextAlignment(suspended?TextAlignment::Center:TextAlignment::Left);
+    status.TextWrapping(suspended?TextWrapping::Wrap:TextWrapping::NoWrap);
+    status.Margin(suspended?Thickness{24,24,24,24}:Thickness{0,0,0,40});
     auto storage=object(model,L"windows_workspace");
     if(flag(storage,L"ready")){
         auto next=uint64_t(num(storage,L"switcher_revision"));

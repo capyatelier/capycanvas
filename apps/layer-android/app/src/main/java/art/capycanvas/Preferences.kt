@@ -214,7 +214,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 trailingIcon = if (view.optString("query").isEmpty()) null else ({
                     IconButton({
                         focus.clearFocus(); host.preference(obj("type" to "search", "query" to ""))
-                    }) { SharedIcon("plus", "Clear search", Modifier.size(20.dp).rotate(45f)) }
+                    }) { SharedIcon("close", "Clear search", Modifier.size(20.dp)) }
                 }))
             if (showDone) { Spacer(Modifier.width(8.dp)); SettingsDone(close) }
         }

@@ -3,6 +3,11 @@
 use super::*;
 
 pub(super) fn drawer_origin(button: &gtk::Button, direction: Option<Edge>) {
+    if direction.is_some() {
+        button.add_css_class("drawer-open");
+    } else {
+        button.remove_css_class("drawer-open");
+    }
     for (edge, class) in [
         (Edge::Top, "drawer-origin-top"),
         (Edge::Bottom, "drawer-origin-bottom"),
@@ -26,14 +31,11 @@ pub(super) fn tile_button(
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
-    let icon = gtk::Image::from_icon_name(&format!(
-        "layer-{}-symbolic",
-        if tile.control == ToolbarControl::Color {
-            "colors"
-        } else {
-            choice.icon
-        }
-    ));
+    let icon = if tile.control == ToolbarControl::Color {
+        crate::icons::color_pair()
+    } else {
+        crate::icons::image(&format!("layer-{}-symbolic", choice.icon))
+    };
     icon.set_pixel_size(config.tile_style.icon_size() as i32);
     let label_lines = config.tile_style.label_lines();
     if label_lines > 0 {
@@ -256,7 +258,7 @@ impl ToolbarManagerUi {
                 row.set_title(&toolbar.title);
                 row.set_subtitle(&toolbar.subtitle);
                 row.set_selectable(true);
-                row.add_prefix(&gtk::Image::from_icon_name(&format!(
+                row.add_prefix(&crate::icons::image(&format!(
                     "layer-{}-symbolic",
                     toolbar.icon
                 )));
@@ -282,17 +284,16 @@ impl ToolbarManagerUi {
 
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
-    palette: gtk::CssProvider,
+    pub(super) palette: gtk::CssProvider,
     palette_colors: Cell<Option<[[f32; 4]; 2]>>,
     context: gtk::PopoverMenu,
+    context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     popup: gtk::Popover,
     popup_control: Cell<Option<PanelControl>>,
     anchor: Cell<[f32; 2]>,
     picker: adw::Dialog,
     name: adw::EntryRow,
-    search: gtk::SearchEntry,
-    choices: gtk::ListBox,
-    choices_key: RefCell<String>,
+    catalog: tool_catalog::ToolCatalog,
     error: gtk::Label,
     count: gtk::Label,
     confirm: gtk::Button,
@@ -329,14 +330,13 @@ impl Customization {
             palette: gtk::CssProvider::new(),
             palette_colors: Cell::new(None),
             context: gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>),
+            context_focus: RefCell::new(None),
             popup: gtk::Popover::new(),
             popup_control: Cell::new(None),
             anchor: Cell::new([320.0, 120.0]),
             picker,
             name: adw::EntryRow::new(),
-            search: gtk::SearchEntry::new(),
-            choices: gtk::ListBox::new(),
-            choices_key: RefCell::new(String::new()),
+            catalog: tool_catalog::ToolCatalog::new(),
             error: gtk::Label::new(None),
             count: gtk::Label::new(None),
             confirm: gtk::Button::new(),
@@ -362,6 +362,22 @@ impl Customization {
 
     pub fn bind(&self, w: &Rc<Workspace>) {
         self.manager.bind(w);
+        self.context.connect_closed(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                let source = w
+                    .customization
+                    .context_focus
+                    .take()
+                    .and_then(|p| p.upgrade());
+                if let Some(source) = source.filter(|s| s.is_mapped())
+                    && w.window.visible_dialog().is_none()
+                {
+                    source.grab_focus();
+                }
+            }
+        ));
         self.toolbar_dialog.set_widget_name("toolbar-dialog");
         self.toolbar_dialog.add_response("cancel", "");
         self.toolbar_dialog.add_response("confirm", "");
@@ -428,6 +444,7 @@ impl Customization {
                 action: CustomizationAction::CancelTools,
             },
         );
+        cancel.set_widget_name("cancel-tools");
         header.pack_start(&cancel);
         self.confirm.add_css_class("suggested-action");
         self.confirm.set_widget_name("confirm-tools");
@@ -455,8 +472,17 @@ impl Customization {
                 });
             }
         ));
-        self.search.set_widget_name("tool-search");
-        self.search.connect_search_changed(glib::clone!(
+        self.catalog.search.set_widget_name("tool-search");
+        self.catalog.search.connect_stop_search(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                if w.customization.picker_shown.get() {
+                    w.customize(CustomizationAction::CancelTools);
+                }
+            }
+        ));
+        self.catalog.search.connect_search_changed(glib::clone!(
             #[weak]
             w,
             move |entry| {
@@ -467,15 +493,7 @@ impl Customization {
                 }
             }
         ));
-        body.append(&self.search);
-        self.choices.set_selection_mode(gtk::SelectionMode::None);
-        self.choices.add_css_class("boxed-list");
-        let list = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&self.choices)
-            .build();
-        body.append(&list);
+        body.append(&self.catalog.root);
         self.count.set_xalign(0.0);
         self.count.add_css_class("dim-label");
         body.append(&self.count);
@@ -1018,30 +1036,25 @@ impl Customization {
             {
                 self.name.set_text(name);
             }
-            self.search.set_placeholder_text(Some(view.search_hint));
-            if self.search.text() != view.query {
-                self.search.set_text(&view.query);
+            self.catalog
+                .search
+                .set_placeholder_text(Some(view.search_hint));
+            if self.catalog.search.text() != view.query {
+                self.catalog.search.set_text(&view.query);
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
             self.error.set_visible(view.error.is_some());
             self.count
                 .set_text(&format!("{} selected", view.selected_count));
             let key = serde_json::to_string(&view.choices).expect("serializable tools");
-            if *self.choices_key.borrow() != key {
-                *self.choices_key.borrow_mut() = key;
-                while let Some(child) = self.choices.first_child() {
-                    self.choices.remove(&child);
-                }
+            self.catalog.update(key, |catalog| {
                 for choice in view.choices {
-                    let row = adw::ActionRow::new();
-                    row.set_use_markup(false);
-                    row.set_title(&choice.label);
-                    row.set_subtitle(&choice.description);
-                    row.add_prefix(&gtk::Image::from_icon_name(&format!(
-                        "layer-{}-symbolic",
-                        choice.icon
-                    )));
+                    let row = catalog.row(&choice.label, &choice.description, choice.icon);
                     let check = gtk::CheckButton::new();
+                    check.set_widget_name(&format!(
+                        "tool-choice-{}",
+                        serde_json::to_string(&choice.control).unwrap()
+                    ));
                     check.set_active(choice.selected);
                     check.set_valign(gtk::Align::Center);
                     check.connect_toggled(glib::clone!(
@@ -1056,20 +1069,19 @@ impl Customization {
                     ));
                     row.add_suffix(&check);
                     row.set_activatable_widget(Some(&check));
-                    self.choices.append(&row);
                 }
-            }
+            });
             if !self.picker_shown.replace(true) {
                 self.picker.present(Some(&w.window));
                 if view.name.is_some() {
                     self.name.grab_focus();
                 } else {
-                    self.search.grab_focus();
+                    self.catalog.search.grab_focus();
                 }
             }
         } else if self.picker_shown.replace(false) {
             self.picker.close();
-            self.choices_key.borrow_mut().clear();
+            self.catalog.clear();
         }
         self.manager.refresh(w, manager);
         if let Some(view) = prompt {
@@ -1415,6 +1427,11 @@ impl Workspace {
         x: f64,
         y: f64,
     ) {
+        if let ContextTarget::Header { id: Some(id) } = target
+            && self.header.is_editing()
+        {
+            self.header.select_context_item(self, id);
+        }
         let held_drag = {
             let mut pending = self.workspace_drag.borrow_mut();
             if let Some(drag) = pending.as_mut() {
@@ -1453,6 +1470,10 @@ impl Workspace {
             popover.set_autohide(false);
         }
         self.populate_workspace_menu(popover, menu);
+        // Unlike MenuButton popovers, this shared surface-owned context menu
+        // has no native invoker to restore keyboard focus to on dismissal.
+        *self.customization.context_focus.borrow_mut() =
+            widget.has_focus().then(|| widget.downgrade());
         popover.set_pointing_to(Some(&gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,

@@ -95,26 +95,29 @@ const HANDLES: [[f32; 2]; 8] = [
 
 pub(crate) fn tool_set(transform: bool) -> ToolSetView {
     ToolSetView {
-        groups: [("Move", "move", false), ("Scale / rotate", "fit", true)]
-            .into_iter()
-            .map(|(label, icon, item)| ToolSetItem {
-                label,
-                icon,
-                preview: None,
-                selected: item == transform,
-                action: if item {
-                    UiAction::Invoke {
-                        command: CommandId::ScaleRotate,
-                    }
-                } else {
-                    UiAction::Layer {
-                        action: LayerAction::Tool {
-                            tool: LayerCanvasTool::Move,
-                        },
-                    }
-                },
-            })
-            .collect(),
+        groups: [
+            ("Move", "move", false),
+            ("Scale / rotate", "transform", true),
+        ]
+        .into_iter()
+        .map(|(label, icon, item)| ToolSetItem {
+            label,
+            icon,
+            preview: None,
+            selected: item == transform,
+            action: if item {
+                UiAction::Invoke {
+                    command: CommandId::ScaleRotate,
+                }
+            } else {
+                UiAction::Layer {
+                    action: LayerAction::Tool {
+                        tool: LayerCanvasTool::Move,
+                    },
+                }
+            },
+        })
+        .collect(),
         subtools: Vec::new(),
     }
 }

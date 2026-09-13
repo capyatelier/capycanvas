@@ -24,6 +24,12 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
+    pub fn column_group_panels(self) -> bool {
+        matches!(
+            self,
+            Self::Generic | Self::Gtk | Self::Mac | Self::Ios | Self::Windows
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +90,6 @@ pub struct Settings {
     pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
     pub light_base: HexColor,
-    pub total_zen: bool,
     pub zen_icon: ZenIcon,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
@@ -93,6 +98,7 @@ pub struct Settings {
     pub feedback: bool,
     pub platform_prediction: bool,
     pub prediction_ms: f32,
+    /// Retained for saved-settings compatibility; preview tracking is automatic.
     pub tip_lock: f32,
     /// Only overrides are stored. Empty keys disable an action's shortcut.
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
@@ -107,7 +113,6 @@ impl Default for Settings {
             show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
-            total_zen: false,
             zen_icon: ZenIcon::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
@@ -115,7 +120,7 @@ impl Default for Settings {
             zoom_speed: 1.0,
             feedback: true,
             platform_prediction: true,
-            prediction_ms: 8.0,
+            prediction_ms: 16.0,
             tip_lock: 1.0,
             shortcuts: BTreeMap::new(),
             custom_actions: Vec::new(),
@@ -136,6 +141,7 @@ impl Settings {
             fields.remove("zen_behavior");
             fields.remove("zen_reveal_mode");
             fields.remove("zen_show_button");
+            fields.remove("total_zen");
             if let Some(shortcuts) = fields.get_mut("shortcuts").and_then(|v| v.as_object_mut()) {
                 shortcuts.remove("command.TogglePanels");
             }
@@ -156,9 +162,13 @@ impl Settings {
                 control.validate(value, &row.title)?;
             }
         }
-        self.feedback_config()
-            .validate()
-            .map_err(|e| e.to_string())?;
+        // Continue validating the retained legacy value without applying it.
+        layer_engine::InstantFeedbackConfig {
+            tip_lock: self.tip_lock,
+            ..self.feedback_config()
+        }
+        .validate()
+        .map_err(|e| e.to_string())?;
         self.validate_shortcuts()
     }
     pub(crate) fn feedback_config(&self) -> layer_engine::InstantFeedbackConfig {
@@ -166,7 +176,8 @@ impl Settings {
             enabled: self.feedback,
             use_platform_prediction: self.platform_prediction,
             prediction_horizon_micros: (self.prediction_ms * 1000.0).round() as u32,
-            tip_lock: self.tip_lock,
+            // Always track the predicted endpoint at full strength. Prediction
+            // time alone controls how far ahead the preview should reach.
             ..Default::default()
         }
     }
@@ -178,10 +189,9 @@ impl Settings {
         config.use_platform_prediction &= native_available;
         if config.use_platform_prediction {
             // Native samples carry their own lookahead. The fallback uses
-            // automatic defaults, never the disabled, saved manual controls.
+            // automatic timing, never the disabled, saved prediction time.
             let defaults = layer_engine::InstantFeedbackConfig::default();
             config.prediction_horizon_micros = defaults.prediction_horizon_micros;
-            config.tip_lock = defaults.tip_lock;
         }
         config
     }
@@ -238,6 +248,7 @@ impl SettingsPage {
 pub enum PreferenceId {
     Theme,
     ShowClock,
+    /// Retired preference ID, retained to decode saved custom actions.
     TotalZen,
     ZenIcon,
     DarkBase,
@@ -249,6 +260,7 @@ pub enum PreferenceId {
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
+    /// Retired preference ID, retained to decode old serialized actions.
     TipLock,
     Version,
     License,
@@ -558,10 +570,10 @@ fn number(
         PreferenceKind::Number {
             value,
             control: match id {
-                PreferenceId::TipLock => NumericControl::percent(),
-                PreferenceId::PredictionHorizon => {
-                    NumericControl::number(min, max, step, 0).unit("ms")
-                }
+                PreferenceId::PredictionHorizon => NumericControl {
+                    kind: NumericKind::Slider,
+                    ..NumericControl::number(min, max, step, 0).unit("ms")
+                },
                 _ => {
                     NumericControl::number(min, max, step, if step < 1.0 { 2 } else { 0 }).unit("×")
                 }
@@ -656,25 +668,16 @@ impl Settings {
             ),
             number(
                 PredictionHorizon,
-                "Prediction time",
-                "Lower values keep strokes from running ahead.",
+                "Prediction amount",
+                "Higher values reduce lag but may overshoot.",
                 self.prediction_ms,
                 0.0,
                 64.0,
                 1.0,
             ),
-            number(
-                TipLock,
-                "Pen tip tracking",
-                "Higher values bring the stroke closer to your pen.",
-                self.tip_lock,
-                0.0,
-                1.0,
-                0.05,
-            ),
         ];
         for r in &mut input {
-            if matches!(r.id, PredictionHorizon | TipLock | PlatformPrediction) {
+            if matches!(r.id, PredictionHorizon | PlatformPrediction) {
                 r.enabled = self.feedback;
             }
         }
@@ -848,34 +851,31 @@ impl Settings {
         ];
         groups[0].push(PreferenceGroup {
             title: CommandId::ZenMode.label().into(),
-            rows: vec![
-                row(
-                    TotalZen,
-                    "Total zen",
-                    "",
-                    PreferenceKind::Switch {
-                        active: self.total_zen,
-                    },
-                ),
-                row(
-                    PreferenceId::ZenIcon,
-                    "Button icon",
-                    "",
-                    PreferenceKind::Choice {
-                        presentation: ChoicePresentation::ImageTiles { columns: 4 },
-                        options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
-                        icons: crate::ZenIcon::CHOICES
-                            .iter()
-                            .map(|c| c.0.icon().into())
-                            .collect(),
-                        selected: crate::ZenIcon::CHOICES
-                            .iter()
-                            .position(|c| c.0 == self.zen_icon)
-                            .unwrap() as u32,
-                    },
-                ),
-            ],
+            rows: vec![row(
+                PreferenceId::ZenIcon,
+                "Button icon",
+                "",
+                PreferenceKind::Choice {
+                    presentation: ChoicePresentation::ImageTiles { columns: 4 },
+                    options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
+                    icons: crate::ZenIcon::CHOICES
+                        .iter()
+                        .map(|c| c.0.icon().into())
+                        .collect(),
+                    selected: crate::ZenIcon::CHOICES
+                        .iter()
+                        .position(|c| c.0 == self.zen_icon)
+                        .unwrap() as u32,
+                },
+            )],
         });
+        if matches!(platform, Platform::Gtk | Platform::Web) {
+            // Clock/battery visibility belongs to each workspace's window
+            // bar. Keep the legacy preference for hosts with the older chrome.
+            for group in &mut groups[0] {
+                group.rows.retain(|row| row.id != ShowClock);
+            }
+        }
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
@@ -887,36 +887,17 @@ impl Settings {
             })
             .collect()
     }
-    pub(crate) fn zen_menu(&self, platform: Platform) -> Result<ContextMenu, String> {
-        let id = PreferenceId::TotalZen;
-        let row = self.field(id, platform)?;
-        let PreferenceKind::Switch { active } = row.kind else {
-            unreachable!("Total zen is a switch");
-        };
-        let mut toggle = ContextMenuItem::command(
-            row.title,
-            UiAction::Preferences {
-                action: PreferenceAction::Edit {
-                    id,
-                    value: PreferenceValue::Bool(!active),
-                },
-            },
-        );
-        toggle.enabled = row.enabled;
-        toggle.selected = Some(active);
+    pub(crate) fn zen_menu(&self, _platform: Platform) -> Result<ContextMenu, String> {
         Ok(ContextMenu {
             title: CommandId::ZenMode.label().into(),
-            sections: vec![
-                vec![toggle],
-                vec![ContextMenuItem::command(
-                    "Change icon…",
-                    UiAction::Preferences {
-                        action: PreferenceAction::Reveal {
-                            id: PreferenceId::ZenIcon,
-                        },
+            sections: vec![vec![ContextMenuItem::command(
+                "Change icon…",
+                UiAction::Preferences {
+                    action: PreferenceAction::Reveal {
+                        id: PreferenceId::ZenIcon,
                     },
-                )],
-            ],
+                },
+            )]],
         })
     }
 
@@ -979,7 +960,7 @@ impl Settings {
                 self.show_clock = ClockVisibility::CHOICES[value.choice().unwrap() as usize].0
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
-            TotalZen => self.total_zen = matches!(value, PreferenceValue::Bool(true)),
+            TotalZen => return Err("Zen mode no longer has a partial mode.".into()),
             ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
@@ -996,7 +977,7 @@ impl Settings {
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,
-            TipLock => self.tip_lock = n,
+            TipLock => return Err("Pen tip tracking is automatic.".into()),
             Feedback => self.feedback = matches!(value, PreferenceValue::Bool(true)),
             PlatformPrediction => {
                 self.platform_prediction = matches!(value, PreferenceValue::Bool(true))
@@ -1041,10 +1022,8 @@ impl PreferencesState {
                 row.enabled = false;
                 row.description = "Unavailable for this system or connected pen.".into();
             }
-            if matches!(
-                row.id,
-                PreferenceId::PredictionHorizon | PreferenceId::TipLock
-            ) && platform_prediction_available
+            if row.id == PreferenceId::PredictionHorizon
+                && platform_prediction_available
                 && settings.platform_prediction
             {
                 row.enabled = false;
@@ -1364,10 +1343,11 @@ mod copy_tests {
     fn clock_visibility_defaults_round_trips_and_resets() {
         let original: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
+        for platform in [Platform::Gtk, Platform::Web] {
+            assert!(original.field(PreferenceId::ShowClock, platform).is_err());
+        }
         for platform in [
             Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
             Platform::Android,
             Platform::Ios,
             Platform::Mac,
@@ -1425,26 +1405,7 @@ mod copy_tests {
     }
 
     #[test]
-    fn zen_preferences_are_persistent_resettable_on_all_platforms() {
-        let mut settings: Settings = serde_json::from_str("{}").unwrap();
-        assert!(!settings.total_zen);
-        let group = settings
-            .pages(Platform::Gtk)
-            .into_iter()
-            .find(|p| p.id == SettingsPage::Appearance)
-            .unwrap()
-            .groups
-            .into_iter()
-            .find(|g| g.title == "Zen mode")
-            .unwrap();
-        assert_eq!(
-            group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
-            [PreferenceId::TotalZen, PreferenceId::ZenIcon]
-        );
-        let id = PreferenceId::TotalZen;
-        let row = settings.field(id, Platform::Gtk).unwrap();
-        assert!(matches!(row.kind, PreferenceKind::Switch { active: false }));
-        assert!(!row.reset.unwrap().enabled);
+    fn zen_icon_is_the_only_preference_and_legacy_mode_is_retired() {
         for platform in [
             Platform::Generic,
             Platform::Gtk,
@@ -1454,30 +1415,57 @@ mod copy_tests {
             Platform::Ios,
             Platform::Windows,
         ] {
-            settings
-                .edit(id, PreferenceValue::Bool(true), platform)
+            let mut settings = Settings::default();
+            let group = settings
+                .pages(platform)
+                .into_iter()
+                .flat_map(|p| p.groups)
+                .find(|g| g.title == "Zen mode")
                 .unwrap();
-            assert!(settings.total_zen);
-            assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
+            assert_eq!(
+                group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+                [PreferenceId::ZenIcon]
+            );
+            assert!(settings.field(PreferenceId::TotalZen, platform).is_err());
             assert!(
                 settings
-                    .edit(id, PreferenceValue::Choice(2), platform)
+                    .edit(
+                        PreferenceId::TotalZen,
+                        PreferenceValue::Bool(false),
+                        platform
+                    )
                     .is_err()
             );
+            settings
+                .edit(PreferenceId::ZenIcon, PreferenceValue::Choice(3), platform)
+                .unwrap();
+            let saved = serde_json::to_string(&settings).unwrap();
+            assert!(!saved.contains("total_zen"));
+            assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
+            let mut state = PreferencesState::default();
+            state.edit(
+                &mut settings,
+                PreferenceAction::Reset {
+                    id: PreferenceId::ZenIcon,
+                },
+                platform,
+            );
+            assert!(state.error.is_none());
+            assert_eq!(settings, Settings::default());
         }
-        let saved = serde_json::to_string(&settings).unwrap();
-        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
-        assert!(!saved.contains("zen_reveal_mode") && !saved.contains("zen_show_button"));
-        let mut state = PreferencesState::default();
-        state.edit(&mut settings, PreferenceAction::Reset { id }, Platform::Gtk);
-        assert!(state.error.is_none());
-        assert_eq!(settings, Settings::default());
-        let mut reader = serde_json::Deserializer::from_str(
-            r#"{"zen_reveal_mode":"button","zen_show_button":false,"pan_speed":2.0}"#,
-        );
-        let retired = Settings::deserialize_saved(&mut reader).unwrap();
-        assert!(!retired.total_zen);
-        assert_eq!(retired.pan_speed, 2.0);
+        for total in [false, true] {
+            let json = format!(
+                r#"{{"total_zen":{total},"zen_reveal_mode":"button","zen_show_button":false,"pan_speed":2.0}}"#
+            );
+            let mut reader = serde_json::Deserializer::from_str(&json);
+            let settings = Settings::deserialize_saved(&mut reader).unwrap();
+            assert_eq!(settings.pan_speed, 2.0);
+            assert!(
+                !serde_json::to_string(&settings)
+                    .unwrap()
+                    .contains("total_zen")
+            );
+        }
     }
 
     #[test]
@@ -1506,7 +1494,6 @@ mod copy_tests {
                     PreferenceId::PredictionHorizon,
                     PreferenceValue::Number(32.0),
                 ),
-                (PreferenceId::TipLock, PreferenceValue::Number(0.5)),
             ] {
                 settings.edit(id, value.clone(), platform).unwrap();
                 assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
@@ -1588,7 +1575,6 @@ mod copy_tests {
                 PreferenceId::PanSpeed,
                 PreferenceId::ZoomSpeed,
                 PreferenceId::Renderer,
-                PreferenceId::TotalZen,
                 PreferenceId::ZenIcon,
             ] {
                 assert!(settings.field(id, platform).unwrap().description.is_empty());
@@ -1611,7 +1597,6 @@ mod copy_tests {
                 PreferenceId::Pressure,
                 PreferenceId::Feedback,
                 PreferenceId::PredictionHorizon,
-                PreferenceId::TipLock,
                 PreferenceId::License,
             ] {
                 assert!(!settings.field(id, platform).unwrap().description.is_empty());

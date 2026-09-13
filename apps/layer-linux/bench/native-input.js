@@ -2,6 +2,12 @@
 // Test-only virtual pointer through Mutter -> Wayland -> GTK/Chromium. Run ONLY inside
 // an isolated dbus-run-session + headless Mutter, never on a user's desktop.
 const {Gio, GLib} = imports.gi;
+// The private monitor is configured by workspace-motion.sh. RemoteDesktop's
+// touch positions are stream pixels; Mutter divides them by monitor scale.
+// Relative pointer motion and the test fixtures use logical desktop units.
+const touchScale = Number(GLib.getenv('LAYER_MOTION_SCALE') || 1);
+if (!Number.isFinite(touchScale) || touchScale < 1 || touchScale > 4)
+    throw new Error('Expected private monitor scale 1..4');
 if (!GLib.getenv('WAYLAND_DISPLAY')?.startsWith('layer-bench-'))
     throw new Error('Requires an isolated layer-bench-* Wayland display');
 const output = GLib.getenv('LAYER_NATIVE_INPUT_DIR');
@@ -9,6 +15,8 @@ if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary d
 const ready = Gio.File.new_for_path(`${output}/ready`);
 if (ready.query_exists(null)) throw new Error('Use a fresh output directory');
 const loop = new GLib.MainLoop(null, false);
+const nativeTest = ARGV.find(a => a.startsWith('--native-test='))?.slice('--native-test='.length);
+if (nativeTest && !/^[a-z0-9_]+$/.test(nativeTest)) throw new Error('Use one exact native test name');
 const workspaceDrag = ARGV.includes('--workspace-drag');
 const workspaceClicks = ARGV.includes('--workspace-clicks');
 const workspaceCursor = ARGV.includes('--workspace-cursor');
@@ -24,23 +32,42 @@ const columnDrops = ARGV.includes('--column-drops');
 const layerHold = ARGV.includes('--layer-hold');
 const workspaceHold = ARGV.includes('--workspace-hold') || layerHold || dragPickup || columnDrops;
 const workspaceSwitcher = ARGV.includes('--workspace-switcher');
+const iconAudit = ARGV.includes('--icons');
 const workspaceTransitions = ARGV.includes('--workspace-transitions');
 const workspaceManagerVisual = ARGV.includes('--workspace-manager-visual');
 const workspaceMenus = ARGV.includes('--workspace-menus') || workspaceSwitcher || workspaceManagerVisual || workspaceTransitions;
 const workspaceResize = ARGV.includes('--workspace-resize') || ARGV.includes('--web-workspace-resize');
 const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('--web-workspace-resize') || ARGV.includes('--web-color-panel');
 const colorPanel = ARGV.includes('--color-panel') || ARGV.includes('--web-color-panel');
-const workspaceMotion = colorPanel || columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
+const workspaceDropSizes = ARGV.includes('--workspace-drop-sizes');
+const workspaceEdges = ARGV.includes('--workspace-edges');
+const workspaceMotion = workspaceDropSizes || workspaceEdges || colorPanel || columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 // Group panels include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
-if (drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
-const process = launcher.spawnv([
+if ((nativeTest && !ARGV.includes('--native-storage')) || drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
+const launch = [
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', colorPanel ? '--color-panel' : workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
-        'cargo', 'test', '--release', '-p', 'layer-linux', colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceDropSizes ? 'native_workspace_drop_sizes' : workspaceEdges ? 'native_workspace_drag_edges' : iconAudit ? 'native_icon_audit' : colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
-]);
+];
+if (nativeTest) {
+    // Cargo's filter is a substring match: a short name can accidentally run
+    // another case (and its storage/input protocol) in the same process.
+    const listing = Gio.Subprocess.new(
+        ['cargo', 'test', '--locked', '--release', '-p', 'layer-linux', '--', '--list'],
+        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+    );
+    const [, stdout, stderr] = listing.communicate_utf8(null, null);
+    if (!listing.get_successful()) throw Error(`Cannot list native tests: ${stderr}`);
+    const matches = stdout.split('\n').filter(line => line.endsWith(': test'))
+        .map(line => line.slice(0, -6)).filter(name => name.split('::').at(-1) === nativeTest);
+    if (matches.length !== 1) throw Error(`Expected exactly one native test named ${nativeTest}, found ${matches.length}`);
+    launch[5] = matches[0];
+    launch.push('--exact');
+}
+const process = launcher.spawnv(launch);
 let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);
@@ -57,7 +84,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     const session = call('/org/gnome/Mutter/RemoteDesktop', dest, 'CreateSession', '()', [])[0];
     const send = (method, signature, values) => call(session, iface, method, signature, values);
     let touchStream;
-    if (workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
+    if (nativeTest || workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
         const id = call(session, 'org.freedesktop.DBus.Properties', 'Get', '(ss)', [iface, 'SessionId'])[0].deep_unpack();
         const cast = 'org.gnome.Mutter.ScreenCast';
         const castCall = (path, name, method, signature, values) => Gio.DBus.session.call_sync(
@@ -70,19 +97,19 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     }
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
-    if (workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
+    if (nativeTest || workspaceHold || workspaceMotion || workspaceSwitcher || workspaceTransitions) {
         // Creating Mutter's virtual touchscreen announces a new seat capability.
         // Let GTK bind wl_touch before the first test contact is delivered.
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (workspaceSwitcher || columnDrops || workspaceTransitions || colorPanel) {
+    if (nativeTest || workspaceSwitcher || columnDrops || workspaceTransitions || colorPanel) {
         // Announce the virtual keyboard before testing activation. Otherwise
         // the first key can arrive before GTK binds the new wl_keyboard.
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, true]);
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, false]);
     }
-    if (workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || tooltips || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
+    if (nativeTest || workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || tooltips || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
         let step = 0, events = null, index = 0, previous = [0, 0];
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceMotion ? 4 : 60, () => {
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
@@ -108,7 +135,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 if (event.touch) {
                     if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
                     else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',
-                        '(sudd)', [touchStream, 0, ...event.point]);
+                        '(sudd)', [touchStream, 0, ...event.point.map(v => v * touchScale)]);
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.point) {
@@ -180,7 +207,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     });
     return GLib.SOURCE_REMOVE;
 });
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher ? 120000 : 60000, () => {
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, nativeTest || workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher ? 120000 : 60000, () => {
     process.force_exit();
     loop.quit();
     return GLib.SOURCE_REMOVE;

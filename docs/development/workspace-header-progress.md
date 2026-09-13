@@ -1,0 +1,527 @@
+# Workspace window-bar builder
+
+Base: `008b646` (fetched origin/main). Previous prototype is preserved on
+`recovery/unified-header-39e1daa`. No pushes. GTK implementation and acceptance
+checks are complete; ready for user review within the tested scope below.
+
+## Design
+
+- The window bar owns individual, stable-ID items in left/center/right regions.
+  It is not a dock group and cannot swallow, hide, or float toolbar containers.
+- Shared Rust owns configuration, validation, editing, tool semantics, drawer
+  origins, overflow policy and workspace history. GTK owns widgets, native
+  measurements and input arbitration.
+- Fixed native window controls and a window-drag reservation sit outside the
+  editable items. Empty caption space uses the native window handle; controls
+  own their own pointer/context-menu events.
+- Inline editing: visible region targets, grips, Add Items, size, canvas-info
+  settings, defaults and Done. Drop outside cancels. Context menus provide
+  move/order/remove alternatives. Tile bodies require hold-drag; explicit
+  grips drag immediately, with native movement slop.
+- One size for the whole bar. Plain tool icons, transparent backing over the
+  full-window GPU canvas. Narrow windows compact the switcher and overflow
+  whole items; no invisible hit targets or overlapping native controls.
+- Menu labels are an independent workspace setting under Window. A menu
+  button always exposes the complete application menu. Recovery remains
+  accessible if every user-configurable navigation item is removed.
+- Canvas-info visibility is a workspace setting, fixed at bottom right, separate from
+  header settings. Painter hides zoom/rotation. Total Zen has one meaning and
+  no partial-Zen preference.
+- GTK is the first native projection. Other hosts retain working existing
+  controls until their projection is implemented; portable data remains valid.
+
+## Milestones
+
+- [x] Preserve old work; reset to fetched main.
+- [x] Shared configuration, history, validation, drawer/picker integration.
+- [x] GTK header and inline editor, Painter defaults, full-canvas/overlay layout.
+- [x] Total-Zen cleanup and host compatibility.
+- [x] End-to-end GTK acceptance and release build.
+
+## Review follow-up (September 13)
+
+Replaced the header-only Add popup with an inline catalog reusing the toolbar
+picker's GTK search/list/row component. Catalog rows and grips can add items by
+dragging into any bar region; + buttons remain a keyboard/click alternative.
+Native device classification preserves touch/pen list scrolling before hold.
+The editor has Done/Cancel with a single shared baseline; previews are excluded
+from saved captures and history. Done records the complete customization once.
+Removed the canvas-info corner setting; visibility remains workspace-owned.
+
+Restored the workspace-selector background and baseline text-menu padding/height.
+Fixed hover radius, centered native icon grips, 6px inter-item gaps, square
+drawer-facing tile corners and equally sized native close hit targets/padding.
+
+Follow-up acceptance:
+
+- Shared UI/host/native storage: 299 / 25 / 65 pass (one host GPU case ignored).
+- Catalog drag/add/cancel/Done with real mouse/touch: 1×
+  `/tmp/capy-workspace-motion.h6TLs9`; real 2× `/tmp/capy-workspace-motion.A1ZHgf`.
+- All sizes/both themes, measured menu heights/padding, close-button centering,
+  selector centering, grips, drawer state and inspected screenshots:
+  `/tmp/capy-workspace-motion.utKlDc` (final panel); earlier pass
+  `/tmp/capy-workspace-motion.X7AsCt`.
+- 640×600 overflow/editor: `/tmp/capy-workspace-motion.JoDVFi`.
+- Save/switch/restart, including closing with an uncommitted preview:
+  `/tmp/capy-workspace-motion.Cq0n3J`.
+- Reorder holds/context menus: `/tmp/capy-workspace-motion.DuV7Is`;
+  editor controls: `/tmp/capy-workspace-motion.hSCOOf`;
+  caption/cancellation/Zen: `/tmp/capy-workspace-motion.tVyMWW`;
+  all header tool drawers: `/tmp/capy-workspace-motion.HEuMRo`.
+- Ordinary toolbar customization and reused picker checkboxes, both themes:
+  `/tmp/capy-workspace-motion.PAIkZj`. Updated stale test assumptions about
+  hard-coded group IDs and the first Pencil search result being a preset.
+- Native fullscreen/clock/battery: `/tmp/capy-workspace-motion.0FBgVC`;
+  restored/maximized/fullscreen window movement: `/tmp/capy-workspace-motion.xDb04g`.
+- Release build, five native non-GUI utility tests, and actual release launch
+  with inspected 1200×900 capture: `/tmp/capy-unified-release.oFksX7`.
+
+No physical-pen or other-host GUI acceptance is inferred from these GTK tests.
+
+## Initial implementation acceptance (September 13)
+
+Implemented the first shared model and GTK projection. Header items now have
+their own identity/zone/size, separate from dock panels. Header tools use the
+same activation and validated drawer handlers as toolbar tiles. Added native
+grips and reused workspace drag arbitration. Shared layout/history strips
+native header measurements. GTK has a searchable Add picker, context actions,
+canvas-info options and navigation recovery. Total-Zen cleanup is in place;
+legacy wire fields remain false/empty for older hosts.
+
+Verified so far (each GTK GUI test runs in its own private Mutter/Vulkan process):
+
+| Check | Result / artifacts |
+| --- | --- |
+| Shared UI / host / native workspace storage | 299 / 25 / 65 pass; one separate host GPU test remains ignored |
+| Hardware-GPU ABI, serialized release run | All 11 pass (a parallel sandboxed attempt crashed; serialized hardware run is the acceptance result) |
+| GTK non-GUI utilities | All 5 pass; native ignored tests are run separately below |
+| Painter tools, cross-zone grip move, Undo, outside cancellation | `native_header_builder_input`: `/tmp/capy-workspace-motion.GZgxAp` |
+| Mouse/touch body holds, immediate grips, held release, context/keyboard actions at real 2× | `native_header_hold_context_input`: `/tmp/capy-workspace-motion.4Agt4i` |
+| All sizes, Add/search/reopen, singleton prevention, canvas-info options, defaults, remove-all recovery | `native_header_editor_controls_input`: `/tmp/capy-workspace-motion.7HoWBt` |
+| Narrow 640px overflow, all sizes, hidden tool activation and persistent drawer origins | `native_header_overflow_input`: `/tmp/capy-workspace-motion.w8NWdJ` |
+| White canvas under the bar, both themes, contrast inspection | `native_header_canvas_visual`: `/tmp/capy-workspace-motion.1owAVF` |
+| Actual brush numeric editing, color swap, Layers menu, every content-panel drawer family | `native_header_drawer_controls_input`: `/tmp/capy-workspace-motion.6gOXDv` |
+| Caption double-click, native close, Escape/blur/source removal, Tab, menu toggle, same-frame publication, Zen | `native_header_cancel_caption_input`: `/tmp/capy-workspace-motion.NEF1KX` |
+| Centered visible switcher, edits, keyboard remove/focus, switch away/back, close/reopen persistence | `native_header_managed_input`: `/tmp/capy-workspace-motion.CIbV4e` |
+| Ordinary toolbar/drawer regression, both themes and all edges | `native_tool_drawers`: `/tmp/capy-workspace-motion.vNzeTb` |
+| Windowed/restored caption movement, maximized/fullscreen docking | `native_window_drag_input`: `/tmp/capy-workspace-motion.SywmDL` |
+| Workspace manager, library, history, save/reset/duplicate workflows | `native_named_workspace_manager_library_and_history`: `/tmp/capy-workspace-motion.obj5wo` |
+| Total Zen and all Capy icon choices | `native_zen_behaviors`: `/tmp/capy-workspace-motion.bDTIKJ`; `native_zen_icons`: `/tmp/capy-workspace-motion.rogGYZ` |
+| Fullscreen, F11/native WM state, locale clock formats, component remove/re-add, simulated battery sizes/states | `native_fullscreen_header_clock_and_battery`: `/tmp/capy-workspace-motion.WIdi1n` |
+| Web build and focused total-Zen browser regression | Build passes; `--zen`: `/tmp/capy-workspace-motion.eTui8O` |
+| Regular release executable, new profile, GPU canvas and desktop menu capture | `/tmp/capy-unified-release.LeLeA1` |
+
+The native input harness converts logical touch positions to ScreenCast physical
+pixels for real 2× monitor tests. A test-only touch-coordinate error was caught
+and corrected; setting GDK_SCALE alone is not the acceptance method.
+
+The older all-preferences Web suite currently fails before its Zen checks on a
+missing panel typography selector in the current default workspace. It is not
+counted as passing. The independent total-Zen suite exercises both themes,
+legacy-setting removal, native browser mouse/touch recovery and layout invariance.
+No physical pen, Windows, macOS or iPadOS GUI acceptance is claimed.
+
+The fullscreen battery test initially raced the machine's UPower response:
+its synthetic battery disappeared while waiting for an allocation. The fixture
+now explicitly disables that observer, while production still observes UPower.
+The complete test passes, including medium/large indicator scaling. Desktop
+menu-label padding was also verified in the regular release screenshot: File,
+Edit, Layer, Select, Filter, View, Window and Help fit at the default 1200px size.
+
+Rust formatting and diff checks are complete. The release executable is built
+and smoke-tested. This feature retires the two partial-Zen implementation files;
+the previous code remains in Git and on the recovery branch.
+
+## Try without touching existing profiles
+
+From the repository root:
+
+```bash
+preview_dir=$(mktemp -d /tmp/capy-header-review.XXXXXX)
+mkdir "$preview_dir/workspaces"
+CAPY_WORKSPACE_DIR="$preview_dir/workspaces" LAYER_SETTINGS_FILE="$preview_dir/settings.json" \
+  dbus-run-session -- target/release/layer-linux
+```
+
+Choose Paint, then Window → Customize Title Bar….
+Keep the printed/assigned profile path to reopen the same review workspace.
+Existing customized workspace histories deliberately do not receive the new
+defaults automatically, so a fresh profile is useful when reviewing the design.
+
+## Acceptance (must be tested, not inferred from serialized state)
+
+- Fresh Painter: requested left/center/right order, medium plain icons, no menu
+  labels/clock/battery/zoom bubble, canvas visible behind header.
+- Every header tool: activation, repeat activation/drawers, enabled/selected
+  state, working drawer controls, close/reopen, menu/secondary-click behavior.
+- Editor: enter/exit, all sizes, add all item types, reorder within/across
+  zones, remove/re-add, context alternatives, keyboard access, defaults.
+- Native mouse/touch gestures: hold vs immediate grips, cancellation, outside
+  drops, release without movement, no accidental action after drag.
+- Overflow: narrow/large, center positioning, accessible hidden items, no
+  overlap or disappearing tools, resize with a drawer/editor open.
+- Recovery with menu/Capy/switcher removed; native close remains protected.
+- Workspace switching, duplicate/saved layouts, restart persistence;
+  preview/cancel produce no saved revisions and Done applies the edit once.
+- Overlay visibility at bottom right, menu-label component add/remove, true Zen return.
+- Caption drag, double/secondary click, maximized/fullscreen, light/dark, 1x/2x.
+- Shared unit/bridge tests, GTK isolated real-input tests, Web regressions,
+  actual release executable and screenshot inspection. Report physical-device
+  and untested-host limitations explicitly.
+
+## Main integration — 2026-09-13
+
+Merged `origin/main` at `6ff2201` into the GTK window-bar branch at `69bbea6`.
+The repository's upstream branch is named `main`, not `master`. The customizable
+header, nested shared tool picker, total-Zen policy and drawer dismissal are
+retained alongside the incoming compact color picker and shared SVG icon bank.
+Header controls, palette grips and tool-picker rows now use the shared GTK SVG
+renderer; the header's color tile uses its live foreground/background paintable.
+The customization command also has a packaged toolbar icon.
+
+Validation passed: release GTK executable and Web/Wasm build; 434 shared tests
+(337 UI, 25 host, 72 workspace; one hardware-only host test remains ignored);
+and these 16 isolated native GTK cases:
+
+- Picker journey, all drawer controls, outside drawer dismissal, caption/cancel,
+  and editor controls: `/tmp/capy-workspace-motion.medFeO`, `DIcal8`, `Fz2pM4`,
+  `mXj9GZ`, `6s0MI5` (later IDs share the same directory prefix).
+- Both-theme/all-size spacing and SVG checks, persistence, held context menus,
+  640px overflow, and 2× mouse/touch palette drag: `vhR8dn`, `nNFK25`, `Ct9AS6`,
+  `EbQcvA`, `i6lhdC`.
+- Compact color input, full SVG bank and 280 production-control icon checks,
+  drawing/default layout, Zen icon choices, invalid-default recovery, and canvas
+  behind the header: `ok94G4`, `W7Ypa3`, `YABflV`, `7U6tbi`, `x276nW`, `CYKNQT`.
+
+Reviewed header, editor and color-drawer captures in both themes. Tests were
+updated to use the new wheel's rotated hue geometry and Okhsv coordinates, and
+to expect a valid saved `shape` after workspace recovery rather than no field.
+The native runner now resolves a short test name to exactly one full Rust test
+name: Cargo substring filtering had accidentally selected both the default
+workspace and default-recovery tests. Physical pen and other native platforms
+were not revalidated by this integration. The Web build is a merge check, not a
+port of the GTK window-bar editor.
+
+## GTK editor ergonomics — 2026-09-13
+
+Replaced the full-width region strip and mixed Options/action rows with a
+460px-wide inline panel. The component palette and Add Tools are at the top,
+with insertion region/position immediately beside them. Selected-item actions
+are separate from adding; size and canvas-info visibility follow, then Reset
+Bar and adjacent Cancel/Done. Size is a labeled segmented choice, not a popup;
+the former cryptic footer is replaced by explicit help on demand. The panel
+measures its content and scrolls at the available window height.
+
+Editing context menus omit redundant Customize and global Capy preferences,
+disable the current region and impossible moves, and offer Done/Cancel.
+Empty editable bar space has its own menu; native caption menus outside editing
+and native window controls retain ownership. Context selection follows the
+clicked item. Shared context popovers restore their keyboard invoker on close.
+
+Keyboard entry establishes panel focus. F6 switches between panel and bar;
+arrows/Home/End select items, Alt+arrows reorder, Alt+Shift+arrows move regions,
+Delete removes, and Menu/Shift+F10 opens actions. Tab/Shift+Tab stay within the
+customization surface, with native popovers and nested dialogs retaining their
+own navigation. Rebuilds preserve focus; an overflowing item retains selection
+in the panel. Key releases still reach shared shortcut bookkeeping so repeated
+Ctrl+Shift+U entry works after Done/Cancel. Escape cancels drag/menu before preview.
+
+Validation: release GTK build; 435 shared tests (338 UI, 25 host, 72 native
+workspace; one hardware-GPU host case ignored). Thirteen isolated native runs
+passed, with no invalid header measurements or GTK criticals in their test logs:
+
+- Component hold/grip mouse/touch input: `wiS86W`; same at 2× scale: `4KhT60`.
+- Picker and nested cancellation: `TAdGx5`; held context menus: `DQwBmA`;
+  caption/Zen/cancellation: `aUJID8`; editor controls/defaults: `AcwdtB`.
+- Extended keyboard/context/focus/reopen journey: `iXLHze` (including the final
+  labeled Help button); minimum 640×480
+  window with every component available and keyboard Done access: `9dLgN4`.
+- Managed workspace persistence/restart: `uDtngz`; 640×600 overflow: `jpT0iQ`.
+- Drawer dismissal on bars/toolbars: `w9nKCP`; actual drawer controls: `x5G7At`.
+- Both themes/all sizes, shared SVGs and spacing: `PHJDke`.
+
+IDs above are under `/tmp/capy-workspace-motion.<ID>`. Reviewed the actual
+light/dark editor captures, narrow overflow layout, and minimum-window Done
+capture. The app's existing minimum window height is 480px; the short-window
+test uses that supported minimum. These checks use real GTK mouse, virtual
+touch and keyboard input under private Mutter, not physical pen hardware or
+other hosts. No Web editor port, workspace reset, or remote push in this change.
+
+## Simplified window-bar palette and live drag — 2026-09-13
+
+Supersedes the editor controls and shortcuts described in the ergonomics entry
+above. The 420px inline panel now contains only the wrapping component palette,
+bar size, bottom-right canvas-readout visibility, and Cancel/Done. Add Tools is
+a palette component: clicking or dropping it opens the existing modal toolbar
+tool picker. There are no region buttons, selected-item action row, Help, Reset,
+or dedicated opening/focus/movement shortcut combinations. Left/Right moves the
+selected bar item, including across region boundaries; Delete/Backspace removes
+it. Native Tab, button and context-menu navigation remain available.
+
+Removed the separate Show Menu Bar state/action as well as its menu entry;
+Menu Labels is simply a component to add/remove. All visible entry points say
+Customize Window Bar. The Window menu puts this entry first so recovery remains
+reachable at the minimum window height. Space has exactly one tile of width,
+with the normal 6px inter-item spacing and an additional grip only while editing.
+Defaults now use Sketch/Paint/Photo and include Full Screen and Settings on the
+right. Existing saved names/layouts are not reset or migrated.
+
+The shared HeaderDrag policy uses the existing TabDrag frozen-slot algorithm
+for horizontal movement. GTK retains/snapshots the actual item widgets, animates
+neighbors, and preserves the original grab offset. Half a tile beyond the bar
+detaches the item; an outside release removes it, returning singleton components
+to the palette. Re-entering reattaches the same contact. Motion never publishes
+session changes; release produces one edit, and editor Cancel restores its full
+starting state. Hidden overflow neighbors are captured without reparenting and
+remain intact after removal/cancellation. Native hold/slop/device arbitration
+still follows the application drag convention.
+
+Native testing also found and fixed missing keyboard focus when reopening the
+retained Settings dialog. Constrained-popover test coordinates now use the
+actual GdkPopup position rather than its unpositioned widget allocation.
+
+Validation passed: release GTK executable and isolated executable smoke capture
+(`/tmp/capy-header-release.957uAV/release.png`); 438 shared tests (341 UI, 25 host,
+72 native workspace; one hardware-specific host case ignored); and 17 isolated
+native runs with no GTK criticals or rejected header measurements:
+
+- Live slide/tear-off/re-entry/removal with mouse and touch: `o5i2xv`; 2×: `c5oMQb`.
+- Palette Tools drop/modal handoff: `XI7iwa`; click/search/multi-select: `qxPWQG`.
+- Catalog hold/grip/cancel: `V9JzY5`; context holds: `zXtnXD`.
+- Keyboard/region boundaries/removal: `fL9BGu`; all editor controls: `Qb4HEu`.
+- Managed save/switch/reopen: `d39qsy`; caption/Zen/cancel/blur: `nIQbyS`.
+- Settings/fullscreen/reopen at all sizes: `DuhDkM`.
+- 640×600 overflow activation/picker: `vK3AHb`; overflow drag at all sizes with
+  mouse/touch, hidden entries, removal and Cancel: `bnEUHn`.
+- 640×480 full-palette/footer/recovery entry: `4K3CLH`.
+- Both themes/all sizes, one-tile Space, gaps, corners and grips: `LbOqpz`.
+- Drawer dismissal on bar and toolbars: `QcOA9o`; drawer controls: `HFbVjG`.
+
+Native IDs are under `/tmp/capy-workspace-motion.<ID>`. Inspected the actual
+default bar, light/dark editor, sliding and detached ghosts, narrow overflow
+drag and minimum-window captures. These tests deliver real GTK mouse, virtual
+touch and keyboard input under private Mutter; physical pen and other hosts
+were not revalidated. Nothing was pushed and no existing user profile was wiped.
+
+## Horizontal title-bar editor refinement — 2026-09-13
+
+Checkpointed the previous validated implementation locally as `264024f` before
+these refinements. Renamed the command, context actions, tool picker and related
+UI copy to Title Bar; internal model/command IDs remain stable.
+
+The editor now uses one native wrapping layout across the available window
+width. It has no heading or visible size label. Components lead; the size
+choices, Show footer and Cancel/Done form a trailing group that stays together.
+The ordinary Paint palette occupies one 48px-high row at 1600px. At 640×480 the
+entire available-component catalog wraps into a 168px-high strip with all
+controls visible. Sizes retain accessible naming and tooltips without a visible
+label. Show footer controls the existing fixed bottom-right readout.
+
+An empty center gets up to one third of the usable width, capped at 320 logical
+pixels, with 12px visual gaps on either side. The shared policy keeps it truly
+centered, protects native controls, and only reserves this extra space during
+editing. New regression coverage drops near both enlarged edges, beyond the
+old 80px target, using mouse/touch at all sizes and at 1×/2×.
+
+Validation: 439 shared tests passed (342 UI, 25 host, 72 workspace; one hardware
+host test ignored), release executable built and smoke-tested in a private
+compositor (`/tmp/capy-titlebar-release.ZKLyuM/release.png`), formatting/diff checks passed.
+Nine isolated native runs passed with no GTK criticals:
+
+- Wide-strip controls, palette and footer: `D1Zmjm`.
+- 640×480 full catalog and keyboard Done/recovery: `38Gzj7`.
+- Empty-center edge drops at 640×600: `Q4uUBa`; 2× desktop: `GMPbb9`.
+- Light/dark, all sizes, spacing/drawer-corner captures: `s5X2bG`.
+- Keyboard/context/focus: `3Bama5`; palette holds/grips/cancel: `ohKZSB`.
+- Palette Tools drop and nested picker: `Yulizy`.
+- Footer/layout persistence, switching, reopen and Cancel: `Ju7ZcS`.
+
+IDs are under `/tmp/capy-workspace-motion.<ID>`. Visually inspected wide strips
+in both themes, the full palette at minimum size, and the widened drop targets.
+Tests use private Mutter mouse/virtual-touch/keyboard input; physical pen and
+other hosts were not revalidated. No existing user workspace was reset.
+
+## Consistent defaults and fullscreen status — 2026-09-13
+
+Scope confirmed as consistent title-bar defaults, not full workspace-layout
+parity or a Web port of the GTK builder. Settings remains the trailing default
+control. Full Screen is Web-only; native menus/shortcuts still enter fullscreen.
+Shared preset tests compare every title-bar region across all six hosts,
+including Paint, allowing only the Web fullscreen component to differ. Hosts
+without the customizable-header projection still keep their existing rendering
+and toolbar fallback; no tools are removed from those hosts.
+GTK projects portable bars through shared platform filtering, so a saved Web
+fullscreen item creates neither a gap, overflow entry nor invisible keyboard
+reorder step. The palette and context menus use the same availability policy.
+The fixed Windows header no longer creates its fullscreen button; its native
+fullscreen request handler remains intact. Windows GUI execution was not
+available here; no Apple/tablet/physical-pen acceptance is inferred.
+
+GTK clock/battery components require actual fullscreen. Windowed geometry omits
+them without spacing; customization retains labeled placeholders. Battery
+absence still hides the value without removing the customizable component.
+
+Built-in names refresh to Sketch, Paint and Photo through existing shared
+catalog maintenance, not workspace reset or user-write replay. SQLite applies
+names, name indexes and metadata generations in the same transaction; browser
+storage follows the same plan. Live other-window owners are deferred. Custom
+names, collision suffixes, working tools and layout history survive unchanged.
+Ordinary built-in rename protection remains unchanged. A forced database write
+failure rolls back, acquires no lease, and retries successfully.
+
+Validation: 444 shared tests pass (344 UI, 25 host, 75 workspace; one separate
+hardware host test ignored). GTK release and Web Wasm builds pass. Native input
+runs use private Mutter and temporary profiles:
+
+- Settings/F11, all sizes, status values/placeholders and saved Web-only tile:
+  `eHy3H2`; true 2× display scale: `8cVvnJ`.
+- Every palette component and empty-bar recovery: `9eA7sB`.
+- Full palette at 640×480, keyboard Done: `40YtnA`.
+- Save/switch/reopen/Cancel: `3E1jKv`; repeated after atomic name maintenance:
+  `FVlIx6`.
+- Native fullscreen, locale clock and simulated battery states: `rezL28`
+  (in-memory desktop settings, no changes to the user's clock preferences).
+- Editor keyboard/context/region boundaries: `DhEVSZ`.
+- Live mouse/touch slide, detach, remove and cancel: `BuzJxH`.
+- Web fullscreen API/menu, browser fullscreen, locale and absent/denied battery:
+  `9bmGkT`. The reload fixture now waits for workspace readiness before clicking
+  the button. Initial test-server ports were occupied; tests used a free port.
+
+IDs are under `/tmp/capy-workspace-motion.<ID>`. Inspected windowed/fullscreen
+captures, managed Paint and the narrow full palette. Strict Clippy is not clean:
+the unchanged manual-clamp expression, eight-argument HeaderDrag constructor and
+large UiAction enum trigger existing warnings. No warning suppression or unrelated
+API refactor was added. Checkpoints are local only; nothing was pushed.
+
+## Correct Sketch/Paint identities — 2026-09-13
+
+The requested name mapping supersedes the preceding record: **Sketch** is the
+minimal internal Painter preset, **Paint** is the panel-heavy internal
+Illustrator preset, and **Photo** remains Photographer. Only display names
+change; stable IDs, tab order, startup selection, layouts and tools do not.
+
+Catalog maintenance vacates all changing names inside its existing transaction
+before assigning their final labels. This avoids spurious `(2)` suffixes when
+swapping two occupied names. Both dependent renames defer when either workspace
+is owned elsewhere; unrelated live owners do not block the pair. Custom-name
+collisions keep the existing unique-name policy. No profile is reset.
+
+Validation: 447 shared tests pass (344 UI, 25 host, 78 workspace; one hardware
+host test ignored). Added SQLite/browser parity checks for the exact old-name
+swap, dry runs, both live-owner cases, unchanged content/working state/pins/order/
+bindings, generation changes, failure rollback including indexes, and idempotent
+reopen. GTK and Web release builds pass.
+
+The isolated GTK managed journey checks the visible names, switches to Sketch,
+edits/saves the bar, switches away/back, closes an uncommitted preview, reopens
+the saved workspace and uses its Color drawer (`yKX97A`). It now also asserts
+visible paper pixels in the full-window captures. The existing behind-header
+canvas test passes in both themes (`stXWLC`). Inspected original-resolution
+PNGs of both layouts and the reopened edit; a blank-looking image-tool preview
+was not present in the actual PNG pixels. Run directories are under
+`/tmp/capy-workspace-motion.<ID>`. No normal user workspace was touched; no
+other-platform GUI or physical-device acceptance is inferred from these checks.
+
+## Drag-only title-bar customization — 2026-09-13
+
+Per the explicit editor-specific request, existing title-bar items and bank
+components now drag immediately after native movement slop from their whole
+surface. This does not alter ordinary toolbar hold behavior or native window
+movement outside customization. Updated the application drag convention and
+AGENTS note to retain that distinction for future changes.
+
+Bank chips are inert boxes with decorative icons/grips, not buttons. They have
+no click/tap/keyboard activation, and their padding, icon and label all resolve
+to the same captured source. Add Tools opens its shared picker only after a
+valid drop. Removed click-to-add callbacks, palette hold recognizers, saved
+insertion-position state and the vertical blue insertion cursor. Existing-item
+keyboard selection, moves/removal and context menus remain; initial editor
+focus moves to the selected size control. Shared drag preview/drop/history
+policy is unchanged, including neighbor motion, detach/re-entry, removal and
+Done/Cancel. No storage format or workspace contents were reset.
+
+Validation: 447 shared tests pass and the GTK release executable builds.
+Private-compositor mouse/touch runs passed for inert bank clicks/holds and
+sub-slop motion, immediate pickup at four chip hit locations (`Np57xY`), catalog
+drag/cancellation (`hxPaZK`), item holds/context menus (`lAKWD3`), drop-only Tools
+(`h29otv`), picker search/filter/Cancel and exact drop positions (`37qKhn`), all
+components/footer/empty-bar recovery (`GgW1GI`), keyboard (`Nyd1Tx`), and
+save/switch/reopen (`4YZNVc`). Minimum 640×480 editor: `NwIiED`; 640×600 overflow,
+overflow dragging and empty-center targets: `526U65`, `VMvWeN`, `ye2kHf`.
+At true 2× scale, whole-bank pickup passes (`NcCErT`), as do body-origin live
+slide, grab offsets, detach/re-entry/removal and cancellation (`DKWkOH`). Both
+themes/all three sizes and grip alignment pass (`O7idnp`), as do caption and
+source-replacement cancellation (`ztXIba`) and normal window controls/fullscreen
+(`rZpphR`): 17 isolated native runs in total. Inspected original-resolution wide
+and minimum-size editor captures. Artifacts are under
+`/tmp/capy-workspace-motion.<ID>`; no physical stylus or other-host GUI acceptance
+is inferred, and no normal user windows/storage were modified.
+
+## Final integration and native ownership — 2026-09-13
+
+Merged fetched `origin/main` (`2142149`) in `a390356`, retaining both the title-bar
+editor and upstream panel release measurements, drag-edge/drop-size tests and
+input-driver scale handling. The ownership fix is `1b488f1`; see
+[native ownership](workspace-ownership.md) for the kernel-lock protocol,
+window teardown and interrupted-write safeguards. The GTK switching path now
+claims/reclaims authoritatively, including stale SwitchToWindow menu actions.
+No user workspace resets and no pushes were performed.
+
+Current Web port specification: [title-bar handoff](title-bar-web-handoff.md).
+This consolidates the reviewed behavior rather than asking the next agent to
+reconstruct it from the superseded prototypes above. Also updated the old Web
+packaging assertion to validate explicit theme paint for the already-redrawn
+filled filter icons instead of requiring their former outline geometry.
+
+Shared validation: 42 core, 44 engine, 353 UI, 25 host and 86 workspace tests pass
+(550 total; one hardware host test intentionally ignored). GTK release build
+and Web/Wasm check pass. Web launcher/package tests: 19 pass. Workspace Clippy
+completes with the existing enum-size/test-helper warnings, no new warnings.
+
+Post-merge private-compositor acceptance (all storage/settings are disposable):
+
+| Journey | Run suffix |
+| --- | --- |
+| Ownership: stale/live external client, stale menu action, two GTK windows, close/reclaim | `MBQ1z7` |
+| Save/switch/reopen and canceled preview | `CPYAsg` |
+| Individual default corruption/recovery | `USvfZE` |
+| Whole-chip immediate pickup; inert clicks/holds | `5cO3na` |
+| Live reorder, detach/re-entry/remove | `nBTTjK` |
+| Drop-only Add Tools (two completed runs) | `GmQZ40`, `Q9bvmY` |
+| Tool picker search, selection, cancellation | `hnLJ00` |
+| Keyboard move/remove | `TS6aVe` |
+| Components, footer and empty-bar recovery | `0l4HNI` |
+| Holds and context menus | `UjlQaJ` |
+| Caption movement, Cancel and source replacement | `SSmb3v` |
+| All sizes/both themes, spacing, drawers and menu hover | `ZjqHDk` |
+| Window controls and fullscreen/status | `T8E3Zu` |
+| 640×600 overflow dragging and empty-center targets | `OaDi63`, `LTGBsS` |
+| True 2× whole-bank pickup | `2BV7ZJ` |
+| Upstream panel drag edges | `3VW2Ej` |
+| Upstream content-aware floating drop sizes | `S0Uryr` |
+| Workspace transition stability | `OlavbQ` |
+
+These are 20 completed native runs. The transition case was updated to find
+tabs by their stable workspace IDs rather than the renamed display labels. It
+recorded 358 frames with zero resized frames, editor disables or busy notices.
+
+Artifacts are `/tmp/capy-workspace-motion.<suffix>/input`. Inspected the default
+Sketch canvas, wide drag-only editor and light/large editor captures.
+
+One Add Tools run (`Xg6Zle`) crashed before canvas initialization. The core dump
+places the fault in `libvulkan`'s `loader_get_icd_and_device`, called by GTK's
+swapchain startup; another thread was enumerating Vulkan devices. The same test
+then passed twice on fresh sessions. No renderer workaround was introduced and
+this intermittent startup failure is **not claimed fixed**. Backtrace:
+`/tmp/capy-tools-drop-backtrace.log`. A separate initial spacing invocation lacked
+its required `--native-storage` fixture; the correctly configured run passed.
+No physical-stylus, Apple or Windows GUI acceptance is inferred from these runs.
+
+Final refresh: fetched and merged `origin/main` at `688fd76` in `cfa4f91`,
+including the later GTK/shared renderer error-propagation update. Rebuilt GTK
+release and Web/Wasm, reran all 550 Rust tests, and repeated native ownership
+(`1NI6dz`), save/switch/reopen (`V4QIsP`) and transition stability (`Aoh405`). All
+pass; the last transition run records 360 frames with no resize, disabled-editor
+frames or busy notices. This brings completed post-integration GTK runs to 23.
+The final tree is ready for the requested local-main integration; nothing is
+pushed to origin by this task.

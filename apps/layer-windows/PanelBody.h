@@ -15,6 +15,7 @@ public:
     double ContentHeight()const;
     std::unique_ptr<NavigatorView> navigator;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::FrameworkElement> tileElements;
+    std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Button> tileControls;
     std::map<std::wstring,winrt::Microsoft::UI::Xaml::FrameworkElement> anchors;
 private:
     std::shared_ptr<CapyUi::WorkspaceData> data;

@@ -758,10 +758,10 @@ impl Preferences {
                                     if let Some(index) =
                                         options.iter().position(|s| s == text.as_str())
                                     {
-                                        image.set_icon_name(Some(&format!(
-                                            "layer-{}-symbolic",
-                                            icons[index]
-                                        )));
+                                        crate::icons::set(
+                                            &image,
+                                            Some(&format!("layer-{}-symbolic", icons[index])),
+                                        );
                                     }
                                 });
                                 control.set_factory(Some(&factory));
@@ -1112,6 +1112,10 @@ impl Preferences {
             if !was_open[0] {
                 self.dialog.present(Some(&w.window));
                 self.split.set_show_content(true);
+                // A retained dialog can remember a focus widget that was
+                // hidden on close. Re-establish native focus after presenting
+                // the content page so Tab and Escape work on every opening.
+                self.content_view.child_focus(gtk::DirectionType::TabForward);
             }
             if self.reveal.replace(view.reveal) != view.reveal
                 && let Some(id) = view.reveal

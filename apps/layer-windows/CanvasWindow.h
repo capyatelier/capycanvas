@@ -93,6 +93,8 @@ private:
     CanvasQueryQueue previewWork;
     bool RequestPreviews(CanvasQueryKind,std::string,PreviewReply);
     bool transportFailed=false;
+    std::string surfaceError; // mutex: UI surface-reset result.
+    bool inputStopped=false; // mutex: admitted work remains owned by the worker.
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
     std::vector<winrt::Windows::Graphics::RectInt32> captionRegions;
@@ -104,6 +106,10 @@ private:
     void Start();
     void Resize();
     void ApplyResize();
+    bool RecoverGpu();
+    void SaveAfterGpuFailure(std::string const& reason);
+    void ResetSurface();
+    int DispatchWork(CanvasWork const&,bool retiring);
     void Run();
     void Stop();
     void Finish();

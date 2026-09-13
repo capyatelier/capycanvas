@@ -59,6 +59,7 @@ public static class CapyRowPointer {
   if(process!=owner)throw new Exception("Input point is outside the owned review.");
  }
  static void Check(){if(failure!=null)throw new Exception("Pointer keepalive failed.",failure);}
+ public static void Verify(){lock(gate)Check();}
  static void MouseMove(Point point) {
   var mouse=new Mouse{dx=(point.x-GetSystemMetrics(76))*65535/(GetSystemMetrics(78)-1),
    dy=(point.y-GetSystemMetrics(77))*65535/(GetSystemMetrics(79)-1),flags=0xC001};
@@ -89,6 +90,12 @@ public static class CapyRowPointer {
     failure=error;try{Cancel();}catch{}
     active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
    }
+  }
+ }
+ public static void Hover(int x,int y) {
+  lock(gate){
+   Check();if(active)throw new Exception("A review contact is already active.");
+   var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
   }
  }
  public static void Down(string device,int x,int y) {
@@ -135,6 +142,14 @@ public static class CapyRowPointer {
    Check();if(active)throw new Exception("A review contact is already active.");
    var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
    MouseButton(8);try{Thread.Sleep(35);}finally{MouseButton(16);}
+  }
+ }
+ // Native text input can move the app when the touch keyboard opens. Permit
+ // a fresh UIA-measured point for idle keyboard input, with both guards intact.
+ public static void KeyAt(ushort key,int x,int y) {
+  lock(gate){
+   Check();if(active)throw new Exception("Use the original contact for keys during a gesture.");
+   var point=new Point{x=x,y=y};Guard(point);last=point;Key(key);
   }
  }
  public static void Key(ushort key) {

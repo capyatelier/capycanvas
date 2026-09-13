@@ -12,7 +12,7 @@ extension XCTestCase {
         let grip = app.buttons["workspace-grip-builtin:workspace:painter"]
         let options = app.buttons["workspace-options-builtin:workspace:painter"]
         let menu = app.descendants(matching: .any)["workspace-row-menu"].firstMatch
-        let pin = app.buttons["workspace-preference-pin"]
+        let pin = app.buttons["menu-action-Show in top bar"]
         func activateMenu(_ control: XCUIElement) {
             XCTAssertTrue(control.waitForExistence(timeout: 10))
             if control.isHittable { workspaceActivate(control); return }
@@ -34,7 +34,7 @@ extension XCTestCase {
         XCTAssertTrue(painter.waitForExistence(timeout: 30))
         XCTAssertTrue(illustrator.isSelected)
         workspaceActivate(options)
-        XCTAssertTrue(pin.waitForExistence(timeout: 10)); XCTAssertEqual(pin.value as? String, "On")
+        XCTAssertTrue(pin.waitForExistence(timeout: 10)); XCTAssertTrue(pin.isSelected)
         activateMenu(pin)
         XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
 
@@ -43,7 +43,7 @@ extension XCTestCase {
         #if os(iOS)
         painter.press(forDuration: 0.8)
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
-        XCTAssertEqual(pin.value as? String, "Off")
+        XCTAssertFalse(pin.isSelected)
         activateMenu(pin) // Restore visibility, closing the menu.
         #else
         workspaceActivate(options); activateMenu(pin)
@@ -72,7 +72,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertTrue(illustrator.isSelected)
 
-        workspaceActivate(options); activateMenu(app.buttons["workspace-preference-down"])
+        workspaceActivate(options); activateMenu(app.buttons["menu-action-Move Down"])
         expectation(for: NSPredicate { _, _ in painter.frame.minY > illustrator.frame.minY && painter.frame.minY < photographer.frame.minY }, evaluatedWith: painter)
         waitForExpectations(timeout: 10)
         workspaceActivate(options); activateMenu(pin)
@@ -82,7 +82,7 @@ extension XCTestCase {
         XCTAssertGreaterThan(painter.frame.minY, illustrator.frame.minY)
         XCTAssertLessThan(painter.frame.minY, photographer.frame.minY)
         workspaceActivate(options)
-        XCTAssertTrue(pin.waitForExistence(timeout: 10)); XCTAssertEqual(pin.value as? String, "Off")
+        XCTAssertTrue(pin.waitForExistence(timeout: 10)); XCTAssertFalse(pin.isSelected)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "workspace-switcher-restarted"; attachment.lifetime = .keepAlways; add(attachment)

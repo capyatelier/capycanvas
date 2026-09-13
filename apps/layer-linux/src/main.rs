@@ -3,6 +3,7 @@ mod effects;
 mod files;
 #[cfg(test)]
 mod fullscreen_tests;
+mod icons;
 mod image_selector;
 mod input;
 mod layers;

@@ -20,12 +20,13 @@ struct WorkspaceManagerPresentation: ViewModifier {
                             }
                         }
                     }.padding(14).frame(maxWidth: 580, alignment: .leading)
-                        .modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
+                        .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
                 }
             }
             .sheet(isPresented: $manager.presented, onDismiss: { manager.dismissed() }) {
                 WorkspaceManagerView(manager: manager, library: library)
                     .modifier(WorkspacePackagePicker(files: manager.files))
+                    .modifier(EditorPopupPresentation())
             }
     }
 }
@@ -42,7 +43,7 @@ struct WorkspaceManagerView: View {
                 if manager.prompt == nil && manager.history.isNull && !manager.toolbarMode {
                     Button {
                         manager.activate(JSON(["type": "new"]))
-                    } label: { Image(systemName: "plus").frame(width: 24, height: 24) }
+                    } label: { SharedIcon(name: "plus").frame(width: 24, height: 24) }
                         .accessibilityLabel("New Workspace")
                         .accessibilityIdentifier("workspace-action-new")
                         .disabled(manager.processing)
@@ -100,15 +101,18 @@ struct WorkspaceManagerView: View {
                 }
             } }
             if !manager.toolbarMode {
-                HStack {
-                    Spacer()
+                HStack(spacing: 8) {
                     Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("workspace-manager-close")
+                        .buttonStyle(WorkspaceManagerButtonStyle())
                     if manager.view["details"].isNull {
                         Button(manager.catalog["switch_label"].string) { }
+                            .buttonStyle(WorkspaceManagerButtonStyle(primary: true))
                             .disabled(true)
                     }
-                    ForEach(manager.view["details"]["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
+                    ForEach(manager.view["details"]["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in
+                        action(button).buttonStyle(WorkspaceManagerButtonStyle(primary: true))
+                    }
                         .disabled(manager.selecting)
                 }
             }
@@ -130,8 +134,9 @@ struct WorkspaceManagerView: View {
             ForEach(row["actions"].array.filter { manager.toolbarMode && $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
             let secondary = row["actions"].array.filter { !$0["primary"].bool }
             if !secondary.isEmpty {
-                Menu { ForEach(secondary, id: \.managerActionID) { button in action(button) } }
-                    label: { Image(systemName: "ellipsis").frame(width: 20) }
+                EditorMenuButton(menu: {
+                    AppleContextMenu(JSON(["sections": [secondary.map(\.raw)]])) { manager.activate($0) }
+                }) { SharedIcon(name: "more").frame(width: 20) }
                     .accessibilityLabel("Actions for " + row["title"].string)
             }
         }.fixedSize(horizontal: true, vertical: false)
@@ -149,7 +154,7 @@ struct WorkspaceManagerView: View {
                         Button { manager.selectHistory(row["id"].string) } label: {
                             HStack {
                                 rowLabel(row)
-                                if manager.history["selected"].string == row["id"].string { Image(systemName: "checkmark") }
+                                if manager.history["selected"].string == row["id"].string { SharedIcon(name: "check") }
                             }.padding(12).contentShape(Rectangle())
                                 .background(Color.accentColor.opacity(manager.history["selected"].string == row["id"].string ? 0.14 : 0), in: RoundedRectangle(cornerRadius: 10))
                         }.buttonStyle(.plain).accessibilityIdentifier("workspace-history-" + row["id"].string)
@@ -164,6 +169,28 @@ struct WorkspaceManagerView: View {
                     .accessibilityIdentifier("workspace-history-restore")
             }
         }
+    }
+}
+
+/// Solid, equally sized footer actions matching the shared workspace manager.
+private struct WorkspaceManagerButtonStyle: ButtonStyle {
+    var primary = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.editorPopupStore) private var store
+    private var foreground: Color {
+        guard let source = store?.state["palette"], !source["text"].isNull else { return .primary }
+        return EditorPalette(source: source)["text"]
+    }
+    func makeBody(configuration: Configuration) -> some View {
+        let prominent = primary && enabled
+        configuration.label.fontWeight(.semibold).lineLimit(1)
+            .padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 40)
+            .foregroundStyle(prominent ? .white : foreground)
+            .background(prominent ? EditorPalette.sharedAccent : foreground.opacity(0.10))
+            .overlay { if configuration.isPressed { Color.black.opacity(0.12) } }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(foreground.opacity(prominent ? 0 : 0.10)) }
+            .opacity(enabled ? 1 : 0.55).contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

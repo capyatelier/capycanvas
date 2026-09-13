@@ -13,8 +13,8 @@ ports are compared.
 
 Install a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`,
 GTK4 and libadwaita development packages, and Wayland development libraries.
-Package names vary by distribution. The current development stack is GTK 4.22
-and libadwaita 1.9; the enabled API features are declared in
+Package names vary by distribution. GTK 4.22 or later is required for the shared
+SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features are declared in
 [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
 
 Check the libraries visible to the build:
@@ -75,6 +75,15 @@ does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
 
 ## Validate
+
+Run `bash tools/performance/workspace-motion.sh gtk --icons` for the complete
+shared icon bank and actual category, preset, mode, filter and toolbar controls.
+It uses the private compositor and fresh storage described below, checks both
+themes at 16/24/32 pixels, and writes native captures to
+`artifacts/icon-audit/gtk/`. Set `LAYER_MOTION_SCALE=2`,
+`LAYER_MOTION_VIEWPORT=2400x2000`, and an absolute `LAYER_TEST_ARTIFACTS` path for
+a separate high-DPI run. See the [icon audit](../ui/icon-audit.md) for paint checks
+and full-image comparison with the canonical SVGs in Chrome.
 
 The [testing guide](testing.md) lists GTK interaction and shared-engine checks.
 The [UI implementation record](../history/ui-implementation.md) and
@@ -157,6 +166,26 @@ above. Its compositor setup can also wrap a focused Cargo test like the one abov
 Headless Mutter still needs a working Vulkan GPU. Keep native input injection on
 that private display; the [input driver](../../apps/layer-linux/bench/native-input.js)
 must not control an ordinary desktop session.
+
+For panel dragging at workspace edges, run
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/drag-edges/gtk" bash tools/performance/workspace-motion.sh gtk --workspace-edges`.
+This checks mouse/touch floating panels, tab tear-off, footer grips, toolbars,
+column drawers and held collapsed icons in both themes. The retained preview
+keeps its size and grab offset beyond all four edges; the host clips it at the
+application surface. Lowest-slot docking, fitted floating release, measurement
+updates, cancellation and one-step undo/redo are included. `--workspace-window`
+also checks bottom overflow and release in windowed, maximized, fullscreen and
+restored windows. Use `--workspace-motion` separately for sustained presentation
+timing. Physical pen validation remains part of human review.
+
+Run `--workspace-drop-sizes` with the same runner for content-aware floating
+release: square Color panels at different widths, two layers, sixty layers,
+and the filter catalog. It exercises tall, squashed and usable sidebar sizes,
+existing floating sizes, footer anchoring, partial room and bottom-edge release
+with mouse/touch in both themes. Assertions check native row viewport sizes,
+square geometry, bounded scrolling, stable height after later measurements and
+one-step undo/redo. It writes captures and `drop-sizes.json`; repeat with the
+scale-2 environment above for high-DPI input/allocation coverage.
 
 For workspace-switching flashes or jumps, run
 `bash tools/performance/workspace-motion.sh gtk --workspace-transitions`.

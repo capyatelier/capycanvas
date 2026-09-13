@@ -22,12 +22,13 @@ pub(super) struct Publication {
 }
 
 impl Workspace {
-    pub(super) fn reset_workspace_publication(&self) {
-        self.publication.layout_pending.set(false);
+    pub(super) fn reset_workspace_publication(&self) -> bool {
+        let pending_layout = self.publication.layout_pending.replace(false);
         self.publication.pending.borrow_mut().take();
         self.publication.current.borrow_mut().take();
         self.publication.placement.borrow_mut().take();
         self.publication.hits.borrow_mut().take();
+        pending_layout
     }
 
     pub(super) fn publish_workspace_layout(self: &Rc<Self>, update: WorkspaceUpdate) {
@@ -96,6 +97,12 @@ impl Workspace {
             self.publication
                 .model_revision
                 .set(Some(update.model_revision));
+            // Measurements can arrive while a clipped drag owns the contact.
+            // Rebase retained allocations on its frozen size, not the newly
+            // measured natural size in the ordinary floating layout.
+            self.publication.placement.borrow_mut().take();
+            *self.drop_hint.borrow_mut() = update.drag.as_ref().and_then(|d| d.drop_hint.clone());
+            *self.publication.current.borrow_mut() = Some(update);
             self.surface.queue_allocate();
             return;
         }
@@ -135,6 +142,8 @@ impl Workspace {
             let Some(base) = resolved.groups.iter().find(|g| g.id == group.id) else {
                 return;
             };
+            let mut base = base.clone();
+            base.interpolate_from(group.bounds, 0.0);
             let children = self
                 .surface
                 .imp()

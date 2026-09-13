@@ -6,6 +6,10 @@ behavior on GTK, Web, Android, macOS, iPadOS, and Windows:
 
 - Reorderable button/tile bodies require **press, hold, then drag** with mouse,
   touch, and pen.
+- In **Customize Title Bar**, the whole editable item and component-bank chip
+  drag immediately after movement slop, with every device. Bank chips have no
+  click-to-add action; placement is drag-only. This explicit customization
+  surface is an exception to the ordinary interactive tile-body hold rule.
 - Grab handles and title/tab bars support **press, then drag without a hold**
   with every device. Normal movement slop still applies.
 - Reorderable list-row bodies require **hold then drag for touch and pen**;

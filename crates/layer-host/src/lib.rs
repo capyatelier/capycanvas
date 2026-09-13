@@ -64,7 +64,7 @@ impl NativeHost {
             dirty: true,
             chrome_hidden: false,
             hide_floating_panels: false,
-            keep_zen_button: true,
+            keep_zen_button: false,
             error: None,
             sequence: 0,
             // Eager hosts are ready on GPU attachment; staged hosts reset this.
@@ -303,9 +303,11 @@ impl NativeHost {
     }
     fn enqueue(&mut self, event: PenEvent) -> Result<(), String> {
         if let Err(event) = self.session.pen(event) {
-            // The sole render owner may drain a full input queue. The platform
-            // UI thread never waits here, and a stroke boundary is never dropped.
-            self.session.frame(event.timestamp_ns, event.timestamp_ns)?;
+            // Relieve queue pressure through an actual frame boundary. Raster
+            // commits require GPU submission; CPU-only draining cannot save them.
+            let previous = self.session.state().revision;
+            let change = self.session.frame(event.timestamp_ns, event.timestamp_ns)?;
+            self.apply_change(previous, change);
             self.session
                 .pen(event)
                 .map_err(|_| "Pen queue remained full")?;
@@ -454,6 +456,7 @@ impl NativeHost {
                     _ => PointerButton::Other,
                 },
                 update[0] != 0,
+                false,
             )?;
         }
         Ok(())
@@ -465,13 +468,35 @@ impl NativeHost {
         if !self.accepts_pointer_input(event.view_revision) {
             return Ok(());
         }
-        self.pointer_event_inner(event, button, false)
+        self.pointer_event_inner(event, button, false, false)
+    }
+    /// Deliver a sample admitted before the host stopped canvas input. This
+    /// bypasses GPU startup gating, not shared pointer ownership or document epochs.
+    pub fn retire_pointer_event(
+        &mut self,
+        event: PenEvent,
+        button: PointerButton,
+    ) -> Result<(), String> {
+        if !self.accepts_pointer_input(event.view_revision) {
+            return Ok(());
+        }
+        self.pointer_event_inner(event, button, false, true)
+    }
+    pub fn suspend_renderer(&mut self) -> Result<(), String> {
+        self.last_pen = None;
+        self.deferred_contacts.clear();
+        let previous = self.session.state().revision;
+        let change = self.session.suspend_renderer()?;
+        self.apply_change(previous, change);
+        self.startup = Default::default();
+        Ok(())
     }
     fn pointer_event_inner(
         &mut self,
         mut event: PenEvent,
         button: PointerButton,
         preserve_token: bool,
+        retiring: bool,
     ) -> Result<(), String> {
         let id = event.device_id;
         let phase = event.phase;
@@ -516,7 +541,7 @@ impl NativeHost {
             self.dirty = true;
         }
         if !predicted && phase == PenPhase::Down {
-            if self.paint_ready() {
+            if retiring || self.paint_ready() {
                 self.deferred_contacts.remove(&id);
             } else {
                 self.deferred_contacts.insert(id);
@@ -526,7 +551,7 @@ impl NativeHost {
         if !predicted && matches!(phase, PenPhase::Up | PenPhase::Cancel) {
             self.deferred_contacts.remove(&id);
         }
-        if paint && !preparing && self.session.engine().backend().0.is_some() {
+        if paint && !preparing && (retiring || self.session.engine().backend().0.is_some()) {
             self.sequence += 1;
             self.enqueue(event)?;
             if !predicted {
@@ -585,6 +610,12 @@ impl NativeHost {
             LayerMenu {
                 id: u64,
                 mask: bool,
+            },
+            LayerDrop {
+                epoch: u64,
+                id: u64,
+                target: u64,
+                fraction: f32,
             },
             LayerThumbnails {
                 requests: Vec<(u64, u64)>,
@@ -686,6 +717,18 @@ impl NativeHost {
                 )
             }
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
+            Query::LayerDrop {
+                epoch,
+                id,
+                target,
+                fraction,
+            } => {
+                let current = self.session.state().document_file.epoch;
+                let position = (epoch == current)
+                    .then(|| self.session.layer_drop_hint(id, target, fraction))
+                    .flatten();
+                json!({ "epoch": current, "position": position })
+            }
             Query::LayerThumbnails { requests } => {
                 let (accepted, images) = self.layer_thumbnails(requests)?;
                 let images: Vec<_> = images
@@ -741,7 +784,6 @@ impl NativeHost {
                             &state.workspace.layout,
                             self.logical,
                             &heights,
-                            state.partial_zen(),
                         )
                     })
                 };
@@ -926,45 +968,26 @@ mod tests {
         }
     }
     #[test]
-    fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
+    fn zen_snapshot_has_no_alternative_toolbar_projection() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2880, 1800, 1.75).unwrap();
-        let mut settings = app.session.state().settings.clone();
-        settings.total_zen = false;
-        app.dispatch(UiAction::RestoreSettings { settings })
-            .unwrap();
         let layout = app.session.state().workspace.layout.clone();
-        app.dispatch(UiAction::Invoke {
-            command: layer_ui::CommandId::ZenMode,
-        })
-        .unwrap();
-        let snapshot = app.take_snapshot().unwrap();
-        assert_eq!(snapshot["partial_zen"], true);
-        let sections = snapshot["zen_toolbars"]["sections"].as_array().unwrap();
-        assert!(!sections.is_empty());
-        for section in sections {
-            let panel = snapshot["panels"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|p| p["id"] == section["panel"])
-                .unwrap();
-            for tile in section["tiles"].as_array().unwrap() {
-                assert!(
-                    panel["tiles"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|t| t["id"] == tile[0])
-                );
-            }
+        for active in [true, false] {
+            app.dispatch(UiAction::Invoke {
+                command: layer_ui::CommandId::ZenMode,
+            })
+            .unwrap();
+            let snapshot = app.take_snapshot().unwrap();
+            assert_eq!(app.session.state().workspace.zen_mode, active);
+            assert_eq!(snapshot["partial_zen"], false);
+            assert!(
+                snapshot["zen_toolbars"]["sections"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(app.session.state().workspace.layout, layout);
         }
-        assert_eq!(app.session.state().workspace.layout, layout);
-        app.dispatch(UiAction::Invoke {
-            command: layer_ui::CommandId::ZenMode,
-        })
-        .unwrap();
-        assert_eq!(app.take_snapshot().unwrap()["partial_zen"], false);
     }
     #[test]
     fn android_drawer_queries_follow_collapsed_toolbar_measurements() {
@@ -1053,6 +1076,7 @@ mod tests {
                     panel: layer_ui::Panel::Brushes,
                     tab_width: 100.,
                     content_height: 900.,
+                    scroll: None,
                 }],
             })
             .unwrap();
@@ -1176,6 +1200,7 @@ mod tests {
                 panel: layer_ui::Panel::Brushes,
                 tab_width: 76.0,
                 content_height: 480.0,
+                scroll: None,
             }],
         })
         .unwrap();
@@ -1252,8 +1277,8 @@ mod tests {
         assert_eq!(app.take_snapshot().unwrap()["chrome_hidden"], true);
         app.hide_floating_panels = true;
         assert_eq!(app.take_snapshot().unwrap()["hide_floating_panels"], true);
-        app.keep_zen_button = false;
-        assert_eq!(app.take_snapshot().unwrap()["keep_zen_button"], false);
+        app.keep_zen_button = true;
+        assert_eq!(app.take_snapshot().unwrap()["keep_zen_button"], true);
         assert!(app.take_snapshot().is_none());
         app.error = Some("test surface error".into());
         assert_eq!(app.take_snapshot().unwrap()["error"], "test surface error");
@@ -1462,10 +1487,16 @@ mod tests {
             host.session.frame(time as u64, time as u64).unwrap();
         }
         assert!(host.last_pen.is_none());
-        let stroke = host.session.engine().document().strokes().next().unwrap();
-        let before = stroke.points[0];
-        assert_eq!(before.pressure, 0.25);
-        let count = stroke.points.len();
+        let checkpoint = host.session.engine().checkpoint();
+        let before = host.session.engine().document().layers[0].raster.clone();
+        let mut before_pixels = vec![0; 64 * 48 * 4];
+        host.session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .copy_rgba8_srgb(&mut before_pixels, 64 * 4)
+            .unwrap();
         let camera = json!(host.session.state().camera);
         host.pointer_batch_updates(
             PointerBatch {
@@ -1481,17 +1512,33 @@ mod tests {
         )
         .unwrap();
         host.session.frame(30_000_000, 30_000_000).unwrap();
-        let stroke = host.session.engine().document().strokes().next().unwrap();
-        assert_eq!(stroke.points.len(), count);
-        assert_eq!(stroke.points[0].pressure, 0.9);
-        assert_eq!(stroke.points[0].tilt, [0.2, -0.3]);
-        assert_eq!(stroke.points[0].twist, 1.7);
-        assert!(stroke.points[0].position.x > before.position.x);
-        assert_eq!(host.session.engine().document().strokes().count(), 1);
+        let after = &host.session.engine().document().layers[0].raster;
+        assert_ne!(
+            after, &before,
+            "late correction publishes a replacement raster root"
+        );
+        assert_ne!(host.session.engine().checkpoint(), checkpoint, "a prior save remains dirty after correction");
+        assert_eq!(host.session.engine().metrics().committed_strokes, 1);
+        let mut after_pixels = vec![0; 64 * 48 * 4];
+        host.session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .copy_rgba8_srgb(&mut after_pixels, 64 * 4)
+            .unwrap();
+        assert_ne!(
+            after_pixels, before_pixels,
+            "corrected pressure/position changes pixels"
+        );
         assert!(host.last_pen.is_none());
         assert!(host.deferred_contacts.is_empty());
         assert_eq!(json!(host.session.state().camera), camera);
         host.session.require_document_idle().unwrap();
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Undo }).unwrap();
+        host.session.frame(40_000_000, 40_000_000).unwrap();
+        assert!(host.session.engine().document().layers[0].raster.is_empty());
+        assert!(!host.session.engine().can_undo(), "correction adds no undo entry");
     }
 
     #[test]

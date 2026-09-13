@@ -43,6 +43,8 @@ pub struct CapyHost {
     // An acquired image drops before its surface; the panel is detached on the
     // UI thread before destruction. The surface retains its native COM reference.
     poisoned: bool,
+    gpu: std::sync::Arc<crate::device::DeviceState>,
+    gpu_generation: u64,
     target: Option<wgpu::SurfaceTexture>,
     surface: wgpu::Surface<'static>,
     config: Option<wgpu::SurfaceConfiguration>,
@@ -85,6 +87,8 @@ impl CapyHost {
         // render worker. No swap chain is attached during CPU/UI initialization.
         Ok(Self {
             poisoned: false,
+            gpu: Default::default(),
+            gpu_generation: 0,
             target: None,
             surface,
             config: None,
@@ -102,6 +106,18 @@ impl CapyHost {
             workspaces: None,
             blocked_contacts: Default::default(),
         })
+    }
+
+    fn device_is_lost(&self) -> bool {
+        self.gpu.is_lost(
+            self.native
+                .session
+                .engine()
+                .backend()
+                .0
+                .as_ref()
+                .map(|gpu| gpu.device()),
+        )
     }
 
     fn accepts_workspace_input(&self) -> bool {
@@ -135,8 +151,25 @@ impl CapyHost {
     }
 
     fn prepare_gpu(&mut self) -> Result<(), String> {
+        if self.device_is_lost() && std::env::var_os("CAPY_TEST_GPU_UNAVAILABLE").is_some()
+            && std::env::var_os("CAPY_SMOKE_TEST").is_some()
+            && std::env::var_os("CAPY_SETTINGS_DIRECTORY").map(std::path::PathBuf::from).is_some_and(|p| p.is_absolute())
+        {
+            return Err("Test GPU remains unavailable".into());
+        }
         if self.config.is_some() {
             return Ok(());
+        }
+        if self.device_is_lost() {
+            // D3D12 devices are process/adapter singletons. Release the removed
+            // renderer and presenter before requesting another device. Retained
+            // CPU assets, history and input remain in the same UiSession.
+            self.presenter = None;
+            drop(self.native.session.renderer_mut().0.take());
+            self.native.startup = Default::default();
+            // Completed document candidates may still own the removed device;
+            // reject those while allowing an in-flight CPU Save to complete.
+            self.poll_services()?;
         }
         let adapter =
             pollster::block_on(self.instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -157,6 +190,7 @@ impl CapyHost {
             ..Default::default()
         }))
         .map_err(err)?;
+        let gpu_state = crate::device::DeviceState::observe(&device);
         let [width, height] = self.native.session.state().camera.viewport;
         let mut config = self
             .surface
@@ -169,7 +203,20 @@ impl CapyHost {
         let renderer = WgpuRasterizer::from_wgpu_staged(adapter, device, queue).map_err(err)?;
         // Prepare the optional overview pipeline during GPU startup, before input is live.
         presenter.prepare_overviews(&renderer);
-        self.native.session.renderer_mut().0 = Some(renderer);
+        gpu_state.check()?;
+        let revision = self.native.session.state().revision;
+        let (retired, change) = self
+            .native
+            .session
+            .replace_renderer(layer_host::Renderer(Some(renderer)))?;
+        self.native.apply_change(revision, change);
+        drop(retired); // GPU resources and retired shader workers stay off the UI thread.
+        if self.device_is_lost() {
+            self.native.error = None;
+        }
+        self.gpu = gpu_state;
+        self.gpu_generation = self.gpu_generation.saturating_add(1);
+        self.native.invalidate_snapshot();
         self.native.startup = Default::default();
         self.presenter = Some(presenter);
         self.config = Some(config);
@@ -179,11 +226,13 @@ impl CapyHost {
     }
 
     fn frame(&mut self, now: u64, presentation: u64) -> Result<i32, String> {
+        self.gpu.check()?;
         let Some(target) = self.target.take() else {
             return Ok(1);
         };
         self.native
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
+        self.gpu.check()?;
         self.native.dirty |= self.native.session.wants_continuous_frames();
         self.native
             .session
@@ -205,10 +254,11 @@ impl CapyHost {
             &target.texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(err)?;
         gpu.queue().present(target);
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
+        self.gpu.check()?;
         if let Some(service) = self.documents.as_mut() {
             service.after_frame(&mut self.native)?;
         }
@@ -430,6 +480,25 @@ pub unsafe extern "C" fn capy_pointer(
     records: *const CapyPointer,
     count: usize,
 ) -> i32 {
+    unsafe { pointer_records(host, records, count, false) }
+}
+/// # Safety
+/// Same ownership and buffer rules as capy_pointer. The host has stopped new
+/// canvas input; these samples were admitted before reconstruction failed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_retire_pointer(
+    host: *mut CapyHost,
+    records: *const CapyPointer,
+    count: usize,
+) -> i32 {
+    unsafe { pointer_records(host, records, count, true) }
+}
+unsafe fn pointer_records(
+    host: *mut CapyHost,
+    records: *const CapyPointer,
+    count: usize,
+    retiring: bool,
+) -> i32 {
     guard(host, |host| {
         if count > 32768 || (count > 0 && records.is_null()) {
             return Err("Invalid pointer batch".into());
@@ -437,7 +506,9 @@ pub unsafe extern "C" fn capy_pointer(
         if count > 0 {
             let batch = unsafe { std::slice::from_raw_parts(records, count) };
             validate_batch(batch).map_err(err)?;
-            host.poll_services()?;
+            if !retiring {
+                host.poll_services()?;
+            }
             let blocked = !host.accepts_workspace_input();
             for sample in batch {
                 if blocked && sample.phase != 0 {
@@ -449,14 +520,16 @@ pub unsafe extern "C" fn capy_pointer(
                     }
                     continue;
                 }
-                host.native.pointer_event(
-                    sample.event(),
-                    match sample.button {
-                        0 => PointerButton::Primary,
-                        1 => PointerButton::Pan,
-                        _ => PointerButton::Other,
-                    },
-                )?;
+                let button = match sample.button {
+                    0 => PointerButton::Primary,
+                    1 => PointerButton::Pan,
+                    _ => PointerButton::Other,
+                };
+                if retiring {
+                    host.native.retire_pointer_event(sample.event(), button)?;
+                } else {
+                    host.native.pointer_event(sample.event(), button)?;
+                }
             }
         }
         Ok(0)
@@ -468,6 +541,10 @@ pub unsafe extern "C" fn capy_pointer(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
+        if host.native.session.rendering_suspended() {
+            fail("Workspace changes are unavailable. Save the drawing and reopen it.");
+            return Ok(1);
+        }
         use crate::workspace_service::{WorkspaceAction, now_ms};
         let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
         let service = host
@@ -674,6 +751,10 @@ pub unsafe extern "C" fn capy_chrome(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
+        if host.device_is_lost() {
+            return Err("The GPU device was lost".into());
+        }
+        host.gpu.check()?;
         if host.config.is_none() {
             return Ok(2);
         }
@@ -710,6 +791,8 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
     guard(host, |host| {
         let metadata = crate::snapshots::WindowsMetadata {
+            windows_gpu_generation: host.gpu_generation,
+            windows_rendering_suspended: host.native.session.rendering_suspended(),
             windows_importing: host
                 .documents
                 .as_ref()
@@ -852,6 +935,94 @@ fn set_composition_scale(surface: &wgpu::Surface<'_>, scale: f32) -> Result<(), 
         ..Default::default()
     };
     unsafe { swapchain.SetMatrixTransform(&transform) }.map_err(err)
+}
+
+/// # Safety
+/// Exclusive host access, or the UI owner while the render worker is parked.
+/// Poisoned hosts cannot resume after an ABI panic.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_device_lost(host: *const CapyHost) -> bool {
+    unsafe { host.as_ref() }.is_some_and(|host| !host.poisoned && host.device_is_lost())
+}
+
+/// # Safety
+/// Call on the XAML thread after detaching the old swap chain, with the render
+/// worker parked. Keep the same panel alive through the replacement surface.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_reset_surface(host: *mut CapyHost, panel: *mut c_void) -> i32 {
+    guard(host, |host| {
+        if panel.is_null() || host.target.is_some() {
+            return Err("Surface replacement requires a live panel and no acquired image".into());
+        }
+        let surface = unsafe {
+            host.instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::SwapChainPanel(panel))
+        }
+        .map_err(err)?;
+        host.surface = surface;
+        host.config = None;
+        host.blank_presented = false;
+        Ok(0)
+    })
+}
+
+/// # Safety
+/// Exclusive render-owner access. Available only in an isolated smoke-test host.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
+    guard(host, |host| {
+        if std::env::var_os("CAPY_SMOKE_TEST").is_none()
+            || !std::env::var_os("CAPY_SETTINGS_DIRECTORY")
+                .map(std::path::PathBuf::from)
+                .is_some_and(|p| p.is_absolute())
+        {
+            return Err("Device-loss injection requires an isolated smoke test".into());
+        }
+        host.target = None;
+        let gpu = host
+            .native
+            .session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .ok_or("GPU is not ready")?;
+        // Remove the D3D12 device shared by this process's windows on the adapter.
+        // The COM object remains owned by wgpu. Ordinary loss detection must
+        // observe removal; this hook never sets the flag or resets the adapter.
+        {
+            use windows::{Win32::Graphics::Direct3D12::ID3D12Device5, core::Interface};
+            let native = unsafe { gpu.device().as_hal::<wgpu::hal::api::Dx12>() }
+                .ok_or("Device removal requires D3D12")?;
+            let device: ID3D12Device5 = native.raw_device().cast().map_err(err)?;
+            unsafe { device.RemoveDevice() };
+        }
+        // Drop the HAL guard before polling wgpu's device-loss notification.
+        let _ = gpu.device().poll(wgpu::PollType::Poll);
+        Ok(0)
+    })
+}
+
+/// # Safety
+/// Exclusive render-owner access after canvas input has stopped and every
+/// admitted sample has been delivered. Keep services alive until approved close.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_suspend_renderer(host: *mut CapyHost) -> i32 {
+    guard(host, |host| {
+        host.target = None;
+        host.native.suspend_renderer()?;
+        host.presenter = None;
+        drop(host.native.session.renderer_mut().0.take());
+        host.config = None;
+        if let Some(service) = host.documents.as_mut() {
+            service.renderer_unavailable(&mut host.native)?;
+        }
+        if let Some(mut service) = host.filters.take() {
+            service.stop();
+        }
+        host.native.invalidate_snapshot();
+        Ok(0)
+    })
 }
 
 /// Native overview geometry, serialized on the same owner as canvas actions.

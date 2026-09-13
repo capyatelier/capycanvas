@@ -179,6 +179,11 @@ impl FilterService {
         }
     }
     pub(crate) fn load(&mut self, native: &mut NativeHost, request: Request) -> Result<(), String> {
+        if native.session.rendering_suspended() {
+            return Err(
+                "Filter loading requires an available GPU. Save the drawing and reopen it.".into(),
+            );
+        }
         if self.status.pending || native.session.state().filter_load.pending {
             return Err("A filter package is already being loaded.".into());
         }
@@ -216,7 +221,19 @@ impl FilterService {
         native.invalidate_snapshot();
     }
     pub(crate) fn poll(&mut self, native: &mut NativeHost) {
-        if let Some(result) = self.task.poll() {
+        let completed = self.task.poll();
+        if native.session.rendering_suspended() {
+            if self.status.pending {
+                self.failed(
+                    native,
+                    "Filter loading stopped because painting is unavailable".into(),
+                );
+            }
+            // Let an in-flight file read finish without blocking saving or
+            // publishing its late result into the suspended session.
+            return;
+        }
+        if let Some(result) = completed {
             match result {
                 Ok(Some(package)) => {
                     self.acquired = Some(package);
@@ -240,10 +257,15 @@ impl FilterService {
                 "The document changed while reading filters. Load the package again.".into(),
             );
         }
-        if self.acquired.is_some()
-            && native.session.renderer_mut().0.is_some()
-            && native.session.can_stage_effect_package()
-        {
+        if self.acquired.is_some() && native.session.can_stage_effect_package() {
+            let gpu = native.session.engine().backend().0.as_ref();
+            let available = gpu.is_some();
+            #[cfg(target_os = "windows")]
+            let available =
+                available && !gpu.is_some_and(|gpu| crate::device::removed(gpu.device()));
+            if !available {
+                return;
+            }
             let package = self.acquired.take().unwrap();
             let read = |name: &str| {
                 package

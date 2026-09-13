@@ -5,7 +5,11 @@ import Darwin
 /// Opt-in local observations. Fixed-size records and a hard cap bound memory;
 /// no document names, pixels, coordinates or hardware/account IDs are collected.
 struct FrameTraceEvent {
-    enum Kind: UInt8 { case tick, frame, input, drawable, presented, memory, display, gpu, gpuStatus, state, activity, workload }
+    enum Kind: UInt8 {
+        case tick, frame, input, drawable, presented, memory, display, gpu, gpuStatus, state, activity, workload
+        // 12 remains reserved for the recorded Metal display-link experiment.
+        case frameRetry = 13
+    }
     let kind: Kind
     var a: UInt64 = 0, b: UInt64 = 0, c: UInt64 = 0, d: UInt64 = 0, e: UInt64 = 0
     var f: UInt64 = 0, g: UInt64 = 0, h: UInt64 = 0, i: UInt64 = 0, j: UInt64 = 0

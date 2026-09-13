@@ -53,9 +53,12 @@ class NativeWorkspaceInputFixture {
         }
         previousPoint = point
         guard let delivered = NSEvent(cgEvent: cg) else { throw HostFailure(message: "Invalid fixture CGEvent") }
+        // The CGEvent round trip can round fractional points by a few ULPs.
+        let location = delivered.locationInWindow
         try require(delivered.type == type && delivered.buttonNumber == button
             && delivered.eventNumber == number && delivered.windowNumber == window.windowNumber
-            && delivered.locationInWindow == event.locationInWindow,
+            && abs(location.x - event.locationInWindow.x) < 1e-6
+            && abs(location.y - event.locationInWindow.y) < 1e-6,
             "Fixture event must retain the native button, window and measured location: type=\(delivered.type.rawValue)/\(type.rawValue), button=\(delivered.buttonNumber)/\(button), number=\(delivered.eventNumber)/\(number), window=\(delivered.windowNumber)/\(window.windowNumber), location=\(delivered.locationInWindow)/\(event.locationInWindow)")
         try require((delivered.subtype == .tabletPoint) == tablet, "The fixture must retain the actual tablet subtype")
         NSApp.postEvent(delivered, atStart: false)

@@ -34,6 +34,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::map<std::wstring,Body> bodies;
     struct Column {Grid frame;ScrollViewer scroll;StackPanel stack;std::vector<std::wstring> panels;};
     std::vector<Column> columns;
+    std::map<std::wstring,Border> resizeHandles;
     std::map<std::wstring,J> toolbarLayouts;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     std::vector<double> heights;
@@ -41,6 +42,15 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     bool closing=false,animating=false,dirty=true,busy=false,layingOut=false,disposed=false;
     uint64_t generation=0;
     int order()const{return id==L"tool"?220:200;}
+    bool stacked()const{return id!=L"tool"&&model.Size()&&!object(model,L"tabs").Size();}
+    J groupPanel()const{
+        if(!stacked())return {};
+        for(auto value:array(object(data->model,L"layout"),L"collapsed")){
+            auto column=value.GetObject();
+            if(uint32_t(num(column,L"id"))==std::stoul(id))return object(column,L"group_panel");
+        }
+        return {};
+    }
     ~Drawer(){dispose();}
     void dispose(){
         if(disposed)return;disposed=true;++generation;
@@ -67,15 +77,35 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         if(disposed)return;
         auto next=current.Size()?current.Stringify():hstring{};
         if(next!=modelKey){
-            from=object(geometry,L"placement");started=Clock::now();animating=true;
+            // Attached allocation has no drawer anchor. Switching presentation
+            // starts from the shared target, never an incomplete DrawerPlacement.
+            from=stacked()?J{}:object(geometry,L"placement");started=Clock::now();animating=true;
             modelKey=next;closing=!current.Size();if(!closing)model=current;
             ++generation;heights.assign(array(model,L"columns").Size(),0.);wake();
         }
         if(layout!=layoutKey){layoutKey=layout;wake();}
+        // Attached panels follow the current shared allocation immediately;
+        // query round trips and drawer animation must not lag a live divider.
+        if(stacked()&&!closing){
+            auto panel=groupPanel();auto bounds=object(panel,L"bounds");
+            if(bounds.Size()){
+                A slots;for(auto value:array(panel,L"panels")){
+                    auto slot=J::Parse(object(value.GetObject(),L"bounds").Stringify());
+                    slot.Insert(L"x",N(num(slot,L"x")-num(bounds,L"x")));
+                    slot.Insert(L"y",N(num(slot,L"y")-num(bounds,L"y")));slots.Append(slot);
+                }
+                geometry=O({{L"placement",O({{L"bounds",bounds},{L"columns",slots},{L"direction",S(str(panel,L"direction"))}})}});
+                animating=false;draw();
+            }
+        }
         for(auto value:array(data->model,L"panels")){auto panel=value.GetObject();panels[std::wstring(str(panel,L"id"))]=panel;}
         rebuild();
         for(auto& [panel,body]:bodies)if(body.view)body.view->Apply(active(panel));
         frame.IsHitTestVisible(!closing);bridge.IsHitTestVisible(!closing);
+        if(closing&&stacked()){
+            frame.Visibility(Visibility::Collapsed);bridge.Visibility(Visibility::Collapsed);
+            shadow.Layout({},order(),false);placeHandles();
+        }
     }
     bool active(std::wstring const& panel)const{
         for(auto const& column:columns)if(std::find(column.panels.begin(),column.panels.end(),panel)!=column.panels.end())return true;
@@ -87,6 +117,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void drive(){
         if(disposed){timer.Stop();return;}
         if(busy)return;
+        if(closing&&stacked()){timer.Stop();closed();return;}
         if(closing&&!object(geometry,L"placement").Size()){timer.Stop();closed();return;}
         // A tile body needs the shared wrapping geometry before native measurement.
         auto placements=array(object(geometry,L"placement"),L"columns"),models=array(model,L"columns");
@@ -106,7 +137,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                             auto result=object(reply,L"result");
                             if(result.Size()){
                                 if(self->toolbarLayouts.size()>=32)self->toolbarLayouts.erase(self->toolbarLayouts.begin());
-                                self->toolbarLayouts[std::wstring(key)]=result;self->columnsKey=L"";self->rebuild();self->wake();
+                                self->toolbarLayouts[std::wstring(key)]=result;self->rebuild();self->wake();
                             }
                         }
                     }
@@ -114,7 +145,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 return;
             }
         }
-        if(!dirty&&!animating){timer.Stop();return;}
+        if((stacked()&&!closing)||(!dirty&&!animating)){dirty=false;timer.Stop();return;}
         float progress=animating?std::clamp(std::chrono::duration<float>(Clock::now()-started).count()/.2f,0.f,1.f):1.f;
         A measured;for(auto height:heights)measured.Append(N(height));
         auto request=O({{L"type",S(L"drawer")},{L"column",id==L"tool"?JsonValue::CreateNullValue():N(std::stoul(id))},
@@ -139,7 +170,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             for(auto value:models.GetArrayAt(i)){
                 auto found=panels.find(std::wstring(value.GetString()));if(found==panels.end())continue;
                 auto panel=found->second;auto key=toolbarKey(panel,width);
-                items.Append(O({{L"key",S(key)},{L"ready",B(!array(panel,L"tiles").Size()||toolbarLayouts.contains(std::wstring(key)))}}));
+                items.Append(O({{L"panel",panelStructure(panel)},{L"ready",B(!array(panel,L"tiles").Size()||(bodies.contains(std::wstring(value.GetString()))&&bodies.at(std::wstring(value.GetString())).key==panelStructure(panel).Stringify())||toolbarLayouts.contains(std::wstring(key)))}}));
             }
             signature.Append(items);
         }
@@ -202,8 +233,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             for(auto value:models.GetArrayAt(i)){
                 std::wstring panelId=value.GetString().c_str();auto found=panels.find(panelId);if(found==panels.end())continue;
                 auto panel=found->second;auto bodyKey=toolbarKey(panel,width);auto toolbar=toolbarLayouts.find(std::wstring(bodyKey));
-                if(array(panel,L"tiles").Size()&&toolbar==toolbarLayouts.end())continue;
+                if(array(panel,L"tiles").Size()&&toolbar==toolbarLayouts.end()&&(!bodies.contains(panelId)||bodies.at(panelId).key!=panelStructure(panel).Stringify()))continue;
                 auto& body=bodies[panelId];keep.insert(panelId);column.panels.push_back(panelId);
+                bodyKey=panelStructure(panel).Stringify();
                 if(!body.view||body.key!=bodyKey){
                     auto placement=O({{L"bounds",O({{L"width",N(width)}})}});
                     if(toolbar!=toolbarLayouts.end())placement.Insert(L"tiles",toolbar->second);
@@ -211,8 +243,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     body.key=bodyKey;
                     if(toolbar!=toolbarLayouts.end())body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
                 }
+                AutomationProperties::SetAutomationId(body.view->Root(),L"drawer-panel-"+hstring(panelId));
+                if(AutomationProperties::GetName(body.view->Root()).empty())
+                    AutomationProperties::SetName(body.view->Root(),str(panel,L"title"));
                 body.view->Root().Width(width);body.view->Apply(true);column.stack.Children().Append(body.view->Root());
             }
+            AutomationProperties::SetAutomationId(column.scroll,hstring(L"drawer-slot-"+id+L"-"+std::to_wstring(i)));
             column.scroll.Content(column.stack);column.scroll.HorizontalScrollMode(ScrollMode::Disabled);
             column.scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);column.scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
             Grid::SetRow(column.scroll,1);column.frame.Children().Append(column.scroll);
@@ -224,7 +260,48 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     }
     void placeColumns(){
         auto placements=array(object(geometry,L"placement"),L"columns");
-        for(uint32_t i=0;i<std::min(uint32_t(columns.size()),placements.Size());++i)place(columns[i].frame,placements.GetObjectAt(i));
+        for(uint32_t i=0;i<std::min(uint32_t(columns.size()),placements.Size());++i){
+            auto placement=placements.GetObjectAt(i);auto& column=columns[i];place(column.frame,placement);
+            double width=num(placement,L"width"),height=num(placement,L"height");
+            for(auto const& panelId:column.panels){
+                auto& body=bodies.at(panelId);auto panel=panels.at(panelId);body.view->Root().Width(width);
+                auto toolbar=toolbarLayouts.find(std::wstring(toolbarKey(panel,width)));
+                if(toolbar!=toolbarLayouts.end()){
+                    body.view->Layout(O({{L"tiles",toolbar->second}}));
+                    body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
+                }else if(panelId==L"layers"||panelId==L"adjustments"||body.view->navigator){
+                    body.view->Root().Height(stacked()?height:body.view->navigator?272.:480.);
+                }
+            }
+        }
+        placeHandles();
+    }
+    void placeHandles(){
+        std::set<std::wstring> keep;auto panel=groupPanel();
+        auto origin=object(object(geometry,L"placement"),L"bounds");
+        if(!closing&&origin.Size()&&panel.Size()){
+            auto dividers=array(panel,L"dividers"),members=array(panel,L"panels");
+            for(uint32_t i=0;i<=dividers.Size();++i){
+                bool width=i==dividers.Size();auto after=width?hstring{}:str(members.GetObjectAt(i),L"panel");
+                std::wstring key=width?L"width":std::wstring(after);keep.insert(key);
+                auto [it,added]=resizeHandles.try_emplace(key);auto handle=it->second;
+                if(added){
+                    handle.Background(width?clear():data->brush(L"tabbar"));Canvas::SetZIndex(handle,1);content.Children().Append(handle);
+                    using namespace Microsoft::UI::Input;
+                    handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(width?InputSystemCursorShape::SizeWestEast:InputSystemCursorShape::SizeNorthSouth));
+                    gestures->Source(handle,O({{L"type",S(L"resize_column_panel")},{L"column",N(std::stoul(id))},
+                        {L"after",width?JsonValue::CreateNullValue():S(after)}}));
+                    AutomationProperties::SetAutomationId(handle,hstring(L"group-panel-resize-"+id+L"-"+key));
+                    AutomationProperties::SetName(handle,width?L"Resize group panel":L"Resize panels");
+                }
+                auto bounds=J::Parse((width?object(panel,L"resize"):dividers.GetObjectAt(i)).Stringify());
+                bounds.Insert(L"x",N(num(bounds,L"x")-num(origin,L"x")));
+                bounds.Insert(L"y",N(num(bounds,L"y")-num(origin,L"y")));place(handle,bounds);
+            }
+        }
+        for(auto it=resizeHandles.begin();it!=resizeHandles.end();)if(!keep.contains(it->first)){
+            remove(content,it->second);it=resizeHandles.erase(it);
+        }else ++it;
     }
     void draw(){
         auto placement=object(geometry,L"placement");auto bounds=object(placement,L"bounds");
@@ -241,7 +318,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         paintBackground();
     }
     void measured(){
-        if(disposed||layingOut||!frame.IsLoaded()||columns.empty())return;
+        // A mode switch can await its first placement with old native slots
+        // still arranged. Never report those heights against the new model.
+        if(disposed||layingOut||!frame.IsLoaded()||columns.empty()||columns.size()!=array(model,L"columns").Size())return;
         layingOut=true;
         double tabHeight=object(model,L"tabs").Size()?36.:0.;
         std::vector<double> next;for(auto const& column:columns)next.push_back(column.stack.ActualHeight()+tabHeight);
@@ -265,6 +344,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             if(hole.Width>0&&hole.Height>0)holes.Append(rectangle(hole));
         }
         auto corners=array(object(geometry,L"connection"),L"square_corners");
+        if(stacked()){
+            bool left=str(object(geometry,L"placement"),L"direction")==L"right";
+            corners=A{};for(bool square:{left,!left,!left,left})corners.Append(B(square));
+        }
         auto key=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners},{L"holes",holes}}).Stringify();
         if(key==backgroundKey)return;backgroundKey=key;
         std::array<float,4> radii{8,8,8,8};
@@ -278,7 +361,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         background.Data(shape);
     }
     void appendOverviews(A& slots)const{
-        if(disposed||!frame.IsLoaded())return;
+        if(disposed||!frame.IsLoaded()||(closing&&stacked()))return;
         for(auto const& column:columns)for(auto const& panel:column.panels){
             auto const& body=bodies.at(panel).view;
             if(!body||!body->navigator)continue;
@@ -338,7 +421,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
     }
     void apply(){
         auto customization=object(data->state,L"customization");std::map<std::wstring,J> models;
-        for(auto value:array(customization,L"column_drawers")){
+        if(!flag(data->model,L"chrome_hidden"))for(auto value:array(customization,L"column_drawers")){
             auto model=value.GetObject();models[std::to_wstring(uint32_t(num(object(model,L"anchor"),L"column")))]=model;
         }
         auto tool=object(customization,L"drawer");if(tool.Size())models[L"tool"]=tool;

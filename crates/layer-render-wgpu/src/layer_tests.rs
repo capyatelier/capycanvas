@@ -1048,7 +1048,7 @@ fn viewport_outline_places_original_selection_without_rebuilding_coverage() {
             &target.create_view(&Default::default()),
             view(),
             [0.; 4],
-        );
+        ).unwrap();
         let expected = page_bytes(&r, &target);
         for matrix in [
             Affine([2., 0., 0., 3., 30., 40.]),
@@ -1063,7 +1063,7 @@ fn viewport_outline_places_original_selection_without_rebuilding_coverage() {
                 &target.create_view(&Default::default()),
                 view(),
                 [0.; 4],
-            );
+            ).unwrap();
             assert_eq!(page_bytes(&r, &target), expected);
             assert_eq!(
                 r.selection_clip.generations, generations,

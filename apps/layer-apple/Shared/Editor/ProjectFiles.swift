@@ -335,7 +335,7 @@ struct ProjectFilesModifier: ViewModifier {
                         ProgressView().controlSize(.small)
                         Text(files.cancelling ? "Cancelling…" : "Working with document…")
                         Button("Cancel") { files.cancel() }.disabled(files.cancelling)
-                    }.padding(10).modifier(EditorGlassSurface(shape: Capsule())).padding(12)
+                    }.padding(10).modifier(EditorPopupSurface(shape: Capsule())).padding(12)
                 }
             }
             .alert(files.error == nil ? "Save changes to “\(files.title)” before continuing?" : "Document",
@@ -348,7 +348,7 @@ struct ProjectFilesModifier: ViewModifier {
                 }
             } message: { if let error = files.error { Text(error) } }
             .sheet(isPresented: $files.creating, onDismiss: { files.created(nil) }) {
-                NewDrawingForm(spec: files.newDocumentSpec) { files.created($0) }
+                NewDrawingForm(spec: files.newDocumentSpec) { files.created($0) }.modifier(EditorPopupPresentation())
             }
             #if os(iOS)
             .sheet(item: $files.picker, onDismiss: { files.picked(nil) }) { picker in

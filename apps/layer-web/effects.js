@@ -18,7 +18,8 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   category.onchange=()=>pickerAction({op:"category",category:category.value||null});
   search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
   search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
-  pickerHeader.append(category,search,searchButton);adjustments.append(pickerHeader,list);
+  const categoryIcon=element("span","filter-category-icon");
+  pickerHeader.append(categoryIcon,category,search,searchButton);adjustments.append(pickerHeader,list);
   const rows=new Map();let visibleIds=null,catalogRevision=null,pending=null,polling=false;
   function refreshPicker(){
     const s=state(),picker=s.filter_picker;
@@ -27,12 +28,15 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
       category.replaceChildren(...s.filter_categories.map(c=>{const option=element("option","",c.label);option.value=c.id??"";return option;}));
     }
     category.hidden=picker.search!=null;category.value=picker.category??"";
+    categoryIcon.hidden=category.hidden;
+    const categoryGlyph=s.filter_categories.find(c=>c.id===picker.category)?.icon??"adjustments";
+    if(categoryIcon.firstChild?.dataset.asset!==categoryGlyph)categoryIcon.replaceChildren(icon(categoryGlyph));
     search.hidden=picker.search==null;search.placeholder=picker.search_label;searchButton.title=picker.search_label;
     if(search.value!==(picker.search??""))search.value=picker.search??"";
     const ids=s.adjustments.map(c=>c.id).join(",");if(ids===visibleIds)return;visibleIds=ids;
     const children=[];let section;
     for(const choice of s.adjustments){
-      if(section!==choice.category){children.push(element("h3","filter-category",choice.category_label));section=choice.category;}
+      if(section!==choice.category){const heading=element("h3","filter-category",choice.category_label);heading.prepend(icon(choice.category_icon));children.push(heading);section=choice.category;}
       let row=rows.get(choice.id);
       if(!row){
         const node=button("",()=>dispatch(choice.action),"filter-row"),canvas=element("canvas"),label=element("span","",choice.label);
@@ -40,6 +44,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
         // allocating another accelerated drawing context for every list item.
         canvas.getContext("2d",{willReadFrequently:true});
         node.dataset.effect=choice.id;node.title=choice.tooltip;canvas.setAttribute("aria-hidden","true");canvas.draggable=false;
+        label.prepend(icon(choice.icon));
         if(choice.animated){const mark=icon("animation");mark.classList.add("filter-animation");mark.setAttribute("aria-hidden","true");label.prepend(mark);}
         node.append(canvas,label);row={node,canvas,key:null};rows.set(choice.id,row);
       }
@@ -158,7 +163,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     const position=numberField(catalog.opacity,"Position",value=>change(selected,value));
     const opacity=numberField(catalog.opacity,"Opacity",value=>change(selected,stops[selected].position,[...stops[selected].color.slice(0,3),value]));
     const remove=button("",()=>{const i=selected;selected=Math.max(0,i-1);change(i,0,null,true);});remove.append(icon("minus"));remove.title="Remove color stop";
-    const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("undo"));reset.title="Reset gradient";
+    const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("reset"));reset.title="Reset gradient";
     const controls=element("div","property-row");controls.append(element("span","","Color"),color,remove,reset);
     node.append(bar,stopsRow,position,controls,opacity);
     bar.onclick=e=>{const b=bar.getBoundingClientRect(),p=Math.max(0,Math.min(1,(e.clientX-b.left)/b.width));selected=stops.filter(s=>s.position<p).length;change(null,p);};

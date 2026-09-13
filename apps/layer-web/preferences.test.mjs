@@ -62,7 +62,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,pointerType:'mouse',bubbles:true})); window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
   await click('#zen-button');
-  // Both reveal modes, independent button visibility, generic image choices
+  // Total Zen, edge reveal, generic image choices
   // and deep linking use real DOM controls backed by the shared preference API.
   const zenVisible = () => evaluate("(async () => { const n=document.querySelector('#zen-button'); await Promise.all(n.getAnimations().map(a=>a.finished)); return getComputedStyle(n).pointerEvents === 'auto' && getComputedStyle(n).opacity === '1'; })()");
   const zenMenu = () => evaluate(`(() => { const n=document.querySelector('#zen-button'); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:24,clientY:36})); })()`);
@@ -91,12 +91,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
       await capture(`zen-icons-${theme}-${index}`);
     }
     await click('#close-settings');
-    await preference({ type: 'edit', id: 'total_zen', value: false });
     await click('#zen-button');
-    assert.ok(await zenVisible());
+    assert.equal(await zenVisible(), false, 'Total Zen hides the Capy with the rest of the chrome');
+    assert.equal(await evaluate("document.querySelector('#setting-total-zen')"), null);
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
-    assert.ok(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"));
-    assert.equal(await evaluate("getComputedStyle(document.querySelector('.floating-panel')).pointerEvents"), 'none');
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+    assert.ok(await zenVisible(), 'Edge reveal restores controls');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.floating-panel')).pointerEvents"), 'auto');
     // A touch hold must open settings, not trigger the button's exit click.
     await call('Input.setIgnoreInputEvents', { ignore: false });
     await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 24, y: 24 }] });
@@ -109,13 +110,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await capture(`zen-menu-${theme}`);
     await chooseMenu('Change icon…');
     await click('#close-settings');
-    await capture(`zen-button-only-${theme}`);
-    for (const show of [false, true]) {
-      await preference({ type: 'edit', id: 'total_zen', value: !show });
-      assert.equal(await zenVisible(), show);
-    }
-    await click('#zen-button');
-    await preference({ type: 'edit', id: 'total_zen', value: true });
+    await action({ type: 'invoke', command: 'zen_mode' });
     await click('#zen-button');
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
     await settle();
@@ -125,15 +120,14 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await click('#zen-button');
   }
   await preference({ type: 'reset', id: 'zen_icon' });
-  await preference({ type: 'reset', id: 'total_zen' });
   await action({ type: 'restore_workspace', workspace: originalWorkspace });
   assert.ok(await evaluate("document.elementFromPoint(24,24).closest('#zen-button') !== null"), 'the visible header must not intercept the persistent button');
   await call('Input.setIgnoreInputEvents', { ignore: false });
-  for (const enabled of [true, false]) {
+  for (const enabled of [true, true, false]) {
     await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 24, y: 24 }] });
     await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await settle();
-    assert.equal(await evaluate('layerApp.state().workspace.zen_mode'), enabled, 'touch toggles the same button with the header visible or hidden');
+    assert.equal(await evaluate('layerApp.state().workspace.zen_mode'), enabled, 'a hidden control first reveals, then activates on the next tap');
   }
   await call('Input.setIgnoreInputEvents', { ignore: true });
   // Values are plain editing buttons. The slider uses the
@@ -292,21 +286,21 @@ export async function checkPreferences({ call, evaluate, settle }) {
     const rows=layerApp.app.preferences().pages.find(p=>p.id==='input').groups.flatMap(g=>g.rows);
     return rows[rows.findIndex(r=>r.id==='feedback')+1].id==='platform_prediction';
   })()`));
-  for (const id of ['prediction-horizon', 'tip-lock'])
-    assert.equal(await evaluate(`document.querySelector('#setting-${id}').disabled`), nativeAvailable);
+  assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), nativeAvailable);
   if (nativeAvailable) await click('#setting-platform-prediction');
-  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value"), '8 ms', 'units appear beside numeric values');
-  await click('#setting-prediction-horizon .number-entry');
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '16 ms', 'units appear beside numeric values');
+  await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='4*2 ms'");
   await key('Enter');
   assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 8, 'expressions accept displayed units');
-  await click('#setting-prediction-horizon .number-entry');
+  await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='32'"); await key('Enter');
-  await click('#setting-prediction-horizon .number-entry');
+  await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value=''");
   assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 32);
   await key('Enter');
-  assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 8);
+  assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 16);
   await click('#setting-feedback');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon').disabled"), true);
   await click('#setting-feedback');

@@ -49,11 +49,37 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
       await click(0,2);await check(0);
       await click(0);assert.equal(await model(),undefined,'Current opener still closes its drawer');
     }
+    const contact=async(selector,device)=>{
+      const p=await evaluate(`(()=>{const b=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()`);
+      if(device==='touch') {
+        await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...p}]});
+        await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      } else {
+        await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0,pointerType:device});
+        await call('Input.dispatchMouseEvent',{type:'mousePressed',...p,button:'left',buttons:1,clickCount:1,pointerType:device});
+        await call('Input.dispatchMouseEvent',{type:'mouseReleased',...p,button:'left',buttons:0,clickCount:1,pointerType:device});
+      }
+      await wait();
+    };
+    await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge:'top',outer:true}});
+    for(const device of ['mouse','touch','pen']) {
+      for(const outside of ['#document-title','.toolbar-controls[data-panel="toolbar"] > .panel-grip','#header [data-menu="file"] > summary','#canvas']) {
+        const undo=await evaluate("layerApp.state().commands.find(c=>c.id==='undo').enabled");
+        await contact(selector(2),device);await check(2);
+        await contact(outside,device);
+        assert.equal(await model(),undefined,`${device}: contact on ${outside} dismisses the drawer`);
+        if(outside.includes('summary')) {
+          assert.equal(await evaluate("document.querySelector('#header [data-menu=\"file\"]').open"),true,'Same contact opens the menu');
+          await contact(outside,device);
+        }
+        assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='undo').enabled"),undo,'Canvas dismissal must not paint');
+      }
+    }
     await send({type:'move_panel',panel:'toolbar',target:{kind:'tab',group:41,index:null}});
     await send({type:'customize',action:{type:'set_column_collapsed',group:41,collapsed:true}});
     await send({type:'customize',action:{type:'toggle_column_drawer',group:41,panel:'toolbar'}});
     await click(2);await check(2);await click(1,2);await check(1);await click(0,1);await check(0);
-    console.log('PASS: first-click tool and drawer switching on all toolbar edges and inside a collapsed drawer');
+    console.log('PASS: first-click drawer switching on all toolbar edges and inside a collapsed drawer; mouse/touch/pen outside dismissal, menu activation and no canvas marks');
   } finally {
     await send({type:'restore_workspace',workspace:saved.workspace});
     await send({type:'select_brush',id:saved.brush.preset});
@@ -110,7 +136,9 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
     const shot=await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`${dir}/${name}.png`,Buffer.from(shot.data,'base64'));
     const pixels=await sample(shot.data,points),fill=pixels[{left:0,right:1,top:2,bottom:3}[s.facing]];
-    assert.ok(fill[2]-fill[0]>12&&fill[2]-fill[1]>6,`${name}: the open drawer tile is active blue: ${fill}`);
+    const blue=fill[2]-fill[0]>12&&fill[2]-fill[1]>6;
+    const selected=await evaluate(`document.querySelector(${JSON.stringify(selector)}).matches('[aria-pressed="true"],[aria-selected="true"]')`);
+    assert.equal(blue,selected,`${name}: blue means selected; action drawer openers stay grey: ${fill}`);
     for(const color of pixels.slice(-2))assert.ok(color.every((v,i)=>Math.abs(v-fill[i])<=1),`${name}: ancestors preserve square source corners`);
     // Compare actual pixels with shadows disabled; catches alpha blending and stacking contexts.
     await evaluate(`(()=>{const s=document.createElement('style');s.id='drawer-shadow-check';s.textContent='.drawer-shadow,.content-drawer{box-shadow:none!important}';document.head.append(s)})()`);await wait();
@@ -125,8 +153,8 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       for(const [group,panel] of [[41,'brushes'],[43,'layers']]) {
         await customize({type:'set_column_collapsed',group,collapsed:true});
         const expandSelector=`.collapsed-column[data-column="${group}"] .column-expand`;
-        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)}).textContent`),
-          group===41?'»':'«','The original compact guillemets point toward the canvas');
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)}).querySelector('svg').dataset.asset`),
+          group===41?'chevron-double-right':'chevron-double-left','Shared expand chevrons point toward the canvas');
         const expandBounds=await rect(expandSelector),glyphBounds=await rect(`${expandSelector} .column-expand-glyph`);
         assert.ok(Math.abs(glyphBounds.x+glyphBounds.width/2-expandBounds.x-expandBounds.width/2)<.01,'Expand icon is horizontally centered');
         assert.ok(Math.abs(glyphBounds.y+glyphBounds.height/2-expandBounds.y-expandBounds.height/2)<.01,'Expand icon is vertically centered');
@@ -157,7 +185,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         await click(tool);await check(tool,'tool',`${theme}-toolbar-${edge}`);
         await click(alternateTool);await check(alternateTool,'tool',`${theme}-toolbar-${edge}-switched`);
         assert.equal((await style(tool)).facing,undefined,'Previous toolbar source returns to rounded corners');
-        assert.equal((await style(tool)).background,'rgba(0, 0, 0, 0)','Previous panel opener loses its active blue');
+        assert.equal((await style(tool)).background,'rgba(0, 0, 0, 0)','Previous panel opener loses its open grey');
         await click(tool);await check(tool,'tool',`${theme}-toolbar-${edge}-switched-back`);await click(tool);
       }
       await send({type:'move_panel',panel:'toolbar',target:{kind:'tab',group:41,index:null}});

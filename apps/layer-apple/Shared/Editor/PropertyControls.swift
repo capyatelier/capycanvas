@@ -168,7 +168,7 @@ private struct CurveProperty: View {
                     })
                     .allowsHitTesting(enabled)
                     .onChange(of: contact) { _, active in if !active { dragging = false; dragIndex = nil } }
-                    .accessibilityLabel(control["label"].string).accessibilityValue("\(points.count) points")
+                    .accessibilityLabel("\(control["label"].string), \(points.count) points")
                     .accessibilityIdentifier("effect-curve")
             }.frame(height: 200)
             HStack {
@@ -232,8 +232,8 @@ private struct GradientProperty: View {
                     dragging = false; dragIndex = nil
                 }).allowsHitTesting(enabled)
                     .onChange(of: contact) { _, active in if !active { dragging = false; dragIndex = nil } }
-                    .accessibilityIdentifier("effect-gradient").accessibilityLabel(control["label"].string)
-                    .accessibilityValue("\(stops.count) stops")
+                    .accessibilityIdentifier("effect-gradient")
+                    .accessibilityLabel("\(control["label"].string), \(stops.count) stops")
             }.frame(height: 44)
             if !stops.isEmpty {
                 NumberControl(store: store, label: "Position", value: stops[index]["position"].number,

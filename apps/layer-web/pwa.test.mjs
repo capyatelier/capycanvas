@@ -225,10 +225,12 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true", "Touch preserves intentional toggle selection");
     assert.equal(await background(zen), idle, "The persistent Zen button stays neutral while other controls are hidden");
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
-    // The persistent button exits Zen directly; it is not a hidden control's
-    // reveal-only first contact.
+    // Total Zen hides the button. Its first corner contact reveals the chrome;
+    // only the next tap activates the now-visible button.
     await tap(zen);
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+    assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true");
+    await tap(zen);
     assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "false");
     assert.equal(await background(zen), idle, "Zen returns to its idle color when toggled off by touch");
   }

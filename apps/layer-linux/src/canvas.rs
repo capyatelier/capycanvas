@@ -21,7 +21,8 @@ impl GpuCanvas {
             .and_then(|native| native.surface())
             .ok_or("GTK surface unavailable")?;
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into())?;
-        drop(self.session.replace_renderer(renderer)?);
+        let (previous, _) = self.session.replace_renderer(renderer)?;
+        drop(previous);
         self._parent = parent;
         self.session.renderer_mut().finish_startup_cache()?;
         self.needs_present = true;

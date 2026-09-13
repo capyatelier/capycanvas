@@ -1,8 +1,7 @@
 // Shared dock projections. The browser supplies widgets and measured body sizes.
 export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel}) {
-  const columns=new Map(),drawers=new Map(),zen=element("div","zen-toolbars");
-  workspace.append(zen);
-  let resolved,zenKey="",animating=false;
+  const columns=new Map(),drawers=new Map();
+  let resolved,animating=false;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
   function intersect(a,b) {
@@ -60,15 +59,15 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     resolved=layout;const live=new Set();
     for(const column of layout.collapsed) {
       live.add(column.id);let root=columns.get(column.id);
-      // Restore Web's compact pre-d0ddb17 guillemet, mirrored toward the canvas.
-      const expandGlyph=column.bounds.x+column.bounds.width/2<layout.work_area.x+layout.work_area.width/2?'»':'«';
+      // Point the shared expand chevrons toward the canvas.
+      const expandGlyph=column.bounds.x+column.bounds.width/2<layout.work_area.x+layout.work_area.width/2?'chevron-double-right':'chevron-double-left';
       const key=JSON.stringify([column,expandGlyph,state().customization.column_drawers,state().workspace.layout.panels.map(p=>[p.id,p.name])]);
       if(root?.dataset.key===key)continue;
       if(!root){root=element("section","collapsed-column");root.dataset.column=column.id;workspace.append(root);columns.set(column.id,root);}
       root.dataset.key=key;root.replaceChildren();place(root,column.bounds);
       customization.target(root,{kind:"group",group:column.groups[0]?.group ?? column.id});
       const expand=button("",()=>send({type:"set_column_collapsed",group:column.id,collapsed:false}),"column-expand");
-      const glyph=element('span','column-expand-glyph',expandGlyph);glyph.setAttribute('aria-hidden','true');expand.append(glyph);
+      const glyph=icon(expandGlyph);glyph.classList.add('column-expand-glyph');expand.append(glyph);
       expand.setAttribute("aria-label","Expand column");place(expand,local(column.expand,column.bounds));root.append(expand);
       const content=element("div","collapsed-content");place(content,local(column.content,column.bounds));root.append(content);
       content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};
@@ -93,17 +92,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   function dispose(record) {customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
     if(!resolved)return;
-    const [partial_zen,zen_toolbars]=app.workspace_projection(workspace.clientWidth,workspace.clientHeight);
-    const model={partial_zen,zen_toolbars};
-    workspace.classList.toggle("partial-zen",model.partial_zen);
-    const key=model.partial_zen ? JSON.stringify([model.zen_toolbars,model.zen_toolbars.sections.map(s=>customization.view(s.panel)?.tiles)]) : "";
-    if(key!==zenKey) {
-      zenKey=key;zen.replaceChildren();
-      for(const section of model.zen_toolbars.sections) {
-        const root=element("div","zen-toolbar");root.dataset.edge=section.edge;place(root,section.bounds);
-        root.append(toolbar(section.panel,section.tiles,['left','right'].includes(section.edge)?'vertical':'horizontal'));zen.append(root);
-      }
-    }
     const live=new Set();
     for(const drawer of [...state().customization.column_drawers,...(state().customization.drawer?[state().customization.drawer]:[])]) {
       const column=drawer.anchor.kind==="column"?drawer.anchor.column:null,id=column??"tool";
@@ -158,7 +146,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
       place(r.shadow,r.placement.bounds);
       const anchor=r.drawer.anchor;
-      const source=r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
+      const source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
         [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
       r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
       if(source&&r.connection&&!r.closing) {

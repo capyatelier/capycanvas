@@ -14,7 +14,9 @@ pub(crate) mod operation;
 mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
-pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
+pub use art_layers::{
+    LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
+};
 #[path = "application_menu.rs"]
 mod application_menu;
 #[path = "document_files.rs"]
@@ -29,6 +31,8 @@ mod effects;
 mod filter_loading;
 #[path = "project_files.rs"]
 mod project_files;
+#[path = "renderer_lifecycle.rs"]
+mod renderer_lifecycle;
 pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
@@ -44,7 +48,12 @@ struct WorkspaceDrag {
     item: DockItem,
     panel: Panel,
     source: Bounds,
+    source_is_icon: bool,
+    torn_off: bool,
     floating: Option<u32>,
+    /// The retained drag presentation can overflow the workspace. Keep this
+    /// size independent of content measurements and the fitted saved layout.
+    preview: Option<Bounds>,
     offset: [f32; 2],
     press: [f32; 2],
     chrome_revealed: bool,
@@ -68,6 +77,7 @@ pub struct UiSession<R: CanvasRenderer> {
     state: UiState,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
+    rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     navigator_preview: crate::navigator::Preview,
@@ -126,6 +136,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             engine,
             pen,
             input_pending: false,
+            rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
             navigator_preview: Default::default(),
@@ -218,6 +229,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         workspace.layout.column_scroll.clear();
         workspace.layout.titlebar_insets = [0.0; 3];
         workspace.layout.bottom_inset = 0.0;
+        workspace.layout.header_presentation = Default::default();
         workspace.zen_mode = self
             .workspace_preview
             .as_ref()
@@ -292,6 +304,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let mut menu = match target {
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
+            ContextTarget::Header { id } => self
+                .state
+                .workspace
+                .layout
+                .header
+                .projected_for(self.state.platform)
+                .context_menu(id, self.state.customization.header_editing),
             _ => self
                 .state
                 .workspace
@@ -408,6 +427,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
+        if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) {
+            // Keep the editor entry reachable above the long panel list, also
+            // in the recovery menu on a short tablet-sized window.
+            menu.sections
+                .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
+        }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
     pub fn toolbar_prompt(&self) -> Option<crate::customization::ToolbarPromptView> {
@@ -519,7 +544,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         true
     }
-    fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
+    pub(crate) fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
         matches!(
             self.state.platform,
             Platform::Gtk | Platform::Android | Platform::Web
@@ -546,10 +571,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply {
-            chrome_hidden: self.state.partial_zen(),
-            hide_floating_panels: self.state.partial_zen(),
-            keep_zen_button: !self.state.settings.total_zen,
-            partial_zen: self.state.partial_zen(),
+            chrome_hidden: self.interaction.hidden,
             ..Default::default()
         };
         let mut contact = None;
@@ -647,7 +669,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                                     &self.state.workspace.layout,
                                     viewport,
                                     &vec![0.; d.columns.len()],
-                                    false,
                                 )
                                 .and_then(|p| p.connection());
                             (!strip.bounds.contains(position[0], position[1])
@@ -672,7 +693,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled |= canvas;
                     }
                 }
-                if let ChromeEvent::Contact { position, .. } = event
+                if let ChromeEvent::Contact { position, canvas } = event
                     && let Some(drawer) = &self.state.customization.drawer
                     && drawer.dismissal == DrawerDismissal::OutsideContact
                     && !facts.popup_open
@@ -690,34 +711,39 @@ impl<R: CanvasRenderer> UiSession<R> {
                             &self.state.workspace.layout,
                             viewport,
                             &vec![0.0; drawer.columns.len()],
-                            self.state.partial_zen(),
                         )
                         .is_some_and(|p| p.anchor.contains(position[0], position[1]))
                 {
-                    let tile = if self.state.partial_zen() {
-                        self.state
-                            .workspace
-                            .layout
-                            .zen_toolbars(viewport)
-                            .tile_at(position)
-                    } else {
-                        self.layout(viewport)
-                            .tile_at(&self.state.workspace.layout, position)
-                            .or_else(|| self.state.customization.drawer_tile_at(position))
-                    };
+                    let tile = self
+                        .layout(viewport)
+                        .tile_at(&self.state.workspace.layout, position)
+                        .or_else(|| self.state.customization.drawer_tile_at(position));
                     // Preserve the open drawer until an eligible button in its
                     // toolbar activates on release (or the contact is cancelled).
-                    if !tile.is_some_and(|anchor| self.switches_toolbar_drawer(anchor)) {
+                    let header_item = self
+                        .state
+                        .workspace
+                        .layout
+                        .header_presentation
+                        .items
+                        .iter()
+                        .find(|m| m.bounds.contains(position[0], position[1]))
+                        .and_then(|m| self.state.workspace.layout.header.entry(m.id).ok());
+                    let switches_header = matches!(drawer.anchor, DrawerAnchor::Header { .. })
+                        && header_item.is_some_and(|e| matches!(e.item, HeaderItem::Tool { control } if control.selectable() && control.drawer_columns().is_some()));
+                    if !switches_header
+                        && !tile.is_some_and(|anchor| self.switches_toolbar_drawer(anchor))
+                    {
                         reply.change = self.dispatch(UiAction::Customize {
                             action: CustomizationAction::CloseExpanded,
                         })?;
-                        // Other tiles can still activate; bare canvas only dismisses.
-                        reply.handled = tile.is_none();
+                        // Canvas contact only dismisses; native chrome must keep
+                        // its click/drag (menus, title-bar grabs, toolbar grips).
+                        reply.handled |= canvas;
                     }
                 }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
-                    && !self.state.partial_zen()
                     && !facts.popup_open
                     && !facts.expanded_panel.is_some_and(|e| {
                         // Tabs activate on release. Leave the press available
@@ -855,6 +881,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled = true;
                     }
                     let blocked = editing
+                        || (self.state.customization.header_editing && !modifiers.command)
                         || self.state.settings_open
                         || self.state.customization.blocks_shortcuts()
                         || self.interaction.facts.popup_open;
@@ -993,24 +1020,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
-        reply.hide_floating_panels = self.state.partial_zen();
-        reply.keep_zen_button = !self.state.settings.total_zen;
-        reply.partial_zen = self.state.partial_zen();
         reply.pan_cursor = self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand;
         Ok(reply)
     }
 
     fn refresh_chrome(&mut self) {
-        // Explicit exit only: proximity, first contact, keyboard chrome hints
-        // and drag/popup pins must not reveal the editor in this mode.
-        if self.state.partial_zen() {
-            self.interaction.hidden = true;
-            self.interaction.zen_entry_guard = false;
-            self.interaction.keep_chrome_until_contact = false;
-            self.interaction.keyboard_chrome = false;
-            return;
-        }
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
             self.interaction.zen_entry_guard = false;
@@ -1137,7 +1152,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .find(|g| g.id == id)
                         .map(|g| WorkspaceGroupPosition {
                             id,
-                            bounds: g.bounds,
+                            bounds: drag.preview.unwrap_or(g.bounds),
                         })
                 }),
                 tab: self.workspace_tab_drag.as_ref().and_then(|tab| {
@@ -1231,7 +1246,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     item,
                     panel: source.groups[0].active,
                     source: source.bounds,
+                    source_is_icon: false,
+                    torn_off: false,
                     floating: None,
+                    preview: None,
                     offset: [0.; 2],
                     press: position,
                     chrome_revealed: true,
@@ -1306,7 +1324,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => source_active,
                 },
                 source: source_bounds,
+                source_is_icon: icon_source.is_some(),
+                torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
+                preview: (matches!(
+                    self.state.platform,
+                    Platform::Gtk | Platform::Web | Platform::Android
+                ) && whole
+                    && source_floating)
+                    .then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
                 chrome_revealed: !source_floating || !self.interaction.hidden,
@@ -1365,6 +1391,30 @@ impl<R: CanvasRenderer> UiSession<R> {
                 DockTarget::Float { position },
             )?;
             let group = self.state.workspace.layout.panel_group(drag.panel).unwrap();
+            // Preserve the visible size for pickup; release selects a separate
+            // content-aware height. A list's natural height can be much larger
+            // than its viewport, and a drawer is wider than its collapsed source.
+            // Standalone toolbars still convert to their compact grid; an icon
+            // has no visible panel size, so it keeps the measured/default size.
+            let preserve_size = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            ) && !drag.source_is_icon
+                && !(drag.panel.kind() == PanelKind::Tiles
+                    && self.state.workspace.layout.group_panels(group)?.len() == 1);
+            if preserve_size {
+                let floating = self
+                    .state
+                    .workspace
+                    .layout
+                    .floating
+                    .iter_mut()
+                    .find(|f| f.root.id() == group)
+                    .unwrap();
+                floating.width = drag.source.width;
+                floating.default_width = Some(drag.source.width);
+                floating.height = Some(drag.source.height);
+            }
             let floated = self
                 .layout(viewport)
                 .groups
@@ -1372,6 +1422,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .find(|g| g.id == group)
                 .unwrap();
             drag.floating = Some(group);
+            drag.torn_off = true;
+            drag.preview = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
+            .then_some(floated.bounds);
             drag.item = DockItem::Group { group };
             // A ribbon becomes a compact vertical grid, with its grip at the
             // bottom. Tabbed groups keep the original header grab offset.
@@ -1384,11 +1440,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .max(0.0),
                     drag.offset[1].min(TAB_BAR_HEIGHT),
                 ]
+            } else if preserve_size {
+                [
+                    drag.offset[0].min(floated.bounds.width),
+                    floated.bounds.height - (drag.source.height - drag.offset[1]),
+                ]
             } else {
                 [floated.bounds.width * 0.5, floated.bounds.height - 10.0]
             };
         }
         if let Some(group) = drag.floating {
+            if let Some(preview) = &mut drag.preview {
+                preview.x = position[0] - drag.offset[0];
+                preview.y = position[1] - drag.offset[1];
+            }
+            // Fit the eventual floating placement, independently of the live
+            // preview. Release over a dock uses the contact's validated target;
+            // release elsewhere exposes this fitted layout in the same undo.
             self.state.workspace.layout.move_floating(
                 group,
                 [position[0] - drag.offset[0], position[1] - drag.offset[1]],
@@ -1404,6 +1472,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .workspace
                     .layout
                     .move_item(viewport, drag.item, hint.target)?;
+            } else if drag.moved
+                && let (Some(group), Some(preview)) = (drag.floating, drag.preview)
+            {
+                self.state.workspace.layout.settle_floating_drop(
+                    group,
+                    viewport,
+                    preview,
+                    (!drag.source_is_icon).then_some(drag.source.height),
+                    drag.torn_off,
+                )?;
             }
             self.workspace_drag = None;
             self.workspace_tab_drag = None;
@@ -1438,9 +1516,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .contains(position[0], position[1])
         {
-            return None;
-        }
-        if self.state.partial_zen() {
             return None;
         }
         let mut resolved = self.layout(viewport);
@@ -1575,6 +1650,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn renderer_stats(&self) -> crate::StatsView {
         crate::stats::view(self.engine.backend().telemetry())
     }
+    /// Live execution availability, including temporary canvas locks. Retained
+    /// controls use `state.commands`; dispatch always rechecks this live state.
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
@@ -1611,6 +1688,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
+        if self.rendering_suspended && !Self::command_without_renderer(id) {
+            return (false, false);
+        }
         if !id.available_on(self.state.platform) || self.state.document_file.close_ready {
             return (false, false);
         }
@@ -1670,8 +1750,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !document.is_locked(document.active_layer)
                     && (id == CommandId::ClearLayer || document.selection.is_some())
             }
-            CommandId::UndoWorkspace => self.workspace_history.can_undo(),
-            CommandId::RedoWorkspace => self.workspace_history.can_redo(),
+            CommandId::UndoWorkspace => {
+                !self.state.customization.header_editing && self.workspace_history.can_undo()
+            }
+            CommandId::RedoWorkspace => {
+                !self.state.customization.header_editing && self.workspace_history.can_redo()
+            }
             CommandId::AddLayer => idle,
             CommandId::DeleteLayer => idle && editable && paint_layers > 1,
             CommandId::RaiseLayer => idle && editable && index > 0,
@@ -1734,6 +1818,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.rendering_suspended && !Self::action_without_renderer(&action) {
+            return Err("Painting is unavailable. Save the drawing and reopen it.".into());
+        }
         // One resize contract for both sides of an attached panel's outside
         // edge. Resolve before revision classification so either hit surface
         // follows the retained-content path and one-step gesture history.
@@ -1771,6 +1858,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
+                    | UiAction::MeasureHeader { .. }
                     | UiAction::MeasureWorkspaceBottom { .. }
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::WindowFullscreen { .. }
@@ -1812,6 +1900,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
+                    | UiAction::MeasureHeader { .. }
                     | UiAction::MeasureWorkspaceBottom { .. }
                     | UiAction::WindowFullscreen { .. }
             )
@@ -1831,7 +1920,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         );
         let layout_only = (!self.state.customization.is_open() || column_resize)
-            && !self.state.partial_zen()
             && matches!(
                 &action,
                 UiAction::DragDivider {
@@ -1877,7 +1965,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar
                 }
         )
-        .then(|| self.state.workspace.clone());
+        .then(|| {
+            let mut before = self.state.workspace.clone();
+            self.state
+                .customization
+                .committed_header(&mut before.layout);
+            before
+        });
         let move_item = match &action {
             UiAction::MovePanel { panel, .. } => Some(DockItem::Panel { panel: *panel }),
             UiAction::MoveGroup { group, .. } => Some(DockItem::Group { group: *group }),
@@ -2036,6 +2130,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                     (LAYOUT, false)
                 }
             }
+            UiAction::MeasureHeader { height, items } => {
+                if !height.is_finite()
+                    || !(0.0..1_000_000.).contains(&height)
+                    || items.len() > 128
+                    || items.iter().enumerate().any(|(i, m)| {
+                        self.state.workspace.layout.header.entry(m.id).is_err()
+                            || items[..i].iter().any(|n| n.id == m.id)
+                            || ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
+                                .into_iter()
+                                .all(|v| v.is_finite() && (0.0..1_000_000.).contains(&v))
+                    })
+                {
+                    return Err("Invalid window-bar measurement".into());
+                }
+                let presentation = HeaderPresentation { height, items };
+                if self.state.workspace.layout.header_presentation == presentation {
+                    (0, false)
+                } else {
+                    self.state.workspace.layout.header_presentation = presentation;
+                    (LAYOUT, false)
+                }
+            }
             UiAction::MeasurePanels { measurements } => {
                 let mut accepted = Vec::new();
                 for measurement in measurements {
@@ -2044,6 +2160,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
                     {
                         return Err("Invalid panel measurement".into());
+                    }
+                    if measurement.scroll.is_some_and(|m| {
+                        ![m.fixed_height, m.unit_height]
+                            .into_iter()
+                            .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                            || m.fixed_height > measurement.content_height
+                    }) {
+                        return Err("Invalid panel scroll measurement".into());
                     }
                     if accepted
                         .iter()
@@ -2162,18 +2286,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (LAYOUT, false)
             }
             UiAction::Customize { action } => {
+                let editing_header = matches!(
+                    &action,
+                    CustomizationAction::Header {
+                        action: HeaderAction::Edit { editing: true }
+                    }
+                );
                 let viewport = self
                     .logical_viewport
                     .or(self.interaction.viewport)
                     .unwrap_or(self.state.camera.viewport.map(|v| v as f32));
-                let partial_zen = self.state.partial_zen();
-                let changed = self.state.customization.edit(
+                let mut changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
                     action,
                     self.state.platform,
                     viewport,
-                    partial_zen,
                 )?;
+                if editing_header && self.state.workspace.zen_mode {
+                    self.state.workspace.zen_mode = false;
+                    changed |= LAYOUT;
+                }
                 if changed & LAYOUT != 0
                     && let Some(before) = workspace_before.as_ref()
                 {
@@ -2201,72 +2333,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .find(|t| t.id == tile)
                     .ok_or("The tool no longer exists")?
                     .control;
-                if control == ToolbarControl::Divider {
-                    return Ok(UiChange::default());
-                }
-                let selected = self
-                    .panel_view(panel)?
-                    .tiles
-                    .iter()
-                    .find(|t| t.id == tile)
-                    .is_some_and(|t| t.choice.selected && t.enabled);
-                if !selected
-                    && control.selectable()
-                    && self.switches_toolbar_drawer(TileAnchor { panel, tile })
-                {
-                    let selected =
-                        self.dispatch(control.action().ok_or("This tool is unavailable")?)?;
-                    let mut opened = self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::ToggleToolDrawer {
-                            anchor: TileAnchor { panel, tile },
-                        },
-                    })?;
-                    opened.regions |= selected.regions;
-                    opened.canvas_wake |= selected.canvas_wake;
-                    return Ok(opened);
-                }
-                if matches!(
-                    self.state.platform,
-                    Platform::Gtk
-                        | Platform::Generic
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Windows
-                ) && control.drawer_columns().is_some()
-                    && (!control.selectable()
-                        || selected
-                        || self
-                            .state
-                            .customization
-                            .drawer
-                            .as_ref()
-                            .is_some_and(|d| d.anchor.tile() == Some(TileAnchor { panel, tile })))
-                {
-                    return self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::ToggleToolDrawer {
-                            anchor: TileAnchor { panel, tile },
-                        },
-                    });
-                }
-                let action = control.action().ok_or("This panel drawer is unavailable")?;
-                if let UiAction::Customize {
-                    action: CustomizationAction::OpenControl { control },
-                } = &action
-                    && self.state.customization.control == Some(*control)
-                {
-                    return self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::CloseControl,
-                    });
-                }
-                return self.dispatch(action);
+                return self.activate_tool(control, DrawerAnchor::Tile { panel, tile });
+            }
+            UiAction::ActivateHeaderItem { id } => {
+                let HeaderItem::Tool { control } =
+                    self.state.workspace.layout.header.entry(id)?.item
+                else {
+                    return Err("Not a window-bar tool".into());
+                };
+                return self.activate_tool(control, DrawerAnchor::Header { id });
             }
             UiAction::RestoreWorkspace { mut workspace } => {
                 workspace.validate()?;
                 workspace.layout.collapse_empty_toolbar_groups();
                 workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                 workspace.layout.bottom_inset = self.state.workspace.layout.bottom_inset;
+                workspace.layout.header_presentation =
+                    self.state.workspace.layout.header_presentation.clone();
                 self.state.workspace = workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.column_panel_drag = None;
@@ -2467,7 +2550,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         CustomizationAction::ShowAllControls { panel }
                     };
-                    let partial_zen = self.state.partial_zen();
                     self.state.customization.edit(
                         &mut self.state.workspace.layout,
                         action,
@@ -2475,7 +2557,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.logical_viewport
                             .or(self.interaction.viewport)
                             .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
-                        partial_zen,
                     )?;
                 } else if let Some(previous) = self.state.customization.expanded {
                     self.state.customization.expanded =
@@ -2706,10 +2787,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && matches!(
                         action,
                         PreferenceAction::Edit {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock,
+                            id: PreferenceId::PredictionHorizon,
                             ..
                         } | PreferenceAction::Reset {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock
+                            id: PreferenceId::PredictionHorizon
                         }
                     )
                 {
@@ -2760,11 +2841,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
+            let mut after = self.state.workspace.clone();
+            self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
                 self.workspace_history
-                    .record_named(before, &self.state.workspace, &description);
+                    .record_named(before, &after, &description);
             } else {
-                self.workspace_history.record(before, &self.state.workspace);
+                self.workspace_history.record(before, &after);
             }
         }
         if explicit_color
@@ -2788,12 +2871,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
                         let layout = &self.state.workspace.layout;
-                        d.anchor.tile().is_none_or(|a| {
-                            layout.active_panel(a.panel) != Some(a.panel)
-                                || layout
-                                    .panel(a.panel)
-                                    .map_or(true, |p| !p.tiles().iter().any(|t| t.id == a.tile))
-                        })
+                        if let DrawerAnchor::Header { id } = d.anchor {
+                            layout.header.entry(id).is_err()
+                                || !layout.header_presentation.items.iter().any(|m| m.id == id)
+                        } else {
+                            d.anchor.tile().is_none_or(|a| {
+                                layout.active_panel(a.panel) != Some(a.panel)
+                                    || layout
+                                        .panel(a.panel)
+                                        .map_or(true, |p| !p.tiles().iter().any(|t| t.id == a.tile))
+                            })
+                        }
                     })))
         {
             self.state.customization.drawer = None;
@@ -2821,8 +2909,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => None,
                 })
                 .collect();
-            // Undo/redo preserves which group is open, even though transient
-            // customization popups are reset. Rebuild its shared presentation.
+            changed |= CUSTOMIZATION;
+        }
+        if changed & (LAYOUT | CUSTOMIZATION) != 0 {
+            // Attached groups survive transient popup resets, including opening
+            // Preferences. Keep their bodies consistent with the allocated space.
+            // Undo/redo also preserves the open group in layout history.
             for settings in &self.state.workspace.layout.column_settings {
                 let Some(group) = self
                     .state
@@ -2920,7 +3012,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
-        if self.workspace_transition || (self.workspace_read_only && event.phase == PenPhase::Down)
+        if self.rendering_suspended
+            || self.workspace_transition
+            || (self.workspace_read_only && event.phase == PenPhase::Down)
         {
             return Ok(());
         }
@@ -3243,6 +3337,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .clone_from(&self.state.workspace.layout.column_scroll);
                         restored.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                         restored.bottom_inset = self.state.workspace.layout.bottom_inset;
+                        restored.header_presentation =
+                            self.state.workspace.layout.header_presentation.clone();
                         self.state.workspace.layout = restored;
                         drag.phase = ResizeDragPhase::Expand {
                             columns,
@@ -3562,13 +3658,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((CAMERA, true))
             }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
+                let canceled = self
+                    .state
+                    .customization
+                    .cancel_header(&mut self.state.workspace.layout);
                 self.state.customization = CustomizationState::default();
                 self.open_settings(match command {
                     CommandId::KeyboardShortcuts => SettingsPage::Shortcuts,
                     CommandId::About => SettingsPage::About,
                     _ => SettingsPage::Appearance,
                 });
-                Ok((SETTINGS | CUSTOMIZATION, false))
+                Ok((
+                    SETTINGS | CUSTOMIZATION | if canceled { LAYOUT } else { 0 },
+                    false,
+                ))
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
@@ -3607,6 +3710,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((LAYOUT, false))
             }
             CommandId::UndoWorkspace | CommandId::RedoWorkspace => {
+                let header_editing = self.state.customization.header_editing;
                 if command == CommandId::UndoWorkspace {
                     self.workspace_history.undo(&mut self.state.workspace);
                 } else {
@@ -3614,11 +3718,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.column_panel_drag = None;
                 self.divider_drag = None;
-                self.state.customization = CustomizationState::default();
+                self.state.customization = CustomizationState {
+                    header_editing,
+                    ..Default::default()
+                };
                 self.floating_resize = None;
                 self.workspace_drag = None;
                 self.workspace_tab_drag = None;
                 self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
+                Ok((LAYOUT | CUSTOMIZATION, false))
+            }
+            CommandId::CustomizeWorkspaceUi => {
+                self.state
+                    .customization
+                    .begin_header(&self.state.workspace.layout);
+                self.state.workspace.zen_mode = false;
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
             CommandId::NewToolbar | CommandId::ManageToolbars => {
@@ -3632,7 +3746,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })?;
                     return Ok((HOST, false));
                 }
-                let partial_zen = self.state.partial_zen();
                 let changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
                     if command == CommandId::ManageToolbars {
@@ -3644,7 +3757,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.logical_viewport
                         .or(self.interaction.viewport)
                         .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
-                    partial_zen,
                 )?;
                 Ok((changed, false))
             }
@@ -3878,6 +3990,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_commands(&mut self) -> bool {
+        let canvas_idle = self.require_idle().is_ok();
         let mut changed = false;
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
@@ -3888,6 +4001,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 id.label()
             };
             if let Some(previous) = self.state.commands.get_mut(index) {
+                // A canvas contact must not flash disabled styling across the
+                // editor. Keep the published availability until it finishes;
+                // selection, icons and labels still follow live state. This is
+                // presentation only: command()/dispatch retain the stroke lock.
+                let enabled = if !canvas_idle {
+                    previous.enabled
+                        && id.available_on(self.state.platform)
+                        && !self.state.document_file.close_ready
+                } else {
+                    enabled
+                };
                 if previous.enabled != enabled
                     || previous.selected != selected
                     || previous.icon != icon
@@ -4221,6 +4345,379 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn header_tool_picker_is_a_nested_preview_not_a_toolbar_transaction() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let original = s.capture_workspace().unwrap();
+        let header = s.state.workspace.layout.header.clone();
+        let before = header.zones[2][0].id;
+        for commit in [false, true] {
+            s.dispatch(HeaderAction::Edit { editing: true }.action())
+                .unwrap();
+            s.dispatch(
+                HeaderAction::SetSize {
+                    size: HeaderSize::Large,
+                }
+                .action(),
+            )
+            .unwrap();
+            let preview = s.state.workspace.layout.header.clone();
+            s.dispatch(
+                HeaderAction::InsertTools {
+                    zone: HeaderZone::Right,
+                    before: Some(before),
+                }
+                .action(),
+            )
+            .unwrap();
+            for control in [ToolbarControl::Opacity, ToolbarControl::Color] {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSelect {
+                        control,
+                        selected: true,
+                    },
+                })
+                .unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSearch {
+                        query: "not a matching tool".into(),
+                    },
+                })
+                .unwrap();
+            }
+            assert_eq!(
+                s.state
+                    .customization
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .selected
+                    .len(),
+                2
+            );
+            assert!(s.state.customization.header_editing);
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::CancelTools,
+            })
+            .unwrap();
+            assert_eq!(s.state.workspace.layout.header, preview);
+            assert!(s.state.customization.header_editing);
+            s.dispatch(
+                HeaderAction::InsertTools {
+                    zone: HeaderZone::Right,
+                    before: Some(before),
+                }
+                .action(),
+            )
+            .unwrap();
+            for control in [ToolbarControl::Opacity, ToolbarControl::Color] {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSelect {
+                        control,
+                        selected: true,
+                    },
+                })
+                .unwrap();
+            }
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ConfirmTools,
+            })
+            .unwrap();
+            assert!(s.state.customization.picker.is_none());
+            assert!(s.state.customization.header_editing);
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            assert_eq!(
+                s.state.workspace.layout.header.zones[2][0].item,
+                HeaderItem::Tool {
+                    control: ToolbarControl::Opacity
+                }
+            );
+            assert_eq!(
+                s.state.workspace.layout.header.zones[2][1].item,
+                HeaderItem::Tool {
+                    control: ToolbarControl::Color
+                }
+            );
+            assert_eq!(s.state.workspace.layout.header.zones[2][2].id, before);
+            s.dispatch(
+                if commit {
+                    HeaderAction::Edit { editing: false }
+                } else {
+                    HeaderAction::Cancel
+                }
+                .action(),
+            )
+            .unwrap();
+            if !commit {
+                assert_eq!(s.state.workspace.layout.header, header);
+                assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            }
+        }
+        assert_eq!(
+            s.capture_workspace().unwrap().history.generation,
+            original.history.generation + 1
+        );
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.header, header);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Left,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+        assert!(
+            s.state.customization.picker.is_none(),
+            "Closing the editor also retires its picker"
+        );
+    }
+
+    #[test]
+    fn header_picker_revalidates_destination_and_capacity() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        let before = s.state.workspace.layout.header.zones[0][0].id;
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Left,
+                before: Some(before),
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::PickerSelect {
+                control: ToolbarControl::Color,
+                selected: true,
+            },
+        })
+        .unwrap();
+        s.dispatch(HeaderAction::Remove { id: before }.action())
+            .unwrap();
+        let view = s
+            .state
+            .customization
+            .picker
+            .as_ref()
+            .unwrap()
+            .view(&s.state.workspace.layout, Platform::Gtk);
+        assert!(!view.can_confirm && view.error.is_some());
+        let changed = s.state.workspace.layout.header.clone();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert!(
+            s.state
+                .customization
+                .picker
+                .as_ref()
+                .unwrap()
+                .error
+                .is_some()
+        );
+        assert_eq!(s.state.workspace.layout.header, changed);
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::CancelTools,
+        })
+        .unwrap();
+        while s.state.workspace.layout.header.entries().count() < 127 {
+            s.dispatch(
+                HeaderAction::Add {
+                    zone: HeaderZone::Left,
+                    before: None,
+                    item: HeaderItem::Space,
+                }
+                .action(),
+            )
+            .unwrap();
+        }
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        for control in [ToolbarControl::Color, ToolbarControl::Opacity] {
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::PickerSelect {
+                    control,
+                    selected: true,
+                },
+            })
+            .unwrap();
+        }
+        let view = s
+            .state
+            .customization
+            .picker
+            .as_ref()
+            .unwrap()
+            .view(&s.state.workspace.layout, Platform::Gtk);
+        assert!(!view.can_confirm && view.error.is_some());
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert_eq!(
+            s.state.workspace.layout.header.entries().count(),
+            127,
+            "Multi-add is atomic at the capacity limit"
+        );
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::PickerSelect {
+                control: ToolbarControl::Opacity,
+                selected: false,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert_eq!(s.state.workspace.layout.header.entries().count(), 128);
+        assert!(s.state.customization.picker.is_none());
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+    }
+
+    #[test]
+    fn header_preview_cancel_and_done_are_transactional() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let original = s.capture_workspace().unwrap();
+        let model = original.history.layout().header.clone();
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        s.dispatch(UiAction::MeasureHeader {
+            height: 60.,
+            items: vec![],
+        })
+        .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        let id = model.zones[0][0].id;
+        s.dispatch(
+            HeaderAction::Move {
+                id,
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        assert_eq!(
+            s.capture_workspace().unwrap().history.generation,
+            original.history.generation
+        );
+        assert!(!s.command(CommandId::UndoWorkspace).enabled);
+        assert!(s.state.customization.header_editing);
+        assert_eq!(s.state.workspace.layout.header_presentation.height, 60.);
+        assert_eq!(
+            s.state.workspace.layout.header.location(id).unwrap().0,
+            HeaderZone::Right
+        );
+        assert!(s.state.customization.header_editing);
+        let before = s.capture_workspace().unwrap();
+        assert!(
+            s.dispatch(
+                HeaderAction::Move {
+                    id,
+                    zone: HeaderZone::Center,
+                    before: Some(9999)
+                }
+                .action()
+            )
+            .is_err()
+        );
+        assert_eq!(s.capture_workspace().unwrap(), before);
+        s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+            .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        invoke(&mut s, CommandId::CustomizeWorkspaceUi);
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(s.state.workspace.layout.canvas_info.visible);
+        assert!(!s.state.customization.header_editing);
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        s.dispatch(
+            HeaderAction::Move {
+                id,
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+            .unwrap();
+        s.dispatch(HeaderAction::Edit { editing: false }.action())
+            .unwrap();
+        let saved = s.capture_workspace().unwrap();
+        saved.validate().unwrap();
+        assert!(!saved.history.layout().canvas_info.visible);
+        assert_eq!(saved.history.generation, original.history.generation + 1);
+        assert_eq!(
+            saved.history.layout().header_presentation,
+            HeaderPresentation::default()
+        );
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(s.state.workspace.layout.canvas_info.visible);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(
+            s.state.workspace.layout.header,
+            saved.history.layout().header
+        );
+    }
+
+    #[test]
+    fn workspace_picker_cannot_adopt_an_uncommitted_header_baseline() {
+        for platform in [Platform::Gtk, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            let original = s.capture_workspace().unwrap();
+            s.dispatch(HeaderAction::Edit { editing: true }.action())
+                .unwrap();
+            s.dispatch(
+                HeaderAction::SetSize {
+                    size: HeaderSize::Large,
+                }
+                .action(),
+            )
+            .unwrap();
+            s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+                .unwrap();
+            s.begin_workspace_transition().unwrap();
+            s.begin_workspace_layout_preview().unwrap();
+            s.preview_workspace_layout(&WorkspacePreset::Painter.layout(platform))
+                .unwrap();
+            assert!(!s.state.customization.header_editing);
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            s.cancel_workspace_layout_preview();
+            s.end_workspace_transition();
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            assert_eq!(
+                s.state.workspace.layout.header,
+                original.history.layout().header
+            );
+            assert_eq!(
+                s.state.workspace.layout.canvas_info,
+                original.history.layout().canvas_info
+            );
+        }
     }
 
     #[test]
@@ -6552,9 +7049,31 @@ mod tests {
     fn tool_switch_keeps_active_stroke_snapshot_and_restores_next_stroke_settings() {
         let mut s = session();
         let original = s.engine.configured_brush().clone();
+        let enabled: Vec<_> = s.state.commands.iter().map(|c| c.enabled).collect();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
         invoke(&mut s, CommandId::Liquify);
+        assert_eq!(
+            s.state
+                .commands
+                .iter()
+                .map(|c| c.enabled)
+                .collect::<Vec<_>>(),
+            enabled,
+            "stroke protection does not restyle commands"
+        );
+        assert!(
+            s.state
+                .commands
+                .iter()
+                .any(|c| c.id == CommandId::Liquify && c.selected)
+        );
+        assert!(
+            !s.state
+                .commands
+                .iter()
+                .any(|c| c.id == CommandId::Pen && c.selected)
+        );
         assert_eq!(s.engine.brush(), &original);
         assert_eq!(
             s.engine.configured_brush().execution_class(),
@@ -7636,6 +8155,119 @@ mod tests {
     }
 
     #[test]
+    fn layer_drop_preview_rejects_invalid_moves_and_does_not_create_history() {
+        let mut s = session();
+        let original = s.engine.document().layers.clone();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        })
+        .unwrap();
+        let id = s.engine.document().active_layer.0;
+        let created = s.engine.document().layers.clone();
+        assert_eq!(s.layer_drop_hint(id, 1, 0.0), None);
+        assert_eq!(s.layer_drop_hint(id, id, 0.5), None);
+        assert_eq!(s.layer_drop_hint(0, id, 0.0), None);
+        assert_eq!(s.layer_drop_hint(id, u64::MAX, 0.0), None);
+        for fraction in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert_eq!(s.layer_drop_hint(id, 1, fraction), None);
+        }
+        assert_eq!(
+            s.layer_drop_hint(id, 1, 1.0),
+            Some(LayerDropPosition::Below)
+        );
+        assert_eq!(s.engine.document().layers, created);
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Drop {
+                id,
+                target: 1,
+                fraction: 0.0,
+            },
+        })
+        .unwrap();
+        // The no-op drop must not consume Undo ahead of the preceding New layer.
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().layers, original);
+        s.engine.redo().unwrap();
+        assert_eq!(s.engine.document().layers, created);
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Drop {
+                id,
+                target: 1,
+                fraction: 1.0,
+            },
+        })
+        .unwrap();
+        let moved = s.engine.document().layers.clone();
+        assert_ne!(moved, created);
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().layers, created);
+        s.engine.redo().unwrap();
+        assert_eq!(s.engine.document().layers, moved);
+    }
+
+    #[test]
+    fn layer_drop_preview_shares_parent_lock_cycle_and_clipping_validation() {
+        let mut s = session();
+        for _ in 0..2 {
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::New {
+                    group: true,
+                    clipped: false,
+                },
+            })
+            .unwrap();
+        }
+        let child = s.engine.document().active_layer;
+        let parent = s
+            .engine
+            .document()
+            .layer(child)
+            .unwrap()
+            .properties
+            .parent
+            .unwrap();
+        assert_eq!(s.layer_drop_hint(parent.0, child.0, 0.5), None);
+        assert_eq!(
+            s.layer_drop_hint(1, child.0, 0.5),
+            Some(LayerDropPosition::Into)
+        );
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: parent.0,
+                value: true,
+            },
+        })
+        .unwrap();
+        assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
+        assert_eq!(s.layer_drop_hint(child.0, 1, 0.0), None);
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: parent.0,
+                value: false,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Select { id: 1, mask: false },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: false,
+                clipped: true,
+            },
+        })
+        .unwrap();
+        let clipped = s.engine.document().active_layer.0;
+        // Both moving the base out and orphaning a clipped layer are rejected.
+        assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
+        assert_eq!(s.layer_drop_hint(clipped, child.0, 0.5), None);
+    }
+
+    #[test]
     fn dropping_into_a_closed_group_expands_it_without_changing_edit_target() {
         let mut s = session();
         s.dispatch(UiAction::Layer {
@@ -7794,7 +8426,12 @@ mod tests {
             let edit = |s: &mut UiSession<Recorder>, action| {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
-            let menu = s.workspace_menu();
+            let mut menu = s.workspace_menu();
+            if CommandId::CustomizeWorkspaceUi.available_on(platform) {
+                assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
+                assert!(!format!("{menu:?}").contains("Show Menu Bar"));
+                menu.sections.remove(0);
+            }
             assert_eq!(
                 menu.sections[1].len(),
                 Panel::ALL
@@ -7833,7 +8470,24 @@ mod tests {
                 s.state.workspace.layout.panel(Panel::Brushes).unwrap(),
                 original.layout.panel(Panel::Brushes).unwrap()
             );
-            assert_eq!(s.workspace_menu().sections[1][0].selected, Some(false));
+            assert_eq!(
+                s.workspace_menu()
+                    .sections
+                    .iter()
+                    .flatten()
+                    .find(|item| matches!(
+                        item.action,
+                        Some(UiAction::Customize {
+                            action: CustomizationAction::SetPanelVisible {
+                                panel: Panel::Brushes,
+                                ..
+                            }
+                        })
+                    ))
+                    .unwrap()
+                    .selected,
+                Some(false)
+            );
             let saved = s.state.workspace.clone();
             saved.validate().unwrap();
             invoke(&mut s, CommandId::UndoWorkspace);
@@ -7992,7 +8646,8 @@ mod tests {
             assert_eq!(
                 s.workspace_menu()
                     .sections
-                    .last()
+                    .iter()
+                    .find(|section| section.first().is_some_and(|i| i.label == "New Toolbar…"))
                     .unwrap()
                     .iter()
                     .map(|i| i.label.as_str())
@@ -8143,231 +8798,20 @@ mod tests {
         })
         .unwrap()
     }
-    #[test]
-    fn partial_zen_never_reveals_on_proximity_or_consumes_drawing() {
-        let mut s = session();
-        s.state.settings.total_zen = true;
-        s.set_platform(Platform::Gtk);
-        invoke(&mut s, CommandId::Settings);
-        edit_preference(&mut s, PreferenceId::TotalZen, PreferenceValue::Bool(false));
-        assert!(matches!(s.state.requests.last().unwrap().kind,
-            HostRequestKind::SaveSettings { ref settings }
-                if !settings.total_zen));
-        s.dispatch(UiAction::CloseSettings).unwrap();
-        let viewport = [1200.0, 900.0];
-        s.dispatch(UiAction::MovePanel {
-            panel: Panel::Sizes,
-            viewport,
-            target: DockTarget::Float {
-                position: [600.0, 450.0],
-            },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ShowAllControls {
-                panel: Panel::Sizes,
-            },
-        })
-        .unwrap();
-        assert!(s.state.customization.expanded.is_some());
-        let camera = s.state.camera.clone();
-        let layout = s.state.workspace.layout.clone();
-        invoke(&mut s, CommandId::ZenMode);
-        let assert_hidden = |reply: InputReply| {
-            assert!(reply.chrome_hidden && reply.hide_floating_panels);
-            reply
-        };
-        let facts = ChromeFacts::default();
-        for position in [
-            [6.0, 6.0],
-            [600.0, 450.0],
-            [1199.0, 450.0],
-            [600.0, 899.0],
-            [1.0, 450.0],
-            [600.0, 1.0],
-        ] {
-            assert_hidden(chrome(&mut s, ChromeEvent::Motion { position }, facts));
-            let reply = assert_hidden(chrome(
-                &mut s,
-                ChromeEvent::Contact {
-                    position,
-                    canvas: true,
-                },
-                facts,
-            ));
-            assert!(
-                !reply.handled,
-                "hidden panels/drawers must not eat the first contact"
-            );
-            assert!(
-                s.drop_hint(
-                    viewport,
-                    position,
-                    &[],
-                    DockItem::Panel {
-                        panel: Panel::Brushes,
-                    },
-                    None
-                )
-                .is_none(),
-                "normal docking targets are hidden in partial Zen"
-            );
-        }
-        for facts in [
-            ChromeFacts {
-                held: true,
-                ..facts
-            },
-            ChromeFacts {
-                dragging: true,
-                ..facts
-            },
-            ChromeFacts {
-                popup_open: true,
-                ..facts
-            },
-        ] {
-            assert_hidden(chrome(&mut s, ChromeEvent::Refresh, facts));
-        }
-        assert_hidden(chrome(&mut s, ChromeEvent::Leave { touch: false }, facts));
-        assert_hidden(s.input(UiInput::Blur).unwrap());
-        assert_hidden(key(&mut s, "Escape", true, false, false));
-        assert_hidden(key(&mut s, "Escape", false, false, false));
-        assert!(
-            assert_hidden(pointer(
-                &mut s,
-                1,
-                ContactPhase::Down,
-                [1.0, 450.0],
-                PointerButton::Primary
-            ))
-            .paint
-        );
-        assert!(
-            assert_hidden(pointer(
-                &mut s,
-                1,
-                ContactPhase::Move,
-                [600.0, 450.0],
-                PointerButton::Primary
-            ))
-            .paint
-        );
-        assert!(
-            assert_hidden(pointer(
-                &mut s,
-                1,
-                ContactPhase::Up,
-                [600.0, 450.0],
-                PointerButton::Primary
-            ))
-            .paint
-        );
-        // Explicit modal shortcuts remain usable, without revealing the editor
-        // behind them, including the early search/shortcut-capture replies.
-        invoke(&mut s, CommandId::Settings);
-        assert_hidden(key(&mut s, "p", true, false, false));
-        assert_eq!(s.preferences().unwrap().query, "p");
-        preference(
-            &mut s,
-            PreferenceAction::BeginShortcut {
-                id: CommandId::Brush.shortcut_id(),
-            },
-        );
-        assert_hidden(key(&mut s, "w", true, false, false));
-        assert!(s.preferences().unwrap().capture.unwrap().chord.is_some());
-        s.dispatch(UiAction::CloseSettings).unwrap();
-        invoke(&mut s, CommandId::ZenMode);
-        let reply = chrome(&mut s, ChromeEvent::Refresh, facts);
-        assert!(!reply.chrome_hidden && !reply.hide_floating_panels);
-        assert!(!s.state.workspace.zen_mode);
-        assert_eq!(s.state.workspace.layout, layout);
-        assert_eq!(s.state.camera, camera);
-    }
 
     #[test]
-    fn partial_zen_has_the_same_policy_on_all_hosts() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
-            let mut s = session();
-            s.set_platform(platform);
-            s.dispatch(UiAction::RestoreSettings {
-                settings: Settings {
-                    total_zen: false,
-                    ..Settings::default()
-                },
-            })
-            .unwrap();
-            invoke(&mut s, CommandId::ZenMode);
-            let facts = ChromeFacts::default();
-            assert!(
-                chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [600.0, 450.0]
-                    },
-                    facts
-                )
-                .chrome_hidden
-            );
-            let reply = chrome(
-                &mut s,
-                ChromeEvent::Motion {
-                    position: [6.0, 6.0],
-                },
-                facts,
-            );
-            assert!(reply.chrome_hidden);
-            assert!(reply.hide_floating_panels);
-        }
-    }
-
-    #[test]
-    fn zen_context_menu_uses_preference_options_and_edits_without_a_dialog() {
+    fn zen_context_menu_contains_only_icon_customization() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         let target = ContextTarget::ZenMode;
-        for total in [true, false] {
-            let menu = s.context_menu(target).unwrap();
-            assert_eq!(menu.title, "Zen mode");
-            assert_eq!(menu.sections.len(), 2);
-            assert_eq!(menu.sections[0].len(), 1);
-            assert_eq!(menu.sections[0][0].label, "Total zen");
-            let change = s
-                .dispatch(menu.sections[0][0].action.clone().unwrap())
-                .unwrap();
-            assert_eq!(s.state.settings.total_zen, total);
-            assert!(!s.state.settings_open && !s.state.workspace.zen_mode);
-            assert_ne!(change.regions & regions::SETTINGS, 0);
-            assert_eq!(
-                s.context_menu(target).unwrap().sections[0][0].selected,
-                Some(total)
-            );
-            assert!(matches!(
-                s.state.requests.last().unwrap().kind,
-                HostRequestKind::SaveSettings { .. }
-            ));
-        }
-        assert!(
-            s.dispatch(UiAction::Preferences {
-                action: PreferenceAction::Search {
-                    query: "Zen".into()
-                },
-            })
-            .is_err()
-        );
+        let menu = s.context_menu(target).unwrap();
+        assert_eq!(menu.title, "Zen mode");
+        assert_eq!(menu.sections.len(), 1);
+        assert_eq!(menu.sections[0].len(), 1);
+        assert_eq!(menu.sections[0][0].label, "Change icon…");
         let saved = s.state.settings.clone();
         let requests = s.state.requests.len();
-        let menu = s.context_menu(target).unwrap();
-        assert_eq!(menu.sections[1][0].label, "Change icon…");
-        s.dispatch(menu.sections[1][0].action.clone().unwrap())
+        s.dispatch(menu.sections[0][0].action.clone().unwrap())
             .unwrap();
         let view = s.preferences().unwrap();
         assert_eq!(view.page, SettingsPage::Appearance);
@@ -8497,18 +8941,22 @@ mod tests {
     }
 
     #[test]
-    fn total_and_partial_zen_have_one_shared_policy() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    fn legacy_settings_use_the_same_total_zen_policy_on_every_host() {
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
             for total in [false, true] {
                 let mut s = session();
                 s.set_platform(platform);
-                s.dispatch(UiAction::RestoreSettings {
-                    settings: Settings {
-                        total_zen: total,
-                        ..Settings::default()
-                    },
-                })
-                .unwrap();
+                let saved =
+                    serde_json::json!({"type":"restore_settings", "settings":{"total_zen":total}});
+                s.dispatch(serde_json::from_value(saved).unwrap()).unwrap();
                 let layout = s.state.workspace.layout.clone();
                 invoke(&mut s, CommandId::ZenMode);
                 let reply = chrome(
@@ -8519,9 +8967,9 @@ mod tests {
                     ChromeFacts::default(),
                 );
                 assert!(reply.chrome_hidden);
-                assert_eq!(reply.hide_floating_panels, !total);
-                assert_eq!(reply.keep_zen_button, !total);
-                assert_eq!(reply.partial_zen, !total);
+                assert!(!reply.hide_floating_panels);
+                assert!(!reply.keep_zen_button);
+                assert!(!reply.partial_zen);
                 let reply = chrome(
                     &mut s,
                     ChromeEvent::Motion {
@@ -8529,8 +8977,8 @@ mod tests {
                     },
                     ChromeFacts::default(),
                 );
-                assert_eq!(reply.chrome_hidden, !total);
-                assert_eq!(reply.keep_zen_button, !total);
+                assert!(!reply.chrome_hidden);
+                assert!(!reply.keep_zen_button);
                 let exit = key(&mut s, "Tab", true, false, false);
                 assert!(
                     exit.handled
@@ -8603,7 +9051,6 @@ mod tests {
     #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
         let mut s = session();
-        s.state.settings.total_zen = true;
         invoke(&mut s, CommandId::ZenMode);
         let motion = |p| ChromeEvent::Motion { position: p };
         let touch = |p| ChromeEvent::Contact {
@@ -8658,7 +9105,6 @@ mod tests {
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
-            s.state.settings.total_zen = true;
             s.set_platform(platform);
             let facts = ChromeFacts::default();
             chrome(
@@ -8724,7 +9170,6 @@ mod tests {
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
         let mut s = session();
-        s.state.settings.total_zen = true;
         invoke(&mut s, CommandId::ZenMode);
         let dragging = ChromeFacts {
             dragging: true,
@@ -9100,6 +9545,183 @@ mod tests {
     }
 
     #[test]
+    fn floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            let mut app = session();
+            app.set_platform(platform);
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Brushes,
+                viewport,
+                target: DockTarget::Float {
+                    position: [600., 300.],
+                },
+            })
+            .unwrap();
+            let baseline = app.state.workspace.clone();
+            let source = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            let offset = [37., 12.];
+            let press = [source.x + offset[0], source.y + offset[1]];
+            let drag = |app: &mut UiSession<_>, phase, position| {
+                app.dispatch(UiAction::DragWorkspace {
+                    item: DockItem::Panel {
+                        panel: Panel::Brushes,
+                    },
+                    phase,
+                    position,
+                    viewport,
+                    tabs: vec![],
+                })
+                .unwrap();
+            };
+            let preview =
+                |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
+            drag(&mut app, ContactPhase::Down, press);
+            for point in [
+                [600., 899.],
+                [1199., 400.],
+                [1., 400.],
+                [600., 1.],
+                [600., 899.],
+            ] {
+                drag(&mut app, ContactPhase::Move, point);
+                assert_eq!(
+                    preview(&app),
+                    Bounds {
+                        x: point[0] - offset[0],
+                        y: point[1] - offset[1],
+                        ..source
+                    }
+                );
+            }
+            // A late native natural-height measurement must not move the grabbed
+            // header or resize the live preview (including its retained handles).
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: vec![PanelMeasurement {
+                    panel: Panel::Brushes,
+                    tab_width: 120.,
+                    content_height: 1800.,
+                    scroll: None,
+                }],
+            })
+            .unwrap();
+            assert_eq!(preview(&app).height, source.height);
+            assert_eq!(preview(&app).y, 887.);
+            drag(&mut app, ContactPhase::Cancel, [600., 899.]);
+            assert_eq!(
+                durable_layout(&app.state.workspace.layout),
+                durable_layout(&baseline.layout)
+            );
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: baseline.layout.measurements.clone(),
+            })
+            .unwrap();
+            assert_eq!(app.state.workspace, baseline);
+            assert!(app.workspace_update().drag.is_none());
+
+            drag(&mut app, ContactPhase::Down, press);
+            drag(&mut app, ContactPhase::Move, [600., 899.]);
+            assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
+            drag(&mut app, ContactPhase::Up, [600., 899.]);
+            let placed = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            assert_eq!([placed.width, placed.height], [source.width, source.height]);
+            assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
+            let after = app.state.workspace.clone();
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace, baseline);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, after);
+        }
+    }
+
+    #[test]
+    fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            for icon in [false, true] {
+                let mut app = session();
+                app.set_platform(platform);
+                let panel = Panel::Brushes;
+                let group = app.state.workspace.layout.panel_group(panel).unwrap();
+                app.dispatch(UiAction::MeasurePanels {
+                    measurements: vec![PanelMeasurement {
+                        panel,
+                        tab_width: 120.,
+                        content_height: 1800.,
+                        scroll: None,
+                    }],
+                })
+                .unwrap();
+                if icon {
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                }
+                let resolved = app.layout(viewport);
+                let source = if icon {
+                    resolved
+                        .collapsed
+                        .iter()
+                        .flat_map(|c| &c.groups)
+                        .flat_map(|g| &g.icons)
+                        .find(|i| i.panel == panel)
+                        .unwrap()
+                        .bounds
+                } else {
+                    resolved
+                        .groups
+                        .iter()
+                        .find(|g| g.id == group)
+                        .unwrap()
+                        .bounds
+                };
+                let before = app.state.workspace.clone();
+                let drag = |app: &mut UiSession<_>, phase, position| {
+                    app.dispatch(UiAction::DragWorkspace {
+                        item: DockItem::Panel { panel },
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                };
+                drag(
+                    &mut app,
+                    ContactPhase::Down,
+                    [source.x + 18., source.y + 12.],
+                );
+                drag(&mut app, ContactPhase::Move, [600., 700.]);
+                let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
+                if icon {
+                    assert!(preview.height > source.height * 3.);
+                    assert!(preview.width > source.width * 3.);
+                } else {
+                    assert_eq!(
+                        [preview.width, preview.height],
+                        [source.width, source.height]
+                    );
+                }
+                let floating = &app.state.workspace.layout.floating[0];
+                assert_eq!(floating.height.is_some(), !icon);
+                drag(&mut app, ContactPhase::Cancel, [600., 700.]);
+                assert_eq!(app.state.workspace, before);
+            }
+        }
+    }
+
+    #[test]
     fn floating_gestures_update_live_preserve_grab_offset_and_coalesce_history() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
@@ -9423,6 +10045,17 @@ mod tests {
         .unwrap();
         assert!(!app.command(CommandId::ClearLayer).enabled);
         assert!(!app.command(CommandId::FillSelection).enabled);
+        for id in [CommandId::ClearLayer, CommandId::FillSelection] {
+            assert!(
+                !app.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == id)
+                    .unwrap()
+                    .enabled,
+                "locked-layer actions remain visibly unavailable"
+            );
+        }
         app.dispatch(UiAction::Layer {
             action: LayerAction::Lock {
                 id: mask_layer,
@@ -9500,7 +10133,7 @@ mod tests {
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
                 );
-                assert_eq!(app.workspace_menu().sections[1].iter().any(|i| matches!(
+                assert_eq!(app.workspace_menu().sections.iter().flatten().any(|i| matches!(
                         i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
                     )), available);
                 let result = app.dispatch(UiAction::Customize {
@@ -10169,8 +10802,7 @@ mod tests {
         let viewport = [1200., 900.];
         s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
             .unwrap();
-        let mut settings = s.state.settings.clone();
-        settings.total_zen = true;
+        let settings = s.state.settings.clone();
         s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
         s.dispatch(UiAction::Invoke {
             command: CommandId::ZenMode,
@@ -10917,6 +11549,7 @@ mod tests {
                                 panel: Panel::Brushes,
                                 tab_width: 120.,
                                 content_height: 200.,
+                                scroll: None,
                             });
                             before.layout.column_scroll.push((t.root, 12.));
                             t.session
@@ -11253,10 +11886,7 @@ mod tests {
                 .intersection(column.content)
                 .unwrap();
             assert_eq!(
-                drawer
-                    .placement(layout, viewport, &[500.], false)
-                    .unwrap()
-                    .anchor,
+                drawer.placement(layout, viewport, &[500.]).unwrap().anchor,
                 expected
             );
             // The former opening button switches back; the current one closes the drawer.
@@ -11374,7 +12004,7 @@ mod tests {
             .unwrap();
             let drawer = s.state.customization.column_drawers[0].clone();
             let bounds = drawer
-                .placement(&s.state.workspace.layout, viewport, &[450.], false)
+                .placement(&s.state.workspace.layout, viewport, &[450.])
                 .unwrap()
                 .bounds;
             let before = s.state.workspace.clone();
@@ -11623,7 +12253,7 @@ mod tests {
             })
             .unwrap();
             let bounds = s.state.customization.column_drawers[0]
-                .placement(&s.state.workspace.layout, viewport, &[450.], false)
+                .placement(&s.state.workspace.layout, viewport, &[450.])
                 .unwrap()
                 .bounds;
             s.dispatch(UiAction::MeasureColumnDrawers {
@@ -11761,7 +12391,6 @@ mod tests {
                         &s.state.workspace.layout,
                         viewport,
                         &[400., 450.],
-                        false,
                     )
                     .unwrap()
             };
@@ -12016,7 +12645,6 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
-            app.state.settings.total_zen = true;
             app.set_platform(platform);
             let panel = Panel::Toolbar;
             let item = DockItem::Panel { panel };
@@ -12128,7 +12756,6 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
-            app.state.settings.total_zen = true;
             app.set_platform(platform);
             app.dispatch(UiAction::MovePanel {
                 panel: Panel::Sizes,
@@ -12932,7 +13559,6 @@ mod tests {
     #[test]
     fn expanded_panel_dismissal_is_core_policy_and_never_paints() {
         let mut app = session();
-        app.state.settings.total_zen = true;
         invoke(&mut app, CommandId::ZenMode);
         let open = |app: &mut UiSession<Recorder>| {
             app.dispatch(UiAction::Customize {
@@ -13158,7 +13784,6 @@ mod tests {
                 let mut s = session();
                 s.set_platform(platform);
                 s.state.workspace.zen_mode = zen;
-                s.state.settings.total_zen = false;
                 let viewport = [1200., 900.];
                 let tiles = s
                     .state
@@ -13213,7 +13838,6 @@ mod tests {
                             &s.state.workspace.layout,
                             viewport,
                             &vec![400.; previous.columns.len()],
-                            zen,
                         )
                         .unwrap();
                     let next = ContentDrawer::for_tile(
@@ -13229,7 +13853,6 @@ mod tests {
                             &s.state.workspace.layout,
                             viewport,
                             &vec![400.; next.columns.len()],
-                            zen,
                         )
                         .unwrap();
                     let reply = chrome(
@@ -13302,9 +13925,60 @@ mod tests {
     }
 
     #[test]
+    fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let color = s
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| t.control == ToolbarControl::Color)
+                .unwrap()
+                .id;
+            for (position, canvas) in [
+                ([500., 15.], false),
+                ([1000., 850.], false),
+                ([1000., 850.], true),
+            ] {
+                s.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: color,
+                })
+                .unwrap();
+                assert!(s.state.customization.drawer.is_some());
+                assert!(
+                    !s.panel_view(Panel::Toolbar)
+                        .unwrap()
+                        .tiles
+                        .iter()
+                        .find(|t| t.id == color)
+                        .unwrap()
+                        .choice
+                        .selected
+                );
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Contact { position, canvas },
+                    ChromeFacts::default(),
+                );
+                assert!(s.state.customization.drawer.is_none());
+                assert_eq!(
+                    reply.handled, canvas,
+                    "Native clicks/drags must reach their target"
+                );
+                assert!(!reply.paint);
+            }
+        }
+    }
+
+    #[test]
     fn tool_drawer_selection_dismissal_and_configuration_are_core_policy() {
         let mut s = session();
-        s.state.settings.total_zen = true;
         s.set_platform(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
@@ -13340,7 +14014,7 @@ mod tests {
             .drawer
             .as_ref()
             .unwrap()
-            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0], false)
+            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0])
             .unwrap();
         let facts = ChromeFacts {
             content_drawer: Some(placement.bounds),
@@ -13370,7 +14044,7 @@ mod tests {
             },
         )
         .unwrap()
-        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0], false)
+        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0])
         .unwrap();
         assert!(
             !chrome(
@@ -13883,7 +14557,7 @@ mod tests {
                     PreferenceValue::Text(value.into()),
                 );
                 assert!(s.preferences().unwrap().error.is_some());
-                assert_eq!(s.state.settings.prediction_ms, 8.0);
+                assert_eq!(s.state.settings.prediction_ms, 16.0);
                 assert!(
                     s.state.requests.is_empty(),
                     "invalid edits never reach storage"
@@ -14308,8 +14982,33 @@ mod tests {
             assert_eq!(rows[index + 1].id, PreferenceId::PlatformPrediction);
             assert_eq!(rows[index + 1].title, title);
             assert_eq!(rows[index + 1].enabled, supported);
-            for id in [PreferenceId::PredictionHorizon, PreferenceId::TipLock] {
-                let row = rows.iter().find(|r| r.id == id).unwrap();
+            assert!(!rows.iter().any(|r| r.id == PreferenceId::TipLock));
+            // Legacy settings still load, but neither old actions nor their
+            // stored value can override automatic endpoint tracking.
+            for action in [
+                PreferenceAction::Edit {
+                    id: PreferenceId::TipLock,
+                    value: PreferenceValue::Number(0.0),
+                },
+                PreferenceAction::Reset {
+                    id: PreferenceId::TipLock,
+                },
+            ] {
+                preference(&mut s, action);
+                assert!(s.preferences().unwrap().error.is_some());
+                assert_eq!(s.state.settings, settings);
+            }
+            {
+                let id = PreferenceId::PredictionHorizon;
+                let row = &rows[index + 2];
+                assert_eq!(row.id, id);
+                let PreferenceKind::Number { control, value } = &row.kind else {
+                    panic!("Prediction amount must be numeric");
+                };
+                assert_eq!(control.kind, NumericKind::Slider);
+                assert_eq!(control.unit, "ms");
+                assert_eq!((control.min, control.max, control.step), (0.0, 64.0, 1.0));
+                assert_eq!(*value, 23.0);
                 assert_eq!(row.enabled, !supported);
                 assert_eq!(row.reset.as_ref().unwrap().enabled, !supported);
                 if supported {
@@ -14335,7 +15034,7 @@ mod tests {
                 config.prediction_horizon_micros,
                 if supported { 8_000 } else { 23_000 }
             );
-            assert_eq!(config.tip_lock, if supported { 1.0 } else { 0.3 });
+            assert_eq!(config.tip_lock, 1.0);
             if supported {
                 edit_preference(
                     &mut s,
@@ -14348,7 +15047,7 @@ mod tests {
                     .feedback_config_for(s.platform_prediction_available());
                 assert!(!config.use_platform_prediction);
                 assert_eq!(config.prediction_horizon_micros, 23_000);
-                assert_eq!(config.tip_lock, 0.3);
+                assert_eq!(config.tip_lock, 1.0);
                 edit_preference(
                     &mut s,
                     PreferenceId::PredictionHorizon,
@@ -15024,43 +15723,137 @@ mod tests {
     }
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {
-        let mut app = session();
-        app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
-        assert!(!app.command(CommandId::AddLayer).enabled);
-        assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
-        assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
-        app.frame(10_000_000, 18_000_000).unwrap();
-        app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
-        let change = app.frame(20_000_000, 28_000_000).unwrap();
-        assert_eq!(change.regions, 0);
-        assert!(change.canvas_wake);
-        app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
-        let change = app.frame(30_000_000, 38_000_000).unwrap();
-        assert_ne!(change.regions & regions::DOCUMENT, 0);
-        assert!(app.command(CommandId::Undo).enabled);
-        let expected = app
-            .state
-            .camera
-            .input_transform()
-            .map(Point { x: 225.0, y: 300.0 });
-        let first = app.engine.backend().recorded_dabs.first().unwrap();
-        assert!((first.center.x - expected.x).abs() < 0.001);
-        assert_eq!(app.engine.metrics().committed_strokes, 1);
-        assert!(app.engine.backend().dabs > 0);
-        invoke(&mut app, CommandId::Undo);
-        assert!(
-            app.engine
-                .document()
-                .target_raster(app.engine.document().active_target())
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            let mut app = session();
+            app.set_platform(platform);
+            app.state
+                .workspace
+                .layout
+                .insert_tools(
+                    Panel::Toolbar,
+                    None,
+                    &[ToolbarControl::Command {
+                        command: CommandId::Hand,
+                    }],
+                )
+                .unwrap();
+            let commands = app.state.commands.clone();
+            let tiles = serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap();
+            assert!(
+                !commands
+                    .iter()
+                    .find(|c| c.id == CommandId::Undo)
+                    .unwrap()
+                    .enabled
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .find(|c| c.id == CommandId::FillSelection)
+                    .unwrap()
+                    .enabled
+            );
+            app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
+            assert!(!app.command(CommandId::AddLayer).enabled);
+            assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
+            assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
+            let change = app.frame(10_000_000, 18_000_000).unwrap();
+            assert_eq!(
+                change.regions & regions::COMMANDS,
+                0,
+                "{platform:?}: pen-down must not restyle commands"
+            );
+            assert_eq!(app.state.commands, commands);
+            assert_eq!(
+                serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap(),
+                tiles
+            );
+            let hand = app
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
                 .unwrap()
-                .is_empty()
-        );
+                .tiles()
+                .iter()
+                .find(|t| {
+                    t.control
+                        == ToolbarControl::Command {
+                            command: CommandId::Hand,
+                        }
+                })
+                .unwrap()
+                .id;
+            assert!(
+                app.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: hand
+                })
+                .is_err()
+            );
+            assert!(
+                app.dispatch(UiAction::Invoke {
+                    command: CommandId::Undo
+                })
+                .is_err()
+            );
+            assert!(
+                app.engine.has_active_stroke(),
+                "blocked actions preserve the stroke"
+            );
+            app.pen(event(&app, 2, PenPhase::Move, 0.8)).unwrap();
+            let change = app.frame(20_000_000, 28_000_000).unwrap();
+            assert_eq!(change.regions, 0);
+            assert!(change.canvas_wake);
+            assert_eq!(app.state.commands, commands);
+            app.pen(event(&app, 3, PenPhase::Up, 0.5)).unwrap();
+            let change = app.frame(30_000_000, 38_000_000).unwrap();
+            assert_ne!(change.regions & regions::DOCUMENT, 0);
+            assert!(app.command(CommandId::Undo).enabled);
+            for command in &app.state.commands {
+                assert_eq!(
+                    *command,
+                    app.command(command.id),
+                    "availability refreshes after release"
+                );
+            }
+            let expected = app
+                .state
+                .camera
+                .input_transform()
+                .map(Point { x: 225.0, y: 300.0 });
+            let first = app.engine.backend().recorded_dabs.first().unwrap();
+            assert!((first.center.x - expected.x).abs() < 0.001);
+            assert_eq!(app.engine.metrics().committed_strokes, 1);
+            assert!(app.engine.backend().dabs > 0);
+            invoke(&mut app, CommandId::Undo);
+            assert!(
+                app.engine
+                    .document()
+                    .target_raster(app.engine.document().active_target())
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
     #[test]
     fn cancel_removes_provisional_stroke_and_binding_actions_roundtrip() {
         let mut app = session();
+        invoke(&mut app, CommandId::AddLayer);
+        invoke(&mut app, CommandId::Undo);
+        assert!(app.command(CommandId::Redo).enabled);
+        let commands = app.state.commands.clone();
         app.pen(event(&app, 1, PenPhase::Down, 0.5)).unwrap();
         app.frame(10_000_000, 18_000_000).unwrap();
+        assert_eq!(app.state.commands, commands);
         app.pen(event(&app, 2, PenPhase::Cancel, 0.0)).unwrap();
         app.frame(20_000_000, 28_000_000).unwrap();
         assert!(
@@ -15071,11 +15864,24 @@ mod tests {
                 .is_empty()
         );
         assert!(!app.command(CommandId::Undo).enabled);
+        assert_eq!(
+            app.state.commands, commands,
+            "cancellation restores live availability"
+        );
         let action: UiAction = serde_json::from_str(r#"{"type":"move_panel","panel":"sizes","target":{"kind":"edge","edge":"right","outer":false},"viewport":[1200,900]}"#).unwrap();
         let value = serde_json::to_string(&action).unwrap();
         app.dispatch(serde_json::from_str(&value).unwrap()).unwrap();
         assert_eq!(app.state.workspace.layout.bands.len(), 4);
         assert!(serde_json::to_value(&app.state).unwrap()["commands"].is_array());
     }
-    include!("column_group_tests.rs");
+    mod gtk_column_groups {
+        use super::*;
+        const COLUMN_PLATFORM: Platform = Platform::Gtk;
+        include!("column_group_tests.rs");
+    }
+    mod windows_column_groups {
+        use super::*;
+        const COLUMN_PLATFORM: Platform = Platform::Windows;
+        include!("column_group_tests.rs");
+    }
 }

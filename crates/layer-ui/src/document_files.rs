@@ -189,22 +189,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
     }
 
-    /// A surface replacement retains the session, including its save checkpoint
-    /// and history. Prepare sources before adopting the replacement renderer.
-    pub fn replace_renderer(&mut self, mut renderer: R) -> Result<R, String> {
-        for (id, asset) in &self.files.assets {
-            renderer.prepare_owned_asset(id, asset).map_err(error)?;
-        }
-        self.eyedropper.cancel();
-        self.region_tools.cancel();
-        self.navigator_preview = Default::default();
-        self.input_pending = false;
-        let old = self.engine.replace_backend(renderer);
-        self.refresh_file_state();
-        self.sync_renderer_telemetry();
-        Ok(old)
-    }
-
     pub(super) fn refresh_file_state(&mut self) {
         self.state.document_file.revision = self.engine.document().revision;
         self.state.document_file.modified = self.files.recovered

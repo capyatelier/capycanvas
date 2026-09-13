@@ -58,9 +58,9 @@
     {
       "name": "Layer operations",
       "commands": ["clear_layer", "add_layer", "delete_layer", "raise_layer", "lower_layer"],
-      "checks": ["native/src/tests.rs"],
-      "ios": "partial: hierarchy/target/mask/menu policy oracles; complete native layer workflows remain",
-      "mac": "partial: hierarchy/target/mask/menu policy oracles; complete native layer workflows remain"
+      "checks": ["native/src/tests.rs", "Shared/Tests/LayerActionChecks.swift", "iOS/Tests/EditorLaunchTests.swift", "tests/layer-row-input.swift", "tests/layer-row-lifecycle.swift"],
+      "ios": "partial: mask/content actions, touch scrolling/grip drop and Undo/Redo; physical layer continuation and broader native workflows remain",
+      "mac": "partial: native pen/mouse pickup, scrolling, hierarchy and source/remount cancellation with Undo/Redo; complete native layer workflows remain"
     },
     {
       "name": "Pixel selection actions",

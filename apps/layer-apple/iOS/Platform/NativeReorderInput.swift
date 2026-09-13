@@ -49,14 +49,12 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         attached?.addGestureRecognizer(pan); attached?.addGestureRecognizer(press); attached?.addGestureRecognizer(secondary)
         updateViewport()
     }
-    override func layoutSubviews() { super.layoutSubviews(); updateViewport() }
+    override func layoutSubviews() { super.layoutSubviews(); validate() }
     func detach() {
         cancel(); attached?.removeGestureRecognizer(pan); attached?.removeGestureRecognizer(press)
         attached?.removeGestureRecognizer(secondary); attached = nil
     }
-    func validate() {
-        updateViewport()
-    }
+    func validate() { updateViewport() }
     private func cancel() {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
@@ -77,8 +75,9 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         }
         return nil
     }
-    @discardableResult private func move(_ point: CGPoint, force: Bool = false) -> Bool {
+    @discardableResult func moveReorder(_ point: CGPoint, force: Bool = false) -> Bool {
         guard let model else { return false }
+        updateViewport()
         if !force && model.contact.dragging && point == lastPoint { return true }
         lastPoint = point
         return model.contact.move(to: point)
@@ -88,6 +87,8 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive incoming: UITouch) -> Bool {
         guard let model, incoming.type == .direct || incoming.type == .pencil || incoming.type == .indirectPointer else { return false }
+        // Window-root recognition must not pick rows behind another panel.
+        if let scroll, incoming.view?.isDescendant(of: scroll) != true { return false }
         if gestureRecognizer === secondary {
             updateViewport()
             let point = incoming.location(in: self)
@@ -105,7 +106,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         return gestureRecognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
     }
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
-        recognizer === secondary ? event.buttonMask.contains(.secondary) : !event.buttonMask.contains(.secondary)
+        return recognizer === secondary ? event.buttonMask.contains(.secondary) : !event.buttonMask.contains(.secondary)
     }
     override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
         if recognizer === secondary { return model?.enabled == true }
@@ -140,7 +141,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
-            if move(recognizer.location(in: self)) && link == nil {
+            if moveReorder(recognizer.location(in: self)) && link == nil {
                 let link = CADisplayLink(target: self, selector: #selector(track)); link.add(to: .main, forMode: .common); self.link = link
             }
         case .ended: finish()
@@ -154,22 +155,30 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     }
     @objc private func track() {
         guard let model, model.contact.dragging else { link?.invalidate(); link = nil; return }
+        trackReorder { pan.location(in: self) }
+    }
+    /// Grips and held row bodies use the same scrolling path.
+    /// Read the contact again after scrolling: its content coordinate has moved.
+    @discardableResult func trackReorder(location: () -> CGPoint) -> Bool {
         updateViewport()
-        let point = pan.location(in: self)
         var scrolled = false
-        if let scroll = scroll ?? scrollAt(point) {
-            let viewport = convert(scroll.bounds, from: scroll)
-            guard viewport.contains(point) else { _ = move(point); return }
-            let delta: CGFloat = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
-            if delta != 0 {
-                let top = -scroll.adjustedContentInset.top
-                let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-                let previous = scroll.contentOffset
-                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: max(top, min(bottom, scroll.contentOffset.y + delta))), animated: false)
-                scrolled = previous != scroll.contentOffset
-                updateViewport()
-            }
+        if let (scroll, next) = reorderScrollTarget(at: location()) {
+            scroll.setContentOffset(next, animated: false)
+            scrolled = true
         }
-        _ = move(pan.location(in: self), force: scrolled)
+        _ = moveReorder(location(), force: scrolled)
+        return scrolled
+    }
+    func needsReorderScrolling(at point: CGPoint) -> Bool { reorderScrollTarget(at: point) != nil }
+    private func reorderScrollTarget(at point: CGPoint) -> (UIScrollView, CGPoint)? {
+        guard let scroll = scroll ?? scrollAt(point) else { return nil }
+        let viewport = convert(scroll.bounds, from: scroll)
+        guard viewport.contains(point) else { return nil }
+        let delta: CGFloat = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
+        guard delta != 0 else { return nil }
+        let top = -scroll.adjustedContentInset.top
+        let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        let next = CGPoint(x: scroll.contentOffset.x, y: max(top, min(bottom, scroll.contentOffset.y + delta)))
+        return next == scroll.contentOffset ? nil : (scroll, next)
     }
 }

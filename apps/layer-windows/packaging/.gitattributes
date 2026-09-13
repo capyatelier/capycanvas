@@ -1,0 +1,2 @@
+# Preserve the exact upstream notice bytes across Windows checkouts.
+notices/*.txt text eol=lf

@@ -201,10 +201,13 @@ Ordinary symbolic icons remain one image. Mixed paints retain drawing order and
 composite as a group before disabled opacity. The generator rejects unsupported
 mixed groups/effects rather than silently changing their compositing semantics.
 
-The direct fixture captures all 96 compiled icons at 16/24/32 points, two explicit
+The direct fixture captures all canonical compiled icons at 16/24/32 points, two explicit
 foreground/background palettes, and normal/accent/disabled states: 18 complete
-grids with 1,728 glyphs per host. These are shared AppKit component captures;
-building the iPad target does not turn them into UIKit pixel evidence.
+grids (157 icons and 2,826 glyphs per host in the current bank). It checks that
+bare model keys and SVG filename stems resolve to the same asset, including
+hyphenated names such as `add-layer`. The Mac fixture uses AppKit. A separate
+UIKit simulator runner below renders the same manifest with `SharedIcon` in a
+real `UIHostingController`; neither fixture establishes physical-device pixels.
 
 ```sh
 python3 apps/layer-apple/tests/test_icon_assets.py
@@ -214,7 +217,7 @@ CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/
 CAPY_ICON_SOURCES="$PWD/apps/layer-web/icons" \
 CAPY_ICON_CAPTURES="$PWD/artifacts/apple-icons" \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/icon-capture.swift
-node tools/visual/chrome-capture.mjs 576 384 2 artifacts/apple-icons light icons \
+node tools/visual/chrome-capture.mjs 576 672 2 artifacts/apple-icons light icons \
   artifacts/apple-icons/fixtures.json
 artifacts/ui/parity/python-env/bin/python tools/visual/check_icon_paints.py \
   artifacts/apple-icons --output artifacts/apple-icons/paint-check.json
@@ -223,12 +226,29 @@ artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
   --output artifacts/apple-icons/diff-light-32-normal
 ```
 
-Repeat complete comparison for every manifest name. All 216 focused flat-paint
-samples pass with maximum channel error one, including fixed fills, foreground
-outlines, overlapping swatches and disabled blending. Full comparisons retain
-15,925,248 pixels: 527,943 differ exactly, per-grid fractions are 1.467–11.404%,
-weighted mean channel error is 0.226276 and maximum is 107. Exact parity fails;
-the flat-paint check does not waive edge rasterization differences.
+For UIKit, build the iPad target for Simulator and boot one iPad simulator.
+The runner accepts only a simulator asset bundle, creates a disposable capture
+app, copies out its own grids and uninstalls it. It uses no XCTest or editor
+storage. Select `--simulator UUID` if several iPads are booted; `--output` must
+be a new local directory.
+
+```sh
+python3 apps/layer-apple/scripts/capture-icons-ios.py \
+  --assets-app PATH_TO_BUILT_SIMULATOR_APP \
+  --fixtures artifacts/apple-icons/fixtures.json --output artifacts/apple-icons-uikit
+node tools/visual/chrome-capture.mjs 576 672 2 artifacts/apple-icons-uikit light icons \
+  artifacts/apple-icons-uikit/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/check_icon_paints.py \
+  artifacts/apple-icons-uikit --output artifacts/apple-icons-uikit/paint-check.json
+```
+
+Repeat complete comparison for every manifest name on each host. The current
+157-icon matrix retains 27,869,184 pixels per host. AppKit's 216 flat-paint
+samples pass with maximum channel error one; UIKit's 216 samples match exactly.
+Full AppKit comparisons have mean channel error 0.145/255 and exact differing
+fractions of 0.97–12.81%. UIKit has mean error 0.133/255 and fractions of
+0.92–2.41%. Both have maximum channel error 107/255 and fail exact pixel parity;
+flat-paint checks do not waive the remaining rasterization differences.
 
 The full native editor fixture now waits for visible layer thumbnails using
 opt-in Debug metadata (`CAPY_CAPTURE_PROBE`); an early GPU/Navigator readiness
@@ -239,78 +259,111 @@ Chrome comparison still differs at 303,396 of 5,680,128 pixels (5.341359%).
 
 ## Complete Color panels
 
-The `color-panel` fixture renders the production shared Apple panel in invisible
-AppKit hosts and the production browser panel in Chrome. Rust supplies color
-models, geometry and formatted numeric values. It covers both Apple presets,
-light/dark themes, HSV/HLS, all three selected paint slots and 160/226-point
-widths: 48 complete panels. The native fixture requires a built Mac asset bundle.
+The `color-panel` fixture renders the production shared Apple panel and the
+production browser controls. Rust supplies the model, layout, guide stops,
+field pixels and formatted readout. It covers both Apple presets, light/dark,
+Okhsv circle / HSV square / HLS triangle, shape/RGB readouts, three selected
+paint slots and 128/160/226-point widths: 216 complete panels per host.
+The AppKit entry point needs a built Mac asset bundle and uses temporary native
+windows. The same source also has a UIKit application entry point for an
+independently signed, isolated component-capture app. Neither entry point reads
+artist storage. Captures wait for stable pixels and require all measured bounds.
 
 ```sh
-CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/Release/CapyCanvas-Mac.app" \
-CAPY_COLOR_CAPTURES="$PWD/artifacts/apple-color-panel/final" \
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/CompactColorMac/Build/Products/Debug/CapyCanvas-Mac.app" \
+CAPY_COLOR_CAPTURES="$PWD/artifacts/apple-color-panel" \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-panel-capture.swift
-node tools/visual/chrome-capture.mjs 226 600 2 artifacts/apple-color-panel/final light color-panel \
-  artifacts/apple-color-panel/final/fixtures.json
+node tools/visual/chrome-capture.mjs 226 226 2 artifacts/apple-color-panel light color-panel \
+  artifacts/apple-color-panel/fixtures.json
 artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
-  artifacts/apple-color-panel/final/web-0-light-hsv-foreground-226.png \
-  artifacts/apple-color-panel/final/native-0-light-hsv-foreground-226.png \
-  --output artifacts/apple-color-panel/final/diff-0-light-hsv-foreground-226
+  artifacts/apple-color-panel/web-0-light-circle-shape-foreground-226.png \
+  artifacts/apple-color-panel/native-0-light-circle-shape-foreground-226.png \
+  --output artifacts/apple-color-panel/diff-0-light-circle-shape-foreground-226
 ```
 
-The manifest controls each browser viewport, scale and theme. Repeat the pixel
-comparison for every manifest name. Each geometry report retains 31 rectangles,
-including the paint interiors and all three numeric controls. All 1,488 measured
-rectangles are within one logical point. Measurement readers are disabled in
-ordinary editors; the fixture creates no visible native windows or drawing data.
+Schema 2 controls every browser viewport, scale, theme and state. The browser
+fixture uses the real compact controls; it has no substitute numeric widgets.
+Each case measures 12 rectangles, including all paint interiors and shape buttons.
+Native measurements are disabled in ordinary editors. Repeat the full-image
+comparison for every manifest name and retain differences without masks.
 
-Each native case also writes `oracle-NAME.json`, containing the actual Rust
-paint color, remembered hue and wheel bounds. Sample either host against the
-same independent picker oracle; this checks interior color correctness separately
-from the complete pixel comparison:
+The same browser renderer accepts Windows' schema-2 grid of six `items`, generated
+by `cargo run -p layer-ui --example compact_color_fixture -- OUTPUT SCALE` and
+measured by its native Color fixture. Grid frame names use `ITEM/color-CONTROL`;
+the native manifest supplies `frames`, the catalog and optional hover/focus state.
+Field files resolve beside the input manifest, independently of the screenshot
+output directory. The Apple adapter retains its required 216/18-case matrices.
+
+Each case also writes `oracle-NAME.json` with the accepted Rust paint, remembered
+hue, shape, wheel bounds and marker radius. Check both native and browser images
+against the same independent picking oracle:
 
 ```sh
 cargo build -p layer-ui --example color_wheel_reference
 artifacts/ui/parity/python-env/bin/python tools/visual/check_color_wheel.py \
-  artifacts/apple-color-panel/final/native-0-light-hls-foreground-160.png \
-  artifacts/apple-color-panel/final/oracle-0-light-hls-foreground-160.json \
-  --output artifacts/apple-color-panel/final/native-oracle-0-light-hls-foreground-160.json
+  artifacts/apple-color-panel/native-0-light-circle-shape-foreground-160.png \
+  artifacts/apple-color-panel/oracle-0-light-circle-shape-foreground-160.json \
+  --output artifacts/apple-color-panel/native-oracle-0-light-circle-shape-foreground-160.json
 ```
 
-Run this for all manifest names and the corresponding `web-NAME.png` images.
-Keep failures from both capture paths; a bitmap result alone cannot validate the
-live UIKit/AppKit renderer.
+Geometry and interior color checks do not establish exact PNG identity. The
+full-image reports retain native text, antialiasing and compositing differences.
+Apple visual acceptance uses perceptual parity at normal viewing size: exact
+identity is unnecessary for imperceptible differences. Fix visible mismatches
+and simple refinements without adding complexity solely to reduce pixel error.
+Component captures also do not exercise native touch/Pencil delivery, a full
+editor or sustained drawing performance.
 
-Full exact pixel comparison still fails, with 9.777–20.803% differing pixels
-across these AppKit pairs and mean channel error 1.617740 over all 22,233,600 pixels.
-Text, edge and remaining color differences remain unmasked. This establishes component
-geometry, not physical UIKit/Mac rendering or full-editor acceptance.
+The Mac `tests/color-panel-interactions.swift` fixture uses the same asset and
+output environment variables. It captures 18 resting, hover and held-press states
+across both themes, and verifies that dragging a pressed button outside before
+release leaves paint unchanged. Its pointer movement stays inside its owned
+window's content; clicks are posted only to that window. Pass its manifest to the
+same browser command above to compare the actual Web hover/active states.
+`interaction_states: true` requires exactly 18 cases; the resting matrix still
+requires 216. This fixture does not establish keyboard focus or iPad input.
 
-The separate `testColorControls` workflow uses the real workspace library and
-scrolls inside the panel to reach the full numeric controls. Opt-in debug-only
-`CAPY_COLOR_PROBE` metadata records accepted Rust hue/RGBA for the existing
-wheel-color oracle; hard-coded colors after a rounded touch are not an accurate
-reference. Release builds ignore that variable. Native input, sampled color
-correctness and complete pixel parity remain distinct checks.
+The separate `testColorControls` workflow exercises native contacts and button
+actions. Debug-only `CAPY_COLOR_PROBE` exposes the accepted Rust state on the
+native wheel's accessibility value. Release builds keep the human color
+readout. The workflow launches its own fresh namespace and initial actions.
+Use the [installed-device test configuration](../../apps/layer-apple/README.md#validation)
+for physical iPad runs; no separate prelaunch or attach mode is needed.
 
-The current simulator HSV capture passes 853 samples at the existing two-level
-channel tolerance. HLS passes 680 samples with hue-ring error at most two and
-exact agreement for all 310 field samples. Both sets of 48 bitmap captures pass
-27,160 samples per host. Complete image differences above remain separate.
+Apple fields use physical-pixel RGBA8 samples from shared Rust. A field image
+changes only with hue, shape or size; the separate guide cache changes only
+with shape or size. The guide interpolates the same adaptive sRGB stops as Web,
+avoiding a full perceptual conversion per pixel during resizing. Fractional
+native font advances and unquantized CoreText glyph positions keep the curved
+readout's digit cells aligned. Ordinary native font smoothing stays enabled;
+disabling it regresses some readouts despite correct advances.
 
-The Apple renderer uses Canvas gradients for HSV/the ring and a shared Rust
-RGBA8 field for HLS. One cached image is regenerated only on hue or physical-size
-changes. Check the raster against the picker, validate the C boundary/cache
-lifetime, and measure generation cost without GUI automation:
+The two rotated shape icons use `drawingGroup()` on macOS, improving all 216
+complete-panel comparisons and the 18 interaction captures. The same modifier
+slightly regresses UIKit, so its drawing path is retained. Repeated physical
+UIKit captures verify the restored frames and pixels. Keep these host-specific
+results separate from the unchanged interior-color tolerance and the remaining
+full-image text, edge and compositing differences.
+Wheel painting uses panel coordinates: a fractional child Canvas allocation can
+round before drawing, even when the input view's measured bounds are correct.
+The painted destination follows Web Canvas's rounded logical edges, and native
+field/guide rasters use that destination's physical pixel size. Keep both the
+full-image comparison and picking oracle; control-frame checks alone cannot
+detect this rendering drift. Swatch paint is above its inset selection border.
 
 ```sh
-cargo test -p layer-ui hls_raster
+cargo test -p layer-ui color::
+cargo test -p layer-apple compact_color
 cargo test -p layer-apple hls_raster
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-field-cache.swift
-cargo run --release -p layer-ui --example color_field_benchmark
+cargo build --release -p layer-ui --example color_field_benchmark
+# Run after compilers, UI automation and GPU profilers have finished.
+target/release/examples/color_field_benchmark
 ```
 
-The benchmark excludes host allocation, upload and presentation. It measures
-CPU field generation, not sustained editor performance or input latency.
+The benchmark covers all three fields and their guides at the matrix's physical
+sizes. It excludes host allocation, upload and presentation, and measures CPU
+cost rather than editor frame rate or input latency.
 
 ## Complete header components
 
@@ -341,6 +394,13 @@ the actual menu, title, workspace, clock, battery, settings and Zen components.
 The Mac reference explicitly reserves window-control space and removes in-app
 menus. The browser fullscreen button is excluded to reflect Apple's different
 capabilities; the iPad fullscreen action remains an open feature gate.
+
+Chrome reports the resolved platform font and each workspace label's computed
+CSS font and canvas advance alongside its measured control rectangle. Use those
+records to distinguish font-family/weight differences from layout allocation.
+Apple's shared header measures and draws medium labels at the CSS weight of 500
+through the public font variation axis where supported. Font/width caches are
+bounded; the native font remains the fallback when that axis is unavailable.
 
 The deterministic background isolates header compositing, without Metal or
 UIKit rasterization. This is component evidence, not whole-editor or physical
@@ -591,13 +651,13 @@ pointer/keyboard interaction, full-editor parity or hardware performance.
 The tool-action fixture compares the production SwiftUI `ToolActionControl` and
 browser `toolSettings` factory. It contains all six shipped actions in four
 enabled/selected combinations, at 120- and 226-point column widths. Generate
-the action list from a complete `apple-inventory --gpu` result; the generator
-requires matching action labels and checkability on both Apple presets. Theme
+the action list from a complete `inventory --gpu` result; the generator
+requires matching action labels, icons and checkability on both Apple presets. Theme
 colors and font size come from the shared `toolbar-fixture` example.
 
 ```sh
 mkdir -p artifacts/ui/tool-actions
-cargo run -p layer-host --example apple-inventory -- --gpu \
+cargo run -p layer-host --example inventory -- --gpu \
   > artifacts/ui/tool-actions/inventory.json
 cargo run -p layer-host --example toolbar-fixture -- mac light \
   > artifacts/ui/tool-actions/theme-light.json
@@ -621,24 +681,25 @@ Repeat for `dark`, and for column width 226 with total capture width 940.
 Height is 420 and scale is 2 in every case. Native and browser sidecar JSON
 files expose each control's measured `frames` keyed by column/action index;
 compare their `x`, `y`, `width` and `height` without rounding. The browser also
-asserts labels, selected/disabled states, full column width and disabled opacity.
+asserts labels, selected/disabled states, full column width, disabled opacity,
+canonical icon identity, 16-point glyph bounds and the six-point icon/text gap.
 The native host never displays a window and closes its surface after capture.
 It uses an explicitly active control environment without changing OS settings.
 
-All 96 measured native bounds match Chrome exactly. Greedy wrapping retains
-the browser's line breaks, including “Show rulers” on one line and “Snap to /
-rulers” on two lines in the narrow case. Full raw sRGB comparisons still fail
+All 96 measured native bounds match Chrome exactly with the published icons.
+The controls retain the browser's leading icon, intrinsic text width and greedy
+wrapping. At 120 points all six actions occupy two lines; at 226 they occupy one.
+Full raw sRGB comparisons still fail
 at zero tolerance; no pixels are cropped, masked or excluded:
 
 | Theme / column width | Mean absolute channel error | Exact differing pixels | Maximum channel error |
 | --- | ---: | ---: | ---: |
-| Light / 120 | 0.947 | 12.810% | 152 |
-| Light / 226 | 0.365 | 8.202% | 106 |
-| Dark / 120 | 0.994 | 13.028% | 173 |
-| Dark / 226 | 0.409 | 8.349% | 128 |
+| Light / 120 | 0.812 | 14.460% | 191 |
+| Light / 226 | 0.408 | 8.461% | 148 |
+| Dark / 120 | 0.884 | 14.701% | 180 |
+| Dark / 226 | 0.446 | 8.607% | 159 |
 
-Before the control change, the corresponding mean errors were 13.581, 7.679,
-13.599 and 7.571. Residual glyph, edge and fill differences remain visible in
+Residual glyph, edge and fill differences remain visible in
 the full comparison reports; this is not a full pixel acceptance pass. These
 AppKit component captures do not establish native UIKit appearance, activation,
 accessibility interaction, complete editor parity or hardware performance.

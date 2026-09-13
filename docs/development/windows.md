@@ -34,6 +34,108 @@ and C++ parts. Packages go into ignored `artifacts/windows/packages`; use
 The Windows App SDK runtime is copied beside the executable. No UWP application
 package or generated application XAML is needed for this development build.
 
+## Portable package
+
+Build an unsigned Windows 11 x64 ZIP from a committed checkout:
+
+~~~powershell
+./apps/layer-windows/scripts/package.ps1
+~~~
+
+This runs the Release Rust/WinUI build into a fresh output directory, collects
+the self-contained Windows App SDK and app-local Visual C++ runtime, and adds
+project, dependency and runtime notices. The pinned Cargo and NuGet dependencies
+are recorded with the compiler/SDK versions and source commit. Every payload file
+has a size and SHA-256 entry in package-manifest.json. Packages and build logs
+stay under ignored artifacts/windows/distribution.
+
+Use -SkipRestore when the pinned NuGet packages are already available. Uncommitted
+changes require -AllowDirty, which marks both the filename and manifest as a
+development package. A clean build fails if source changes during packaging.
+The packager assembles the same payload twice with sorted paths and fixed ZIP
+timestamps, requires identical hashes, and writes a .sha256 sidecar. This verifies
+deterministic archive assembly; it does not establish identical compilation
+across machines or toolchain installations.
+
+Extract the complete archive and launch CapyCanvas.exe. To check an archive on an
+unlocked Windows desktop:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-package.ps1 -Archive <path-to-zip>
+~~~
+
+The fixture verifies the complete file inventory, extracts to a fresh path
+containing spaces, and launches with an unrelated working directory and isolated
+preferences. It checks packaged filter loading, app-local runtime origins,
+drawing/Undo/Redo, pan, resize and clean exit. A failed live app is retained for
+inspection. Captures and diagnostics stay outside the payload.
+
+Deployment follows Microsoft's
+[self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
+and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
+Clean-machine installation, distribution signing, full visual and physical-input
+acceptance, device recovery and sustained painting performance remain separate
+acceptance work.
+
+## MSIX package
+
+Convert an existing portable build into an unsigned MSIX, using its result.json:
+
+~~~powershell
+./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json> -Version 1.0.0.0
+./apps/layer-windows/scripts/test-msix.ps1 -ResultFile <msix-result.json>
+~~~
+
+Run from an STA PowerShell session on Windows. Both Windows PowerShell 5.1 and
+PowerShell 7 are supported. The packager verifies the portable inventory before
+copying it, retains the app-local runtimes and notices, and generates package
+logos from the shared symbolic brand asset. The application runs as a
+`packagedClassicApp` at `mediumIL`, with the `runFullTrust` capability.
+Output stays under ignored artifacts/windows/msix.
+
+The manifest records the application source commit separately from the packager
+source commit, along with hashes of the packaging scripts and brand asset.
+Uncommitted sources require -AllowDirty and mark the result and filename as a
+development package. The four-part package version requires a nonzero major
+component and components no greater than 65535.
+
+MakeAppx performs its normal semantic validation. It writes wall-clock ZIP
+timestamps even when source timestamps are fixed, so normalize-msix.ps1 checks
+the ZIP32/ZIP64 headers and replaces only their date/time fields before signing.
+Compressed blocks, file contents and block maps are preserved. It refuses signed
+packages and validates all headers before changing any bytes. Two assemblies
+must produce the same SHA-256. This establishes repeatable archive assembly for
+identical inputs, rather than bit-identical compiler output across machines.
+
+The test verifies the complete inventory, URI-encoded license paths, extracted
+hashes using MakeAppx, activation metadata, repeat logo generation and
+normalization idempotence. Independent ZIP32 fixtures check content preservation
+and refusal to modify a signed archive. Invalid payload hashes, duplicate and
+escaping paths, undeclared files, versions and identity lengths are rejected.
+These checks do not establish installed application behavior.
+
+For local Windows 11 installation testing, create a separate test identity:
+
+~~~powershell
+./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json> -UnsignedTestIdentity
+~~~
+
+This adds .Test to the identity and Microsoft's unsigned-test publisher OID.
+[Microsoft requires administrator privilege for unsigned packages containing executable activations](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package).
+From Administrator PowerShell, install the exact reviewed test artifact with
+`Add-AppxPackage -Path <test.msix> -AllowUnsigned`. Check for an existing test
+installation before replacing it, and remove the test package after acceptance.
+The test identity is for local testing, not distribution.
+
+The standard output uses identity CapyAtelier.CapyCanvas and publisher
+CN=Capy Atelier. Pass -Publisher to match the distribution certificate's exact
+subject. It must be
+[signed before distribution](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview);
+never normalize the archive after signing. Installed identity, launch, update,
+uninstall, clean-machine behavior and distribution signing remain acceptance
+gates. The first ordinary-user install attempt was rejected by Windows because
+the unsigned package contains an executable.
+
 ## How the host works
 
 The native shell collects pointer history and dispatches shared commands. A render
@@ -136,12 +238,41 @@ and inspect stderr before relaunching. Opt-in `ui-state-<pid>-<window>.json`,
 directory. Check snapshot `process_id`, `window_id` and freshness. The per-window
 JSON files use atomic replacement; compatibility files `ui-state.json` and
 `camera-state.json` can be read mid-write. Read relevant fields from one snapshot
-per assertion rather than dumping whole models or mixing revisions. A timeout does not prove
+per assertion rather than dumping whole models or mixing revisions. Compare a
+suspect snapshot's workspace revision with the native workspace's UIA ItemStatus;
+a leftover `.pending` file can indicate failed diagnostic replacement even when
+the app advanced correctly. A timeout does not prove
 the app exited: inspect its state and close only the owned test app with
 `./apps/layer-windows/scripts/exercise-window.ps1 -ProcessId $review.Id -Action Close`,
-which checks successful exit. Close the diagnostic PowerShell session afterward.
+which checks successful exit. Add `-DiscardUnsaved` only for an owned disposable
+review whose synthetic edits can be discarded. Close the diagnostic PowerShell session afterward.
 In test scripts, remove flags with `Remove-Item Env:NAME`: passing `$null` to
 `.NET SetEnvironmentVariable` can leave an empty, still-enabled flag on newer runtimes.
+
+For a native crash, reproduce with a Debug build under Visual Studio's native
+debugger, WinDbg or CDB, attached to the owned review PID. Load the PDBs from that
+exact build and Microsoft's public symbols. With CDB on `PATH`, the same review
+session can be attached from PowerShell:
+
+```powershell
+cdb -p $review.Id -logo (Join-Path $run 'debugger.log')
+```
+
+At the debugger prompt, use `.symfix` with an absolute cache directory under
+`artifacts/windows`, then `.sympath+` with the executable directory (quote paths
+containing spaces). Run `sxe av` and `g` to stop on access violations. At the
+fault, record the exception code and `kv` stack before closing or restarting;
+when inspecting a crash dump, select its exception context with `.ecxr` first.
+See Microsoft's [exception controls](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/sx--sxd--sxe--sxi--sxn--sxr--sx---set-exceptions-)
+and [symbol setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-symbol-and-source-paths-in-cdb).
+For workspace gestures, inspect the `Drawing workspace` element's UIA HelpText
+with `CAPY_TRACE_UI=1`: it records the actual pointer device, capture state and
+last cancellation. Its ItemStatus reports layout publication separately. Compare
+an injected-input failure with physical input before changing native capture;
+they can differ even when the test reports the expected device type.
+
+Keep debugger logs and dumps local: they can contain document contents and paths.
+Debugger runs are for diagnosis; measure presentation without an attached debugger.
 
 For a browser reference, follow the [web prerequisites](web.md#prerequisites)
 and run `bash ./apps/layer-web/build.sh` (for example, using Git Bash). Install
@@ -171,3 +302,64 @@ separately, with diagnostic tracing off and no competing builds or GPU tests.
 Probe the actual display configuration first. Elevate only the capture script
 if Windows denies ETW access. UI Automation and replay do not establish physical
 pen/touch behavior, painting cadence or input latency.
+
+## GPU reconstruction checks
+
+Run the document and lifecycle fixtures with actual D3D12 device removal enabled:
+
+```powershell
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailGpu
+./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+cargo test --locked -p layer-windows --lib device::tests::validation_error_releases_pipeline_and_allows_device_replacement -- --ignored --exact --nocapture
+cargo test --locked -p layer-windows --lib documents::recovery_tests -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p layer-windows --lib filter_packages::tests::recovery_tests -- --ignored --test-threads=1 --nocapture
+```
+
+The native fixtures create isolated profiles. The document check removes the
+process-owned device twice, then compares exported PNG bytes and verifies
+history, state, thumbnails and subsequent saving. The lifecycle check overlaps
+removal with startup, minimized windows and close decisions. The Rust regression
+checks failed-pipeline cleanup and replacement of a removed hardware device.
+The multiwindow fixture removes the shared device from each of two open windows,
+checking reconstruction in the idle sibling and independent document Undo/Redo.
+The `-FailGpu` variant removes the device and prevents reconstruction in its
+isolated test profile until the normal retry deadline expires. It checks Save,
+Save As, canceled pickers, Cancel/Discard close decisions, retained preferences,
+and durable reopen with identical exported pixels. It also checks failure in Zen
+mode: File remains accessible without changing the saved Zen preference.
+
+When reconstruction fails, painting stops and the existing drawing remains
+saveable. Completed admitted strokes are retained; an unfinished stroke is
+canceled. Document/settings services stay alive until an approved close, and
+GPU-dependent commands are disabled. An accepted save can finish; a PNG export
+that has not captured its image is canceled. Reopen the saved drawing in a new
+window to resume painting.
+
+The document recovery test module selects hardware D3D12 explicitly and removes
+only its own process devices. Run it alone and serially. It exercises real worker
+completions before adoption, including a decoded image whose original file is
+already deleted, New/Open candidates with embedded image data, an accepted save,
+a captured PNG ticket and a viewport upload. It verifies retained pixels/history,
+failed-operation retry, protected export destinations and error return without
+unwinding. The ordinary CPU suite separately covers canceling a deferred import.
+
+The filter recovery module uses the same hardware selection/removal helpers and
+must also run alone and serially. It removes the device after file transport has
+started and after validation has been submitted but before publication. Original
+package files are then deleted. Reconstructed pixels, parameter values and
+one-step Undo/Redo must match uninterrupted replacement. Exhausted recovery must
+cancel the candidate without changing the current catalog or document. These are
+controlled worker/publication boundaries, not proof of removal during a particular
+shader-compiler instruction or native pointer event.
+
+The loader retains acquired source bytes while the device is removed or the
+renderer is absent. If painting becomes suspended, pending reads settle as a
+visible failure and late file results are discarded; new loads are rejected.
+Ordinary tests cover suspension both during acquisition and while waiting for
+a renderer, including completion after the failure has already been published.
+
+Run these separately from performance measurements. They do not establish
+physical driver-reset or suspend behavior, every native picker/input overlap,
+or recovery during every filter operation.

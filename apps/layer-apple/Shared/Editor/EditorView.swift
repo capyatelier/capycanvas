@@ -52,6 +52,7 @@ struct EditorView<Canvas: View>: View {
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .modifier(EditorPopoverHost())
         .coordinateSpace(name: "editor-workspace")
         .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor-workspace")).onEnded { event in
             store.workspace.chrome(["kind": "contact", "position": [event.location.x, event.location.y], "canvas": false])
@@ -79,13 +80,13 @@ struct EditorView<Canvas: View>: View {
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
-            SettingsView(store: store).modifier(StorageAlert(store: store))
+            SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
+                .foregroundStyle(.primary).presentationBackground(.background)
+                .modifier(EditorPresentationAppearance())
         }
-        // Glass/material and native controls must match the resolved editor
-        // palette even when it differs from the OS appearance. This view still
-        // observes the parent system scheme above for the shared Auto setting.
+        .environment(\.editorPopupStore, store)
         .environment(\.colorScheme, store.state.isNull ? colorScheme : store.state["theme"].string == "dark" ? .dark : .light)
-        .onAppear { systemTheme() }
+        .background(NativeEditorAppearance(store: store, preferred: store.state["settings"]["theme"].string))
         .onOpenURL { url in
             if store.workspaceLibrary != nil, let kind = WorkspacePackageKind.forURL(url) { store.workspaceManager.openURL(url, kind: kind) }
             else { store.projectFiles.openURL(url) }
@@ -117,9 +118,7 @@ struct EditorView<Canvas: View>: View {
                 }
             }
         }
-        .onChange(of: colorScheme) { _, _ in systemTheme() }
     }
-    private func systemTheme() { store.dispatch(["type": "system_theme_changed", "theme": colorScheme == .dark ? "dark" : "light"]) }
 }
 
 struct EditorZenButton: View {
@@ -129,9 +128,10 @@ struct EditorZenButton: View {
         IconTile(icon: zen["icon"].string, label: zen["tooltip"].string,
             selected: zen["selected"].bool, size: CGFloat(store.catalog["zen_icon_size"].number)) { store.invoke("zen_mode") }
             .frame(width: 36, height: 36).background(EditorPalette(source: store.state["palette"])["bg"], in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityIdentifier("zen-button")
             .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
             .modifier(HeaderControlMeasurement(id: "zen-button"))
-            .offset(x: 6 + store.headerLeadingInset, y: 6).accessibilityIdentifier("zen-button")
+            .offset(x: 6 + store.headerLeadingInset, y: 6)
     }
 }
 
@@ -227,7 +227,7 @@ struct MenuItems: View {
                 if !item["sections"].array.isEmpty {
                     Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke, usesShortcuts: usesShortcuts)) }.disabled(!item["enabled"].bool)
                 } else {
-                    Button { store.dispatch(item["action"]); didInvoke() } label: {
+                    Button { invoke(item["action"]) } label: {
                         if item["selected"].bool { Label(item["label"].string, systemImage: "checkmark") }
                         else { Text(item["label"].string) }
                     }.disabled(!item["enabled"].bool || item["action"].isNull)
@@ -238,6 +238,12 @@ struct MenuItems: View {
                 }
             }
         }
+    }
+    private func invoke(_ action: JSON) {
+        #if os(macOS)
+        if nativeTextMenuAction(action) { didInvoke(); return }
+        #endif
+        store.dispatch(action); didInvoke()
     }
 }
 

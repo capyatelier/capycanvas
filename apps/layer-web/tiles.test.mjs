@@ -15,7 +15,6 @@ export async function checkMediumTiles({ call, evaluate, settle }) {
   const docked = '.dock-group[data-panel="toolbar"] .toolbar-controls';
   const group = panel => evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(panel)}))`);
   try {
-    await send({ type: "restore_settings", settings: { ...saved.settings, total_zen: false } });
     for (const [style, name, width, height, icon, lines, weight] of [
       ["medium", "Medium Tiles", 54, 54, 24, 0, 400],
       ["medium_labeled", "Medium Labeled Tiles", 108, 54, 16, 2, 400],
@@ -68,17 +67,23 @@ export async function checkMediumTiles({ call, evaluate, settle }) {
       await customize({ type: "set_column_collapsed", group: column, collapsed: false });
       await send({ type: "move_panel", panel: "toolbar", target: { kind: "edge", edge: "top", outer: true } });
       await send({ type: "invoke", command: "zen_mode" });
-      await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:'mouse',bubbles:true}))");
+      await evaluate("document.documentElement.dispatchEvent(new PointerEvent('pointermove',{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:'mouse',bubbles:true}))");
       await settle();
-      await check('.zen-toolbar .toolbar-controls[data-panel="toolbar"]');
+      assert.equal(await evaluate("document.querySelector('.zen-toolbar')"), null);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${docked}').closest('.dock-group')).opacity`), '0');
       await send({ type: "invoke", command: "zen_mode" });
+      await check(docked);
       assert.deepEqual(await evaluate("({zoom:layerApp.state().camera.zoom,rotation:layerApp.state().camera.rotation,pixels:[document.querySelector('#canvas').width,document.querySelector('#canvas').height]})"), camera);
       // Each size choice survives an actual reload, including the legacy labeled ID.
+      await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;function check(){
+        const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy&&!v.dirty)resolve();
+        else if(performance.now()>end)reject(Error('Workspace save did not finish'));else setTimeout(check,40);
+      }check();})`);
       await call("Page.reload");
       let ready = false;
       for (let i = 0; i < 300 && !ready; i++) {
         await new Promise(resolve => setTimeout(resolve, 100));
-        try { ready = await evaluate("!!window.layerApp?.app.brush_ready()"); } catch { /* navigation replaces the execution context */ }
+        try { ready = await evaluate("!!window.layerApp?.app.brush_ready() && (()=>{const v=JSON.parse(layerApp.app.workspace_view());return v?.ready&&!v.busy})()"); } catch { /* navigation replaces the execution context */ }
       }
       assert.ok(ready, "Reloaded app became ready");
       assert.equal(await evaluate("layerApp.app.panel_view('toolbar').tile_style"), style);

@@ -152,9 +152,24 @@ try {
     Choose 'Restore This Version';Closed
     if((Layout) -eq $before -or (Model).state.brush.diameter -ne $size){throw 'History did not apply only the selected arrangement'}
     Invoke 'panel-tab-stats'
+    Wait-Until {(Layout) -ne $saved -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Reset fixture arrangement did not settle and save'
+    $beforeStarting=Layout
     Menu 'Restore Starting Layout…'
+    Wait-Until {(Layout) -eq $saved} 'Starting layout was not previewed before confirmation'
+    if((Model).state.brush.diameter -ne $size){throw 'Starting-layout preview changed brush settings'}
+    Capture 'starting-layout-preview'
+    Choose 'Cancel';Closed
+    if((Layout) -ne $beforeStarting){throw 'Cancelling starting-layout preview changed the arrangement'}
+    Menu 'Restore Starting Layout…'
+    Wait-Until {(Layout) -eq $saved} 'Reopening did not preview the starting layout'
     Choose ((Manager).prompt.confirm);Closed
     if((Layout) -ne $saved -or (Model).state.brush.diameter -ne $size){throw 'Restore Starting Layout did not preserve tool settings and restore the baseline'}
+    foreach($step in @(@{id='undo_workspace';layout=$beforeStarting},@{id='redo_workspace';layout=$saved})){
+        Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq $step.id -and $_.enabled}).Count -eq 1 -and !(Model).windows_workspace.busy} 'Reset history action did not become available'
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
+        Invoke $step.id
+        Wait-Until {(Layout) -eq $step.layout} 'Starting-layout restore was not one history step'
+    }
     Menu 'Manage Workspaces…'
     Capture 'workspaces'
     Invoke ('workspace-manager-options-'+$original)
@@ -225,7 +240,7 @@ try {
     Choose 'Cancel';Closed
     Write-Output 'Manager actions and restart passed; checking the five-second final process exit.'
     Close
-    [pscustomobject]@{included_workspaces='passed';header_switcher='passed';preview_cancel='passed';explicit_apply='passed';enter_previews_only='passed';retained_rows='passed';history_escape_restore='passed';name_only_create='passed';explicit_switch='passed';rename_delete='passed';reset_brushes='passed';restart='passed';zero_exit='passed';scope='native UI Automation and guarded OS keys; physical pointer and performance acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{included_workspaces='passed';header_switcher='passed';preview_cancel='passed';explicit_apply='passed';enter_previews_only='passed';retained_rows='passed';history_escape_restore='passed';starting_layout_preview='passed';starting_layout_undo_redo='passed';name_only_create='passed';explicit_switch='passed';rename_delete='passed';reset_brushes='passed';restart='passed';zero_exit='passed';scope='native UI Automation and guarded OS keys; physical pointer and performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

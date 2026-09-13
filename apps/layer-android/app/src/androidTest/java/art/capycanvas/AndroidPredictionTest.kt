@@ -12,6 +12,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -44,13 +45,14 @@ class AndroidPredictionTest {
         .flatMap { it.array("groups").objects() }.flatMap { it.array("rows").objects() }
     private fun row(id: String = "platform_prediction") = rows().first { it.getString("id") == id }
     private fun manualControls(enabled: Boolean) {
-        for (id in listOf("prediction_horizon", "tip_lock")) {
-            assertEquals(enabled, row(id).getBoolean("enabled"))
-            val ranged = row(id).getJSONObject("kind").getJSONObject("control").getString("kind") == "slider"
-            val control = compose.onNodeWithTag(if (ranged) "setting-slider-$id" else "setting-number-$id").performScrollTo()
-            if (enabled) control.assertIsEnabled() else control.assertIsNotEnabled()
-            if (!enabled) assertFalse(row(id).getJSONObject("reset").getBoolean("enabled"))
-        }
+        val id = "prediction_horizon"
+        assertFalse(rows().any { it.getString("id") == "tip_lock" })
+        compose.onNodeWithTag("preference-tip_lock").assertDoesNotExist()
+        assertEquals(enabled, row(id).getBoolean("enabled"))
+        assertEquals("slider", row(id).getJSONObject("kind").getJSONObject("control").getString("kind"))
+        val control = compose.onNodeWithTag("setting-slider-$id").performScrollTo()
+        if (enabled) control.assertIsEnabled() else control.assertIsNotEnabled()
+        if (!enabled) assertFalse(row(id).getJSONObject("reset").getBoolean("enabled"))
         compose.onNodeWithTag(tag).performScrollTo()
     }
     private fun waitFor(condition: () -> Boolean) {
@@ -132,6 +134,11 @@ class AndroidPredictionTest {
         waitFor { !settings().getBoolean("platform_prediction") && !host.nativePredictionEnabled }
         compose.onNodeWithTag(tag).assertIsOff()
         manualControls(true)
+        compose.onNodeWithTag("setting-slider-prediction_horizon").performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(.5f) }
+        waitFor { settings().getDouble("prediction_ms") == 32.0 }
+        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("32 ms")
+        compose.onNodeWithTag(tag).performScrollTo()
         waitFor { preferences.getString("settings", null)?.let { !JSONObject(it).getBoolean("platform_prediction") } == true }
         shot("off")
 
@@ -159,6 +166,12 @@ class AndroidPredictionTest {
         manualControls(true)
         compose.onNodeWithTag(tag).assertIsNotEnabled().assertIsOn()
         assertTrue("Losing support preserves the user's choice", settings().getBoolean("platform_prediction"))
+        assertEquals("Manual prediction time survives native mode", 32.0, settings().getDouble("prediction_ms"), 0.0)
+        compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
+        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("")
+        compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
+        waitFor { settings().getDouble("prediction_ms") == 16.0 }
+        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("16 ms")
     }
 
     @Test fun fallingPressureStrokeRendersAndSurvivesUndoRedo() {

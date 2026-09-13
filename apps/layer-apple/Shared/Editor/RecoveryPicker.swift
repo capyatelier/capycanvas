@@ -39,7 +39,7 @@ struct RecoveryPicker: View {
 struct RecoveryPresentation: ViewModifier {
     @ObservedObject var recovery: ArtworkRecovery
     func body(content: Content) -> some View {
-        content.sheet(isPresented: $recovery.presented, onDismiss: recovery.dismissed) { RecoveryPicker(recovery: recovery) }
+        content.sheet(isPresented: $recovery.presented, onDismiss: recovery.dismissed) { RecoveryPicker(recovery: recovery).modifier(EditorPopupPresentation()) }
             #if DEBUG
             .overlay(alignment: .topLeading) {
                 if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
@@ -55,7 +55,7 @@ struct RecoveryPresentation: ViewModifier {
                         Text(error)
                         Button("Retry") { recovery.refresh(); recovery.flush { _ in } }
                         Button("Recovered Drawings…") { recovery.refresh(); recovery.presented = true }
-                    }.padding(12).modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 8))).padding()
+                    }.padding(12).modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8))).padding()
                 }
             }
     }

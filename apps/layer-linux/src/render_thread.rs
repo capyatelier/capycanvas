@@ -278,7 +278,7 @@ impl RenderWorker {
                                         target,
                                         #[cfg(test)]
                                         None,
-                                    );
+                                    )?;
                                 }
                                 continue;
                             }
@@ -940,7 +940,7 @@ impl Worker {
                 target,
                 #[cfg(test)]
                 Some(timing),
-            );
+            )?;
         }
         Ok(())
     }
@@ -973,7 +973,7 @@ impl Worker {
         &mut self,
         target: wgpu::SurfaceTexture,
         #[cfg(test)] timing: Option<&mut crate::timing::Timing>,
-    ) {
+    ) -> Result<(), String> {
         let (camera, surround) = self.last_view.expect("rendered document");
         let view = target.texture.create_view(&Default::default());
         let mut encoder = self
@@ -981,7 +981,7 @@ impl Worker {
             .device()
             .create_command_encoder(&Default::default());
         self.presenter
-            .encode(&self.renderer, &mut encoder, &view, camera, surround);
+            .encode(&self.renderer, &mut encoder, &view, camera, surround).map_err(error)?;
         #[cfg(test)]
         if let Some(timing) = &timing {
             timing.overview(
@@ -1022,6 +1022,7 @@ impl Worker {
             timing.end(&self.renderer);
         }
         self.pending_present = false;
+        Ok(())
     }
     fn capture(&mut self) -> Result<ReadbackImage, String> {
         let (view, surround) = self.last_view.ok_or("Canvas has not rendered")?;
@@ -1056,7 +1057,7 @@ impl Worker {
             &texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(error)?;
         let stride = (view.width_px * 4).div_ceil(256) * 256;
         let buffer = self
             .renderer
