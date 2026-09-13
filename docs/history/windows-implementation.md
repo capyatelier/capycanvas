@@ -2545,13 +2545,22 @@ checks full Zen in both themes, hidden chrome, retained canvas/device on resize,
 and restored workspace geometry. Its obsolete partial-Zen toolbars and Total Zen
 preference checks were removed to match the shared behavior.
 
-The integrated tree passes 652 ordinary core/engine/host/UI/Windows/workspace
+The integrated tree passes 653 ordinary core/engine/host/UI/Windows/workspace
 tests, a normal Release build and the Web Wasm check. Native Release queued/active
 pen recovery, exhausted-recovery Save/Save As with tail cancellation, full editor
 and two-window recovery checks pass with clean shutdown. Strict Clippy currently
 reports three incoming shared UI issues: the header measurement clamp, the drag
 constructor argument count, and the large workspace-restore action variant.
 These were not suppressed or represented as a passing check.
+
+The subsequent committed-header picker baseline change also passes a fresh
+normal Release build, the ordinary suites and Wasm check. The native workspace
+manager verifies preview cancellation, history, starting-layout Undo/Redo,
+creation, switching, rename/delete, brush reset, preview-close restart and clean
+exit. Its header selectors now resolve stable workspace IDs through the shared
+model, following the new Sketch/Paint/Photo keys without changing production
+controls. Actual switching was confirmed in the same window as the obsolete
+selector failure before rerunning the complete fixture successfully.
 
 Windows still uses its existing native header projection, as allowed by the
 shared port handoff. Projecting the new customizable title bar is remaining

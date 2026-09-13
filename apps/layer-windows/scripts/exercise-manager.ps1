@@ -46,6 +46,11 @@ function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
     $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item} "Missing $Value"
     $hit.item
 }
+function HeaderChoice([string]$Id){
+    $choice=(Model).windows_workspace.switcher_display|Where-Object id -eq $Id
+    if(!$choice){throw "Workspace $Id is missing from the header model"}
+    Control ('workspace-switch-'+$choice.key)
+}
 function Invoke([string]$Value,[switch]$Name,$Within=$root){
     (Control $Value -Name:$Name -Within $Within).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
@@ -101,7 +106,7 @@ try {
     Launch 'initial'
     $original=(Model).windows_workspace.id
     $originalName=(Model).windows_workspace.name
-    if($original -ne 'builtin:workspace:illustrator'){throw 'Fresh installations must open Illustrator'}
+    if($original -ne 'builtin:workspace:illustrator'){throw 'Fresh installations must open Paint'}
     $saved=Layout
     Capture 'illustrator'
     Invoke 'panel-tab-stats'
@@ -117,7 +122,7 @@ try {
     if((Manager).rows|Where-Object {$_.delete -or $_.rename}){throw 'Included workspace options violate rename/delete policy'}
     $painter='builtin:workspace:painter'
     $item=Select-Row $painter
-    if((Layout) -eq $before){throw 'Row selection did not preview Painter'}
+    if((Layout) -eq $before){throw 'Row selection did not preview Sketch'}
     if((Model).state.brush.diameter -ne $size){throw 'Workspace preview changed tool settings'}
     $identity=$item.GetRuntimeId() -join ':'
     $item.SetFocus();[CapyManagerKeys]::Key([uint32]$review.Id,13)
@@ -130,13 +135,13 @@ try {
     Menu 'Manage Workspaces…'
     $null=Select-Row $painter
     Choose 'Switch to Workspace';Closed
-    if((Model).windows_workspace.id -ne $painter){throw 'Explicit switch did not adopt Painter'}
+    if((Model).windows_workspace.id -ne $painter){throw 'Explicit switch did not adopt Sketch'}
     Capture 'painter'
-    (Control 'workspace-switch-photographer').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:photographer'} 'Header did not switch to Photographer'
+    (HeaderChoice 'builtin:workspace:photographer').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:photographer'} 'Header did not switch to Photo'
     Closed;Capture 'photographer'
-    (Control 'workspace-switch-illustrator').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Wait-Until {(Model).windows_workspace.id -eq $original} 'Header did not switch to Illustrator'
+    (HeaderChoice $original).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {(Model).windows_workspace.id -eq $original} 'Header did not switch to Paint'
     Closed
     if((Layout) -ne $before -or (Model).state.brush.diameter -ne $size){throw 'Header switching reset saved workspace edits'}
     Menu 'Layout History…'
@@ -181,7 +186,7 @@ try {
     [CapyManagerKeys]::Key([uint32]$review.Id,27)
     Wait-Until {$null -eq (Find 'workspace-manager-show')} 'Included workspace menu did not close'
     Choose 'Cancel';Closed
-    if((Control 'workspace-switch-illustrator').Current.Name -ne $originalName){throw 'Included workspace name changed'}
+    if((HeaderChoice $original).Current.Name -ne $originalName){throw 'Included workspace name changed'}
     Menu 'Manage Workspaces…'
     Invoke 'workspace-manager-create'
     Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'New Workspace prompt did not open'
@@ -190,8 +195,8 @@ try {
     Capture 'new-workspace'
     Choose 'Create and Switch';Closed
     if((Model).windows_workspace.name -ne 'Painting' -or (Model).state.brush.diameter -ne $size){throw 'Workspace creation did not preserve tool settings'}
-    foreach($key in @('painter','illustrator','photographer')){
-        if((Control ('workspace-switch-'+$key)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off){throw 'Custom workspace must leave all header choices off'}
+    foreach($id in @($painter,$original,'builtin:workspace:photographer')){
+        if((HeaderChoice $id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off){throw 'Custom workspace must leave all header choices off'}
     }
     (Control 'Brush size slider' -Name -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.28)
     Wait-Until {(Model).state.brush.diameter -ne $size} 'Second workspace tool edit did not apply'
@@ -208,10 +213,10 @@ try {
     Edit 'workspace-manager-name' 'Inking'
     Choose 'Rename'
     Wait-Until {$null -eq (Manager).prompt -and $null -ne (Row 'Inking')} 'Rename did not update retained list'
-    Wait-Until {(Control ('workspace-switch-'+$painting)).Current.Name -eq 'Inking'} 'Header did not follow the renamed custom workspace'
+    Wait-Until {(HeaderChoice $painting).Current.Name -eq 'Inking'} 'Header did not follow the renamed custom workspace'
     Wait-Until {
         $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
-        $firstChoice=(Control 'workspace-switch-painter').Current.BoundingRectangle
+        $firstChoice=(HeaderChoice $painter).Current.BoundingRectangle
         $menu.Right -le $firstChoice.Left
     } 'Renamed workspace header overlaps the application menus'
     Capture 'renamed-header'
@@ -234,7 +239,7 @@ try {
     Launch 'restart'
     if((Layout) -ne $beforeReset){throw 'Closing during a preview persisted the temporary arrangement'}
     if((Model).windows_workspace.name -ne $originalName -or (Model).state.brush.diameter -ne $size){throw 'Restart did not restore the active workspace'}
-    if((Control 'workspace-switch-illustrator').Current.Name -ne $originalName){throw 'Included workspace header name changed after restart'}
+    if((HeaderChoice $original).Current.Name -ne $originalName){throw 'Included workspace header name changed after restart'}
     Menu 'Manage Workspaces…'
     if((Manager).rows.Count -ne 3){throw 'Restart did not preserve workspace deletion'}
     Choose 'Cancel';Closed
