@@ -970,7 +970,7 @@ pub enum UiAction {
         tile: u32,
     },
     RestoreWorkspace {
-        workspace: WorkspaceState,
+        workspace: Box<WorkspaceState>,
     },
     Invoke {
         command: CommandId,
@@ -1144,6 +1144,23 @@ mod icon_tests {
             assert_ne!(filter.icon.as_ref(), "adjustments", "{} must not use the picker icon", filter.program.label);
             assert!(meanings.insert(filter.icon.as_ref()), "Different filters need recognizable identities");
         }
+    }
+
+    #[test]
+    fn workspace_restore_action_preserves_the_host_json_contract() {
+        let workspace = WorkspaceState::default();
+        let expected = serde_json::json!({
+            "type": "restore_workspace",
+            "workspace": workspace,
+        });
+        let action = UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        };
+        assert_eq!(serde_json::to_value(&action).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<UiAction>(expected).unwrap(),
+            action
+        );
     }
 
     #[test]

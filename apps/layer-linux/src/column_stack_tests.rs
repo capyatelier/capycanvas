@@ -139,7 +139,7 @@ fn native_stack_drop_input(append: bool) {
                             .set_column_collapsed(8, true, viewport)
                             .unwrap();
                     }
-                    w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+                    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
                     w.dispatch(UiAction::SetTheme { theme: Some(theme) });
                     w.dispatch(UiAction::Customize {
                         action: CustomizationAction::SetColumnDrawers {
@@ -417,10 +417,10 @@ fn native_column_stack_input() {
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         w.dispatch(UiAction::RestoreWorkspace {
-            workspace: layer_ui::WorkspaceState {
+            workspace: Box::new(layer_ui::WorkspaceState {
                 layout: layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk),
                 ..Default::default()
-            },
+            }),
         });
         pump(300);
         let resolved = w.resolved();
@@ -490,7 +490,7 @@ fn native_column_stack_input() {
                 .layout
                 .set_column_collapsed(8, true, viewport)
                 .unwrap();
-            w.dispatch(UiAction::RestoreWorkspace { workspace: initial });
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(initial) });
             w.dispatch(UiAction::SetTheme { theme: Some(theme) });
             pump(300);
             let original = layer_ui::durable_layout(&state(&w).workspace.layout);

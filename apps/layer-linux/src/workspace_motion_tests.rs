@@ -52,7 +52,9 @@ fn native_workspace_motion_input() {
                     panic!("fixture must have a right tab group");
                 }
             }
-            w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(fixture),
+            });
             pump(250);
             let group = state(&w)
                 .workspace

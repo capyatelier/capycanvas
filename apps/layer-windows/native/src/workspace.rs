@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 // Match Android's native startup before optional preferences restore a workspace.
 pub(crate) fn initialize(native: &mut NativeHost) -> Result<(), String> {
     native.dispatch(layer_ui::UiAction::RestoreWorkspace {
-        workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Windows),
+        workspace: Box::new(layer_ui::WorkspaceState::for_platform(
+            layer_ui::Platform::Windows,
+        )),
     })
 }
 
@@ -116,7 +118,7 @@ mod tests {
         assert!(host.session.state().requests.is_empty());
         let saved = WorkspaceState::default();
         host.dispatch(UiAction::RestoreWorkspace {
-            workspace: saved.clone(),
+            workspace: Box::new(saved.clone()),
         })
         .unwrap();
         assert_eq!(host.session.state().workspace, saved);

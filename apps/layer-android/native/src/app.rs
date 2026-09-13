@@ -18,7 +18,9 @@ impl App {
         host.startup = Default::default();
         host.session.set_document_replacement(true);
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {
-            workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Android),
+            workspace: Box::new(layer_ui::WorkspaceState::for_platform(
+                layer_ui::Platform::Android,
+            )),
         })?;
         Ok(Self {
             host,

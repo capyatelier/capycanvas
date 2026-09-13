@@ -294,7 +294,9 @@ fn controls(app: &adw::Application, output: &Path) {
             },
         )
         .unwrap();
-    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
     pump(150);
     let output = output.join("controls");
     std::fs::create_dir_all(&output).unwrap();

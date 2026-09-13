@@ -1721,13 +1721,11 @@ mod tests {
                         DockTarget::Tab { .. }
                     ));
                     // The new target is beside the strip, never over its controls.
-                    for control in [c.grip] {
-                        assert!(!matches!(
-                            r.drop_hint(x, control.y + control.height * 0.5, &[], true)
-                                .map(|h| h.target),
-                            Some(DockTarget::BesideBand { .. })
-                        ));
-                    }
+                    assert!(!matches!(
+                        r.drop_hint(x, c.grip.y + c.grip.height * 0.5, &[], true)
+                            .map(|h| h.target),
+                        Some(DockTarget::BesideBand { .. })
+                    ));
                 }
             }
         }
@@ -1816,9 +1814,7 @@ mod tests {
                 serde_json::to_value(c.groups[0].divider).unwrap()
             );
             let x = c.bounds.x + 18.;
-            for control in [c.grip] {
-                assert!(c.drop_hint([x, control.y + control.height / 2.]).is_none());
-            }
+            assert!(c.drop_hint([x, c.grip.y + c.grip.height / 2.]).is_none());
             for y in (c.content.y as i32)..((c.content.y + c.content.height) as i32) {
                 let hint = c.drop_hint([x, y as f32]).unwrap();
                 assert!(hint.bounds.height > 0.);

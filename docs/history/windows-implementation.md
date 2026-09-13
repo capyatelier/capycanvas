@@ -2589,3 +2589,105 @@ This verifies reproducible archive assembly for the recorded inputs and portable
 runtime behavior on the development host. Installed MSIX launch/update/uninstall,
 distribution signing and clean-machine acceptance remain open. No elevation or
 installation was attempted. Artifacts and local reports remain outside Git.
+
+
+### Immutable raster recovery and shared UI cleanup
+
+The Windows port integrates the immutable raster/project work through upstream
+`c1ec69e`. Successful renderer replacement now retains the existing active
+stroke builder and queued samples. Completed strokes restore from immutable
+raster roots; recovery does not replay historical strokes or add another queue.
+The engine regression covers G Pen, Natural Blender and Watercolor, queued pen-up,
+Undo/Redo and a second replacement that restores history without replaying dabs.
+
+If reconstruction is exhausted, queued and unfinished contacts are canceled.
+Completed host-backed raster edits remain saveable through the existing document
+service. The obsolete path that tried to process raw pen samples without a GPU
+has been removed. Commands admitted before failure are processed after renderer
+suspension, so Save/Close remain available and GPU-dependent commands are disabled.
+
+The integrated tree passes 664 ordinary core/engine/host/UI/Windows/workspace
+library tests, a normal Release build and the C++ input/publication/queue tests.
+Strict Clippy passes with warnings denied for Windows, UI and workspace, including
+all targets and their library dependencies. Four document and three filter
+recovery tests pass with actual process-owned D3D12 device removal, run serially.
+Release document fixtures pass queued-stroke and active-stroke reconstruction,
+exact PNG comparisons, history and thumbnails. Exhausted recovery passes Save,
+Save As, cancel/discard and exact persisted-raster reopen. Two native windows
+recover from two shared device removals while retaining independent documents
+and Undo/Redo, then exit cleanly.
+
+The pre-removal active-ink fixture now checks that the probe area is clear after
+Undo and visibly contains ink after pen-down. Same-process inspection found one
+channel value of difference in one pixel between live and committed sRGB8 output;
+the final exported PNG was identical. Final image comparisons remain exact.
+Project save checks compare complete persisted bytes rather than process-local
+raster publication identities. Snapshot fixtures start with shared document
+identities while preserving their complete model comparisons.
+
+The shared title-bar cleanup retains NaN-safe native measurement bounds, replaces
+eight positional drag arguments with one pickup-data struct, and boxes large
+workspace payloads in shared enums. Native geometry is still captured at pickup;
+drag behavior and serialized host/workspace formats are unchanged. Existing
+storage/migration/history tests and an explicit restore-action JSON check pass.
+Incoming simple Clippy issues were fixed without lint suppressions.
+
+The native host build of the Web Rust crate also passes. The Wasm-target check
+stopped at the new zstd native dependency because this Windows toolchain lacks
+Clang; it is not a passing Web build. GTK, Apple and Android runtime validation
+is outside this Windows check. The native color wheel remains the accepted
+Direct2D implementation; imperceptible differences do not justify extra machinery.
+
+This milestone does not refresh packages or establish physical pen delivery,
+real driver reset, sleep/resume, mixed-display behavior or 120 Hz input latency.
+The new workspace-owned title-bar editor and whole-editor visual acceptance
+remain Windows work. No filter reference was regenerated or tolerance relaxed.
+
+
+### Shared column-stack integration after raster recovery
+
+The subsequent integration through upstream `45a1786` retains the validated
+Windows recovery path and brings shared column stacks, default-layout migration,
+Web event-loop raster capture and Apple document completion updates. Conflict
+resolution preserves the new stack defaults and adapts incoming Rust callers to
+the boxed workspace API. Three incoming test-loop lints were simplified while
+retaining their assertions.
+
+The combined tree passes 670 ordinary library tests (45 core, 48 engine, 25 host,
+364 UI, 103 Windows and 85 workspace), strict all-target Clippy for Windows/UI/
+workspace, a normal Release build, C++ input/queue/publication checks and the
+native host build of the Web Rust crate. The final Release editor, workspace
+manager and two-window device-removal fixtures pass with clean shutdown. These
+cover titlebar hit regions, geometry, native tools and numeric editing, both
+themes, full Zen, retained resizing, workspace history/preview/starting-layout
+Undo/Redo, creation/switching/rename/delete, restart and shared-device recovery.
+
+The editor fixture reacquires its shared snapshot as well as native controls
+while waiting for tool projection. A transform transition can supersede an older
+snapshot during raster completion. The original assertion passed against the
+current model in the same failed window; the complete rerun then passed with all
+label, selection, settings and action comparisons retained.
+
+Windows now uses ordinary tabbed drawers while retaining shared stack membership
+and preferences. GTK's replacement full-column opening remains a Windows port
+item, alongside the workspace-owned customizable title bar. This integration
+adds no claim of complete visual parity, physical input or 120 Hz acceptance,
+and does not refresh the previously validated portable/MSIX payloads.
+
+
+A later non-force atomic push encountered concurrent upstream title-bar overflow
+work through `0c472fb`. That integration preserves the cleaned-up drag constructor
+and adapts its two new test call sites. All 365 shared UI tests and strict Clippy
+pass; the normal Windows Release rebuild also passes. Windows does not yet invoke
+the shared HeaderDrag path, so the native editor/manager/multiwindow acceptance
+above continues to cover the unchanged native interaction paths. The additional
+header regression brings the ordinary test coverage across these suites to 671.
+
+
+The final integration through `6aee96d` adds the Web column-stack projection and
+shared stack geometry/history metadata. Host/UI/Windows/workspace suites pass
+again (25/366/103/85 tests); unchanged core/engine suites retain their 45/48 passes,
+for 672 ordinary tests across the validated suites. Strict Clippy and a normal
+Release rebuild pass. The native manager rerun passes preview, starting-layout
+history, Undo/Redo, creation, switching, rename/delete, brush reset, restart and
+clean exit. Windows still uses tabbed drawers pending the full-column port.

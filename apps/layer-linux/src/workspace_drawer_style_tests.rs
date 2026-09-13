@@ -143,7 +143,9 @@ fn check_theme(
                 DockTarget::Edge { edge, outer: true },
             )
             .unwrap();
-        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(workspace),
+        });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(300);
         perform(serde_json::json!([{"point":[800,700]}]));
@@ -271,7 +273,7 @@ fn check_theme(
         }
     }
     w.dispatch(UiAction::RestoreWorkspace {
-        workspace: initial.clone(),
+        workspace: Box::new(initial.clone()),
     });
     w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
     w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });

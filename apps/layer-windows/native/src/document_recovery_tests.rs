@@ -193,8 +193,14 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
         )
         .unwrap();
     invoke(&mut f.host, CommandId::AddLayer);
-    let original = f.host.session.engine().document().clone();
     let expected = image(&mut f.host).bytes;
+    let mut expected_project = Vec::new();
+    f.host
+        .session
+        .capture_project_recovery()
+        .unwrap()
+        .write(&mut expected_project)
+        .unwrap();
     let path = f.path("drawing.capy");
     invoke(&mut f.host, CommandId::SaveDocument);
     let (id, _, _) = request(&f.host);
@@ -206,8 +212,9 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
     f.retire_renderer();
     f.finish();
     assert!(!f.host.session.state().document_file.modified);
-    let saved = Project::read(File::open(&path).unwrap(), Default::default()).unwrap();
-    assert_eq!(saved.document.layers, original.layers);
+    // Raster publication identities are process-local; the complete persisted
+    // project, including its embedded image and tile bytes, must match exactly.
+    assert_eq!(std::fs::read(&path).unwrap(), expected_project);
     f.restore_renderer();
     assert_eq!(image(&mut f.host).bytes, expected);
     // Check both a completed candidate awaiting adoption and removal immediately

@@ -57,8 +57,10 @@ fn main() {
         unreachable!()
     };
     tiles.drain(..original_count);
-    host.dispatch(UiAction::RestoreWorkspace { workspace })
-        .unwrap();
+    host.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    })
+    .unwrap();
     host.dispatch(UiAction::SetTheme { theme: Some(theme) })
         .unwrap();
     host.dispatch(

@@ -8,7 +8,7 @@ use std::io::Write;
 fn host(platform: Platform) -> NativeHost {
     let mut host = NativeHost::new(platform).unwrap();
     host.dispatch(UiAction::RestoreWorkspace {
-        workspace: WorkspaceState::for_platform(platform),
+        workspace: Box::new(WorkspaceState::for_platform(platform)),
     })
     .unwrap();
     host.session.set_document_replacement(true);

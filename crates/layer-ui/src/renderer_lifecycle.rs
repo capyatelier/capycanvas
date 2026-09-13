@@ -90,7 +90,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("The replacement GPU could not resume filter validation".into());
         }
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
-        self.input_pending = false;
+        self.input_pending = self.engine.has_pending_input();
         self.refresh_file_state();
         self.sync_renderer_telemetry();
         self.rendering_suspended = false;

@@ -61,7 +61,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             unreachable!()
         };
         let entity = if duplicate {
-            Entity::workspace(name, capture, baseline, origin, now)
+            Entity::workspace(name, capture, *baseline, origin, now)
         } else {
             let baseline = capture.history.layout().clone();
             Entity::workspace(
@@ -114,7 +114,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             name,
             description,
             ReusableContent::Layout {
-                layout: source.capture()?.history.layout().clone(),
+                layout: Box::new(source.capture()?.history.layout().clone()),
             },
             now,
         );
@@ -305,7 +305,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .layout
                     .clone()
             } else {
-                baseline.clone()
+                baseline.as_ref().clone()
             };
             self.publish_layout(
                 &stored,

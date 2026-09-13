@@ -105,9 +105,9 @@ fn member_trailing_edges_append_groups_without_taking_grips() {
                 let stack = layout.column_stack(member);
                 assert_eq!(stack.members.len(), members.len());
                 assert_eq!(stack.members[index], member);
-                for other in 0..3 {
+                for (other, expected) in members.iter().enumerate() {
                     if other != index {
-                        assert_eq!(stack.members[other], members[other]);
+                        assert_eq!(&stack.members[other], expected);
                     }
                 }
                 let updated = s.layout(STACK_VIEW);

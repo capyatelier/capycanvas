@@ -212,10 +212,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Replace GPU state while retaining committed raster roots and history.
     /// Prepare sources and resize before adoption; failure leaves live input intact.
-    /// Unsubmitted contacts cannot be recovered by historical stroke replay.
+    /// The active builder and queued samples survive; completed history restores
+    /// immutable rasters without replaying historical strokes.
     pub fn replace_backend(&mut self, mut backend: B) -> Result<B, B::Error> {
         backend.resize_surface(self.view.width_px, self.view.height_px)?;
-        self.discard_unsubmitted_input();
         self.restore_rasters.clear();
         self.rebuild_all = true;
         self.composite_all = true;
@@ -646,13 +646,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                                 .pending_operations
                                 .drain(..old.pending_operations.len());
                         }
-                        if let (Some(mask), Some(old)) = (&mut layer.mask, &old.mask) {
-                            if mask.id == old.id
-                                && mask.pending_operations.starts_with(&old.pending_operations)
-                            {
-                                std::sync::Arc::make_mut(&mut mask.pending_operations)
-                                    .drain(..old.pending_operations.len());
-                            }
+                        if let (Some(mask), Some(old)) = (&mut layer.mask, &old.mask)
+                            && mask.id == old.id
+                            && mask.pending_operations.starts_with(&old.pending_operations)
+                        {
+                            std::sync::Arc::make_mut(&mut mask.pending_operations)
+                                .drain(..old.pending_operations.len());
                         }
                     }
                 }
@@ -1988,7 +1987,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_replacement_restores_committed_roots_and_discards_unsubmitted_ink() {
+    fn backend_replacement_restores_committed_roots_and_rebuilds_only_the_active_contact() {
         for preset in [
             DefaultBrushPreset::GPen,
             DefaultBrushPreset::NaturalBlender,
@@ -2023,17 +2022,29 @@ mod tests {
             canvas
                 .replace_backend(RecordingRenderer::default())
                 .unwrap();
-            assert!(!canvas.has_active_stroke() && !canvas.has_pending_input());
-            canvas.render_frame_at(96_000_000).unwrap();
-            assert!(canvas.backend().saw_reset);
-            assert_eq!(
-                canvas.backend().persistent_dabs,
-                0,
-                "restoration never replays dabs"
-            );
+            assert!(canvas.has_active_stroke() && canvas.has_pending_input());
             assert_eq!(canvas.document(), &document);
             assert_eq!(canvas.checkpoint(), checkpoint);
-            assert_eq!(canvas.metrics().committed_strokes, 1);
+            canvas.render_frame_at(96_000_000).unwrap();
+            assert!(canvas.backend().saw_reset);
+            assert!(!canvas.has_active_stroke() && !canvas.has_pending_input());
+            assert_eq!(canvas.metrics().committed_strokes, 2);
+            assert!(canvas.backend().persistent_dabs > 0);
+            assert!(
+                canvas
+                    .backend()
+                    .persistent_batches
+                    .iter()
+                    .all(|(id, _, _, _)| id.0 == 2),
+                "only the live contact is rebuilt; completed ink comes from raster roots"
+            );
+            assert!(canvas.undo().unwrap());
+            canvas.render_frame().unwrap();
+            assert_eq!(
+                canvas.document().layers[0].raster,
+                document.layers[0].raster
+            );
+            assert_eq!(canvas.checkpoint(), checkpoint);
             assert!(canvas.undo().unwrap());
             canvas.render_frame().unwrap();
             assert!(canvas.document().layers[0].raster.is_empty());
@@ -2044,6 +2055,11 @@ mod tests {
             assert!(canvas.can_redo());
             assert!(canvas.redo().unwrap());
             canvas.render_frame().unwrap();
+            assert_eq!(
+                canvas.backend().persistent_dabs,
+                0,
+                "history restoration uses raster roots"
+            );
             assert_eq!(
                 canvas.document().layers[0].raster,
                 document.layers[0].raster
