@@ -6,6 +6,7 @@ use serde_json::Value;
 #[derive(Serialize)]
 pub(crate) struct WindowsMetadata {
     pub windows_gpu_generation: u64,
+    pub windows_rendering_suspended: bool,
     pub windows_importing: bool,
     pub windows_filter_load: Option<crate::filter_packages::Status>,
     pub windows_image_import: Option<Value>,
@@ -40,6 +41,7 @@ mod tests {
     fn metadata() -> WindowsMetadata {
         WindowsMetadata {
             windows_gpu_generation: 1,
+            windows_rendering_suspended: false,
             windows_importing: false,
             windows_filter_load: None,
             windows_image_import: None,
@@ -63,6 +65,7 @@ mod tests {
         for field in [
             "workspace_update",
             "windows_gpu_generation",
+            "windows_rendering_suspended",
             "windows_importing",
             "windows_filter_load",
             "windows_image_import",

@@ -13,9 +13,10 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 ## Workspace recovery and editor workflow milestone
 
 - The Color milestone is published as `6c36d0a`. The periodic pull now includes
-  `65a9855`; both integrations preserved all working paths and every recovery
-  stash. The final upstream change keeps command icons steady during strokes.
-  The lifecycle and feature fixes below form this validated milestone.
+  `19d6722`; all integrations preserve working paths and every recovery stash.
+  Milestone `072c7b7` adds the lifecycle and feature fixes below. The integrated
+  upstream code keeps command icons steady during strokes and adds shared CPU
+  input retirement for renderer failure.
 - Quick restart tests exposed a shared native ownership bug: a killed process
   left Illustrator claimed, so restart selected Painter and hid the expected
   Color/Layers panels. `SqliteStore` now holds a standard OS file lock for each
@@ -48,7 +49,9 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
   shows the accepted Color layout retained. The final command-presentation pull
   also passes the 410 Apple/host/UI regressions and both signed iteration-22
   builds. Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers each
-  pass their native follow-up with no failures or skips.
+  pass their native follow-up with no failures or skips. The final integration
+  through `19d6722` passes 411 Apple/host/UI checks and the focused input-retirement
+  regression, both signed iteration-23 builds and the same two native follow-ups.
 - Mac passes all four lifecycle workflows: settings/workspace restart, artwork
   recovery, independent windows and New/Export cancellation. The iPad passes
   the first three. Its export cancellation awaits the user unlocking Files;
@@ -58,7 +61,7 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
   `DependentProductPaths` or bundle paths. Original `app.launch()` works,
   including terminate/relaunch. The unsuccessful explicit-bundle experiment and
   obsolete Color attach branch are removed. See the Apple README for setup.
-- The iteration-22 iPad review app and runner are installed, its saved review
+- The iteration-23 iPad review app and runner are installed, its saved review
   namespace is restored and the artist descriptor remains unchanged. Earlier
   post-test process-query timeouts are retained with their verified recovery.
   No component-app exchange was needed. Old iteration-17 picker scripts must be
@@ -66,7 +69,8 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 - Evidence: `artifacts/apple-lifecycle-workflows-v1/checkpoint.json`,
   `artifacts/apple-feature-workflows-v1/checkpoint.json`,
   `artifacts/apple-main-integration-b56bca3/` and
-  `artifacts/apple-main-integration-65a9855/`. The full feature, visual,
+  `artifacts/apple-main-integration-65a9855/` and
+  `artifacts/apple-main-integration-19d6722/`. The full feature, visual,
   physical-input, lifecycle/expiration and sustained-performance gates remain open.
 
 ## Compact Color panel milestone

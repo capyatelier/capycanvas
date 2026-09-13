@@ -137,8 +137,10 @@ captures pass the unchanged oracle, with guide error at most one channel level
 and field error zero. A final pull through `65a9855` retains steady command styling
 while drawing; the 410 Apple/host/UI regressions and both signed builds pass.
 Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers also pass their
-focused native follow-ups. This retains the accepted Color appearance; full-editor
-visual and physical-input/performance acceptance remain open.
+focused native follow-ups. The subsequent integration through `19d6722` also
+passes both signed builds, both native follow-ups, 411 Apple/host/UI checks and
+the focused CPU input-retirement regression. This retains the accepted Color
+appearance; full-editor visual and physical-input/performance acceptance remain open.
 
 Installed-device XCTest now uses the documented destination-artifact setup;
 normal launch/relaunch works and the obsolete Color attach branch is removed.
