@@ -957,7 +957,7 @@ impl WebApp {
             &target.texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(js)?;
         gpu.renderer.queue().present(target);
         gpu.blank_presented = true;
         serialize(&change)

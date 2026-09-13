@@ -12,8 +12,9 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 
 ## Native docking validation
 
-- This milestone builds on `main` through `2142149` and groups the docking fixes
-  with their native validation. The periodic fetch found no further changes.
+- Milestone `d520d49` groups the docking fixes with their native validation.
+  Main advanced before publication; the clean integration now includes
+  `688fd76`, preserving both branches and every recovery stash.
 - Both hosts pass the drawer-tab reorder, tear-off, redock and group tear-off
   workflow, collapsed/nested drawers, and panel configuration followed by a live
   group drag. The iPad also passes held toolbar tiles with exact Undo/Redo and
@@ -50,6 +51,18 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
   reported no usable hit point for that remote element. Cancellation remains
   unverified. See `files-unlocked-v28/` for the failure and restored review state;
   no further Files-unlock confirmation is pending.
+- Incoming shared GPU uploads now return mapping failures to the host; Apple's
+  blank presentation forwards those errors. Both signed iteration-29 builds
+  pass. Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers each
+  pass with no failures or skips. The new review app and runner are installed,
+  the review namespace is restored and the artist descriptor is unchanged.
+- The integrated regression has 529 passes and 19 existing hardware/benchmark
+  skips. Its one strict filter-reference failure remains: all decoded input,
+  output and reference pixels, plus the per-case error table, exactly match the
+  retained Metal baseline. No reference or tolerance is changed. Integration
+  evidence is under `artifacts/apple-main-integration-688fd76/`; final native
+  results and installed descriptors are under `integrated-v29/` in the docking
+  evidence folder. Overall acceptance remains incomplete.
 
 ## Workspace recovery and editor workflow milestone
 

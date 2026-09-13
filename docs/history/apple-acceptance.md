@@ -154,6 +154,22 @@ unchanged. Cancellation remains unverified, with no unlock question pending.
 The full feature, visual, physical-input, lifecycle and sustained-performance
 gates remain open.
 
+Before publication, main advanced through `688fd76`; the clean integration
+preserves milestone `d520d49` and all recovery stashes. Shared GPU upload
+mapping failures now propagate to the host, including Apple's initial blank
+presentation. Both signed iteration-29 builds pass. Mac mouse drawing,
+Undo/Redo and layers, and iPad Metal launch/layers each pass their native test
+with no failures or skips. The current iPad review app and runner are installed,
+the saved namespace is restored and the artist descriptor is unchanged.
+
+The merged suites pass 42 Apple, 25 host, 344 UI and 118 GPU checks, with 19
+existing hardware/benchmark skips. The strict filter-reference check still
+fails at maximum channel error 47. Its input, output and reference images and
+per-case error table exactly match the retained Metal baseline; no new pixel
+regression is observed and no oracle or tolerance is changed. Evidence is under
+`artifacts/apple-main-integration-688fd76/` and the docking folder's
+`integrated-v29/`.
+
 ## Workspace recovery and editor workflows — 2026-09-13
 
 Fast native restarts now reclaim abandoned workspace ownership once every prior

@@ -353,7 +353,8 @@ impl PixelTransform {
             }
         }
         let (buffer, binding) = self.uniforms.as_ref().unwrap();
-        uploads.write_at(encoder, queue, buffer, self.next_record, &self.records);
+        uploads.write_at(encoder, queue, buffer, self.next_record, &self.records)
+            .map_err(|_| "Could not upload transform uniforms")?;
         for (index, target) in targets.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("affine changed region"),

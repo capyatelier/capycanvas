@@ -172,11 +172,16 @@ function Start-RecoveryReview([string]$label){
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No GPU save review window' 30
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $script:scope=$root
-    Wait-Until {(Model).brush_ready} 'GPU save review did not finish starting' 45
+    # GPU readiness can precede the asynchronous restoration of saved Zen/layout.
+    Wait-Until {$model=Model;$model.brush_ready -and $model.windows_workspace.ready} 'GPU save review did not restore its workspace' 60
     if((Model).state.workspace.zen_mode){
         Invoke-Control 'Zen mode'
         Wait-Until {!(Model).state.workspace.zen_mode -and !(Model).chrome_hidden} 'Reopened review could not leave Zen'
     }
+    Wait-Until {
+        $compact=Find-Id 'application-menus';$full=Find-Id 'application-menu-file'
+        ($compact -and !$compact.Current.IsOffscreen) -or ($full -and !$full.Current.IsOffscreen)
+    } 'Restored application header did not become visible'
 }
 function Draw {
     $script:scope=$root

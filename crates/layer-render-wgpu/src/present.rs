@@ -1,6 +1,6 @@
 //! GPU-only viewport presentation shared by toolkit surfaces and WebGPU.
 
-use crate::{Uploads, WgpuRasterizer};
+use crate::{GpuRasterError, Uploads, WgpuRasterizer};
 use layer_render::{CursorSegment, ViewState};
 
 /// A native UI's document overview, sampled from the existing GPU image.
@@ -349,14 +349,15 @@ impl ViewportPresenter {
         target: &wgpu::TextureView,
         view: ViewState,
         surround_linear: [f32; 4],
-    ) {
+    ) -> Result<(), GpuRasterError> {
         let mut encoder = renderer
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("viewport presentation"),
             });
-        self.encode(renderer, &mut encoder, target, view, surround_linear);
+        self.encode(renderer, &mut encoder, target, view, surround_linear)?;
         renderer.queue.submit([encoder.finish()]);
+        Ok(())
     }
 
     /// Encode into the host's submission, allowing native GPU interop barriers
@@ -368,8 +369,8 @@ impl ViewportPresenter {
         target: &wgpu::TextureView,
         view: ViewState,
         surround_linear: [f32; 4],
-    ) {
-        self.encode_content(renderer, encoder, target, view, surround_linear, false);
+    ) -> Result<(), GpuRasterError> {
+        self.encode_content(renderer, encoder, target, view, surround_linear, false)
     }
 
     /// Render a retained native Navigator surface from the current GPU image.
@@ -379,7 +380,7 @@ impl ViewportPresenter {
         renderer: &WgpuRasterizer,
         target: &wgpu::TextureView,
         extent: [u32; 2],
-    ) {
+    ) -> Result<(), GpuRasterError> {
         assert!(
             self.standalone_overview,
             "use ViewportPresenter::for_overviews"
@@ -397,8 +398,9 @@ impl ViewportPresenter {
             },
             [0.; 4],
             true,
-        );
+        )?;
         renderer.queue.submit([encoder.finish()]);
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -410,9 +412,9 @@ impl ViewportPresenter {
         view: ViewState,
         surround_linear: [f32; 4],
         overview_only: bool,
-    ) {
+    ) -> Result<(), GpuRasterError> {
         let Some(composite) = renderer.composite_view.as_ref() else {
-            return;
+            return Ok(());
         };
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
@@ -449,7 +451,7 @@ impl ViewportPresenter {
         let [a, b, c, d, tx, ty] = view.document_to_surface;
         let det = a * d - b * c;
         if !det.is_finite() || det.abs() < 1.0e-12 {
-            return;
+            return Ok(());
         }
         let inverse = selection
             .map_or(layer_core::Affine::IDENTITY, |(s, _)| {
@@ -488,7 +490,7 @@ impl ViewportPresenter {
         };
         if self.camera_data != Some(data) {
             self.uploads
-                .write(encoder, &renderer.queue, &self.uniform, bytes);
+                .write(encoder, &renderer.queue, &self.uniform, bytes)?;
             self.camera_data = Some(data);
         }
         if !self.cursor_vertices.is_empty() {
@@ -500,7 +502,7 @@ impl ViewportPresenter {
                 )
             };
             self.uploads
-                .write(encoder, &renderer.queue, &self.cursor_buffer, bytes);
+                .write(encoder, &renderer.queue, &self.cursor_buffer, bytes)?;
         }
         if self.overviews_changed && !self.overviews.is_empty() {
             // Fixed initialized f32 arrays, with no struct padding.
@@ -515,7 +517,7 @@ impl ViewportPresenter {
                 &renderer.queue,
                 self.overview_buffer.as_ref().unwrap(),
                 bytes,
-            );
+            )?;
             self.overviews_changed = false;
         }
         {
@@ -558,6 +560,7 @@ impl ViewportPresenter {
         // Return upload chunks only after this encoder's GPU work completes.
         // Works both for present() and hosts submitting encode() themselves.
         self.uploads.finish(encoder);
+        Ok(())
     }
 }
 

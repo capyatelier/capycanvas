@@ -313,6 +313,7 @@ Run the document and lifecycle fixtures with actual D3D12 device removal enabled
 ./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -RecoverGpu
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
 cargo test --locked -p layer-windows --lib device::tests::validation_error_releases_pipeline_and_allows_device_replacement -- --ignored --exact --nocapture
+cargo test --locked -p layer-windows --lib documents::recovery_tests -- --ignored --test-threads=1 --nocapture
 ```
 
 The native fixtures create isolated profiles. The document check removes the
@@ -335,6 +336,14 @@ GPU-dependent commands are disabled. An accepted save can finish; a PNG export
 that has not captured its image is canceled. Reopen the saved drawing in a new
 window to resume painting.
 
+The document recovery test module selects hardware D3D12 explicitly and removes
+only its own process devices. Run it alone and serially. It exercises real worker
+completions before adoption, including a decoded image whose original file is
+already deleted, New/Open candidates with embedded image data, an accepted save,
+a captured PNG ticket and a viewport upload. It verifies retained pixels/history,
+failed-operation retry, protected export destinations and error return without
+unwinding. The ordinary CPU suite separately covers canceling a deferred import.
+
 Run these separately from performance measurements. They do not establish
-physical driver-reset or suspend behavior, or acceptance of every concurrent
-New/Open/import/filter/export operation.
+physical driver-reset or suspend behavior, every native picker/input overlap,
+or recovery during every filter operation.

@@ -250,7 +250,7 @@ impl App {
             &target.texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
         if surface.first_frame_complete.is_none() {
