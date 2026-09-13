@@ -26,7 +26,9 @@ commits.
 
 See the [Windows development guide](../../docs/development/windows.md) for prerequisites,
 NuGet setup, build commands and output locations. The guide also documents the
-unsigned portable ZIP packager and extracted-package validation.
+unsigned portable ZIP packager, extracted-package validation, and reproducible
+MSIX assembly with a separate local test identity. MSIX installation and
+publisher signing remain acceptance gates.
 
 ## Diagnostics and privacy
 

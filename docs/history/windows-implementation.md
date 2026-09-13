@@ -2231,3 +2231,31 @@ Release editor checks also pass, including titlebar hits, tools, Zen, resize,
 workspace restoration, themes and zero exit. Rust remains unchanged from the
 523-test and strict-Clippy checkpoint. Physical input, other physical scales,
 strict visual parity and 120 Hz painting remain open.
+
+### Reproducible MSIX archive assembly
+
+The MSIX packager consumes a verified portable payload, preserves app-local
+runtimes and license notices, and derives its package logos from the shared
+symbolic mark using the existing GTK icon proportions and colors. App source
+and packaging source are recorded separately, with script and asset hashes.
+Dirty inputs produce an explicit development artifact.
+
+Both the normal unsigned package and the separate Windows 11 unsigned test
+identity pass MakeAppx semantic validation and repeated assembly with identical
+SHA-256 hashes. The normalizer handles the SDK's ZIP64 headers, changing only
+timestamps before signing. It preserves compressed blocks and block maps and
+refuses signed packages before mutation.
+
+The 1,085-entry archives pass inventory hashing, MakeAppx extraction, activation
+metadata and repeat-logo checks. ZIP32 fixtures verify payload preservation,
+normalization idempotence and signed-archive refusal without mutation. Negative
+inputs cover altered hashes, duplicate/traversal paths, undeclared files and
+invalid versions/identity lengths. The archive suite passes under both Windows
+PowerShell 5.1 and PowerShell 7.
+
+An ordinary-user installation attempt failed with Windows error 0x80073D2B:
+unsigned executable activations require administrator installation. No test
+package remained registered. Installed identity, launch, update, uninstall,
+clean-machine behavior and publisher signing remain unverified. The existing
+portable ZIP and its runtime acceptance are unchanged. Strict picker pixels,
+physical pen, GPU recovery and 120 Hz painting also remain open.
