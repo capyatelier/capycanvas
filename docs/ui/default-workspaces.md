@@ -33,7 +33,7 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Sketch (GTK title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color, Settings |
+| Sketch (GTK title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color |
 | Paint | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
 | Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
@@ -48,8 +48,9 @@ the existing default arrangement and tool selection.
 
 ## Workspace behavior
 
-- Common title-bar defaults include Settings at the right, with a Full Screen
-  button only on Web. Native fullscreen commands/shortcuts remain available.
+- Paint and Photo title-bar defaults include Settings at the right. Sketch ends
+  with Color; Web adds a Full Screen button. Native fullscreen commands/shortcuts
+  remain available.
   GTK status components show only in fullscreen; the builder retains editable
   Clock/Battery placeholders when their values are hidden. Workspace-specific
   tools and panels remain distinct; this does not port GTK's builder to Web.
@@ -102,9 +103,10 @@ the existing default arrangement and tool selection.
 - The first Photographer arrangement used Medium tiles. On switching to an
   untouched copy of that arrangement, update it and its starting layout to Small.
   Keep renamed workspaces and brush edits; leave customized layout histories alone.
-- Untouched GTK Painter workspaces upgrade from the shipped two-toolbar layout
-  to the window bar. Working brush/color values remain intact. Any edited
-  history, custom baseline or independent copy is left alone.
+- Untouched GTK Sketch workspaces upgrade from the shipped two-toolbar layout
+  or the earlier title bar with Settings to the current title bar. Working
+  brush/color values remain intact. Any edited history, custom baseline or
+  independent copy is left alone.
 
 ## Configurable switcher
 

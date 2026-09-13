@@ -14,11 +14,30 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
     else {
         return None;
     };
+    let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
+    let mut previous_header = layout.clone();
+    previous_header.header.add(
+        layer_ui::HeaderZone::Right,
+        None,
+        &[layer_ui::HeaderItem::Settings],
+    ).ok()?;
     let previous = layer_ui::WorkspacePreset::Painter.layout(Platform::Web);
-    if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
+    let mut previous_with_settings = previous.clone();
+    previous_with_settings.header = previous_header.header.clone();
+    let settings = previous_with_settings.header.zones[2].last()?.id;
+    previous_with_settings.header.add(
+        layer_ui::HeaderZone::Right,
+        Some(settings),
+        &[layer_ui::HeaderItem::Fullscreen],
+    ).ok()?;
+    if history.revisions.len() != 1
+        || history.layout() != baseline
+        || (baseline != &previous
+            && baseline != &previous_with_settings
+            && baseline != &previous_header)
+    {
         return None;
     }
-    let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
     let mut content = entity.content.clone();
     if let ItemContent::Workspace {
         history, baseline, ..
@@ -59,6 +78,32 @@ fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
     );
     assert!(updated_painter_default(&updated, Platform::Gtk).is_none());
     assert!(updated_painter_default(&entity, Platform::Web).is_none());
+    if let ItemContent::Workspace { history, .. } = &mut entity.content {
+        let mut layout = history.layout().clone();
+        layout.header.size = layer_ui::HeaderSize::Large;
+        history.append(&layout, "User customization");
+    }
+    assert!(updated_painter_default(&entity, Platform::Gtk).is_none());
+
+    // The prior GTK Sketch header ended in Settings. Only an untouched
+    // included layout receives the new default; working brush values survive.
+    let mut old = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk);
+    old.header.add(
+        layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
+    ).unwrap();
+    entity.content = ItemContent::Workspace {
+        history: layer_ui::LayoutHistory::new(&old),
+        baseline: old,
+        origin: None,
+    };
+    let mut updated = entity.clone();
+    updated.content = updated_painter_default(&entity, Platform::Gtk).unwrap();
+    assert_eq!(
+        updated.capture().unwrap().history.layout(),
+        &layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk)
+    );
+    assert_eq!(updated.capture().unwrap().working, working);
+    assert!(updated_painter_default(&updated, Platform::Gtk).is_none());
     if let ItemContent::Workspace { history, .. } = &mut entity.content {
         let mut layout = history.layout().clone();
         layout.header.size = layer_ui::HeaderSize::Large;

@@ -228,14 +228,22 @@ mod tests {
                     items.contains(&HeaderItem::Fullscreen),
                     platform == Platform::Web
                 );
-                assert_eq!(
-                    layout.header.zones[2].last().unwrap().item,
-                    HeaderItem::Settings
-                );
                 assert!(
                     items.contains(&HeaderItem::Capy) && items.contains(&HeaderItem::Workspaces)
                 );
                 let minimal = preset == WorkspacePreset::Painter;
+                assert_eq!(items.contains(&HeaderItem::Settings), !minimal);
+                let last = layout.header.zones[2].last().unwrap().item;
+                assert_eq!(
+                    last,
+                    if !minimal {
+                        HeaderItem::Settings
+                    } else if platform == Platform::Web {
+                        HeaderItem::Fullscreen
+                    } else {
+                        HeaderItem::Tool { control: ToolbarControl::Color }
+                    }
+                );
                 assert_eq!(items.contains(&HeaderItem::Clock), !minimal);
                 assert_eq!(items.contains(&HeaderItem::Battery), !minimal);
                 assert_eq!(items.contains(&HeaderItem::MenuLabels), !minimal);
