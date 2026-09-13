@@ -4,10 +4,11 @@ The title bar is a workspace-owned arrangement of individual controls, not a
 dock for toolbar containers. The default workspaces are **Sketch**, **Paint** and
 **Photo** (their internal IDs remain unchanged). Paint starts with Capy, Main
 Menu, Filters, Lasso and Transform on the left; workspace choices in the center;
-and Brush, Blend, Erase, Layers, Color, Full Screen and Settings on the right.
+and Brush, Blend, Erase, Layers, Color and Settings on the right.
 It uses medium icons and hides canvas zoom/rotation. The canvas extends behind
-the transparent bar. Existing saved workspace names and arrangements remain
-user-owned; changing the defaults does not reset them.
+the transparent bar. Included names refresh to Sketch, Paint and Photo without
+resetting saved arrangements, working tools or history. Custom workspace names
+are untouched; normal name-collision suffixes remain supported.
 
 ## Customize inline
 
@@ -20,7 +21,7 @@ every component and confirmation control reachable. There is no separate
 designer or opening shortcut.
 
 - The palette offers **Add Tools…**, Capy, Main Menu, Menu Labels, Settings,
-  Full Screen, Workspaces, Document Title, Clock, Battery and Space.
+  Workspaces, Document Title, Clock, Battery and Space.
   Already-present singleton components are omitted. Removing one returns it
   to the palette; tools disappear and can be added again using Add Tools.
 - Drag a component into the bar, or click it to insert at the marked position.
@@ -75,8 +76,13 @@ Native window-control targets grow equally in both axes, with 6px outer clearanc
 At narrow widths, each region overflows whole items into a More menu. Tools
 still open their normal drawers, anchored to the visible overflow control;
 resizing does not change the stored arrangement. Workspace choices compact to
-a menu when needed. Battery is absent on devices without one, but has an
-editable placeholder in the builder.
+a menu when needed. Clock and battery items occupy space only in fullscreen,
+even when included in the saved bar. Both have editable placeholders in the
+builder while windowed; battery also has a placeholder on devices without one.
+Fullscreen is a Web-only title-bar component. GTK keeps F11 and View → Full screen,
+but excludes the tile from its bar, overflow menus and palette, including when
+loading a saved arrangement containing it. Other default controls stay aligned
+across hosts without replacing each workspace's distinct tools/panels.
 
 Removing all navigation items exposes a recovery menu; native close is always
 outside customization. Outside editing, unused caption space and informational
@@ -141,8 +147,9 @@ neighbors survive preview, removal and Cancel at every size.
 dropping near either edge of the enlarged target, with mouse and touch at every
 size. Run it both at 640×600 and at 2× scale.
 `native_header_tools_drop_input` checks the palette-to-modal handoff, and
-`native_header_window_actions_input` checks Settings and Full Screen at all
-sizes, including reopening Settings and restoring keyboard focus.
+`native_header_window_actions_input` checks Settings and F11 at all sizes,
+including reopening Settings, keyboard focus, fullscreen-only clock/battery
+geometry, editable windowed placeholders and exclusion of saved Web-only tiles.
 Inspect their captured screenshots as well as
 assertions. Physical pen input and non-GTK window managers still require their
 own platform/hardware validation.

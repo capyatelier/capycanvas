@@ -1500,7 +1500,11 @@ fn native_header_editor_controls_input() {
     d.click_label("Customize Title Bar…");
     assert!(state(&d.w).customization.header_editing);
     crate::capture(&d.w, d.dir.join("empty-bar-palette.png").to_str().unwrap());
-    for (i, item) in HeaderItem::COMPONENTS.into_iter().enumerate() {
+    for (i, item) in HeaderItem::COMPONENTS
+        .into_iter()
+        .filter(|item| item.available_on(Platform::Gtk))
+        .enumerate()
+    {
         let zone = HeaderZone::ALL[i % 3];
         d.slot(zone);
         let name = format!(
@@ -2263,20 +2267,81 @@ fn native_header_empty_center_input() {
 #[ignore = "isolated native-input.js --native-test=native_header_window_actions_input"]
 fn native_header_window_actions_input() {
     let mut d = Driver::new("art.capycanvas.HeaderWindowActions");
+    assert!(
+        !state(&d.w)
+            .workspace
+            .layout
+            .header
+            .entries()
+            .any(|e| e.item == HeaderItem::Fullscreen)
+    );
+    d.w.dispatch(UiAction::RestoreWorkspace {
+        workspace: WorkspaceState {
+            layout: WorkspacePreset::Illustrator.layout(Platform::Gtk),
+            ..WorkspaceState::default()
+        },
+    });
+    pump(500);
     let model = state(&d.w).workspace.layout.header;
     let settings = model
         .entries()
         .find(|e| e.item == HeaderItem::Settings)
         .unwrap()
         .id;
-    let fullscreen = model
-        .entries()
-        .find(|e| e.item == HeaderItem::Fullscreen)
-        .unwrap()
-        .id;
+    assert!(!model.entries().any(|e| e.item == HeaderItem::Fullscreen));
+    // Portable/saved Web components must not reintroduce a native fullscreen
+    // button, reserve a gap, or appear in the overflow menu/editor palette.
+    d.w.dispatch(
+        HeaderAction::Add {
+            zone: HeaderZone::Right,
+            before: Some(settings),
+            item: HeaderItem::Fullscreen,
+        }
+        .action(),
+    );
+    let model = state(&d.w).workspace.layout.header;
+    let ids: Vec<_> = [
+        HeaderItem::Clock,
+        HeaderItem::Battery,
+        HeaderItem::Fullscreen,
+    ]
+    .map(|item| model.entries().find(|e| e.item == item).unwrap().id)
+    .into();
+    d.w.system_status
+        .show_battery(Some(crate::system_status::Battery {
+            percent: 73,
+            charging: false,
+            low: false,
+        }));
     for size in HeaderSize::ALL {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         pump(250);
+        let geometry = d.w.header.geometry_for_test();
+        for id in &ids {
+            assert!(!geometry.items.iter().any(|item| item.id == *id));
+        }
+        assert!(!d.w.system_status.clock.is_visible());
+        assert!(!d.w.system_status.battery.is_visible());
+        d.edit();
+        for id in &ids[..2] {
+            assert!(
+                d.w.header
+                    .geometry_for_test()
+                    .items
+                    .iter()
+                    .any(|item| item.id == *id),
+                "status placeholders are editable while windowed"
+            );
+        }
+        assert!(
+            !d.w.header
+                .geometry_for_test()
+                .items
+                .iter()
+                .any(|item| item.id == ids[2])
+        );
+        assert!(find_named(d.w.header.root.upcast_ref(), "header-add-full-screen").is_none());
+        d.click_name("header-edit-done");
         d.click_name(&format!("header-item-{settings}"));
         assert!(state(&d.w).settings_open && d.w.window.visible_dialog().is_some());
         crate::capture(
@@ -2301,20 +2366,23 @@ fn native_header_window_actions_input() {
         }
         assert!(!state(&d.w).settings_open);
         for enabled in [true, false] {
-            d.click_name(&format!("header-item-{fullscreen}"));
+            d.key(0xffc8); // Native fullscreen remains available through F11/menu.
             pump(500);
             assert_eq!(d.w.window.is_fullscreen(), enabled);
             assert_eq!(state(&d.w).fullscreen, enabled);
-            let button = d.w.header.drawer_button(fullscreen).unwrap();
-            assert!(!button.has_css_class("selected-tool"));
-            let image = button.child().unwrap().downcast::<gtk::Image>().unwrap();
-            assert_eq!(
-                crate::icons::name(&image).as_deref(),
-                Some(if enabled {
-                    "layer-fullscreen-exit-symbolic"
-                } else {
-                    "layer-fullscreen-enter-symbolic"
-                })
+            assert_eq!(d.w.system_status.clock.is_visible(), enabled);
+            assert_eq!(d.w.system_status.battery.is_visible(), enabled);
+            let geometry = d.w.header.geometry_for_test();
+            for id in &ids[..2] {
+                assert_eq!(geometry.items.iter().any(|item| item.id == *id), enabled);
+            }
+            assert!(!geometry.items.iter().any(|item| item.id == ids[2]));
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("status-{size:?}-{enabled}.png"))
+                    .to_str()
+                    .unwrap(),
             );
         }
     }

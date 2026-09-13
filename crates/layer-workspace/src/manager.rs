@@ -435,7 +435,39 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(())
     }
     async fn ensure_default(&self, entity: Entity) -> Result<()> {
-        if self.items().iter().any(|i| i.id == entity.id) {
+        if let Some(existing) = self.items().iter().find(|i| i.id == entity.id) {
+            let name = &entity.metadata.name;
+            // Keep the store's collision suffix. Refreshing a system-owned label
+            // must never reset a workspace or rewrite it on every launch.
+            let current = &existing.metadata.name;
+            let collision_suffix = current
+                .strip_prefix(&format!("{name} ("))
+                .and_then(|s| s.strip_suffix(')'))
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|n| n >= 2);
+            if existing.metadata.builtin
+                && current != name
+                && !collision_suffix
+                && self.active_id().as_deref() != Some(entity.id.as_str())
+            {
+                let saved = match self.claim(&entity.id).await {
+                    Ok(saved) => saved,
+                    Err(error) if error.kind == ErrorKind::OwnedElsewhere => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+                let mut metadata = saved.entity.metadata.clone();
+                metadata.name = name.clone();
+                let mut mutation = update(&saved, Some(metadata), None, None)?;
+                if let Mutation::Update { name_policy, .. } = &mut mutation {
+                    *name_policy = NamePolicy::Unique;
+                }
+                let result = self
+                    .publish(CommitBatch::prepare(self.owner.clone(), vec![mutation])?)
+                    .await;
+                self.release_checked(&saved).await?;
+                result?;
+                self.refresh().await?;
+            }
             return Ok(());
         }
         let id = entity.id.clone();

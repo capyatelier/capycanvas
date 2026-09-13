@@ -300,6 +300,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .workspace
                 .layout
                 .header
+                .projected_for(self.state.platform)
                 .context_menu(id, self.state.customization.header_editing),
             _ => self
                 .state

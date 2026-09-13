@@ -1103,7 +1103,7 @@ impl DockLayout {
     /// The complete editor preset is enabled as hosts finish their native UI.
     /// This selects initial/reset geometry, never migrates a saved workspace.
     pub fn for_platform(platform: crate::Platform) -> Self {
-        if matches!(
+        let mut layout = if matches!(
             platform,
             crate::Platform::Gtk
                 | crate::Platform::Android
@@ -1115,7 +1115,9 @@ impl DockLayout {
             Self::editor_default()
         } else {
             Self::default()
-        }
+        };
+        layout.header = crate::HeaderLayout::for_platform(platform);
+        layout
     }
 
     pub fn editor_default() -> Self {
@@ -4181,10 +4183,9 @@ mod tests {
             crate::Platform::Android,
             crate::Platform::Web,
         ] {
-            assert_eq!(
-                DockLayout::for_platform(platform),
-                DockLayout::editor_default()
-            );
+            let mut expected = DockLayout::editor_default();
+            expected.header = crate::HeaderLayout::for_platform(platform);
+            assert_eq!(DockLayout::for_platform(platform), expected);
             assert!(Panel::Commands.available_on(platform));
         }
         use crate::CommandId::*;

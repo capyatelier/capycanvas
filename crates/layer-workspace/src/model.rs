@@ -12,7 +12,7 @@ pub const OWNER_RENEW_MS: u64 = 10_000;
 pub const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
 /// Retained for older saved-layout references; new installs only seed workspaces.
 pub const DEFAULT_TEMPLATE_ID: &str = "builtin:default";
-/// Stable identities: names and contents of the workspaces remain editable.
+/// Stable identities: included names are system-owned; workspace content is editable.
 pub const DEFAULT_WORKSPACES: [(&str, layer_ui::WorkspacePreset); 3] = [
     (
         "builtin:workspace:painter",
@@ -28,9 +28,14 @@ pub const DEFAULT_WORKSPACES: [(&str, layer_ui::WorkspacePreset); 3] = [
     ),
 ];
 pub(crate) fn is_default_item(id: &str) -> bool {
+    default_workspace_name(id).is_some()
+}
+
+pub(crate) fn default_workspace_name(id: &str) -> Option<&'static str> {
     DEFAULT_WORKSPACES
         .iter()
-        .any(|(workspace, _)| *workspace == id)
+        .find(|(key, _)| *key == id)
+        .map(|(_, preset)| preset.name())
 }
 
 pub fn new_id() -> String {

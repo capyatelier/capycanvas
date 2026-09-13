@@ -1,6 +1,7 @@
 # Default workspaces
 
-2026-09-12: first GTK implementation of Painter, Illustrator, and Photographer.
+The included profiles are **Sketch**, **Paint** and **Photo** (formerly
+Illustrator, Painter and Photographer). Their stable internal IDs are unchanged.
 **Workspaces are the only saved product item**.
 There is no Save Layout or Load Layout UI. Workspace changes save automatically.
 
@@ -31,9 +32,9 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Painter (GTK window bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color |
-| Illustrator | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
-| Photographer | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
+| Paint (GTK title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color, Settings |
+| Sketch | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
+| Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
 GTK Painter uses Medium window-bar icons, a transparent canvas overlay, no menu
 labels and no zoom/rotation bubble. Other hosts retain the earlier two-toolbar
@@ -46,6 +47,14 @@ the existing default arrangement and tool selection.
 
 ## Workspace behavior
 
+- Common title-bar defaults include Settings at the right, with a Full Screen
+  button only on Web. Native fullscreen commands/shortcuts remain available.
+  GTK status components show only in fullscreen; the builder retains editable
+  Clock/Battery placeholders when their values are hidden. Workspace-specific
+  tools and panels remain distinct; this does not port GTK's builder to Web.
+- Startup refreshes included names to Sketch, Paint and Photo, retaining normal
+  collision suffixes and preserving saved contents, working tools and history.
+  Custom names and workspaces owned by another live window are not modified.
 - Seed exactly three default workspaces with stable IDs:
   `builtin:workspace:painter`, `builtin:workspace:illustrator`, and
   `builtin:workspace:photographer`. Fresh installations open Illustrator.

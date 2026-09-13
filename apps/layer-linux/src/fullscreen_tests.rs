@@ -68,7 +68,13 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap()
         .downcast::<gtk::Label>()
         .unwrap();
-    until(|| clock.is_mapped());
+    until(|| {
+        named(w.window.upcast_ref(), "workspace-window-bar").is_some_and(|bar| bar.is_mapped())
+    });
+    assert!(
+        !clock.is_mapped(),
+        "windowed status does not occupy title-bar space"
+    );
     let menu = w
         .gpu
         .borrow()
@@ -155,7 +161,7 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap();
     assert!(reply.handled);
     w.changed(Ok(reply.change));
-    until(|| !w.window.is_fullscreen() && clock.is_mapped());
+    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     w.window.fullscreen();
     until(|| {
         w.window.is_fullscreen() && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
@@ -223,7 +229,7 @@ fn native_fullscreen_header_clock_and_battery() {
     assert!(!battery.is_visible());
     probe.destroy();
     w.window.unfullscreen();
-    until(|| !w.window.is_fullscreen() && clock.is_mapped());
+    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     assert!(
         !w.gpu
             .borrow()
@@ -233,8 +239,8 @@ fn native_fullscreen_header_clock_and_battery() {
             .command(CommandId::Fullscreen)
             .selected
     );
-    // GTK visibility belongs to the workspace component, not a global
-    // fullscreen-only preference. Removing/readding retains the live observer.
+    // GTK visibility requires both a workspace component and fullscreen.
+    // Removing/readding retains the live observer.
     let id = w
         .gpu
         .borrow()
@@ -264,7 +270,7 @@ fn native_fullscreen_header_clock_and_battery() {
     );
     until(|| clock.is_mapped());
     w.window.unfullscreen();
-    until(|| !w.window.is_fullscreen() && clock.is_mapped());
+    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
     w.window.destroy();
     assert!(w.gpu.borrow().is_none());
     // Finish compositor releases before libtest tears down the GTK owner thread.

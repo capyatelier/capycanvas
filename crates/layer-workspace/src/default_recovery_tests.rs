@@ -130,6 +130,46 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn included_name_updates_allow_only_canonical_names_on_both_backends() {
+    let mut f = Fixture::new(Platform::Gtk);
+    for (id, preset) in DEFAULT_WORKSPACES {
+        f.corrupt(id, |e| {
+            e["metadata"]["name"] = json!(format!("Old {}", preset.name()))
+        });
+        let saved = f.claim(id).unwrap();
+        for name in ["Arbitrary rename", preset.name()] {
+            let mut metadata = saved.entity.metadata.clone();
+            metadata.name = name.into();
+            let batch = CommitBatch::prepare(
+                f.owner.clone(),
+                vec![Mutation::Update {
+                    id: id.into(),
+                    generations: saved.generations,
+                    fence: saved.claim.as_ref().unwrap().fence,
+                    metadata: Some(metadata),
+                    content: None,
+                    working: None,
+                    name_policy: NamePolicy::Unique,
+                }],
+            )
+            .unwrap();
+            let result = f.both(StoreRequest::Commit { batch });
+            if name == "Arbitrary rename" {
+                assert_eq!(result.unwrap_err().kind, ErrorKind::InvalidData);
+            } else {
+                result.unwrap();
+            }
+        }
+        let updated = f.claim(id).unwrap();
+        assert_eq!(updated.entity.metadata.name, preset.name());
+        assert_eq!(updated.entity.content, saved.entity.content);
+        assert_eq!(updated.entity.working, saved.entity.working);
+        assert_eq!(updated.generations.layout, saved.generations.layout);
+        assert_eq!(updated.generations.working, saved.generations.working);
+    }
+}
+
+#[test]
 fn invalid_defaults_reset_individually_and_persist_on_both_backends() {
     for platform in [Platform::Gtk, Platform::Web] {
         for (index, (id, _)) in DEFAULT_WORKSPACES.iter().enumerate() {

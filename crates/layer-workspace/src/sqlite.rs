@@ -795,7 +795,10 @@ fn apply_write(
                 "Included workspaces cannot be deleted.",
             ));
         }
-        if row.builtin && metadata.name != serde_json::from_str::<Metadata>(&row.metadata)?.name {
+        if row.builtin
+            && metadata.name != serde_json::from_str::<Metadata>(&row.metadata)?.name
+            && crate::model::default_workspace_name(&write.id) != Some(metadata.name.as_str())
+        {
             return Err(StoreError::invalid(
                 "Included workspaces cannot be renamed.",
             ));

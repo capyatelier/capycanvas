@@ -308,6 +308,7 @@ impl SystemStatus {
         let [clock, battery] = self
             .components
             .get()
+            .map(|components| components.map(|present| present && self.fullscreen.get()))
             .unwrap_or_else(|| [self.show_clock.get().visible(self.fullscreen.get()); 2]);
         let battery = battery && self.value.get().is_some();
         self.clock.set_visible(clock);

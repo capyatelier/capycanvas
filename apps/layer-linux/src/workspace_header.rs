@@ -179,6 +179,11 @@ impl Header {
             w,
             move |_| w.header.root.queue_allocate()
         ));
+        w.system_status.clock.connect_visible_notify(glib::clone!(
+            #[weak]
+            w,
+            move |_| w.header.root.queue_allocate()
+        ));
         self.editor.bind(w);
         let pick = gtk::GestureClick::new();
         pick.set_button(1);
@@ -344,7 +349,8 @@ impl Header {
         w.window.add_controller(keys);
     }
     pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
-        let model = &state.workspace.layout.header;
+        let projected = state.workspace.layout.header.projected_for(Platform::Gtk);
+        let model = &projected;
         let editing = state.customization.header_editing;
         let was_editing = self.editing.replace(editing);
         let rebuild = was_editing != editing || self.model.borrow().as_ref() != Some(model);
@@ -676,12 +682,12 @@ impl Header {
         if entry.item == HeaderItem::Menu {
             size_images(&content, size.icon());
         }
-        let content = if entry.item == HeaderItem::Battery {
+        let content = if matches!(entry.item, HeaderItem::Clock | HeaderItem::Battery) {
             let stack = gtk::Stack::new();
             stack.set_hhomogeneous(false);
             stack.set_vhomogeneous(false);
             stack.add_named(&content, Some("value"));
-            let placeholder = gtk::Label::new(Some("Battery"));
+            let placeholder = gtk::Label::new(Some(&entry.item.label()));
             stack.add_named(&placeholder, Some("placeholder"));
             stack.set_visible_child_name(if content.is_visible() {
                 "value"
@@ -792,7 +798,7 @@ impl Header {
             .borrow()
             .iter()
             .map(|item| {
-                if item.entry.item == HeaderItem::Battery
+                if matches!(item.entry.item, HeaderItem::Clock | HeaderItem::Battery)
                     && !self.editing.get()
                     && item
                         .content
@@ -843,14 +849,14 @@ impl Header {
             .items
             .borrow()
             .iter()
-            .filter(|i| i.entry.item == HeaderItem::Battery)
+            .filter(|i| matches!(i.entry.item, HeaderItem::Clock | HeaderItem::Battery))
         {
             if let Some(stack) = item.content.first_child().and_downcast::<gtk::Stack>() {
-                stack.set_visible_child_name(if w.system_status.battery.is_visible() {
-                    "value"
-                } else {
-                    "placeholder"
-                });
+                let visible = match item.entry.item {
+                    HeaderItem::Clock => w.system_status.clock.is_visible(),
+                    _ => w.system_status.battery.is_visible(),
+                };
+                stack.set_visible_child_name(if visible { "value" } else { "placeholder" });
             }
         }
         let height = model.size.height();

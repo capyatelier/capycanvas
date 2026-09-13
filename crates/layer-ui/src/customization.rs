@@ -565,7 +565,9 @@ impl DockLayout {
     ) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
-            ContextTarget::Header { id } => return self.header.context_menu(id, false),
+            ContextTarget::Header { id } => {
+                return self.header.projected_for(platform).context_menu(id, false);
+            }
             ContextTarget::Column { column } => {
                 if !self.is_collapsed(column) {
                     return Err("The column is not collapsed".into());

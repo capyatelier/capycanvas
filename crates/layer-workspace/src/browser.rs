@@ -599,7 +599,10 @@ impl BrowserDatabase {
                     return Err(StoreError::conflict());
                 }
                 if let Some(m) = &w.metadata {
-                    if s.entity.metadata.builtin && m.name != s.entity.metadata.name {
+                    if s.entity.metadata.builtin
+                        && m.name != s.entity.metadata.name
+                        && crate::model::default_workspace_name(&w.id) != Some(m.name.as_str())
+                    {
                         return Err(StoreError::invalid(
                             "Included workspaces cannot be renamed.",
                         ));

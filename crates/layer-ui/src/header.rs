@@ -79,6 +79,11 @@ pub enum HeaderItem {
     Tool { control: ToolbarControl },
 }
 impl HeaderItem {
+    /// Native hosts retain their OS/menu fullscreen actions, not a title-bar tile.
+    pub fn available_on(self, platform: Platform) -> bool {
+        self != Self::Fullscreen || platform == Platform::Web
+    }
+
     pub const COMPONENTS: [Self; 10] = [
         Self::Capy,
         Self::Menu,
@@ -136,7 +141,6 @@ impl Default for HeaderLayout {
                     HeaderItem::Workspaces,
                     HeaderItem::Clock,
                     HeaderItem::Battery,
-                    HeaderItem::Fullscreen,
                     HeaderItem::Settings,
                 ],
             ],
@@ -144,6 +148,27 @@ impl Default for HeaderLayout {
     }
 }
 impl HeaderLayout {
+    /// Omit host-inapplicable controls from presentation and editing without
+    /// changing the portable, saved arrangement or its stable item identities.
+    pub fn projected_for(&self, platform: Platform) -> Self {
+        let mut header = self.clone();
+        for zone in &mut header.zones {
+            zone.retain(|entry| entry.item.available_on(platform));
+        }
+        header
+    }
+
+    pub fn for_platform(platform: Platform) -> Self {
+        let mut header = Self::default();
+        if platform == Platform::Web {
+            let settings = header.zones[2].last().unwrap().id;
+            header
+                .add(HeaderZone::Right, Some(settings), &[HeaderItem::Fullscreen])
+                .unwrap();
+        }
+        header
+    }
+
     pub fn context_menu(&self, id: Option<u32>, editing: bool) -> Result<ContextMenu, String> {
         let entry =
             |label: &str, action: HeaderAction| ContextMenuItem::command(label, action.action());
@@ -274,7 +299,6 @@ impl HeaderLayout {
                     Tool {
                         control: ToolbarControl::Color,
                     },
-                    Fullscreen,
                     Settings,
                 ],
             ],
@@ -435,8 +459,7 @@ impl HeaderLayout {
         let gaps = |count: usize| count.saturating_sub(1) as f32 * item_gap;
         // Zero-width native metrics denote unavailable informational items
         // (e.g. a desktop without a battery), not overflowed interactive items.
-        let visible =
-            |e: &&HeaderEntry| editing || !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
+        let visible = |e: &&HeaderEntry| !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
         let metric = |e: &HeaderEntry, compact: bool| {
             let m = metrics.iter().find(|m| m.id == e.id);
             m.map_or(tile, |m| if compact { m.compact } else { m.width })
@@ -680,6 +703,48 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unavailable_items_take_no_space_even_when_customizing() {
+        let mut h = HeaderLayout::for_platform(Platform::Web);
+        let id = h
+            .entries()
+            .find(|e| e.item == HeaderItem::Fullscreen)
+            .unwrap()
+            .id;
+        let metrics = [HeaderMetric {
+            id,
+            width: 0.,
+            compact: 0.,
+        }];
+        let hidden = h.resolve(1600., [0.; 2], &metrics, false);
+        h.remove(id).unwrap();
+        let web = HeaderLayout::for_platform(Platform::Web);
+        assert_eq!(web.projected_for(Platform::Gtk), h);
+        assert_eq!(web.projected_for(Platform::Web), web);
+        let battery = h
+            .entries()
+            .find(|e| e.item == HeaderItem::Battery)
+            .unwrap()
+            .id;
+        assert_eq!(
+            web.projected_for(Platform::Gtk).step(battery, true),
+            h.step(battery, true)
+        );
+        assert_eq!(hidden.items, h.resolve(1600., [0.; 2], &[], false).items);
+        for editing in [false, true] {
+            for width in [320., 1600.] {
+                let portable = HeaderLayout::for_platform(Platform::Web);
+                let g = portable.resolve(width, [0.; 2], &metrics, editing);
+                assert!(!g.items.iter().any(|item| item.id == id));
+                let removed = h.resolve(width, [0.; 2], &[], editing);
+                assert_eq!(g.items, removed.items);
+                assert_eq!(g.zones, removed.zones);
+                assert_eq!(g.overflow, removed.overflow);
+                assert_eq!(g.hidden, removed.hidden);
+            }
+        }
+    }
+
     #[test]
     fn context_actions_match_editing_state_and_actual_region() {
         let h = HeaderLayout::painter();

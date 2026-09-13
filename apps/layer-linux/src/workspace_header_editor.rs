@@ -41,6 +41,7 @@ impl Editor {
                 .chain(
                     HeaderItem::COMPONENTS
                         .into_iter()
+                        .filter(|item| item.available_on(Platform::Gtk))
                         .map(HeaderDragSource::Component),
                 )
                 .map(|source| (source, gtk::Box::new(gtk::Orientation::Horizontal, 0)))
