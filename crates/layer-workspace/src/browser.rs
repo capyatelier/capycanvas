@@ -452,6 +452,12 @@ impl BrowserDatabase {
                 report.database_bytes = self.encoded()?.len() as u64;
                 report.component_bytes = self.components.values().map(|v| v.len() as u64).sum();
                 if apply {
+                    // execute() publishes this cloned transaction only on success.
+                    // Vacate all renamed labels before ordinary collision resolution.
+                    for id in &plan.renamed {
+                        self.items.get_mut(id).unwrap().entity["metadata"]["name"] =
+                            serde_json::json!(format!("\0catalog:{id}"));
+                    }
                     for mut entity in plan.changed {
                         entity.metadata =
                             self.resolve_name(entity.metadata, &entity.id, NamePolicy::Unique)?;

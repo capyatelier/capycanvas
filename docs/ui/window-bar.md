@@ -2,7 +2,7 @@
 
 The title bar is a workspace-owned arrangement of individual controls, not a
 dock for toolbar containers. The default workspaces are **Sketch**, **Paint** and
-**Photo** (their internal IDs remain unchanged). Paint starts with Capy, Main
+**Photo** (their internal IDs remain unchanged). Sketch starts with Capy, Main
 Menu, Filters, Lasso and Transform on the left; workspace choices in the center;
 and Brush, Blend, Erase, Layers, Color and Settings on the right.
 It uses medium icons and hides canvas zoom/rotation. The canvas extends behind

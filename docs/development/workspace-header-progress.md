@@ -392,3 +392,32 @@ captures, managed Paint and the narrow full palette. Strict Clippy is not clean:
 the unchanged manual-clamp expression, eight-argument HeaderDrag constructor and
 large UiAction enum trigger existing warnings. No warning suppression or unrelated
 API refactor was added. Checkpoints are local only; nothing was pushed.
+
+## Correct Sketch/Paint identities — 2026-09-13
+
+The requested name mapping supersedes the preceding record: **Sketch** is the
+minimal internal Painter preset, **Paint** is the panel-heavy internal
+Illustrator preset, and **Photo** remains Photographer. Only display names
+change; stable IDs, tab order, startup selection, layouts and tools do not.
+
+Catalog maintenance vacates all changing names inside its existing transaction
+before assigning their final labels. This avoids spurious `(2)` suffixes when
+swapping two occupied names. Both dependent renames defer when either workspace
+is owned elsewhere; unrelated live owners do not block the pair. Custom-name
+collisions keep the existing unique-name policy. No profile is reset.
+
+Validation: 447 shared tests pass (344 UI, 25 host, 78 workspace; one hardware
+host test ignored). Added SQLite/browser parity checks for the exact old-name
+swap, dry runs, both live-owner cases, unchanged content/working state/pins/order/
+bindings, generation changes, failure rollback including indexes, and idempotent
+reopen. GTK and Web release builds pass.
+
+The isolated GTK managed journey checks the visible names, switches to Sketch,
+edits/saves the bar, switches away/back, closes an uncommitted preview, reopens
+the saved workspace and uses its Color drawer (`yKX97A`). It now also asserts
+visible paper pixels in the full-window captures. The existing behind-header
+canvas test passes in both themes (`stXWLC`). Inspected original-resolution
+PNGs of both layouts and the reopened edit; a blank-looking image-tool preview
+was not present in the actual PNG pixels. Run directories are under
+`/tmp/capy-workspace-motion.<ID>`. No normal user workspace was touched; no
+other-platform GUI or physical-device acceptance is inferred from these checks.

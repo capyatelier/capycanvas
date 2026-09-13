@@ -1,7 +1,8 @@
 # Default workspaces
 
 The included profiles are **Sketch**, **Paint** and **Photo** (formerly
-Illustrator, Painter and Photographer). Their stable internal IDs are unchanged.
+Painter, Illustrator and Photographer). Sketch is the minimal drawing workspace;
+Paint is the panel-heavy workspace. Their stable internal IDs are unchanged.
 **Workspaces are the only saved product item**.
 There is no Save Layout or Load Layout UI. Workspace changes save automatically.
 
@@ -32,8 +33,8 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Paint (GTK title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color, Settings |
-| Sketch | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
+| Sketch (GTK title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color, Settings |
+| Paint | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
 | Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
 GTK Painter uses Medium window-bar icons, a transparent canvas overlay, no menu
@@ -54,6 +55,8 @@ the existing default arrangement and tool selection.
   tools and panels remain distinct; this does not port GTK's builder to Web.
 - Startup refreshes included names to Sketch, Paint and Photo, retaining normal
   collision suffixes and preserving saved contents, working tools and history.
+  A name swap is atomic, so the two included names do not collide with each
+  other. If either participant is open elsewhere, both names wait for release.
   Custom names and workspaces owned by another live window are not modified.
 - Seed exactly three default workspaces with stable IDs:
   `builtin:workspace:painter`, `builtin:workspace:illustrator`, and

@@ -15,8 +15,8 @@ impl WorkspacePreset {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Painter => "Paint",
-            Self::Illustrator => "Sketch",
+            Self::Painter => "Sketch",
+            Self::Illustrator => "Paint",
             Self::Photographer => "Photo",
         }
     }
@@ -209,8 +209,8 @@ mod tests {
 
     #[test]
     fn preset_title_bar_controls_follow_the_host_platform() {
-        assert_eq!(WorkspacePreset::Illustrator.name(), "Sketch");
-        assert_eq!(WorkspacePreset::Painter.name(), "Paint");
+        assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
+        assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
         assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
         for platform in [
             Platform::Gtk,

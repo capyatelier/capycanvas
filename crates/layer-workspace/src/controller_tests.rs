@@ -572,7 +572,7 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
             .find(|r| r.id == painter)
             .unwrap()
             .title,
-        "Paint"
+        "Sketch"
     );
     f.input(serde_json::json!({"type":"cancel"}));
     f.input(serde_json::json!({"type":"open","page":"workspaces"}));

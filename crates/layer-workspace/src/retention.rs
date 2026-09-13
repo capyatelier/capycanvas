@@ -14,6 +14,9 @@ pub struct StorageReport {
 pub(crate) struct RetentionPlan {
     pub report: StorageReport,
     pub changed: Vec<Entity>,
+    /// Names vacated together before assigning their final values. This permits
+    /// label swaps without introducing collision suffixes between included items.
+    pub renamed: Vec<String>,
     pub expired: Vec<String>,
 }
 #[derive(Clone)]
@@ -128,6 +131,31 @@ pub(crate) fn retention_plan(
             }
         }
     }
+    // A name swap must wait if its other half is still owned by a live window.
+    // Propagate deferral through dependent renames, leaving unrelated items alone.
+    loop {
+        let mut deferred = false;
+        for index in 0..items.len() {
+            if entities[index].metadata.name == items[index].entity.metadata.name {
+                continue;
+            }
+            let desired = name_key(&entities[index].metadata.name);
+            if items.iter().enumerate().any(|(other, stored)| {
+                other != index
+                    && stored.entity.metadata.builtin
+                    && stored.entity.metadata.kind == entities[index].metadata.kind
+                    && stored.entity.metadata.deleted_at_ms.is_none()
+                    && name_key(&stored.entity.metadata.name) == desired
+                    && entities[other].metadata.name == stored.entity.metadata.name
+            }) {
+                entities[index].metadata.name = items[index].entity.metadata.name.clone();
+                deferred = true;
+            }
+        }
+        if !deferred {
+            break;
+        }
+    }
     eligible.sort_by_key(|(date, index, _, _)| (*date, *index));
     let mut remaining = report.eligible_history_bytes;
     for (_, index, version, bytes) in eligible {
@@ -151,6 +179,12 @@ pub(crate) fn retention_plan(
         report.versions_to_remove += 1;
     }
     report.expired_items = expired.len();
+    let renamed = entities
+        .iter()
+        .zip(items)
+        .filter(|(e, s)| e.metadata.name != s.entity.metadata.name && !expired.contains(&e.id))
+        .map(|(e, _)| e.id.clone())
+        .collect();
     let changed = entities
         .into_iter()
         .zip(items)
@@ -160,6 +194,7 @@ pub(crate) fn retention_plan(
     Ok(RetentionPlan {
         report,
         changed,
+        renamed,
         expired,
     })
 }

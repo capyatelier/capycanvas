@@ -116,7 +116,7 @@ fn included_name_write_failure_is_atomic_and_retryable_without_claims() {
         db.execute_batch("DROP TRIGGER fail_catalog_name;").unwrap();
         m.initialize_catalog(3_000).await.unwrap();
         let saved = m.load(id).await.unwrap();
-        assert_eq!(saved.entity.metadata.name, "Paint");
+        assert_eq!(saved.entity.metadata.name, "Sketch");
         assert_eq!(saved.entity.content, before.entity.content);
         assert_eq!(saved.entity.working, before.entity.working);
         assert!(
@@ -421,7 +421,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         let outgoing = m.activate(incoming).unwrap();
         m.release(&outgoing).await;
         let restored = m.prepare_switch(painter, 7_000).await.unwrap();
-        assert_eq!(restored.entity.metadata.name, "Paint");
+        assert_eq!(restored.entity.metadata.name, "Sketch");
         assert_eq!(
             restored.entity.capture().unwrap(),
             m.load(painter).await.unwrap().entity.capture().unwrap()
@@ -435,7 +435,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
         let incoming = reopened.initialize(8_000).await.unwrap();
         assert_eq!(incoming.entity.id, painter);
-        assert_eq!(incoming.entity.metadata.name, "Paint");
+        assert_eq!(incoming.entity.metadata.name, "Sketch");
         assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
         assert_eq!(incoming.entity.capture().unwrap().working, capture.working);
         assert_eq!(reopened.items().len(), 3);
@@ -557,7 +557,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
         let mut layout = DockLayout::for_platform(Platform::Gtk);
         layout.bands[0].extent += 80.;
         let user = Entity::workspace(
-            "Paint",
+            "Sketch",
             WorkspaceCapture::from_template(&layout).unwrap(),
             layout.clone(),
             None,
@@ -598,7 +598,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
         let manager = WorkspaceManager::new(worker, Platform::Gtk);
         let incoming = manager.initialize(1_000).await.unwrap();
         assert_eq!(incoming.entity.id, user_id);
-        assert_eq!(incoming.entity.metadata.name, "Paint");
+        assert_eq!(incoming.entity.metadata.name, "Sketch");
         assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
         assert_eq!(manager.items().len(), 4);
         assert_eq!(manager.rows(ManagerPage::Workspaces, "", 1_000).len(), 4);
@@ -614,7 +614,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
                 .entity
                 .metadata
                 .name,
-            "Paint (2)"
+            "Sketch (2)"
         );
         manager.activate(incoming);
         manager.close().await.unwrap();
@@ -1339,7 +1339,7 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
         m.store.fail.set(false);
         m.refresh().await.unwrap();
         assert_eq!(m.items().len(), before);
-        assert_eq!(m.active_name().as_deref(), Some("Sketch"));
+        assert_eq!(m.active_name().as_deref(), Some("Paint"));
         assert!(m.import_workspace_package(&bytes, 2_000).await.is_ok());
     });
 }
@@ -1349,7 +1349,7 @@ fn template_creation_duplication_switching_and_original_baselines_are_independen
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
-        assert_eq!(m.active_name().as_deref(), Some("Sketch"));
+        assert_eq!(m.active_name().as_deref(), Some("Paint"));
         let initial = m.current().unwrap();
         let mut capture = initial.capture().unwrap();
         let mut layout = capture.history.layout().clone();

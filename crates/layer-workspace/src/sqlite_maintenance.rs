@@ -38,6 +38,14 @@ impl SqliteStore {
             |r| r.get::<_, i64>(0),
         )? as u64;
         if apply {
+            // Only the transaction sees these reserved keys. Readers keep the
+            // old pair until both final names and their indexes commit together.
+            for id in &plan.renamed {
+                tx.execute(
+                    "UPDATE items SET name_key=?2 WHERE id=?1",
+                    params![id, format!("\0catalog:{id}")],
+                )?;
+            }
             for mut entity in plan.changed {
                 entity.metadata =
                     resolve_name(&tx, entity.metadata, &entity.id, NamePolicy::Unique)?;

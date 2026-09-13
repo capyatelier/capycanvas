@@ -49,6 +49,18 @@ impl Driver {
             pump(20);
         }
     }
+    fn capture_canvas(&self, name: &str) {
+        // As in native_header_canvas_visual, settle the screenshot-only
+        // paintable before inspecting GTK's cached whole-window scene.
+        let _warm = crate::snapshot(&self.w);
+        pump(120);
+        let snapshot = crate::snapshot(&self.w);
+        assert!(
+            canvas_white(&self.w, &snapshot) > 100_000,
+            "paper remains visible"
+        );
+        snapshot.save_to_png(self.dir.join(name)).unwrap();
+    }
     fn header_tool(&self, control: ToolbarControl) -> String {
         let id = state(&self.w)
             .workspace
@@ -218,10 +230,33 @@ impl Driver {
 #[ignore = "isolated native-input.js --native-test=native_header_managed_input --native-storage"]
 fn native_header_managed_input() {
     let mut d = Driver::managed("art.capycanvas.HeaderStorage");
+    assert_eq!(
+        d.w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_name()
+            .as_deref(),
+        Some("Paint")
+    );
+    for name in ["Sketch", "Paint", "Photo"] {
+        d.label(name);
+    }
+    d.capture_canvas("paint-default.png");
     d.click_name("workspace-switch-painter");
     Driver::wait_ready(&d.w);
     pump(400);
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
+    assert_eq!(
+        d.w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_name()
+            .as_deref(),
+        Some("Sketch")
+    );
+    d.capture_canvas("sketch-default.png");
     let switcher =
         d.w.workspaces
             .switcher
@@ -295,7 +330,7 @@ fn native_header_managed_input() {
             .unwrap()
             .active_name()
             .as_deref(),
-        Some("Paint")
+        Some("Sketch")
     );
     assert_eq!(
         durable_layout(&state(&d.w).workspace.layout),
@@ -308,7 +343,7 @@ fn native_header_managed_input() {
         action: CustomizationAction::CloseExpanded,
     });
     pump(100);
-    crate::capture(&d.w, d.dir.join("managed-painter.png").to_str().unwrap());
+    d.capture_canvas("managed-painter.png");
     d.finish();
 }
 
@@ -385,7 +420,7 @@ fn native_default_workspace_recovery_input() {
             .unwrap()
             .active_name()
             .as_deref(),
-        Some("Paint")
+        Some("Sketch")
     );
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter());
     assert!(d.w.area.is_mapped());
@@ -413,7 +448,7 @@ fn native_default_workspace_recovery_input() {
             .unwrap()
             .active_name()
             .as_deref(),
-        Some("Paint")
+        Some("Sketch")
     );
     assert_eq!(
         sql("SELECT owner IS NULL FROM items WHERE id='builtin:workspace:photographer'"),
@@ -2386,8 +2421,8 @@ fn native_header_window_actions_input() {
             );
         }
     }
-    assert_eq!(WorkspacePreset::Illustrator.name(), "Sketch");
-    assert_eq!(WorkspacePreset::Painter.name(), "Paint");
+    assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
+    assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
     assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
     d.finish();
 }

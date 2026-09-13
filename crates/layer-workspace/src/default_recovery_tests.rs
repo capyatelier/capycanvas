@@ -24,6 +24,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(platform: Platform) -> Self {
+        Self::with_names(platform, None)
+    }
+    fn with_names(platform: Platform, names: Option<[&str; 3]>) -> Self {
         let directory = std::env::temp_dir().join(format!("capy-default-recovery-{}", new_id()));
         let clock = Arc::new(TestClock(AtomicU64::new(1000)));
         let mut f = Self {
@@ -34,8 +37,11 @@ impl Fixture {
             owner: Owner::fresh(),
             entities: Vec::new(),
         };
-        for (id, _) in DEFAULT_WORKSPACES {
+        for (index, (id, _)) in DEFAULT_WORKSPACES.iter().enumerate() {
             let mut entity = Entity::included_workspace(id, platform, 1000).unwrap();
+            if let Some(names) = names {
+                entity.metadata.name = names[index].into();
+            }
             entity.working.as_mut().unwrap().zen_mode = true;
             f.entities.push(entity);
         }
@@ -122,10 +128,185 @@ impl Fixture {
             .map(|e| self.sqlite.load(&e.id).unwrap())
             .collect()
     }
+    fn release(&mut self, id: &str) {
+        let saved = self.sqlite.load(id).unwrap();
+        self.both(StoreRequest::Release {
+            id: id.into(),
+            owner: self.owner.clone(),
+            fence: saved.claim.unwrap().fence.to_string(),
+        })
+        .unwrap();
+    }
+    fn maintain(&mut self, apply: bool) {
+        // Storage byte counts intentionally differ across the two backends.
+        let request = StoreRequest::Maintenance {
+            owner: None,
+            clear_older: false,
+            apply,
+        };
+        self.sqlite.handle(request.clone()).unwrap();
+        self.browser.execute(request, self.clock.now_ms()).unwrap();
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+#[test]
+fn included_names_swap_without_suffixes_or_layout_changes_and_survive_reopen() {
+    for platform in [Platform::Gtk, Platform::Web] {
+        let mut f = Fixture::with_names(platform, Some(["Paint", "Sketch", "Photo"]));
+        for (id, _) in DEFAULT_WORKSPACES {
+            f.release(id);
+        }
+        let before = f.snapshots();
+        let pins = serde_json::to_value(f.both(StoreRequest::Switcher).unwrap()).unwrap();
+        let order = serde_json::to_value(f.both(StoreRequest::WorkspaceOrder).unwrap()).unwrap();
+        let binding = StoreRequest::Binding {
+            key: "last_workspace".into(),
+        };
+        let last = serde_json::to_value(f.both(binding.clone()).unwrap()).unwrap();
+        f.maintain(false);
+        assert_eq!(f.snapshots(), before);
+        f.maintain(true);
+        let after = f.snapshots();
+        for (index, old) in before.iter().enumerate() {
+            let mut expected = old.clone();
+            if index < 2 {
+                expected.entity.metadata.name = ["Sketch", "Paint"][index].into();
+                expected.generations.metadata += 1;
+            }
+            let StoreResponse::Entity(actual) = f
+                .both(StoreRequest::Load {
+                    id: old.entity.id.clone(),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(*actual, expected);
+        }
+        assert_eq!(
+            serde_json::to_value(f.both(StoreRequest::Switcher).unwrap()).unwrap(),
+            pins
+        );
+        assert_eq!(
+            serde_json::to_value(f.both(StoreRequest::WorkspaceOrder).unwrap()).unwrap(),
+            order
+        );
+        assert_eq!(
+            serde_json::to_value(f.both(binding).unwrap()).unwrap(),
+            last
+        );
+        let encoded = f.browser.encoded().unwrap();
+        assert!(!encoded.contains("\\u0000catalog:"));
+        f.browser = BrowserDatabase::decode(&encoded).unwrap();
+        f.sqlite =
+            SqliteStore::with_clock(&f.directory.join("db.sqlite3"), f.clock.clone()).unwrap();
+        f.maintain(true);
+        assert_eq!(f.snapshots(), after);
+        assert_eq!(f.browser.encoded().unwrap(), encoded);
+        let db = rusqlite::Connection::open(f.directory.join("db.sqlite3")).unwrap();
+        for (id, preset) in DEFAULT_WORKSPACES {
+            let (name, key): (String, String) = db
+                .query_row("SELECT name,name_key FROM items WHERE id=?1", [id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            assert_eq!(name, preset.name());
+            assert_eq!(key, name_key(preset.name()));
+        }
+    }
+}
+
+#[test]
+fn included_name_swap_waits_for_either_live_participant_but_not_unrelated_owners() {
+    for owned_index in 0..2 {
+        let mut f = Fixture::with_names(Platform::Gtk, Some(["Paint", "Sketch", "Photo"]));
+        f.release(DEFAULT_WORKSPACES[1 - owned_index].0);
+        let before = f.snapshots();
+        f.maintain(true);
+        assert_eq!(f.snapshots(), before);
+        for old in &before {
+            let StoreResponse::Entity(actual) = f
+                .both(StoreRequest::Load {
+                    id: old.entity.id.clone(),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(*actual, *old);
+        }
+        f.release(DEFAULT_WORKSPACES[owned_index].0);
+        f.maintain(true);
+        for (id, preset) in DEFAULT_WORKSPACES {
+            let StoreResponse::Entity(actual) =
+                f.both(StoreRequest::Load { id: id.into() }).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(actual.entity.metadata.name, preset.name());
+        }
+        // The Photo and custom workspace leases are unaffected by the swap.
+        assert_eq!(&f.snapshots()[2..], &before[2..]);
+    }
+}
+
+#[test]
+fn included_name_swap_failure_rolls_back_names_and_indexes_on_both_backends() {
+    let mut f = Fixture::with_names(Platform::Gtk, Some(["Paint", "Sketch", "Photo"]));
+    for (id, _) in DEFAULT_WORKSPACES {
+        f.release(id);
+    }
+    let db = rusqlite::Connection::open(f.directory.join("db.sqlite3")).unwrap();
+    let id = DEFAULT_WORKSPACES[0].0;
+    let set_generation = |f: &mut Fixture, generation: u64| {
+        db.execute(
+            "UPDATE items SET metadata_generation=?2 WHERE id=?1",
+            rusqlite::params![id, generation.to_string()],
+        )
+        .unwrap();
+        let mut data: Value = serde_json::from_str(&f.browser.encoded().unwrap()).unwrap();
+        data["items"][id]["generations"]["metadata"] = json!(generation.to_string());
+        f.browser = BrowserDatabase::decode(&data.to_string()).unwrap();
+    };
+    set_generation(&mut f, u64::MAX);
+    let before = f.snapshots();
+    let encoded = f.browser.encoded().unwrap();
+    assert_eq!(
+        f.both(StoreRequest::Maintenance {
+            owner: None,
+            clear_older: false,
+            apply: true
+        })
+        .unwrap_err()
+        .kind,
+        ErrorKind::InvalidData
+    );
+    assert_eq!(f.snapshots(), before);
+    assert_eq!(f.browser.encoded().unwrap(), encoded);
+    for old in &before {
+        let (name, key): (String, String) = db
+            .query_row(
+                "SELECT name,name_key FROM items WHERE id=?1",
+                [&old.entity.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, old.entity.metadata.name);
+        assert_eq!(key, name_key(&name));
+    }
+    set_generation(&mut f, 1);
+    f.maintain(true);
+    for (id, preset) in DEFAULT_WORKSPACES {
+        let StoreResponse::Entity(actual) = f.both(StoreRequest::Load { id: id.into() }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(actual.entity.metadata.name, preset.name());
     }
 }
 
