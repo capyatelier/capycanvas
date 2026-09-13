@@ -25,7 +25,8 @@ commits.
 ## Build
 
 See the [Windows development guide](../../docs/development/windows.md) for prerequisites,
-NuGet setup, build commands and output locations.
+NuGet setup, build commands and output locations. The guide also documents the
+unsigned portable ZIP packager and extracted-package validation.
 
 ## Diagnostics and privacy
 

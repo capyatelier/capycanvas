@@ -1984,3 +1984,33 @@ Full-image workspace parity, strict renderer reference agreement, the complete
 physical input matrix, mixed-DPI/device recovery, distribution and sustained
 120 Hz painting plus physical input latency remain open. No performance
 benchmark ran during this milestone.
+
+## Portable Windows distribution
+
+The Windows packager now builds Release Rust/WinUI into a fresh staging directory
+and produces an unsigned Windows 11 x64 ZIP with self-contained WinUI and app-local
+Visual C++ runtimes. It includes project/branding terms, notices for the resolved
+Cargo and pinned NuGet dependencies, and Rust/native runtime notices. Missing
+unreviewed notices fail packaging. Supplemental texts retain their exact upstream
+source commits.
+
+The package records its source commit, development status, toolchain versions and
+every file's size/hash. Uncommitted changes require an explicit development option.
+A clean source change during packaging aborts the build. Sorted paths, fixed ZIP
+timestamps and normalized entry attributes make archive assembly repeatable for
+identical payloads; two assemblies must have the same SHA-256. This is narrower
+than bit-identical recompilation across toolchain installations.
+
+The extracted-package fixture validates the complete inventory before launch.
+It uses a path with spaces, an unrelated working directory and a disposable
+profile, then checks complete filter loading, runtime origins, drawing, Undo/Redo,
+pan, resize and zero-exit shutdown. Rust, XAML, Windows App Runtime and the C++
+runtime load from the package. The observed shader compiler loads from the Windows
+system directory. Captures, loaded-module paths and profiles remain local.
+
+The Release build, notice collection, repeated archive comparison and extracted
+native fixture pass. The dirty-source gate and rejection of changed or undeclared
+archive files also pass; invalid packages never launch. This checkpoint does not
+establish clean-machine deployment,
+MSIX/signing, full-image parity, physical pen/touch features, mixed-DPI/device
+recovery or sustained 120 Hz painting/input latency. No performance benchmark ran.

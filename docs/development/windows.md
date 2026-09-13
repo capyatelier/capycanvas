@@ -34,6 +34,49 @@ and C++ parts. Packages go into ignored `artifacts/windows/packages`; use
 The Windows App SDK runtime is copied beside the executable. No UWP application
 package or generated application XAML is needed for this development build.
 
+## Portable package
+
+Build an unsigned Windows 11 x64 ZIP from a committed checkout:
+
+~~~powershell
+./apps/layer-windows/scripts/package.ps1
+~~~
+
+This runs the Release Rust/WinUI build into a fresh output directory, collects
+the self-contained Windows App SDK and app-local Visual C++ runtime, and adds
+project, dependency and runtime notices. The pinned Cargo and NuGet dependencies
+are recorded with the compiler/SDK versions and source commit. Every payload file
+has a size and SHA-256 entry in package-manifest.json. Packages and build logs
+stay under ignored artifacts/windows/distribution.
+
+Use -SkipRestore when the pinned NuGet packages are already available. Uncommitted
+changes require -AllowDirty, which marks both the filename and manifest as a
+development package. A clean build fails if source changes during packaging.
+The packager assembles the same payload twice with sorted paths and fixed ZIP
+timestamps, requires identical hashes, and writes a .sha256 sidecar. This verifies
+deterministic archive assembly; it does not establish identical compilation
+across machines or toolchain installations.
+
+Extract the complete archive and launch CapyCanvas.exe. To check an archive on an
+unlocked Windows desktop:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-package.ps1 -Archive <path-to-zip>
+~~~
+
+The fixture verifies the complete file inventory, extracts to a fresh path
+containing spaces, and launches with an unrelated working directory and isolated
+preferences. It checks packaged filter loading, app-local runtime origins,
+drawing/Undo/Redo, pan, resize and clean exit. A failed live app is retained for
+inspection. Captures and diagnostics stay outside the payload.
+
+Deployment follows Microsoft's
+[self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
+and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
+Clean-machine installation, signing/MSIX delivery, full visual and physical-input
+acceptance, device recovery and sustained painting performance remain separate
+acceptance work.
+
 ## How the host works
 
 The native shell collects pointer history and dispatches shared commands. A render
