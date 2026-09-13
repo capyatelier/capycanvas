@@ -13,7 +13,7 @@ struct NativeReorderInput: NSViewRepresentable {
 final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     weak var model: (any NativeReorderModel)?
     private weak var attached: NSView?
-    private var stream = -1
+    private var downEvent: NSEvent?
     private var cancelling = false
     private var lastPoint: CGPoint?
     private var pan: NSPanGestureRecognizer!
@@ -65,7 +65,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     private func cancel() {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
-        model?.cancel(); timer?.invalidate(); timer = nil; stream = -1
+        model?.cancel(); timer?.invalidate(); timer = nil; downEvent = nil
         pan.isEnabled = false; press.isEnabled = false; pan.isEnabled = true; press.isEnabled = true
     }
     private func scrollAt(_ point: CGPoint) -> NSScrollView? {
@@ -92,12 +92,14 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             return event.type == .rightMouseDown && model.acceptsContext(at: point)
         }
         guard event.type == .leftMouseDown else { return false }
-        if stream != event.eventNumber {
+        // Pan and press share this mouse-down object. Injected native events
+        // can reuse eventNumber across different contacts.
+        if downEvent !== event {
             guard let target = model.source(at: point) else {
                 return false
             }
-            let device: ReorderDevice = event.type == .tabletPoint || event.subtype == .tabletPoint ? .pen : .mouse
-            model.contact.prepare(target, device: device, origin: point); stream = event.eventNumber
+            let device: ReorderDevice = event.subtype == .tabletPoint ? .pen : .mouse
+            model.contact.prepare(target, device: device, origin: point); downEvent = event
             lastPoint = nil
         }
         return recognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
@@ -138,7 +140,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         }
     }
     private func finish() {
-        model?.contact.release(at: pan.location(in: self)); stream = -1
+        model?.contact.release(at: pan.location(in: self)); downEvent = nil
         timer?.invalidate(); timer = nil
     }
     private func track() {
