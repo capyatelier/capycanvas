@@ -2146,3 +2146,49 @@ resize, workspace restore, theme changes and zero exit. Rust is unchanged
 from the preceding 523-test and strict-Clippy checkpoint. Custom ClearType tuning,
 other physical display scales, physical digitizer behavior and 120 Hz painting
 remain separate acceptance gates.
+
+### Compact picker label spacing and hue stroke
+
+The native labels now retain the font's pair kerning and quarter-pixel glyph
+origins. Font metrics use Chromium's hundredth-pixel effective font size while
+layout keeps the original logical size. Independent browser probes reproduce
+all four complete labels from individually positioned glyphs at three sizes;
+native DirectWrite metrics confirm the LC and RG pair adjustments.
+
+The transparency checker now samples the shared repeating conic gradient's
+quadrant boundaries, including the tile center. This removes the reversed gray
+cells at the actual 1.5 display scale. The hue mesh is retained in an image brush
+and strokes a single ellipse, matching the reference drawing operation and
+reducing the previous annulus clip's rim differences. The wheel uses its whole
+allocated bitmap extent for the normalized drawing transform. No new runtime
+dependency or per-drag cache allocation was introduced.
+
+The complete default surfaces at scale 1.5 now compare as follows:
+
+| Theme / size | Exact differing pixels | Mean absolute RGB error (0–255) | Maximum |
+| --- | ---: | ---: | ---: |
+| dark 128 | 21.461% | 0.8252 | 64 |
+| dark 160 | 25.064% | 0.6483 | 63 |
+| dark 226 | 25.285% | 0.4927 | 68 |
+| dark 360 | 25.911% | 0.3386 | 68 |
+| light 128 | 21.715% | 0.7839 | 71 |
+| light 160 | 25.266% | 0.6383 | 58 |
+| light 226 | 25.338% | 0.4835 | 68 |
+| light 360 | 25.976% | 0.3460 | 82 |
+
+Average error improves at every default size and theme. The fourteen keyboard
+focus and hover surfaces at size 160 have mean error 0.6340–0.6574 and maximum
+error 58–78. **All twenty-two complete-image comparisons still fail exact pixel
+equality.** The eight production browser references were recaptured and remain
+byte-identical. Reported bounds retain the preceding size-160 wheel discrepancy.
+No reference styles, comparator tolerances or capture boundaries were changed.
+
+Normal Debug and Release builds, the production Color fixture, the full Release
+picker input exercise and the full Release editor exercise pass. Picker checks
+cover all shapes with synthetic mouse/pen/touch in the field and ring,
+cancellation, keyboard activation, paint slots and swap, native menus, the
+mouse-hold negative case, retained drawer input and an unchanged document.
+Editor checks cover titlebar hits, tools, Zen modes, retained resize, workspace
+restoration, themes and zero exit. Rust is unchanged from the 523-test and
+strict-Clippy checkpoint. Physical pen, other display scales and 120 Hz painting
+remain open acceptance work.

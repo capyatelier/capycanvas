@@ -235,12 +235,16 @@ and mouse/pen/touch capture. A solo docked Color panel fits the available
 height. Rotated shape icons retain shared SVG geometry as native vectors; the
 swap button uses the native SVG loader. DirectWrite rasterizes readout glyphs
 at their final transform, using the shared canvas's integral backing size.
+Labels preserve pair kerning and quarter-pixel glyph positions; font metrics
+use the reference's hundredth-pixel font size. The hue brush strokes a single
+ellipse, and the transparency checker preserves conic-gradient boundaries.
 Glyph images and text correction tables are retained across updates; size,
 scale, text and ink changes invalidate the corresponding images. The native
 readout button retains the complete accessible color description.
 
 The text rasterizer follows the reference's default Windows canvas rendering:
 [Skia's DirectWrite modes and font hinting](https://github.com/google/skia/blob/main/src/ports/SkScalerContext_win_dw.cpp),
+[font-size precision](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/fonts/font_description.cc),
 [font-cache transform precision](https://github.com/google/skia/blob/main/src/core/SkScalerContext.cpp),
 [glyph position rounding](https://github.com/google/skia/blob/main/src/core/SkGlyph.h),
 and [sRGB coverage correction](https://github.com/google/skia/blob/main/src/core/SkMaskGamma.cpp).
