@@ -98,6 +98,10 @@ Use `--title-bar-overflow` to reproduce the menu-label region collapsing as the
 window narrows, then drag its hidden items with mouse, touch and pen at every
 bar size. It checks real hit targets above the component bank, stable item IDs,
 collapsed drop destinations, cancellation and workspace undo/redo.
+Use `--menu-labels` for the fixed-width growth regression: add bank items after
+Menu Labels in the left region, verify that the labels compact inside the same
+item, and drag its still-visible body/grip and following neighbors. This runs
+mouse/touch/pen in both themes at all sizes without removing Capy.
 They can also run through `node apps/layer-web/test.mjs` against a running
 development server. See the [acceptance record](title-bar-web-acceptance.md) for
 captures, shared tests, existing regressions and device limitations.

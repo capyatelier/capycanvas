@@ -182,3 +182,33 @@ Validation on 2026-09-13 after integrating current main: release Wasm build,
 short row taps, capture loss, resize and source removal during overflow drags.
 The corrected build was loaded on the connected tablet after confirming no
 unsaved drawing or active customization; its selected workspace was retained.
+
+## Menu Labels compaction within the left region
+
+The earlier overflow fix left the allocation error intact. Web reported the
+full text width of Menu Labels as both its natural and compact widths. Once
+added items exceeded the left region's width, shared whole-item overflow hid
+Menu Labels and every later item, including their grips. The apparent compact
+menu was the region's aggregate overflow button.
+
+Menu Labels now supplies an icon-sized compact width to the existing Rust
+allocator. Web switches only its content between labels and the shared primary
+menu; the item root, ID, grip and drag surface stay intact. Neighboring items
+remain visible when they fit beside the compact menu. Natural measurements stay
+independent of the currently displayed variant, and hidden menus close with
+focus moving to visible controls.
+
+The `--menu-labels` fixed-width reproduction failed against the previous Web
+header with `hidden: true`, a zero-width grip and no body/grip hit target during
+the first bank drop. It passed against the correction for both themes, all
+three sizes and mouse/touch/pen. The same journey adds two bank items, checks
+their live and committed visibility, drags Menu Labels by body and grip, moves
+both neighbors without removing Capy, and checks workspace undo/redo. Evidence:
+`artifacts/title-bar/baseline/menu-labels/failure.png` and
+`artifacts/title-bar/review/menu-labels/`.
+
+Validation on 2026-09-13: release Wasm build and headed Chrome `--menu-labels`,
+`--header-controls`, `--title-bar-overflow` and `--title-bar-state` passed.
+The control regression covers all eight menus through expanded labels, the
+retained compact menu and genuine whole-item overflow, including Zoom In and
+focus restoration. Extreme-width overflow remains separately covered.
