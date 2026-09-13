@@ -757,7 +757,7 @@ pub fn render_hue_guide(side: u32, shape: ColorShape, rgba: &mut [u8]) -> bool {
     let mut state = ColorState::default();
     state.apply(ColorAction::Shape { shape }).unwrap();
     let stops = state.wheel_hue_stops();
-    for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let point = [
             (index % side as usize) as f32 + 0.5,
             (index / side as usize) as f32 + 0.5,
@@ -768,8 +768,10 @@ pub fn render_hue_guide(side: u32, shape: ColorShape, rgba: &mut [u8]) -> bool {
         let upper = stops.partition_point(|stop| stop.offset < offset).clamp(1, stops.len() - 1);
         let (a, b) = (stops[upper - 1], stops[upper]);
         let t = (offset - a.offset) / (b.offset - a.offset);
-        for c in 0..3 {
-            pixel[c] = ((a.color[c] + t * (b.color[c] - a.color[c])) * 255.).round().clamp(0., 255.) as u8;
+        for (c, channel) in pixel[..3].iter_mut().enumerate() {
+            *channel = ((a.color[c] + t * (b.color[c] - a.color[c])) * 255.)
+                .round()
+                .clamp(0., 255.) as u8;
         }
         pixel[3] = 255;
     }
@@ -788,7 +790,7 @@ pub fn render_hsv_field(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
         return false;
     }
     let geometry = ColorWheelGeometry::new(side as f32).unwrap();
-    for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let point = [
             (index % side as usize) as f32 + 0.5,
             (index / side as usize) as f32 + 0.5,

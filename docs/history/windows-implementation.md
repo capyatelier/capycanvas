@@ -2320,3 +2320,29 @@ in that state remains required work. Pending export/open/import overlaps,
 multiple-window removal, physical driver reset, sleep/resume, digitizer behavior
 and 120 Hz painting remain separate acceptance gates. No package or presentation
 benchmark was regenerated for this checkpoint.
+
+### Integrated GPU recovery and two native windows
+
+The reconstruction milestone is integrated with upstream main through ce41feb,
+including Apple compact color controls and the shared GTK/Web/Android floating
+preview and content-size work. The merged engine/host/UI/Windows/workspace suite
+passes 574 ordinary tests. Strict all-target Clippy passes after a small iterator
+cleanup in the incoming hue-guide and HSV raster loops; their calculations and
+accepted output are unchanged. The full 343-test UI suite passes after cleanup.
+Normal merged Debug and Release builds pass.
+
+The merged Release document fixture passes repeated real removal, unchanged PNG
+exports, thumbnail readiness, state/history preservation and subsequent saving.
+The multiwindow fixture also passes removal initiated once from each of two open
+windows. Both the initiating window and idle sibling reconstruct, retain their
+separate document/camera/brush/workspace state, and support Undo/Redo. Subsequent
+independent closes and creating another native window pass with zero process
+exit and no stderr output.
+
+The complete merged Release editor and compact-color interaction fixtures pass,
+including titlebar hits, retained resize, themes, Zen modes, all three picker
+shapes, synthetic mouse/pen/touch, cancellation, keyboard, menus and drawer input.
+These checks preserve the accepted native wheel implementation. Permanent GPU
+failure and CPU saving, concurrent document-operation recovery, physical input,
+suspend/driver-reset behavior, installed distribution and 120 Hz acceptance
+remain open. Local profiles, screenshots and binaries are excluded from commits.
