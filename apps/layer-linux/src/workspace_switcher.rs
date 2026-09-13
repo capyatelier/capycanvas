@@ -117,29 +117,8 @@ fn bind_button(w: &Rc<Workspace>, button: &gtk::ToggleButton, id: String) {
                 w,
                 async move {
                     let native = &w.workspaces;
-                    let manager = native.manager.as_ref().unwrap();
-                    let result = async {
-                        // Ownership does not require decoding the layout/tool
-                        // state. Let prepare_switch repair an unreadable default.
-                        manager.refresh().await?;
-                        let elsewhere = manager.items().iter().any(|item| {
-                            item.id == id
-                                && item.claim.as_ref().is_some_and(|c| {
-                                    c.owner != manager.owner && c.expires_at_ms > now_ms()
-                                })
-                        });
-                        native
-                            .perform(
-                                &w,
-                                if elsewhere {
-                                    ManagerAction::SwitchToWindow(id.into())
-                                } else {
-                                    ManagerAction::Switch(id.into())
-                                },
-                            )
-                            .await
-                    }
-                    .await;
+                    let result =
+                        async { native.perform(&w, ManagerAction::Switch(id.into())).await }.await;
                     if let Err(error) = result {
                         w.status.set_text(&error.to_string());
                         w.status.set_visible(true);

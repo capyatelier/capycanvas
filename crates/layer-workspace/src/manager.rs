@@ -31,6 +31,11 @@ pub struct WorkspaceManager<S: WorkspaceStore> {
     saving: Cell<bool>,
     transitioning: Cell<bool>,
 }
+impl<S: WorkspaceStore> Drop for WorkspaceManager<S> {
+    fn drop(&mut self) {
+        self.store.retire_owner(&self.owner);
+    }
+}
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn new(store: S, platform: Platform) -> Self {
         Self {

@@ -376,6 +376,128 @@ fn native_header_managed_input() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_workspace_ownership_input --native-storage"]
+fn native_workspace_ownership_input() {
+    let mut d = Driver::managed("art.capycanvas.WorkspaceOwnership");
+    let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap())
+        .join("workspaces.sqlite3");
+    let original =
+        d.w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_id()
+            .unwrap();
+    let target = layer_workspace::DEFAULT_WORKSPACES
+        .iter()
+        .find(|(id, _)| *id != original)
+        .unwrap();
+    let target_id = target.0;
+    let target_button = match target.1 {
+        WorkspacePreset::Painter => "workspace-switch-painter",
+        WorkspacePreset::Illustrator => "workspace-switch-illustrator",
+        WorkspacePreset::Photographer => "workspace-switch-photographer",
+    };
+    let mut external = layer_workspace::SqliteStore::open(&database).unwrap();
+    let owner = layer_workspace::Owner::fresh();
+    let saved = external.claim(target_id, owner.clone()).unwrap();
+    // A live but non-renewing owner remains protected after its timer expires.
+    let output = std::process::Command::new("sqlite3")
+        .arg(&database)
+        .arg(format!(
+            "UPDATE items SET lease_until='0' WHERE id='{target_id}'"
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    d.click_name(target_button);
+    Driver::wait_ready(&d.w);
+    assert_eq!(
+        d.w.workspaces
+            .manager
+            .as_ref()
+            .unwrap()
+            .active_id()
+            .as_deref(),
+        Some(original.as_str())
+    );
+    assert_eq!(
+        external.load(target_id).unwrap().claim.unwrap().owner,
+        owner
+    );
+    // Keep the GTK process/worker alive while this independent owner exits.
+    drop(external);
+    d.click_name(target_button);
+    Driver::wait_ready(&d.w);
+    let manager = d.w.workspaces.manager.as_ref().unwrap();
+    assert_eq!(manager.active_id().as_deref(), Some(target_id));
+    assert!(manager.error().is_none());
+    assert_eq!(manager.current().unwrap().working, saved.entity.working);
+
+    // Context menus created while an item was occupied use SwitchToWindow.
+    // That stale action must now reclaim the item too, rather than get stuck.
+    let mut external = layer_workspace::SqliteStore::open(&database).unwrap();
+    external
+        .claim(&original, layer_workspace::Owner::fresh())
+        .unwrap();
+    glib::MainContext::default()
+        .block_on(manager.refresh())
+        .unwrap();
+    drop(external);
+    glib::MainContext::default()
+        .block_on(d.w.workspaces.perform(
+            &d.w,
+            layer_workspace::ManagerAction::SwitchToWindow(original.clone()),
+        ))
+        .unwrap();
+    Driver::wait_ready(&d.w);
+    assert_eq!(manager.active_id().as_deref(), Some(original.as_str()));
+
+    // An actual second GTK window is focused, not stolen. Closing it makes
+    // its workspace immediately available to the first window.
+    let second = Workspace::new(&d._app);
+    second.window.present();
+    Driver::wait_ready(&second);
+    let second_id = second
+        .workspaces
+        .manager
+        .as_ref()
+        .unwrap()
+        .active_id()
+        .unwrap();
+    assert_ne!(second_id, original);
+    glib::MainContext::default()
+        .block_on(d.w.workspaces.perform(
+            &d.w,
+            layer_workspace::ManagerAction::Switch(second_id.clone()),
+        ))
+        .unwrap();
+    pump(500);
+    assert_eq!(manager.active_id().as_deref(), Some(original.as_str()));
+    assert!(
+        second.window.is_active(),
+        "switching to a live owner focuses its GTK window"
+    );
+    second.window.close();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while second.window.is_visible() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    d.w.window.present();
+    glib::MainContext::default()
+        .block_on(d.w.workspaces.perform(
+            &d.w,
+            layer_workspace::ManagerAction::Switch(second_id.clone()),
+        ))
+        .unwrap();
+    Driver::wait_ready(&d.w);
+    assert_eq!(manager.active_id().as_deref(), Some(second_id.as_str()));
+    assert!(manager.error().is_none());
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_default_workspace_recovery_input --native-storage"]
 fn native_default_workspace_recovery_input() {
     let mut d = Driver::managed("art.capycanvas.DefaultWorkspaceRecovery");

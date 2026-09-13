@@ -26,6 +26,79 @@ fn normalize(result: Result<StoreResponse, StoreError>) -> serde_json::Value {
     }
 }
 #[test]
+fn browser_leases_still_expire_and_fence_stale_writers() {
+    let mut browser = BrowserDatabase::default();
+    let owner = Owner::fresh();
+    let other = Owner::fresh();
+    let layout = layer_ui::DockLayout::for_platform(layer_ui::Platform::Web);
+    let entity = Entity::workspace(
+        "Browser lease",
+        layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
+        layout,
+        None,
+        1000,
+    );
+    let id = entity.id.clone();
+    let batch = CommitBatch::prepare(
+        owner.clone(),
+        vec![Mutation::Create {
+            entity,
+            claim: true,
+            name_policy: NamePolicy::Exact,
+        }],
+    )
+    .unwrap();
+    browser
+        .execute(StoreRequest::Commit { batch }, 1000)
+        .unwrap();
+    let request = StoreRequest::Claim {
+        id: id.clone(),
+        owner: other.clone(),
+        reset_invalid_default: None,
+    };
+    assert_eq!(
+        browser.execute(request.clone(), 1001).unwrap_err().kind,
+        ErrorKind::OwnedElsewhere
+    );
+    let StoreResponse::Entity(successor) = browser.execute(request, 1000 + OWNER_LEASE_MS).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(successor.claim.as_ref().unwrap().fence, 2);
+    assert_eq!(
+        browser
+            .execute(
+                StoreRequest::Renew {
+                    id: id.clone(),
+                    owner: owner.clone(),
+                    fence: "1".into()
+                },
+                1000 + OWNER_LEASE_MS
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    browser
+        .execute(
+            StoreRequest::Release {
+                id: id.clone(),
+                owner,
+                fence: "1".into(),
+            },
+            1000 + OWNER_LEASE_MS,
+        )
+        .unwrap();
+    let StoreResponse::Entity(current) = browser
+        .execute(StoreRequest::Load { id }, 1000 + OWNER_LEASE_MS)
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(current.claim, successor.claim);
+}
+
+#[test]
 fn browser_transactions_match_sqlite_contract() {
     let directory = std::env::temp_dir().join(format!("capy-browser-contract-{}", new_id()));
     let clock = Arc::new(TestClock(AtomicU64::new(1000)));
@@ -297,6 +370,16 @@ fn browser_transactions_match_sqlite_contract() {
     duplicate.legacy_imports = original.legacy_imports;
     // SQLite reports constraint errors with backend-specific kinds; test atomic
     // import rejection separately below instead of comparing error wording/kind.
+    // A live native OS lock never expires. Exercise common release/takeover
+    // here; browser-only timeout behavior has its own regression below.
+    execute(
+        StoreRequest::Release {
+            id: first.id.clone(),
+            owner: owner.clone(),
+            fence: "1".into(),
+        },
+        1004,
+    );
     execute(
         StoreRequest::Claim {
             id: first.id.clone(),

@@ -161,6 +161,7 @@ fn included_names_swap_without_suffixes_or_layout_changes_and_survive_reopen() {
         for (id, _) in DEFAULT_WORKSPACES {
             f.release(id);
         }
+        f.release(&f.entities[3].id.clone());
         let before = f.snapshots();
         let pins = serde_json::to_value(f.both(StoreRequest::Switcher).unwrap()).unwrap();
         let order = serde_json::to_value(f.both(StoreRequest::WorkspaceOrder).unwrap()).unwrap();
@@ -461,10 +462,11 @@ fn invalid_defaults_reset_individually_and_persist_on_both_backends() {
                         serde_json::to_value(expected).unwrap()
                     );
                 }
-                let persisted = SqliteStore::open(&f.directory.join("db.sqlite3"))
-                    .unwrap()
-                    .load(id)
-                    .unwrap();
+                let persisted =
+                    SqliteStore::with_clock(&f.directory.join("db.sqlite3"), f.clock.clone())
+                        .unwrap()
+                        .load(id)
+                        .unwrap();
                 assert_eq!(persisted, *repaired);
                 f.browser = BrowserDatabase::decode(&f.browser.encoded().unwrap()).unwrap();
                 f.both(StoreRequest::Load { id: (*id).into() }).unwrap();
@@ -488,6 +490,8 @@ fn recovery_respects_live_owners_and_fences_stale_writes() {
     assert_eq!(f.claim(id).unwrap_err().kind, ErrorKind::OwnedElsewhere);
     assert_eq!(f.browser.encoded().unwrap(), damaged);
     f.clock.0.store(1000 + OWNER_LEASE_MS, Ordering::SeqCst);
+    // Native recovery needs the old owner to exit, not just miss a heartbeat.
+    f.sqlite = SqliteStore::with_clock(&f.directory.join("db.sqlite3"), f.clock.clone()).unwrap();
     let repaired = f.claim(id).unwrap();
     assert!(repaired.claim.unwrap().fence > before.claim.as_ref().unwrap().fence);
     let batch = CommitBatch::prepare(

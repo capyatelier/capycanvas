@@ -12,6 +12,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         let ids = strings(&tx, "SELECT id FROM items")?;
         let mut items = Vec::new();
         for id in ids {
@@ -102,6 +103,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         let row = header(&tx, id)?;
         check_owner(&row, owner, fence, now)?;
         if !row.deleted || row.builtin {
@@ -112,6 +114,7 @@ impl SqliteStore {
         remove(&tx, id)?;
         collect_components(&tx)?;
         tx.commit()?;
+        self.ownership.release(id, owner, fence);
         Ok(())
     }
 }

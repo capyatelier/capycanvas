@@ -839,9 +839,23 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
         m.revalidate_owner(1).await.unwrap();
         assert!(m.dirty());
         assert_eq!(m.current().unwrap().working, Some(capture.working.clone()));
-        assert!(m.current_record().unwrap().claim.unwrap().fence > 1);
+        assert_eq!(
+            m.current_record().unwrap().claim.unwrap().fence,
+            1,
+            "a suspended native window retains its kernel lock and fence"
+        );
         m.flush().await.unwrap();
         expire();
+        let held = m.current_record().unwrap().claim.unwrap();
+        m.store
+            .worker
+            .request(StoreRequest::Release {
+                id: id.clone(),
+                owner: held.owner,
+                fence: held.fence.to_string(),
+            })
+            .await
+            .unwrap();
         let other = Owner::fresh();
         let StoreResponse::Entity(successor) = m
             .store

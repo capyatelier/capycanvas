@@ -8,6 +8,11 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, StoreError>;
+// Native ownership protocol changed without changing browser/package data.
+// Older native binaries must not reopen this store with timer-only ownership.
+const SQLITE_SCHEMA_VERSION: u32 = 5;
+#[path = "sqlite_ownership.rs"]
+pub(crate) mod ownership;
 pub trait Clock: Send + Sync {
     fn now_ms(&self) -> u64;
 }
@@ -48,9 +53,7 @@ impl From<rusqlite::Error> for StoreError {
 pub struct SqliteStore {
     connection: Connection,
     clock: Arc<dyn Clock>,
-    // A shared OS lock lives as long as this connection, including suspension.
-    // The first opener after every native client exits can reclaim old leases.
-    _lifetime_lock: std::fs::File,
+    ownership: ownership::Ownership,
 }
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<Self> {
@@ -81,21 +84,10 @@ impl SqliteStore {
             options.mode(0o600);
         }
         options.open(path).map_err(unavailable)?;
-        let mut lock_path = path.as_os_str().to_os_string();
-        lock_path.push("-lock");
-        let lifetime_lock = options.open(lock_path).map_err(unavailable)?;
-        let reclaim = match lifetime_lock.try_lock() {
-            Ok(()) => true,
-            Err(std::fs::TryLockError::WouldBlock) => {
-                lifetime_lock.lock_shared().map_err(unavailable)?;
-                false
-            }
-            Err(std::fs::TryLockError::Error(error)) => return Err(unavailable(error)),
-        };
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > SCHEMA_VERSION {
+        if version > SQLITE_SCHEMA_VERSION {
             return Err(StoreError::new(
                 ErrorKind::UnsupportedSchema,
                 "This workspace database needs a newer version of Capy Canvas. Its contents have been preserved.",
@@ -107,6 +99,12 @@ impl SqliteStore {
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version > SQLITE_SCHEMA_VERSION {
+            return Err(StoreError::new(
+                ErrorKind::UnsupportedSchema,
+                "This workspace database needs a newer version of Capy Canvas. Its contents have been preserved.",
+            ));
+        }
         if version == 0 {
             let tables: u32 = tx.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", [], |r| r.get(0))?;
             if tables != 0 {
@@ -129,37 +127,22 @@ impl SqliteStore {
                 CREATE TABLE bindings (key TEXT PRIMARY KEY, item_id TEXT NOT NULL);
                 CREATE TABLE legacy_imports (source TEXT PRIMARY KEY, item_id TEXT NOT NULL);
                 CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);")?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         if version < 2 {
             tx.execute_batch("CREATE TABLE cancelled_operations(id TEXT PRIMARY KEY)")?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         if version < 3 {
             tx.execute_batch("CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL)")?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         if version < 4 {
             tx.execute_batch("CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL)")?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        if reclaim {
-            tx.execute(
-                "UPDATE items SET owner=NULL,epoch=NULL,lease_until=NULL WHERE owner IS NOT NULL",
-                [],
-            )?;
-        }
+        tx.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION)?;
         tx.commit()?;
-        if reclaim {
-            // No requests have run yet, so the unlock/relock gap cannot expose
-            // one of our own claims. Other openers retain every live claim.
-            lifetime_lock.unlock().map_err(unavailable)?;
-            lifetime_lock.lock_shared().map_err(unavailable)?;
-        }
         Ok(Self {
             connection,
             clock,
-            _lifetime_lock: lifetime_lock,
+            ownership: ownership::Ownership::new(path)?,
         })
     }
     pub fn handle(&mut self, request: StoreRequest) -> Result<StoreResponse> {
@@ -284,7 +267,10 @@ impl SqliteStore {
         }
     }
     pub fn load(&mut self, id: &str) -> Result<StoredEntity> {
-        let tx = self.connection.transaction()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, self.clock.now_ms())?;
         let result = load(&tx, id)?;
         tx.commit()?;
         Ok(result)
@@ -343,7 +329,10 @@ impl SqliteStore {
         Ok(ids)
     }
     pub fn list(&mut self) -> Result<Vec<ItemSummary>> {
-        let tx = self.connection.transaction()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, self.clock.now_ms())?;
         let ids = {
             let mut statement = tx.prepare("SELECT id FROM items ORDER BY name_key,id")?;
             statement
@@ -407,6 +396,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         let row = header(&tx, id)?;
         if row
             .claim
@@ -460,6 +450,7 @@ impl SqliteStore {
         } else {
             advance(row.fence)?
         };
+        let guard = self.ownership.acquire(id, &owner)?;
         tx.execute(
             "UPDATE items SET owner=?2,epoch=?3,fence=?4,lease_until=?5 WHERE id=?1",
             params![
@@ -473,6 +464,7 @@ impl SqliteStore {
         // Ownership acquisition and the returned snapshot are one transaction.
         let result = load(&tx, id)?;
         tx.commit()?;
+        self.ownership.publish(id, &owner, fence, guard);
         Ok(result)
     }
     pub fn renew(&mut self, id: &str, owner: &Owner, fence: u64) -> Result<Claim> {
@@ -480,6 +472,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         let row = header(&tx, id)?;
         check_owner(&row, owner, fence, now)?;
         let claim = Claim {
@@ -497,7 +490,19 @@ impl SqliteStore {
     pub fn release(&mut self, id: &str, owner: &Owner, fence: u64) -> Result<()> {
         // A delayed release must never clear a successor's claim.
         self.connection.execute("UPDATE items SET owner=NULL,epoch=NULL,lease_until=NULL WHERE id=?1 AND owner=?2 AND epoch=?3 AND fence=?4", params![id, owner.id, owner.epoch, fence.to_string()])?;
+        self.ownership.release(id, owner, fence);
         Ok(())
+    }
+    pub(crate) fn retire_owner(&mut self, owner: &Owner) {
+        // The window no longer exists. Even a failed database cleanup must not
+        // pin its kernel locks in a worker shared by the surviving windows.
+        // A subsequent transaction reclaims any leftover row; pending deliveries
+        // and receipts remain available for recovery.
+        let _ = self.connection.execute(
+            "UPDATE items SET owner=NULL,epoch=NULL,lease_until=NULL WHERE owner=?1 AND epoch=?2",
+            params![owner.id, owner.epoch],
+        );
+        self.ownership.retire(owner);
     }
     pub fn commit(&mut self, batch: CommitBatch) -> Result<CommitReceipt> {
         let encoded = batch.encoded()?;
@@ -564,6 +569,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         // Another process may have delivered the operation while this writer waited.
         let cancelled: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM cancelled_operations WHERE id=?1)",
@@ -623,8 +629,19 @@ impl SqliteStore {
             tx.execute("INSERT INTO cancelled_operations(id) VALUES(?1)", [id])?;
             tx.execute("DELETE FROM pending WHERE id=?1", [id])?;
         }
+        let mut guards = Vec::new();
+        let mut released = Vec::new();
         for write in &batch.writes {
+            if write.create && write.claim {
+                guards.push((
+                    write.id.clone(),
+                    self.ownership.acquire(&write.id, &batch.owner)?,
+                ));
+            }
             let generations = apply_write(&tx, write, &batch.owner, now)?;
+            if !write.create && header(&tx, &write.id)?.claim.is_none() {
+                released.push((write.id.clone(), write.fence));
+            }
             result.items.push((write.id.clone(), generations));
         }
         if !batch.pin_workspaces.is_empty() {
@@ -672,6 +689,12 @@ impl SqliteStore {
             ],
         )?;
         tx.commit()?;
+        for (id, guard) in guards {
+            self.ownership.publish(&id, &batch.owner, 1, guard);
+        }
+        for (id, fence) in released {
+            self.ownership.release(&id, &batch.owner, fence);
+        }
         Ok(result)
     }
 }
