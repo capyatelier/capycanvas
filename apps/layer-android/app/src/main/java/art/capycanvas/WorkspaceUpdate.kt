@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -40,16 +41,23 @@ internal data class WorkspaceGeometry(val revision: Long, val modelRevision: Lon
 
 internal fun JSONObject.rect() = Rect(number("x"), number("y"), number("x") + number("width"), number("y") + number("height"))
 
-/** Read motion in placement, leaving composition, panel measurement and drawing
- * instructions intact. Descendant hit rectangles and GPU navigator allocations
- * follow native placement, including clipping. Handles use the same translation. */
-internal fun Modifier.workspacePlaced(host: CanvasHost, group: Int, rect: JSONObject,
-    base: JSONObject, density: Float): Modifier = offset {
-    val motion = host.workspaceGeometry?.takeIf { it.group == group }?.bounds
-    val x = if (motion == null) rect.number("x") else motion.left + rect.number("x") - base.number("x")
-    val y = if (motion == null) rect.number("y") else motion.top + rect.number("y") - base.number("y")
-    IntOffset((x * density).roundToInt(), (y * density).roundToInt())
-}.size(rect.number("width").coerceAtLeast(0f).dp, rect.number("height").coerceAtLeast(0f).dp)
+/** Motion only invalidates placement. A late measurement can change the saved
+ * layout, but the held panel and its handles retain their original allocation. */
+@Composable internal fun Modifier.workspacePlaced(host: CanvasHost, group: Int, rect: JSONObject,
+    base: JSONObject, density: Float, edge: String? = null): Modifier {
+    val baseWidth = base.number("width"); val baseHeight = base.number("height")
+    val size by remember(host, group, baseWidth, baseHeight) { derivedStateOf {
+        host.workspaceGeometry?.takeIf { it.group == group }?.bounds?.size ?: Size(baseWidth, baseHeight)
+    } }
+    val dw = size.width - baseWidth; val dh = size.height - baseHeight
+    return offset {
+        val motion = host.workspaceGeometry?.takeIf { it.group == group }?.bounds
+        val x = if (motion == null) rect.number("x") else motion.left + rect.number("x") - base.number("x") + if (edge?.contains("right") == true) dw else 0f
+        val y = if (motion == null) rect.number("y") else motion.top + rect.number("y") - base.number("y") + if (edge?.contains("bottom") == true) dh else 0f
+        IntOffset((x * density).roundToInt(), (y * density).roundToInt())
+    }.size((rect.number("width") + if (edge == null || edge == "top" || edge == "bottom") dw else 0f).coerceAtLeast(0f).dp,
+        (rect.number("height") + if (edge == null || edge == "left" || edge == "right") dh else 0f).coerceAtLeast(0f).dp)
+}
 
 /** Tab slots stay frozen for insertion decisions. Only retained native drawing
  * instructions translate inside the header clip; there is no bitmap rescaling. */

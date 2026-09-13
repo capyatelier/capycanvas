@@ -16,7 +16,7 @@ mod tool_settings;
 mod tools;
 pub use color::{
     ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
-    ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_hls_field, render_okhsv_disc,
+    ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};
 use tools::preset;
@@ -72,7 +72,8 @@ pub use layout::{
     ColumnIcon, ColumnMode, ColumnPanelHeight, ColumnSettings, Divider, DockBand, DockItem,
     DockLayout, DockNode, DockTarget, Edge, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
-    PanelExpansion, PanelMeasurement, ResizeEdge, ResolvedLayout, WorkspacePreset,
+    PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
+    WorkspacePreset,
 };
 pub use layout::{
     DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,

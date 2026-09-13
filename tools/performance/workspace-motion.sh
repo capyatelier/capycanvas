@@ -41,6 +41,8 @@ for ((attempt=0; attempt<100; attempt++)); do
 done
 [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]
 if [[ ${LAYER_MOTION_SCALE:-1} != 1 ]]; then
+    # Mutter can create its Wayland socket before exporting DisplayConfig.
+    gdbus wait --session --timeout 10 org.gnome.Mutter.DisplayConfig
     gjs tools/performance/display-scale.js "$LAYER_MOTION_SCALE"
 fi
 if [[ "$motion_platform" == gtk ]]; then

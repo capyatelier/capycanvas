@@ -48,7 +48,12 @@ struct WorkspaceDrag {
     item: DockItem,
     panel: Panel,
     source: Bounds,
+    source_is_icon: bool,
+    torn_off: bool,
     floating: Option<u32>,
+    /// The retained drag presentation can overflow the workspace. Keep this
+    /// size independent of content measurements and the fitted saved layout.
+    preview: Option<Bounds>,
     offset: [f32; 2],
     press: [f32; 2],
     chrome_revealed: bool,
@@ -1141,7 +1146,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .find(|g| g.id == id)
                         .map(|g| WorkspaceGroupPosition {
                             id,
-                            bounds: g.bounds,
+                            bounds: drag.preview.unwrap_or(g.bounds),
                         })
                 }),
                 tab: self.workspace_tab_drag.as_ref().and_then(|tab| {
@@ -1235,7 +1240,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     item,
                     panel: source.groups[0].active,
                     source: source.bounds,
+                    source_is_icon: false,
+                    torn_off: false,
                     floating: None,
+                    preview: None,
                     offset: [0.; 2],
                     press: position,
                     chrome_revealed: true,
@@ -1310,7 +1318,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => source_active,
                 },
                 source: source_bounds,
+                source_is_icon: icon_source.is_some(),
+                torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
+                preview: (matches!(
+                    self.state.platform,
+                    Platform::Gtk | Platform::Web | Platform::Android
+                ) && whole && source_floating)
+                    .then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
                 chrome_revealed: !source_floating || !self.interaction.hidden,
@@ -1369,6 +1384,31 @@ impl<R: CanvasRenderer> UiSession<R> {
                 DockTarget::Float { position },
             )?;
             let group = self.state.workspace.layout.panel_group(drag.panel).unwrap();
+            // Preserve the visible size for pickup; release selects a separate
+            // content-aware height. A list's natural height can be much larger
+            // than its viewport, and a drawer is wider than its collapsed source.
+            // Standalone toolbars still convert to their compact grid; an icon
+            // has no visible panel size, so it keeps the measured/default size.
+            let preserve_size = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
+                && !drag.source_is_icon
+                && !(drag.panel.kind() == PanelKind::Tiles
+                    && self.state.workspace.layout.group_panels(group)?.len() == 1);
+            if preserve_size {
+                let floating = self
+                    .state
+                    .workspace
+                    .layout
+                    .floating
+                    .iter_mut()
+                    .find(|f| f.root.id() == group)
+                    .unwrap();
+                floating.width = drag.source.width;
+                floating.default_width = Some(drag.source.width);
+                floating.height = Some(drag.source.height);
+            }
             let floated = self
                 .layout(viewport)
                 .groups
@@ -1376,6 +1416,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .find(|g| g.id == group)
                 .unwrap();
             drag.floating = Some(group);
+            drag.torn_off = true;
+            drag.preview = matches!(
+                self.state.platform,
+                Platform::Gtk | Platform::Web | Platform::Android
+            )
+            .then_some(floated.bounds);
             drag.item = DockItem::Group { group };
             // A ribbon becomes a compact vertical grid, with its grip at the
             // bottom. Tabbed groups keep the original header grab offset.
@@ -1388,11 +1434,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .max(0.0),
                     drag.offset[1].min(TAB_BAR_HEIGHT),
                 ]
+            } else if preserve_size {
+                [
+                    drag.offset[0].min(floated.bounds.width),
+                    floated.bounds.height - (drag.source.height - drag.offset[1]),
+                ]
             } else {
                 [floated.bounds.width * 0.5, floated.bounds.height - 10.0]
             };
         }
         if let Some(group) = drag.floating {
+            if let Some(preview) = &mut drag.preview {
+                preview.x = position[0] - drag.offset[0];
+                preview.y = position[1] - drag.offset[1];
+            }
+            // Fit the eventual floating placement, independently of the live
+            // preview. Release over a dock uses the contact's validated target;
+            // release elsewhere exposes this fitted layout in the same undo.
             self.state.workspace.layout.move_floating(
                 group,
                 [position[0] - drag.offset[0], position[1] - drag.offset[1]],
@@ -1408,6 +1466,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .workspace
                     .layout
                     .move_item(viewport, drag.item, hint.target)?;
+            } else if drag.moved
+                && let (Some(group), Some(preview)) = (drag.floating, drag.preview)
+            {
+                self.state.workspace.layout.settle_floating_drop(
+                    group,
+                    viewport,
+                    preview,
+                    (!drag.source_is_icon).then_some(drag.source.height),
+                    drag.torn_off,
+                )?;
             }
             self.workspace_drag = None;
             self.workspace_tab_drag = None;
@@ -2049,6 +2117,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
                     {
                         return Err("Invalid panel measurement".into());
+                    }
+                    if measurement.scroll.is_some_and(|m| {
+                        ![m.fixed_height, m.unit_height]
+                            .into_iter()
+                            .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                            || m.fixed_height > measurement.content_height
+                    }) {
+                        return Err("Invalid panel scroll measurement".into());
                     }
                     if accepted
                         .iter()
@@ -9017,6 +9093,183 @@ mod tests {
     }
 
     #[test]
+    fn floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            let mut app = session();
+            app.set_platform(platform);
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Brushes,
+                viewport,
+                target: DockTarget::Float {
+                    position: [600., 300.],
+                },
+            })
+            .unwrap();
+            let baseline = app.state.workspace.clone();
+            let source = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            let offset = [37., 12.];
+            let press = [source.x + offset[0], source.y + offset[1]];
+            let drag = |app: &mut UiSession<_>, phase, position| {
+                app.dispatch(UiAction::DragWorkspace {
+                    item: DockItem::Panel {
+                        panel: Panel::Brushes,
+                    },
+                    phase,
+                    position,
+                    viewport,
+                    tabs: vec![],
+                })
+                .unwrap();
+            };
+            let preview =
+                |app: &UiSession<_>| app.workspace_update().drag.unwrap().group.unwrap().bounds;
+            drag(&mut app, ContactPhase::Down, press);
+            for point in [
+                [600., 899.],
+                [1199., 400.],
+                [1., 400.],
+                [600., 1.],
+                [600., 899.],
+            ] {
+                drag(&mut app, ContactPhase::Move, point);
+                assert_eq!(
+                    preview(&app),
+                    Bounds {
+                        x: point[0] - offset[0],
+                        y: point[1] - offset[1],
+                        ..source
+                    }
+                );
+            }
+            // A late native natural-height measurement must not move the grabbed
+            // header or resize the live preview (including its retained handles).
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: vec![PanelMeasurement {
+                    panel: Panel::Brushes,
+                    tab_width: 120.,
+                    content_height: 1800.,
+                    scroll: None,
+                }],
+            })
+            .unwrap();
+            assert_eq!(preview(&app).height, source.height);
+            assert_eq!(preview(&app).y, 887.);
+            drag(&mut app, ContactPhase::Cancel, [600., 899.]);
+            assert_eq!(
+                durable_layout(&app.state.workspace.layout),
+                durable_layout(&baseline.layout)
+            );
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: baseline.layout.measurements.clone(),
+            })
+            .unwrap();
+            assert_eq!(app.state.workspace, baseline);
+            assert!(app.workspace_update().drag.is_none());
+
+            drag(&mut app, ContactPhase::Down, press);
+            drag(&mut app, ContactPhase::Move, [600., 899.]);
+            assert!(app.workspace_update().drag.unwrap().drop_hint.is_none());
+            drag(&mut app, ContactPhase::Up, [600., 899.]);
+            let placed = app
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Brushes)
+                .unwrap()
+                .bounds;
+            assert_eq!([placed.width, placed.height], [source.width, source.height]);
+            assert!(placed.y + placed.height <= viewport[1] - WORKSPACE_SPACING);
+            let after = app.state.workspace.clone();
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace, baseline);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, after);
+        }
+    }
+
+    #[test]
+    fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let viewport = [1200., 900.];
+            for icon in [false, true] {
+                let mut app = session();
+                app.set_platform(platform);
+                let panel = Panel::Brushes;
+                let group = app.state.workspace.layout.panel_group(panel).unwrap();
+                app.dispatch(UiAction::MeasurePanels {
+                    measurements: vec![PanelMeasurement {
+                        panel,
+                        tab_width: 120.,
+                        content_height: 1800.,
+                        scroll: None,
+                    }],
+                })
+                .unwrap();
+                if icon {
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                }
+                let resolved = app.layout(viewport);
+                let source = if icon {
+                    resolved
+                        .collapsed
+                        .iter()
+                        .flat_map(|c| &c.groups)
+                        .flat_map(|g| &g.icons)
+                        .find(|i| i.panel == panel)
+                        .unwrap()
+                        .bounds
+                } else {
+                    resolved
+                        .groups
+                        .iter()
+                        .find(|g| g.id == group)
+                        .unwrap()
+                        .bounds
+                };
+                let before = app.state.workspace.clone();
+                let drag = |app: &mut UiSession<_>, phase, position| {
+                    app.dispatch(UiAction::DragWorkspace {
+                        item: DockItem::Panel { panel },
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                };
+                drag(
+                    &mut app,
+                    ContactPhase::Down,
+                    [source.x + 18., source.y + 12.],
+                );
+                drag(&mut app, ContactPhase::Move, [600., 700.]);
+                let preview = app.workspace_update().drag.unwrap().group.unwrap().bounds;
+                if icon {
+                    assert!(preview.height > source.height * 3.);
+                    assert!(preview.width > source.width * 3.);
+                } else {
+                    assert_eq!(
+                        [preview.width, preview.height],
+                        [source.width, source.height]
+                    );
+                }
+                let floating = &app.state.workspace.layout.floating[0];
+                assert_eq!(floating.height.is_some(), !icon);
+                drag(&mut app, ContactPhase::Cancel, [600., 700.]);
+                assert_eq!(app.state.workspace, before);
+            }
+        }
+    }
+
+    #[test]
     fn floating_gestures_update_live_preserve_grab_offset_and_coalesce_history() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
@@ -10833,6 +11086,7 @@ mod tests {
                                 panel: Panel::Brushes,
                                 tab_width: 120.,
                                 content_height: 200.,
+                                scroll: None,
                             });
                             before.layout.column_scroll.push((t.root, 12.));
                             t.session

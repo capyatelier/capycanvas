@@ -548,9 +548,9 @@ impl ColorState {
                         let mut values = self.components();
                         match self.space {
                             ColorSpace::Hsv => {
-                                let [x, y, side] = geometry.square;
-                                values[1] = ((point[0] - x) / side).clamp(0., 1.) * 100.;
-                                values[2] = (1. - (point[1] - y) / side).clamp(0., 1.) * 100.;
+                                let [s, v] = geometry.square_components(point);
+                                values[1] = s * 100.;
+                                values[2] = v * 100.;
                                 self.set_components(values)?;
                             }
                             ColorSpace::Hls => {
@@ -742,6 +742,66 @@ pub fn hue_color(hue: f32) -> [f32; 3] {
     }
 }
 
+/// Opaque sRGB pixels for hosts that cache the hue guide instead of using a
+/// native conic gradient. The host clips its antialiased ring silhouette.
+pub fn render_hue_guide(side: u32, shape: ColorShape, rgba: &mut [u8]) -> bool {
+    if side == 0
+        || (side as usize)
+            .checked_mul(side as usize)
+            .and_then(|n| n.checked_mul(4))
+            != Some(rgba.len())
+    {
+        return false;
+    }
+    let geometry = ColorWheelGeometry::new(side as f32).unwrap();
+    let mut state = ColorState::default();
+    state.apply(ColorAction::Shape { shape }).unwrap();
+    let stops = state.wheel_hue_stops();
+    for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+        let point = [
+            (index % side as usize) as f32 + 0.5,
+            (index / side as usize) as f32 + 0.5,
+        ];
+        // Use the same encoded-sRGB gradient stops as the browser. Evaluating
+        // the perceptual hue conversion at every pixel stalls panel resizing.
+        let offset = state.wheel_hue_at(&geometry, point) / 360.;
+        let upper = stops.partition_point(|stop| stop.offset < offset).clamp(1, stops.len() - 1);
+        let (a, b) = (stops[upper - 1], stops[upper]);
+        let t = (offset - a.offset) / (b.offset - a.offset);
+        for c in 0..3 {
+            pixel[c] = ((a.color[c] + t * (b.color[c] - a.color[c])) * 255.).round().clamp(0., 255.) as u8;
+        }
+        pixel[3] = 255;
+    }
+    true
+}
+
+/// Opaque sRGB HSV field. Hosts retain it by hue/size and clip the rounded square.
+pub fn render_hsv_field(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
+    if side == 0
+        || !hue.is_finite()
+        || (side as usize)
+            .checked_mul(side as usize)
+            .and_then(|n| n.checked_mul(4))
+            != Some(rgba.len())
+    {
+        return false;
+    }
+    let geometry = ColorWheelGeometry::new(side as f32).unwrap();
+    for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+        let point = [
+            (index % side as usize) as f32 + 0.5,
+            (index / side as usize) as f32 + 0.5,
+        ];
+        let [s, v] = geometry.square_components(point);
+        let color = from_components([hue, s * 100., v * 100.], ColorSpace::Hsv, 1.);
+        for c in 0..4 {
+            pixel[c] = (color[c] * 255.).round().clamp(0., 255.) as u8;
+        }
+    }
+    true
+}
+
 /// Display-encoded RGBA8 for the HLS field, at physical pixel centers. Hosts
 /// cache this by hue and pixel size; markers and the hue ring stay independent.
 /// Transparent pixels outside the triangle have zero RGB. No allocation occurs.
@@ -908,6 +968,13 @@ impl ColorWheelGeometry {
     }
     pub fn disc_radius(&self) -> f32 {
         self.disc_radius
+    }
+    pub fn square_components(&self, point: [f32; 2]) -> [f32; 2] {
+        let [x, y, side] = self.square;
+        [
+            ((point[0] - x) / side).clamp(0., 1.),
+            (1. - (point[1] - y) / side).clamp(0., 1.),
+        ]
     }
     /// Smooth elliptical square-to-disc map. Full S/V range, including corners.
     /// https://arxiv.org/abs/1509.06344 (elliptical grid mapping)
@@ -1587,6 +1654,50 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn hsv_raster_matches_picking_and_hue_guides_keep_shape_orientation() {
+        for side in [31, 92, 130, 198] {
+            let geometry = ColorWheelGeometry::new(side as f32).unwrap();
+            let mut bytes = vec![0; side as usize * side as usize * 4];
+            for hue in [0., 60., 174., 240., 359.] {
+                assert!(render_hsv_field(side, hue, &mut bytes));
+                let mut state = ColorState::default();
+                state.apply(ColorAction::Shape { shape: ColorShape::Square }).unwrap();
+                state.apply(ColorAction::Component { index: 0, value: hue }).unwrap();
+                for index in (0..side as usize * side as usize).step_by(17) {
+                    let point = [(index % side as usize) as f32 + 0.5, (index / side as usize) as f32 + 0.5];
+                    if geometry.hit_shape(point, ColorShape::Square) != Some(ColorWheelPart::Field) { continue; }
+                    let mut picked = state.clone();
+                    picked.apply(ColorAction::PickWheel { part: ColorWheelPart::Field, point, size: side as f32 }).unwrap();
+                    for (actual, expected) in bytes[index*4..][..4].iter().zip(picked.rgba()) {
+                        assert!((*actual as f32 - expected * 255.).abs() <= 0.501);
+                    }
+                }
+            }
+        }
+        let side = 101;
+        let mut bytes = vec![0; side * side * 4];
+        for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
+            assert!(render_hue_guide(side as u32, shape, &mut bytes));
+            let mut state = ColorState::default();
+            state.apply(ColorAction::Shape { shape }).unwrap();
+            for (x, y, hue) in [(95, 50, 150.), (50, 95, 240.), (5, 50, 330.), (50, 5, 60.)] {
+                let hue = hue + if shape == ColorShape::Circle { 24. } else { 0. };
+                let expected = state.wheel_hue_color(hue);
+                let pixel = &bytes[(y * side + x) * 4..][..4];
+                // Shared guide interpolation is within one byte of the exact
+                // hue curve; RGBA8 rounding adds at most another half byte.
+                for c in 0..3 { assert!((pixel[c] as f32 - expected[c] * 255.).abs() <= 1.501); }
+                assert_eq!(pixel[3], 255);
+            }
+        }
+        let mut invalid = [23; 16];
+        assert!(!render_hsv_field(2, f32::NAN, &mut invalid));
+        assert!(!render_hsv_field(3, 0., &mut invalid));
+        assert!(!render_hue_guide(0, ColorShape::Circle, &mut invalid));
+        assert!(!render_hue_guide(3, ColorShape::Circle, &mut invalid));
+        assert_eq!(invalid, [23; 16]);
     }
     #[test]
     fn hls_raster_invalid_requests_preserve_caller_buffer() {

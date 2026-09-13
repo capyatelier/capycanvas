@@ -55,7 +55,92 @@ def native_frames(path, pid):
     return header, frames, presented
 
 
-def correlate(gpu_path, encoder_path, time_path, frame_path, pid):
+def presentation_requests(submission_path, request_path, offset, frames, pid, gpu_frames, presented):
+    """Join actual CA requests through their submitted buffer's CPU lifetime.
+
+    The submission table's start is Creation, not GPU scheduling. Its complete
+    interval must belong to one serial frame; request callbacks may follow it.
+    Use native presentedTime for display endpoints. Instruments' request at-time
+    is an optional requested time, not an observation of actual presentation.
+    """
+    submissions = Table(submission_path, "metal-application-command-buffer-submissions")
+    requests = Table(request_path, "ca-client-present-request")
+    buffers = collections.defaultdict(list)
+    for row in submissions.rows:
+        if submissions.pid(row) == pid:
+            buffers[integer(row["cmdbuffer-id"])].append(row)
+    starts = [r[3] for r in frames]
+    by_frame = collections.defaultdict(list)
+    counts = collections.Counter()
+    for row in requests.rows:
+        if requests.pid(row) != pid:
+            counts["other_or_unattributed_requests"] += 1
+            continue
+        counts["target_requests"] += 1
+        identity, timestamp = integer(row["cmdbuffer-id"]), integer(row["timestamp"])
+        if identity is None or identity <= 0 or timestamp is None or timestamp < 0:
+            counts["invalid_requests"] += 1
+            continue
+        candidates = buffers[identity]
+        if not candidates:
+            counts["requests_without_submission"] += 1
+            continue
+        if len(candidates) != 1:
+            counts["requests_with_ambiguous_submission"] += 1
+            continue
+        submission = candidates[0]
+        start, duration = integer(submission["start"]), integer(submission["duration"])
+        if start is None or duration is None or start < 0 or duration < 0 or timestamp < start + duration:
+            counts["requests_with_invalid_submission_order"] += 1
+            continue
+        index = bisect.bisect_right(starts, offset + start) - 1
+        if index < 0 or offset + start + duration > frames[index][4]:
+            counts["requests_outside_native_frames"] += 1
+            continue
+        by_frame[frames[index][1]].append(offset + timestamp)
+        counts["mapped_requests"] += 1
+    gpu_by_frame = {r["frame"]: r for r in gpu_frames}
+    rows = []
+    for frame in frames:
+        times = by_frame.get(frame[1], [])
+        if not times:
+            continue
+        # Multiple requests can be different surfaces in one frame, or duplicate
+        # events. Neither establishes a unique association to its native drawable.
+        request = times[0] if len(times) == 1 else None
+        counts["frames_with_multiple_requests"] += len(times) > 1
+        counts["frames_without_target"] += frame[2] == 0
+        gpu = gpu_by_frame.get(frame[1], {})
+        covered = gpu.get("all_observed_encoders_have_valid_gpu", False)
+        display = presented[frame[1]]
+        shown = display[0] if len(display) == 1 and display[0] > 0 else None
+        end = gpu.get("last_observed_gpu_end_ns")
+        valid_display = request is not None and shown is not None and shown >= request
+        counts["frames_presented_before_request"] += request is not None and shown is not None and shown < request
+        rows.append({"frame": frame[1], "request_count": len(times),
+            "all_observed_encoders_have_valid_gpu": covered,
+            "request_after_owner_ms": float((request - frame[4]) / 1e6) if request is not None else None,
+            "request_to_frame_target_ms": float((frame[2] - request) / 1e6) if request is not None and frame[2] > 0 else None,
+            "request_to_present_ms": float((shown - request) / 1e6) if valid_display else None,
+            "request_to_last_observed_gpu_end_ms": float((end - request) / 1e6)
+                if request is not None and end is not None and covered else None})
+    keys = ["request_after_owner_ms", "request_to_frame_target_ms", "request_to_present_ms",
+            "request_to_last_observed_gpu_end_ms"]
+    return {"sources": [submission_path.name, request_path.name],
+        "counts": {key: counts[key] for key in ["target_requests", "other_or_unattributed_requests",
+            "invalid_requests", "requests_without_submission", "requests_with_ambiguous_submission",
+            "requests_with_invalid_submission_order", "requests_outside_native_frames", "mapped_requests",
+            "frames_with_multiple_requests", "frames_without_target", "frames_presented_before_request"]},
+        "frames": rows,
+        "distributions_ms": {key: distribution((r[key] for r in rows if r[key] is not None), divisor=1) for key in keys},
+        "warnings": ["CPU buffer lifetime associates a request with a serial frame; it does not prove which surface was presented. Multiple requests are excluded from timing distributions.",
+            "Frame target is the native requested display time, not necessarily a CPU commit deadline. Request observation is not a kernel scheduling timestamp.",
+            "Capture loss can omit GPU work and requests. GPU-end comparisons require all observed encoders, but that is not complete coverage or physical input latency."]}
+
+
+def correlate(gpu_path, encoder_path, time_path, frame_path, pid, submission_path=None, request_path=None):
+    if (submission_path is None) != (request_path is None):
+        raise ValueError("Submission and presentation-request tables must be supplied together")
     offset = clock_offset(time_path)
     header, frames, presented = native_frames(frame_path, pid)
     starts = [r[3] for r in frames]
@@ -133,6 +218,7 @@ def correlate(gpu_path, encoder_path, time_path, frame_path, pid):
             "active_gpu_intervals": len(rows),
             "gpu_active_union_ms": union_ns(rows) / 1e6 if rows else None,
             "gpu_stage_sum_ms": sum(b - a for a, b in rows) / 1e6 if rows else None,
+            "last_observed_gpu_end_ns": float(gpu_end) if gpu_end is not None else None,
             "frame_admission_to_present_ms": (shown - identity) / 1e6 if shown is not None else None,
             "gpu_end_to_present_ms": float((shown - gpu_end) / 1e6) if shown is not None and gpu_end is not None else None})
     if not result:
@@ -148,7 +234,7 @@ def correlate(gpu_path, encoder_path, time_path, frame_path, pid):
         warnings.append("Native recorder overflow; frame coverage is incomplete.")
     if any(r["gpu_end_to_present_ms"] is not None and r["gpu_end_to_present_ms"] < 0 for r in result):
         warnings.append("Some associated GPU work ends after presentation; do not interpret negative intervals as presentation latency.")
-    return {"schema": 1, "pid": pid, "clock_offset_ns": {"numerator": offset.numerator, "denominator": offset.denominator},
+    report = {"schema": 1, "pid": pid, "clock_offset_ns": {"numerator": offset.numerator, "denominator": offset.denominator},
         "sources": [path.name for path in [gpu_path, encoder_path, time_path, frame_path]],
         "counts": {key: counts[key] for key in ["target_gpu_rows", "other_or_unattributed_gpu_rows",
             "ambiguous_cpu_encoder_rows", "invalid_cpu_encoder_intervals", "cpu_encoders_outside_native_frames",
@@ -158,6 +244,9 @@ def correlate(gpu_path, encoder_path, time_path, frame_path, pid):
         "frames_with_all_observed_encoders_matched": len(covered),
         "observed_covered_frame_gpu_active_ms": distribution((r["gpu_active_union_ms"] for r in covered), divisor=1),
         "frames": result, "warnings": warnings}
+    if request_path is not None:
+        report["presentation_requests"] = presentation_requests(submission_path, request_path, offset, frames, pid, result, presented)
+    return report
 
 
 def main():
@@ -165,9 +254,12 @@ def main():
     for name in ["gpu_xml", "encoder_xml", "time_xml", "frame_jsonl"]:
         parser.add_argument(name, type=Path)
     parser.add_argument("--pid", type=int, required=True)
+    parser.add_argument("--submissions-xml", type=Path)
+    parser.add_argument("--present-requests-xml", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = correlate(args.gpu_xml, args.encoder_xml, args.time_xml, args.frame_jsonl, args.pid)
+    report = correlate(args.gpu_xml, args.encoder_xml, args.time_xml, args.frame_jsonl, args.pid,
+                       args.submissions_xml, args.present_requests_xml)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
 
 

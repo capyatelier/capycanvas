@@ -64,6 +64,81 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
   assert.ok(await compare(cameraBefore,await navCrop())>0,'Navigator updates the camera outline');
   await writeFile(`${dir}/web-navigator-${dpr}x.png`,Buffer.from(navDuring,'base64'));
   console.log(JSON.stringify({dpr,nativeNavigator:native,retainedPixels:true,cameraUpdate:true}));
+  // Use real host measurements and all pointer types for the clipped-preview
+  // path, alongside the existing retained-pixel and cancellation checks.
+  for (const device of ["mouse", "touch", "pen"]) for (const scenario of [
+    {panel:"color"}, {panel:"layers"}, {panel:"adjustments"},
+    {panel:"adjustments", sourceHeight:140}, {panel:"adjustments", sourceHeight:370},
+    {panel:"color", footer:true}, {panel:"layers", established:true},
+  ]) {
+    const {panel,footer,sourceHeight,established} = scenario;
+    const dropped = structuredClone(fixture);
+    dropped.layout.bands[1].root = tabs(43, [panel]);
+    if (footer) dropped.layout.panels.find(p=>p.id===panel).hide_tab = true;
+    if (sourceHeight) {
+      dropped.layout.bands[1].root = {kind:"split",id:46,axis:"vertical",fraction:sourceHeight/946,
+        first:tabs(43,[panel]),second:tabs(47,["navigator"])};
+      dropped.layout.next_id = Math.max(48,dropped.layout.next_id);
+    }
+    if (established) {
+      dropped.layout.floating = [{root:dropped.layout.bands.pop().root,position:[550,220],width:360,default_width:360,height:320}];
+    }
+    await send({type:"restore_workspace", workspace:dropped});
+    const savedLayout = await evaluate("layerApp.state().workspace");
+    const source = await rect();
+    const start = await evaluate(`(()=>{const r=document.querySelector('.dock-group[data-group="43"] .panel-grip').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    let point = start;
+    const input = async (phase, p = point) => {
+      point = p;
+      if (device === "touch") await call("Input.dispatchTouchEvent", {type:{down:"touchStart",move:"touchMove",up:"touchEnd"}[phase],touchPoints:phase==="up"?[]:[{id:1,...p}]});
+      else await call("Input.dispatchMouseEvent", {type:{down:"mousePressed",move:"mouseMoved",up:"mouseReleased"}[phase],...p,button:"left",buttons:phase==="up"?0:1,clickCount:1,pointerType:device});
+      await settle();
+    };
+    const live = () => evaluate(`(()=>{const p=layerApp.app.workspace_update().drag.group,n=document.querySelector('.dock-group[data-group="'+p.id+'"]'),r=n.getBoundingClientRect();return {bounds:p.bounds,actual:{x:r.x,y:r.y,width:r.width,height:r.height},id:p.id}})()`);
+    await input("down");
+    await input("move", {x:800,y:650});
+    const first = await live();
+    assert.equal(first.bounds.width, source.width, `${device} ${panel}: source width`);
+    assert.ok(Math.abs(first.bounds.height-source.height)<.02, `${device} ${panel}: source height`);
+    for (const y of [980, 995, 650]) {
+      await input("move", {x:800,y});
+      const preview = await live();
+      assert.ok(Math.abs(preview.bounds.y-(y - (start.y-source.y)))<.02);
+      assert.ok(Math.abs(preview.bounds.height-source.height)<.02);
+      assert.ok(["x","y","width","height"].every(k=>Math.abs(preview.actual[k]-preview.bounds[k])<=.51), `${device} ${panel}: retained native allocation at edge`);
+    }
+    const measurement = await evaluate(`layerApp.app.layout_update(innerWidth,innerHeight).panel_measurements.find(m=>m.panel===${JSON.stringify(panel)})`);
+    assert.ok(measurement.content_height > 0, `${panel}: natural native height`);
+    const chrome = footer ? 20 : 36;
+    const minimum = measurement.scroll ? Math.min(measurement.content_height,measurement.scroll.fixed_height+4*(measurement.scroll.unit_height||36))+chrome : measurement.content_height+chrome;
+    // Compact/short content moves inward whole; long content uses the available
+    // space down to four rows, then moves inward to keep those rows reachable.
+    const room = sourceHeight ? 800 : panel === "adjustments" ? minimum+15 : 10;
+    await input("move", {x:800,y:footer ? 995 : 1000-6-room+(start.y-source.y)});
+    if (!sourceHeight) assert.ok((await live()).actual.y + source.height > 1000, "preview extends beyond the clip");
+    await input("up"); await send({type:"set_theme",theme:"dark"});
+    const final = await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(panel)}))`);
+    const natural = measurement.content_height+chrome;
+    const preferred = established ? source.height : measurement.scroll && natural>400 ?
+      (source.height>=minimum && source.height<=400 ? source.height : 400) : natural;
+    const expected = Math.min(preferred,Math.max(room,minimum));
+    assert.ok(Math.abs(final.bounds.height-expected)<1, `${device} ${panel}: ${final.bounds.height} versus ${expected}, ${JSON.stringify(measurement)}`);
+    assert.ok(final.bounds.y+final.bounds.height<=994.01);
+    if (panel === "layers") assert.ok(final.bounds.height<300, "two layers do not produce a tall float");
+    if (panel === "color") {
+      const body = await evaluate(`(()=>{const r=document.querySelector('.floating-panel .color-wheel-square').getBoundingClientRect(),b=document.querySelector('.floating-panel').getBoundingClientRect();return {side:r.height,gap:b.bottom-r.bottom}})()`);
+      assert.ok(body.gap<(footer ? 32 : 12) && body.side>300, `color fits its square: ${JSON.stringify(body)}`);
+    }
+    if (device === "mouse" && !sourceHeight && !established) {
+      const capture = await call("Page.captureScreenshot",{format:"png"});
+      await writeFile(`${dir}/web-drop-${panel}${footer ? "-footer" : ""}-${dpr}x.png`,Buffer.from(capture.data,"base64"));
+    }
+    const committed = await evaluate("layerApp.state().workspace");
+    await send({type:"invoke",command:"undo_workspace"});assert.deepEqual(await evaluate("layerApp.state().workspace"),savedLayout);
+    await send({type:"invoke",command:"redo_workspace"});assert.deepEqual(await evaluate("layerApp.state().workspace"),committed);
+    console.log(JSON.stringify({dpr,device,...scenario,natural:measurement.content_height,settledHeight:final.bounds.height,clippedPreview:true}));
+  }
+
  }
- await send({type:'restore_workspace',workspace:saved});console.log('PASS: collapsed icon centering/rotation, native pixels at 1x/2x, model rebase and queued cancellation');
+ await send({type:'restore_workspace',workspace:saved});console.log('PASS: native pixels at 1x/2x, model rebase/cancel, mouse/touch/pen clipping, compact/short/long drops, squashed/preserved source heights, footer anchor, undo/redo');
 }

@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
@@ -197,7 +198,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
-    BoxWithConstraints(Modifier.fillMaxSize().testTag("workspace").workspaceGestures(dock)
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").workspaceGestures(dock)
         .workspaceDragCursor(dock.dragCursor)
         .drawWithContent { drawContent(); host.recordUiDraw() }
         .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {
@@ -275,7 +276,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                                 "width" to (r.width + if ("left" in edge || "right" in edge) 6f else 0f),
                                 "height" to (r.height + if ("top" in edge || "bottom" in edge) 6f else 0f))
                         }
-                        Box(Modifier.workspacePlaced(host, group.getInt("id"), hit, base, density).zIndex(z.toFloat())
+                        Box(Modifier.workspacePlaced(host, group.getInt("id"), hit, base, density, edge).zIndex(z.toFloat())
                             .testTag("resize-${group.getInt("id")}-${handle.getString("edge")}").workspaceSource(dock,
                             obj("type" to "resize_floating", "group" to group.getInt("id"), "edge" to handle.getString("edge")),
                             priority = 4, cursor = resizePointerIcon(handle.getString("edge"))))
@@ -463,7 +464,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
             Box(Modifier.weight(1f).testTag("panel-body-$active")) {
                 if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")
-                else PanelControls(host, state, panel, Modifier.fillMaxSize()) { dock.measure(active, contentHeight = it) }
+                else PanelControls(host, state, panel, Modifier.fillMaxSize(), onContent = { dock.measure(active, content = it) })
             }
             group.objectOrNull("footer_grip")?.let { grip ->
                 Box(Modifier.fillMaxWidth().height(grip.number("height").dp).testTag("group-grip-${group.getInt("id")}").dragSource(dock, groupItem)

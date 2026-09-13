@@ -2,6 +2,12 @@
 // Test-only virtual pointer through Mutter -> Wayland -> GTK/Chromium. Run ONLY inside
 // an isolated dbus-run-session + headless Mutter, never on a user's desktop.
 const {Gio, GLib} = imports.gi;
+// The private monitor is configured by workspace-motion.sh. RemoteDesktop's
+// touch positions are stream pixels; Mutter divides them by monitor scale.
+// Relative pointer motion and the test fixtures use logical desktop units.
+const touchScale = Number(GLib.getenv('LAYER_MOTION_SCALE') || 1);
+if (!Number.isFinite(touchScale) || touchScale < 1 || touchScale > 4)
+    throw new Error('Expected private monitor scale 1..4');
 if (!GLib.getenv('WAYLAND_DISPLAY')?.startsWith('layer-bench-'))
     throw new Error('Requires an isolated layer-bench-* Wayland display');
 const output = GLib.getenv('LAYER_NATIVE_INPUT_DIR');
@@ -31,14 +37,16 @@ const workspaceMenus = ARGV.includes('--workspace-menus') || workspaceSwitcher |
 const workspaceResize = ARGV.includes('--workspace-resize') || ARGV.includes('--web-workspace-resize');
 const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('--web-workspace-resize') || ARGV.includes('--web-color-panel');
 const colorPanel = ARGV.includes('--color-panel') || ARGV.includes('--web-color-panel');
-const workspaceMotion = colorPanel || columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
+const workspaceDropSizes = ARGV.includes('--workspace-drop-sizes');
+const workspaceEdges = ARGV.includes('--workspace-edges');
+const workspaceMotion = workspaceDropSizes || workspaceEdges || colorPanel || columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 // Group panels include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
 if (drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
 const process = launcher.spawnv([
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', colorPanel ? '--color-panel' : workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
-        'cargo', 'test', '--release', '-p', 'layer-linux', iconAudit ? 'native_icon_audit' : colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceDropSizes ? 'native_workspace_drop_sizes' : workspaceEdges ? 'native_workspace_drag_edges' : iconAudit ? 'native_icon_audit' : colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
 ]);
@@ -109,7 +117,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 if (event.touch) {
                     if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
                     else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',
-                        '(sudd)', [touchStream, 0, ...event.point]);
+                        '(sudd)', [touchStream, 0, ...event.point.map(v => v * touchScale)]);
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.point) {

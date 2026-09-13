@@ -704,7 +704,8 @@ pub struct FloatingGroup {
     /// Width inherited on tear-off, retained when manually resizing.
     #[serde(default)]
     pub default_width: Option<f32>,
-    /// None sizes to the active content; resizing supplies an explicit height.
+    /// None sizes to active content; a preserved tear-off size or manual resize
+    /// supplies an explicit height.
     pub height: Option<f32>,
     /// Default-size cycle and flow direction for a standalone floating toolbar.
     #[serde(default)]
@@ -740,12 +741,29 @@ impl FloatingToolbarLayout {
 
 /// Native measurements only. Rust owns sizing rules and resulting geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PanelScrollMeasurement {
+    /// Controls and padding outside the scrolling content, excluding workspace chrome.
+    pub fixed_height: f32,
+    /// One complete row (including spacing), or zero for continuous content.
+    pub unit_height: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PanelMeasurement {
     pub panel: Panel,
     pub tab_width: f32,
-    /// Zero means the body has not been measured; use the default floating height.
+    /// Natural body height including all scroll content and fixed controls, but
+    /// excluding the workspace tab bar/footer grip. Zero means not yet measured.
     pub content_height: f32,
+    /// None means the content should keep its natural height, e.g. a square picker.
+    /// Older hosts can omit this until they opt into content-aware drop sizing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll: Option<PanelScrollMeasurement>,
 }
+
+#[cfg(test)]
+#[path = "floating_drop_tests.rs"]
+mod floating_drop_tests;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockLayout {
@@ -3065,6 +3083,105 @@ impl DockLayout {
         Ok(())
     }
 
+    /// Settle a floating drag once, inside its existing history transaction. The host
+    /// measures content at the floating width; the held preview never uses this
+    /// policy. Subsequent content updates do not resize the established window.
+    pub(crate) fn settle_floating_drop(
+        &mut self,
+        group: u32,
+        viewport: [f32; 2],
+        preview: Bounds,
+        source_height: Option<f32>,
+        newly_floating: bool,
+    ) -> Result<(), String> {
+        let placement = self
+            .workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+            .groups
+            .into_iter()
+            .find(|g| g.id == group && g.floating)
+            .ok_or("Unknown floating group")?;
+        // Toolbars already have an exact compact grid and wrap to fit the window.
+        if placement.panels.len() == 1 && placement.active.kind() == PanelKind::Tiles {
+            return self.move_floating(group, [preview.x, preview.y], viewport);
+        }
+        let top = crate::HEADER_HEIGHT;
+        let bottom = self.workspace_height(viewport[1]) - WORKSPACE_SPACING;
+        let usable = (bottom - top).max(1.0);
+        let chrome = if placement.tabs_visible {
+            TAB_BAR_HEIGHT
+        } else {
+            PANEL_GRIP_HEIGHT
+        };
+        let measurement = self
+            .measurements
+            .iter()
+            .find(|m| m.panel == placement.active);
+        let natural = measurement
+            .filter(|m| m.content_height > 0.0)
+            .map_or(preview.height, |m| m.content_height + chrome)
+            .max(TAB_BAR_HEIGHT)
+            .min(usable);
+        let scroll = measurement.and_then(|m| m.scroll);
+        let minimum = scroll.map_or(natural, |m| {
+            (chrome
+                + m.fixed_height
+                + 4.0
+                    * if m.unit_height > 0.0 {
+                        m.unit_height
+                    } else {
+                        TILE_SIZE
+                    })
+            .min(natural)
+        });
+        let budget = 400.0_f32.min(usable * 0.5).max(minimum).min(usable);
+        let preferred = if !newly_floating {
+            preview.height.min(usable)
+        } else if scroll.is_none() || natural <= budget {
+            natural
+        } else {
+            source_height
+                .filter(|h| *h >= minimum && *h <= budget)
+                .unwrap_or(budget)
+        };
+        // Compact controls stay whole. Scrollable content can lose rows, down to
+        // four (or all rows if fewer exist), before its grab edge moves inward.
+        let minimum = if !newly_floating && scroll.is_none() {
+            preferred
+        } else {
+            minimum.min(preferred)
+        };
+        let footer = !placement.tabs_visible;
+        let anchor = if footer {
+            (preview.y + preview.height).min(bottom)
+        } else {
+            preview.y.max(top)
+        };
+        let room = if footer {
+            anchor - top
+        } else {
+            bottom - anchor
+        };
+        let height = preferred
+            .min(room.max(minimum))
+            .max(TAB_BAR_HEIGHT)
+            .min(usable);
+        self.floating
+            .iter_mut()
+            .find(|f| f.root.id() == group)
+            .unwrap()
+            .height = Some(height);
+        self.move_floating(
+            group,
+            [preview.x, if footer { anchor - height } else { anchor }],
+            viewport,
+        )
+    }
+
     pub fn resize_floating(
         &mut self,
         group: u32,
@@ -4784,6 +4901,7 @@ mod tests {
             panel: Panel::Sizes,
             tab_width: 80.0,
             content_height: 100.0,
+            scroll: None,
         });
         layout.bands[0].extent = 50.0;
         let resolved = layout.workspace(1600.0, 2000.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
@@ -5677,6 +5795,7 @@ mod tests {
                 panel,
                 tab_width: 140.0,
                 content_height: 0.0,
+                scroll: None,
             });
             assert_eq!(height(&layout), default_height);
             layout.measurements[0].content_height = 180.0;
@@ -5701,11 +5820,13 @@ mod tests {
                     panel: Panel::Brushes,
                     tab_width: 200.0,
                     content_height: 1000.0,
+                    scroll: None,
                 },
                 PanelMeasurement {
                     panel: Panel::Layers,
                     tab_width: 140.0,
                     content_height: 100.0,
+                    scroll: None,
                 },
             ],
             ..Default::default()
@@ -5884,11 +6005,13 @@ mod tests {
                 panel: Panel::Brushes,
                 tab_width: 150.0,
                 content_height: 200.0,
+                scroll: None,
             },
             PanelMeasurement {
                 panel: Panel::Layers,
                 tab_width: 180.0,
                 content_height: 200.0,
+                scroll: None,
             },
         ];
         layout.add_panel_to_group(Panel::Brushes, 8).unwrap();

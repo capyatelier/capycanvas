@@ -950,24 +950,26 @@ class AndroidInteractionTest {
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme)); restore()
                 customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
-                assertEquals("Leading divider uses toolbar spacing below the expand button", 12 * density,
+                assertEquals("Leading divider has only the lower gap below Expand", 6 * density,
                     bounds("column-icon-brushes").top - bounds("expand-column-46").bottom, 1f)
+                assertEquals("Leading divider touches Expand", bounds("expand-column-46").bottom,
+                    bounds("column-divider-46-0").top, 1f)
                 assertEquals("Collapsed group spacing matches toolbar divider and gaps", 12 * density,
                     bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)
-                fun line(tag: String, horizontal: Boolean, name: String) {
+                fun line(tag: String, horizontal: Boolean, name: String, slotDp: Float = 8f) {
                     waitFor("divider layout $tag") {
                         find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot?.let {
-                            kotlin.math.abs((if (horizontal) it.height else it.width) - 8 * density) < 1f
+                            kotlin.math.abs((if (horizontal) it.height else it.width) - slotDp * density) < 1f
                         } == true
                     }
                     val b = bounds(tag)
-                    assertEquals("Divider slot is 8dp", 8 * density, if (horizontal) b.height else b.width, 1f)
+                    assertEquals("Divider slot is ${slotDp}dp", slotDp * density, if (horizontal) b.height else b.width, 1f)
                     capture("$theme-$name") { sample ->
                         assertNotEquals("Divider line is visible", sample(b.center), sample(b.center +
                             if (horizontal) Offset(0f, 2 * density) else Offset(2 * density, 0f)))
                     }
                 }
-                line("column-divider-46-0", true, "column-divider")
+                line("column-divider-46-0", true, "column-divider", slotDp = 1f)
                 line("column-divider-46-1", true, "column-group-divider")
                 line("tile-toolbar-$nextTile", false, "toolbar-divider-horizontal")
                 moveToolbar(obj("kind" to "edge", "edge" to "right", "outer" to true))
@@ -1017,27 +1019,63 @@ class AndroidInteractionTest {
     @Test fun detachedPanelsKeepBodiesAndWiderResizeTargets() {
         systemInput = false
         val root = fixture.getJSONObject("layout").array("bands").getJSONObject(1).getJSONObject("root")
-        root.put("panels", JSONArray(listOf("navigator", "layers", "properties", "adjustments"))).put("tab_style", "icon")
-        for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS))
-            for (panel in listOf("properties", "adjustments", "layers")) for (wholeGroup in listOf(false, true)) {
+        root.put("panels", JSONArray(listOf("navigator", "layers", "properties", "adjustments", "color"))).put("tab_style", "icon")
+        for (pointer in pointerTools)
+            for (panel in listOf("properties", "adjustments", "layers", "color", "navigator")) for (wholeGroup in listOf(false, true)) {
                 tool = pointer; restore()
                 if (wholeGroup) action(obj("type" to "select_panel_tab", "group" to 43, "panel" to panel))
                 val before = workspace()
+                val sourceHeight = group(panel).getJSONObject("bounds").number("height")
                 event(MotionEvent.ACTION_DOWN, bounds(if (wholeGroup) "group-grip-43" else "tab-$panel").center)
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
                 waitFor("$panel detaches") { group(panel).optBoolean("floating") }
                 settle()
                 assertTrue("$panel floating body is visible during contact", bounds("panel-body-$panel").height > 60 * density)
-                val content = when (panel) { "adjustments" -> "filter-list"; "properties" -> "layer-properties"; else -> "layer-rows" }
+                val content = when (panel) { "adjustments" -> "filter-list"; "properties" -> "layer-properties"; "color" -> "color-panel"; "navigator" -> "navigator-overview"; else -> "layer-rows" }
                 assertTrue("$panel controls are painted below the header", bounds(content).height > 20 * density)
                 event(MotionEvent.ACTION_MOVE, point + Offset(24 * density, 30 * density)); settle()
                 assertTrue("$panel body remains visible while moving", bounds(content).height > 20 * density)
+                val rootBounds = bounds("workspace")
+                val offsetY = point.y / density - host.workspaceGeometry!!.bounds!!.top
+                for (y in listOf(rootBounds.bottom - 30 * density, rootBounds.bottom - 2 * density)) {
+                    event(MotionEvent.ACTION_MOVE, Offset(rootBounds.center.x, y)); settle()
+                    instrumentation.runOnMainSync {
+                        val moving = host.workspaceGeometry!!
+                        val preview = moving.bounds!!
+                        assertEquals("$panel $pointer: contact follows the lower edge", y / density - offsetY, preview.top, 1f)
+                        assertEquals("$panel $pointer: preview keeps source height", sourceHeight, preview.height, 1f)
+                        val node = find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-${moving.group}")!!
+                        assertEquals("Native allocation stays full while clipped", preview.height * density, node.size.height.toFloat(), 1f)
+                        assertTrue("Preview extends beyond workspace", preview.bottom * density > rootBounds.bottom)
+                    }
+                }
                 event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(before, workspace())
                 event(MotionEvent.ACTION_DOWN, bounds(if (wholeGroup) "group-grip-43" else "tab-$panel").center)
-                event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle(); event(MotionEvent.ACTION_UP); settle()
+                event(MotionEvent.ACTION_MOVE, Offset(rootBounds.center.x, rootBounds.bottom - 2 * density)); settle()
+                event(MotionEvent.ACTION_UP); settle(); settle()
                 assertTrue(group(panel).optBoolean("floating"))
                 val floating = workspace()
                 val floatingId = group(panel).getInt("id")
+                val settledGroup = group(panel)
+                val placed = settledGroup.getJSONObject("bounds").rect()
+                val measured = snapshot().array("panel_measurements").objects().first { it.getString("panel") == panel }
+                val chrome = if (settledGroup.getBoolean("tabs_visible")) 36f else settledGroup.getJSONObject("footer_grip").number("height")
+                val natural = measured.number("content_height") + chrome
+                val scroll = measured.objectOrNull("scroll")
+                val minimum = if (scroll == null) natural else minOf(natural, chrome + scroll.number("fixed_height") + 4 * scroll.number("unit_height").takeIf { it > 0f }.let { it ?: 36f })
+                assertEquals("$panel $pointer whole=$wholeGroup: useful height from $measured", minimum, placed.height, 1f)
+                assertTrue("Dropped panel fits above the screen bottom", placed.bottom * density <= rootBounds.bottom + 1f)
+                if (panel == "layers") assertTrue("Short layer list fits its rows", placed.height < 300f)
+                if (panel == "color") assertEquals("Color uses its full-width square", placed.width, measured.number("content_height"), 1f)
+                if (pointer == MotionEvent.TOOL_TYPE_MOUSE && wholeGroup) {
+                    val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/drop-$panel.png")
+                    file.parentFile!!.mkdirs()
+                    instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                        bitmap.recycle()
+                    }
+                }
+
                 val edge = bounds("resize-$floatingId-right")
                 assertTrue("Floating side target is at least 12dp", edge.width >= 12 * density - 1)
                 val press = Offset(edge.right - 2 * density, edge.center.y)
@@ -1047,6 +1085,44 @@ class AndroidInteractionTest {
                 event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(floating, workspace())
                 action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
             }
+        val layout = fixture.getJSONObject("layout")
+        val band = layout.array("bands").getJSONObject(1)
+        val originalRoot = band.getJSONObject("root")
+        val colorConfig = layout.array("panels").objects().first { it.getString("id") == "color" }
+        val hidden = colorConfig.optBoolean("hide_tab")
+        try {
+            for (pointer in pointerTools) for (case in listOf("squashed", "usable", "footer", "navigator-squashed")) {
+                tool = pointer
+                band.put("root", originalRoot); colorConfig.put("hide_tab", hidden); restore()
+                val usableHeight = bounds("workspace").height / density - 48f - 6f - layout.number("bottom_inset")
+                val budget = minOf(400f, usableHeight * .5f)
+                val panel = when(case) { "footer" -> "color"; "navigator-squashed" -> "navigator"; else -> "adjustments" }
+                val first = obj("kind" to "tabs", "id" to 43, "panels" to JSONArray(listOf(panel)), "active" to panel, "tab_style" to "icon")
+                if (case == "footer") {
+                    band.put("root", first); colorConfig.put("hide_tab", true)
+                } else {
+                    val requested = if (case.endsWith("squashed")) 120f else budget - 4f
+                    band.put("root", obj("kind" to "split", "id" to 46, "axis" to "vertical", "fraction" to (requested / usableHeight),
+                        "first" to first, "second" to obj("kind" to "tabs", "id" to 47, "panels" to JSONArray(listOf("layers")), "active" to "layers", "tab_style" to "icon")))
+                    layout.put("next_id", maxOf(48, layout.getInt("next_id")))
+                }
+                restore()
+                val before = workspace()
+                val source = group(panel).getJSONObject("bounds").rect()
+                val workspaceBounds = bounds("workspace")
+                event(MotionEvent.ACTION_DOWN, bounds("group-grip-43").center)
+                event(MotionEvent.ACTION_MOVE, if (case == "footer") Offset(workspaceBounds.center.x, workspaceBounds.bottom - 2*density) else Offset(workspaceBounds.center.x, 140*density))
+                settle()
+                assertEquals("$case: preview preserves source size", source.height, host.workspaceGeometry!!.bounds!!.height, 1f)
+                event(MotionEvent.ACTION_UP); settle(); settle()
+                val final = group(panel).getJSONObject("bounds").rect()
+                val expected = when (case) { "squashed" -> budget; "usable" -> source.height; "navigator-squashed" -> 304f; else -> final.width + 20f }
+                assertEquals("$pointer $case: sensible drop height", expected, final.height, 1.5f)
+                val committed = workspace()
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
+                action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(committed, workspace())
+            }
+        } finally { band.put("root", originalRoot); colorConfig.put("hide_tab", hidden) }
         restore()
         val divider = bounds("divider-40")
         assertTrue("Column resize target is at least 16dp", divider.width >= 16 * density - 1)

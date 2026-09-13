@@ -521,52 +521,67 @@ function queuePanelMeasurements() {
   measuringPanels = true;
   requestAnimationFrame(() => {
     measuringPanels = false;
-    const pending = [];
-    // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
-    // copy per content revision, so width changes reflow it without cloning.
-    for (const config of state.workspace.layout.panels) {
-      const view = customization.view(config.id);
-      const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
-      const key = JSON.stringify([String(workspaceContentRevision), view.title, view.tab, view.icon, view.controls, view.tile_style]);
-      let cached = panelMeasurements.get(config.id);
-      if (cached?.key !== key) {
-        invalidatePanelMeasurement(config.id);
-        const root = element("div");
-        const tab = element("button", "dock-tab");
-        tab.style.width = "max-content";
-        tabLabel(tab, view);
-        root.append(tab);
-        const content = config.content.kind === "toolbar" ? null : panels.get(config.id).cloneNode(true);
-        if (content) {
-          content.style.height = "auto"; content.style.width = "100%";
-          root.append(content);
-        }
-        cached = { key, root, tab, content };
-        panelMeasurements.set(config.id, cached); measurementRoot.append(root);
+    measurePanels();
+  });
+}
+function measurePanels() {
+  const pending = [];
+  // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
+  // copy per content revision, so width changes reflow it without cloning.
+  for (const config of state.workspace.layout.panels) {
+    const view = customization.view(config.id);
+    const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
+    const key = JSON.stringify([String(workspaceContentRevision), view.title, view.tab, view.icon, view.controls, view.tile_style]);
+    let cached = panelMeasurements.get(config.id);
+    if (cached?.key !== key) {
+      invalidatePanelMeasurement(config.id);
+      const root = element("div");
+      const tab = element("button", "dock-tab");
+      tab.style.width = "max-content";
+      tabLabel(tab, view);
+      root.append(tab);
+      const content = config.content.kind === "toolbar" ? null : panels.get(config.id).cloneNode(true);
+      if (content) {
+        content.style.height = "auto"; content.style.width = "100%";
+        root.append(content);
       }
-      // Toolbar intrinsic height is fixed at zero and its tab width is
-      // independent of the available column width.
-      if (cached.value && !cached.content) continue;
-      if (cached.width !== width) {
-        cached.width = width; cached.root.style.width = `${width}px`;
-        pending.push([config.id, cached]);
-      }
+      cached = { key, root, tab, content };
+      panelMeasurements.set(config.id, cached); measurementRoot.append(root);
     }
-    for (const [id, cached] of pending) cached.value = {
+    // Toolbar intrinsic height is fixed at zero and its tab width is
+    // independent of the available column width.
+    if (cached.value && !cached.content) continue;
+    if (cached.width !== width) {
+      cached.width = width; cached.root.style.width = `${width}px`;
+      pending.push([config.id, cached]);
+    }
+  }
+  for (const [id, cached] of pending) {
+    const content_height = cached.content?.getBoundingClientRect().height || 0;
+    // The unconstrained copy lays out every row, including offscreen rows.
+    // Subtract the list itself to keep headers/footers outside the scroll budget.
+    const list = cached.content?.querySelector(".layer-rows, .filter-picker-list");
+    const row = list?.querySelector(".layer-row, .filter-row");
+    cached.value = {
       panel: id,
       tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
-      content_height: cached.content?.getBoundingClientRect().height || 0,
+      content_height,
+      ...(cached.content && id !== "color" ? { scroll: {
+        fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
+        unit_height: row?.getBoundingClientRect().height || 0,
+      }} : {}),
     };
-    for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
-    const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
-    // Compare against the shared publication, not a second authoritative cache.
-    // Full restores omit these transient facts and therefore measure again.
-    const current = state.workspace.layout.measurements;
-    if (!current || current.length !== measurements.length || measurements.some((m, i) =>
-      m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height)) {
-      dispatch({ type: "measure_panels", measurements });
-    }
-  });
+  }
+  for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
+  const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
+  // Compare against the shared publication, not a second authoritative cache.
+  // Full restores omit these transient facts and therefore measure again.
+  const current = state.workspace.layout.measurements;
+  if (!current || current.length !== measurements.length || measurements.some((m, i) =>
+    m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height ||
+    m.scroll?.fixed_height !== current[i].scroll?.fixed_height || m.scroll?.unit_height !== current[i].scroll?.unit_height)) {
+    dispatch({ type: "measure_panels", measurements });
+  }
 }
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect(),
@@ -817,13 +832,19 @@ function queueWorkspaceLayout(presentation) {
     Object.assign(state.workspace.layout, packet.workspace_layout);
     state.workspace.layout.measurements = packet.panel_measurements;
     arrange(packet.layout, true);
+    queueWorkspacePresentation(update);
   });
 }
 workspace.addEventListener("scroll", () => { if (workspaceGesture) workspaceGesture.hits = null; }, true);
-const workspacePlacements = new Set();
+const workspacePlacements = new Map();
 const deviceAligned = value => Math.round(value * devicePixelRatio) / devicePixelRatio;
 function clearWorkspacePlacement() {
-  for (const node of workspacePlacements) node.style.removeProperty("transform");
+  for (const [node, original] of workspacePlacements) {
+    node.style.removeProperty("transform");
+    node.style.width = original.width;
+    node.style.height = original.height;
+    node.style.setProperty("--panel-body-height", original.bodyHeight);
+  }
   workspacePlacements.clear();
 }
 function queueWorkspacePresentation(presentation) {
@@ -843,13 +864,29 @@ function flushWorkspacePresentation() {
   if (!update || update.model_revision !== workspaceModelRevision) return false;
   const drag = update.drag, moving = drag?.group;
   if (moving) {
-    const base = layout.groups.find(g => g.id === moving.id)?.bounds;
+    const group = layout.groups.find(g => g.id === moving.id), base = group?.bounds;
     if (base) {
-      const transform = `translate(${deviceAligned(moving.bounds.x) - base.x}px, ${deviceAligned(moving.bounds.y) - base.y}px)`;
+      const dw = moving.bounds.width - base.width, dh = moving.bounds.height - base.height;
       const nodes = [groups.get(moving.id), ...[...dividers.values()].filter(n => n.dragAction.group === moving.id)];
       for (const node of nodes.filter(Boolean)) {
+        if (!workspacePlacements.has(node)) workspacePlacements.set(node, {
+          width: node.style.width, height: node.style.height,
+          bodyHeight: node.style.getPropertyValue("--panel-body-height"),
+        });
+        const original = workspacePlacements.get(node), edge = node.dataset.edge;
+        const x = deviceAligned(moving.bounds.x) - base.x + (edge?.includes("right") ? dw : 0);
+        const y = deviceAligned(moving.bounds.y) - base.y + (edge?.includes("bottom") ? dh : 0);
+        const transform = `translate(${x}px, ${y}px)`;
         if (node.style.transform !== transform) node.style.transform = transform;
-        workspacePlacements.add(node);
+        // Freeze native allocation too, without scaling the retained controls.
+        const width = `${parseFloat(original.width) + (!edge || edge === "top" || edge === "bottom" ? dw : 0)}px`;
+        const height = `${parseFloat(original.height) + (!edge || edge === "left" || edge === "right" ? dh : 0)}px`;
+        if (node.style.width !== width) node.style.width = width;
+        if (node.style.height !== height) node.style.height = height;
+        if (!edge) {
+          const bodyHeight = `${moving.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0)}px`;
+          if (node.style.getPropertyValue("--panel-body-height") !== bodyHeight) node.style.setProperty("--panel-body-height", bodyHeight);
+        }
       }
     }
   } else clearWorkspacePlacement();
@@ -861,6 +898,7 @@ function workspaceGestureEvent(phase, e) {
   if (!drag) return;
   if (phase === "down" || phase === "up") {
     workspaceChrome?.measureColumnDrawers();
+    if (phase === "up") measurePanels();
     drag.hits = null;
   }
   dispatch({ ...drag.action, phase, position: [e.clientX, e.clientY],

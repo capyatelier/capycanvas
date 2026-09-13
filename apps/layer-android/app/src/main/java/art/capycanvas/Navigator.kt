@@ -27,7 +27,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** GPU overview and shared camera geometry; Compose only displays and routes input. */
-@Composable internal fun NavigatorPanel(host: CanvasHost, availableHeight: Dp = 268.dp) {
+@Composable internal fun NavigatorPanel(host: CanvasHost, availableHeight: Dp = 268.dp, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
     val density = LocalDensity.current.density
     val colors = LocalPalette.current
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -41,8 +41,10 @@ import org.json.JSONObject
         if (viewport.width > 0 && viewport.height > 0) geometry = host.awaitQuery(obj("type" to "navigator",
             "viewport" to JSONArray(listOf(viewport.width / density, viewport.height / density))))
     }
+    val overviewHeight = (availableHeight - 48.dp).coerceIn(64.dp, 220.dp)
+    SideEffect { onHeight(220f, overviewHeight.value) }
     Column {
-        Canvas(Modifier.fillMaxWidth().height((availableHeight - 48.dp).coerceIn(64.dp, 220.dp)).testTag("navigator-overview").background(colors.surround)
+        Canvas(Modifier.fillMaxWidth().height(overviewHeight).testTag("navigator-overview").background(colors.surround)
             .onSizeChanged { viewport = it }
             .onGloballyPositioned { coords ->
                 val origin = coords.positionInRoot() - host.surfaceOrigin

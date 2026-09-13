@@ -96,6 +96,12 @@ impl Workspace {
             self.publication
                 .model_revision
                 .set(Some(update.model_revision));
+            // Measurements can arrive while a clipped drag owns the contact.
+            // Rebase retained allocations on its frozen size, not the newly
+            // measured natural size in the ordinary floating layout.
+            self.publication.placement.borrow_mut().take();
+            *self.drop_hint.borrow_mut() = update.drag.as_ref().and_then(|d| d.drop_hint.clone());
+            *self.publication.current.borrow_mut() = Some(update);
             self.surface.queue_allocate();
             return;
         }
@@ -135,6 +141,8 @@ impl Workspace {
             let Some(base) = resolved.groups.iter().find(|g| g.id == group.id) else {
                 return;
             };
+            let mut base = base.clone();
+            base.interpolate_from(group.bounds, 0.0);
             let children = self
                 .surface
                 .imp()
