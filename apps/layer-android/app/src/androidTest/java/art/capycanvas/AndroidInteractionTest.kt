@@ -78,7 +78,7 @@ class AndroidInteractionTest {
             if (ready) return
             SystemClock.sleep(16)
         } while (SystemClock.uptimeMillis() < deadline)
-        fail("Timed out: $label")
+        fail("Timed out: $label; workspace manager: ${host.workspaceManager}")
     }
     // A held contact at a scroll edge can keep native overscroll animation
     // alive. Drain main-thread work without waiting forever for global idleness.
@@ -547,6 +547,143 @@ class AndroidInteractionTest {
                 action(obj("type" to "invoke", "command" to "undo_workspace"))
                 assertEquals(before, workspace())
             }
+    }
+
+    private fun stackFixture() {
+        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
+        fun split(id: Int, first: JSONObject, second: JSONObject) = obj("kind" to "split", "id" to id,
+            "axis" to "vertical", "fraction" to .5, "first" to first, "second" to second)
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to "left", "extent" to 42, "root" to split(51,
+                    split(41, split(42, tabs(43, "brushes", "sizes"), tabs(44, "navigator")), tabs(45, "color")), tabs(50, "tool_settings"))),
+                obj("id" to 46, "edge" to "right", "extent" to 252, "root" to split(47,
+                    tabs(48, "layers", "properties", "adjustments"), tabs(49, "toolbar"))))))
+            put("collapsed", JSONArray(listOf(51, 42, 45, 50).map { obj("root" to it, "expanded_width" to 246) }))
+            put("column_stacks", JSONArray(listOf(obj("column" to 51, "members" to JSONArray(listOf(42, 45, 50)), "drawers" to false, "auto_hide" to false))))
+            put("next_id", maxOf(52, getInt("next_id")))
+        }
+        restore()
+    }
+    private fun collapsed() = snapshot().getJSONObject("layout").array("collapsed").objects()
+    private fun columnFor(panel: String) = collapsed().first { c ->
+        c.array("groups").objects().any { g -> g.array("icons").objects().any { it.getString("panel") == panel } }
+    }
+    private fun openTile(panel: String) {
+        tap(bounds("column-icon-$panel").center)
+        waitFor("open column for $panel") { columnFor(panel).objectOrNull("open") != null }; settle()
+    }
+    @Test fun stackedColumnsOpenAndResizeOrdinaryGroups() {
+        stackFixture()
+        for (pointer in pointerTools) {
+            tool = pointer; restore()
+            val columns = collapsed()
+            assertEquals(3, columns.size)
+            assertEquals(6 * density, bounds("collapsed-column-45").top - bounds("collapsed-column-42").bottom, 1f)
+            assertFalse(exists("column-divider-42-0"))
+            assertFalse("Closed stack has no resize affordance", exists("divider-40"))
+            assertTrue(snapshot().getJSONObject("layout").array("dividers").objects().first { it.getInt("id") == 40 }.getBoolean("fixed"))
+            openTile("brushes")
+            val opened = columnFor("brushes").getJSONObject("open").getJSONObject("bounds").rect()
+            assertEquals(bounds("collapsed-column-42").top / density, opened.top, 1f)
+            assertEquals(bounds("collapsed-column-50").bottom / density, opened.bottom, 1f)
+            assertTrue(exists("group-43") && exists("group-44"))
+            for (panel in listOf("brushes", "navigator")) {
+                assertTrue(exists("column-connection-42-$panel"))
+                instrumentation.runOnMainSync {
+                    assertEquals(true, find(owner.semanticsOwner.unmergedRootSemanticsNode, "column-icon-$panel")!!.config.getOrNull(SemanticsProperties.Selected))
+                }
+            }
+            val beforeResize = workspace()
+            val edge = bounds("divider-40").center
+            event(MotionEvent.ACTION_DOWN, edge); event(MotionEvent.ACTION_MOVE, edge + Offset(80 * density, 0f)); settle()
+            assertTrue(columnFor("brushes").getJSONObject("open").getJSONObject("bounds").number("width") > opened.width + 60f)
+            val c = columnFor("brushes").getJSONObject("open").array("connections").getJSONArray(0).getJSONObject(1).getJSONObject("bounds").rect()
+            assertEquals(c.left * density, bounds("column-connection-42-brushes").left, 1f)
+            event(MotionEvent.ACTION_UP); settle()
+            action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(beforeResize, workspace())
+            openTile("sizes"); assertEquals("sizes", group("sizes").getString("active"))
+            openTile("color"); assertEquals(1, collapsed().count { it.objectOrNull("open") != null })
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            waitFor("Back closes open member") { collapsed().all { it.objectOrNull("open") == null } }
+            customize(obj("type" to "set_column_auto_hide", "column" to 42, "auto_hide" to true))
+            openTile("brushes")
+            tap(snapshot().getJSONObject("layout").getJSONObject("work_area").rect().center * density)
+            waitFor("Auto-hide closes open column") { collapsed().all { it.objectOrNull("open") == null } }
+            customize(obj("type" to "set_column_drawers", "column" to 42, "drawers" to true))
+            tap(bounds("column-icon-brushes").center)
+            waitFor("Individual panel drawer") { exists("column-drawer-42") }
+            assertTrue(collapsed().all { it.objectOrNull("open") == null })
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK); settle()
+        }
+    }
+
+    @Test fun stackedColumnDropsKeepFooterAppendTargets() {
+        stackFixture()
+        for (pointer in pointerTools) for (source in listOf("panel", "group", "toolbar", "tile", "drawer")) {
+            for (mode in listOf("append", "member", "cancel", "middle")) {
+                if (mode == "middle" && source != "group") continue
+                tool = pointer; restore()
+                if (source == "drawer") {
+                    customize(obj("type" to "set_column_collapsed", "group" to 48, "collapsed" to true))
+                    tap(bounds("column-icon-layers").center)
+                    waitFor("source drawer") { exists("drawer-tab-layers") }; settle()
+                }
+                val before = workspace()
+                val targetId = if (mode == "middle") 45 else 42
+                val target = collapsed().first { it.getInt("id") == targetId }
+                val last = target.array("groups").objects().last().getJSONObject("bounds").rect()
+                val append = mode in listOf("append", "middle")
+                val destination = if (append) Offset(last.center.x, last.bottom + 3f) * density else bounds("column-grip-$targetId").center
+                val tag = when (source) {
+                    "panel" -> "tab-layers"
+                    "group" -> "group-grip-48"
+                    "toolbar" -> "ribbon-grip-toolbar"
+                    "drawer" -> "drawer-tab-layers"
+                    else -> "column-icon-tool_settings"
+                }
+                val panels = when (source) {
+                    "group" -> listOf("layers", "properties", "adjustments")
+                    "toolbar" -> listOf("toolbar")
+                    "tile" -> listOf("tool_settings")
+                    else -> listOf("layers")
+                }
+                event(MotionEvent.ACTION_DOWN, bounds(tag).center)
+                if (source == "tile") SystemClock.sleep(700)
+                event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
+                event(MotionEvent.ACTION_MOVE, destination)
+                waitFor("$pointer/$source/$mode drop preview") { host.workspaceGeometry?.hint != null && exists("workspace-drop-hint") }; settle()
+                assertEquals(0, popupCount())
+                val hint = host.workspaceGeometry!!.hint!!.getJSONObject("target")
+                assertEquals(if (append) "split" else "stack_column", hint.getString("kind"))
+                if (append) {
+                    assertEquals("bottom", hint.getString("edge"))
+                    assertEquals(last.bottom * density, bounds("workspace-drop-hint").center.y, 1f)
+                }
+                event(if (mode == "cancel") MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP); settle()
+                assertFalse(exists("workspace-drop-hint"))
+                if (mode == "cancel") { assertEquals(before, workspace()); continue }
+                val after = workspace()
+                val member = columnFor(panels[0])
+                val groups = member.array("groups").objects()
+                val moved = groups.first { g -> g.array("icons").objects().any { it.getString("panel") == panels[0] } }
+                assertEquals(panels, moved.array("icons").objects().map { it.getString("panel") })
+                val stack = state().getJSONObject("workspace").getJSONObject("layout").array("column_stacks").objects()
+                    .first { member.getInt("id") in it.array("members").values() }
+                assertEquals((if (source == "tile") 2 else 3) + (if (append) 0 else 1), stack.array("members").length())
+                assertEquals(if (append) (if (mode == "middle") 2 else 3) else 1, groups.size)
+                assertFalse(stack.getBoolean("drawers")); assertFalse(stack.getBoolean("auto_hide"))
+                openTile(panels[0])
+                if (pointer == MotionEvent.TOOL_TYPE_MOUSE && source == "group" && mode == "middle") {
+                    val image = instrumentation.uiAutomation.takeScreenshot()
+                    val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/stacked-column-append.png")
+                    file.parentFile!!.mkdirs(); file.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
+                }
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
+                action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(after, workspace())
+            }
+        }
     }
 
     @Test fun collapsedDividerDropsHaveForgivingTargetsAndAlignedPreviews() {

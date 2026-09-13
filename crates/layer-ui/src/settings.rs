@@ -25,7 +25,7 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn stacked_columns(self) -> bool {
-        matches!(self, Self::Generic | Self::Gtk | Self::Web)
+        matches!(self, Self::Generic | Self::Gtk | Self::Web | Self::Android)
     }
 }
 

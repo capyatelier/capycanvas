@@ -45,6 +45,24 @@ impl Ownership {
             options.mode(0o600);
         }
         let file = options.open(path).map_err(unavailable)?;
+        // std::fs::File::try_lock is unsupported on Android. Bionic exposes
+        // the same kernel flock primitive, with release when this File closes.
+        #[cfg(target_os = "android")]
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: file owns a live descriptor for the duration of this call.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                Ok(Some(file))
+            } else {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    Ok(None)
+                } else {
+                    Err(unavailable(error))
+                }
+            }
+        }
+        #[cfg(not(target_os = "android"))]
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),

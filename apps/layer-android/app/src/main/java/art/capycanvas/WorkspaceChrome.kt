@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import org.json.JSONArray
@@ -73,11 +74,12 @@ internal fun drawerButtonShape(direction: String?) = RoundedCornerShape(
     bottomStart = if (direction == "bottom" || direction == "left") 0.dp else 6.dp)
 
 /** Ancestor clipping must preserve the connected source corners. */
-internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Float = 8f, joined: JSONArray? = null): RoundedCornerShape {
+internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Float = 8f, joined: JSONArray? = null,
+    sources: Collection<DockInteraction.DrawerSource> = drawerSources.values): RoundedCornerShape {
     val b = bounds.rect()
     val corners = listOf(b.topLeft, b.topRight, b.bottomRight, b.bottomLeft)
     val square = corners.mapIndexed { index, point ->
-        joined?.optBoolean(index) == true || drawerSources.values.any { source ->
+        joined?.optBoolean(index) == true || sources.any { source ->
             val facing = when (source.direction) {
                 "top" -> listOf(0, 1); "right" -> listOf(1, 2); "bottom" -> listOf(2, 3); else -> listOf(0, 3)
             }
@@ -96,7 +98,19 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         val id = column.getInt("id")
         key(id) {
             val bounds = column.getJSONObject("bounds")
-            val shape = dock.drawerContainerShape(bounds)
+            val opened = column.objectOrNull("open")
+            val sources = if (opened == null) emptyList() else column.array("groups").objects().flatMap { group ->
+                group.array("icons").objects().filter { it.getString("panel") == group.getString("active") }.map {
+                    DockInteraction.DrawerSource(opened.getString("direction"), it.getJSONObject("bounds").rect())
+                }
+            }
+            val shape = dock.drawerContainerShape(bounds, sources = dock.drawerSources.values + sources)
+            opened?.array("connections")?.values()?.forEach { pair ->
+                pair as JSONArray
+                key(pair.getString(0)) {
+                    DrawerBridge(pair.getJSONObject(1), dock, 159f, Modifier.testTag("column-connection-$id-${pair.getString(0)}"))
+                }
+            }
             val content = column.getJSONObject("content")
             val current by rememberUpdatedState(column)
             val scroll = rememberScrollableState { delta ->
@@ -104,7 +118,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                 val old = host.snapshot?.getJSONObject("state")?.getJSONObject("workspace")?.getJSONObject("layout")
                     ?.array("column_scroll")?.values()?.map { it as JSONArray }?.find { it.getInt(0) == id }?.getDouble(1)?.toFloat() ?: 0f
                 val bottom = c.array("groups").objects().maxOfOrNull { it.getJSONObject("bounds").let { b -> b.number("y") + b.number("height") } } ?: 0f
-                val max = (old + bottom - content.number("y") - content.number("height")).coerceAtLeast(0f)
+                val currentContent = c.getJSONObject("content")
+                val max = (old + bottom - currentContent.number("y") - currentContent.number("height")).coerceAtLeast(0f)
                 val next = (old - delta / dock.density).coerceIn(0f, max)
                 if (next != old) host.dispatch(obj("type" to "measure_column_scroll", "column" to id, "offset" to next))
                 (old - next) * dock.density
@@ -129,12 +144,12 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 val panel = icon.getString("panel")
                                 val view = panels[panel] ?: return@forEach
                                 val target = obj("kind" to "panel", "panel" to panel)
-                                val selected = drawers.any { it.getJSONObject("anchor").let { anchor ->
+                                val selected = if (opened != null) group.getString("active") == panel else drawers.any { it.getJSONObject("anchor").let { anchor ->
                                     anchor.getInt("column") == id && anchor.getString("origin") == panel
                                 } }
-                                val shape = drawerButtonShape(if (selected) dock.drawerSources[id.toString()]?.direction else null)
+                                val shape = drawerButtonShape(if (selected) opened?.getString("direction") ?: dock.drawerSources[id.toString()]?.direction else null)
                                 HoverTip(view.getString("title"), Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
-                                    .testTag("column-icon-$panel").dragSource(dock, target, holdToDrag = true)) {
+                                    .testTag("column-icon-$panel").semantics { this.selected = selected }.dragSource(dock, target, holdToDrag = true)) {
                                     Box(Modifier.fillMaxSize().clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
                                         .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
                                             host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
@@ -146,7 +161,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                         }
                     }
                     val item = obj("kind" to "column", "column" to id)
-                    val context = obj("kind" to "group", "group" to column.array("groups").getJSONObject(0).getInt("group"))
+                    val context = item
                     Box(Modifier.placed(column.getJSONObject("grip").relativeTo(bounds), dock.density)
                         .testTag("column-grip-$id").dragSource(dock, item, context), contentAlignment = Alignment.Center) { PanelGrip("Move column", vertical = true) }
                 }
@@ -162,8 +177,10 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     val retained = remember { mutableStateMapOf<String, JSONObject>() }
     LaunchedEffect(models.mapValues { it.value.toString() }) { models.forEach { (id, model) -> retained[id] = model } }
     val activeTool = models["tool"] != null
-    BackHandler(models.isNotEmpty()) {
-        if (activeTool) host.customize(obj("type" to "close_expanded")) else models.values.lastOrNull()?.getJSONObject("anchor")?.let {
+    val openColumns = snapshot.getJSONObject("layout").array("collapsed").objects().filter { it.objectOrNull("open") != null }
+    BackHandler(models.isNotEmpty() || openColumns.isNotEmpty()) {
+        if (models.isEmpty()) host.customize(obj("type" to "close_column", "column" to openColumns.last().getInt("id")))
+        else if (activeTool) host.customize(obj("type" to "close_expanded")) else models.values.lastOrNull()?.getJSONObject("anchor")?.let {
             host.customize(obj("type" to "toggle_column_drawer", "group" to it.getInt("group"), "panel" to it.getString("origin")))
         }
     }
@@ -301,9 +318,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     }
 }
 
-@Composable private fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float) {
+@Composable private fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float, modifier: Modifier = Modifier) {
     val color = LocalPalette.current.panel
-    Canvas(Modifier.placed(connection.getJSONObject("bounds"), dock.density).zIndex(z).chromeRegion(dock)) {
+    Canvas(Modifier.placed(connection.getJSONObject("bounds"), dock.density).then(modifier).zIndex(z).chromeRegion(dock)) {
         val t = connection.array("transform")
         fun point(x: Float, y: Float) = Offset((t.getDouble(0).toFloat() * x + t.getDouble(2).toFloat() * y + t.getDouble(4).toFloat()) * dock.density,
             (t.getDouble(1).toFloat() * x + t.getDouble(3).toFloat() * y + t.getDouble(5).toFloat()) * dock.density)
