@@ -2346,3 +2346,43 @@ These checks preserve the accepted native wheel implementation. Permanent GPU
 failure and CPU saving, concurrent document-operation recovery, physical input,
 suspend/driver-reset behavior, installed distribution and 120 Hz acceptance
 remain open. Local profiles, screenshots and binaries are excluded from commits.
+
+### Saving after GPU reconstruction cannot finish
+
+Exhausted reconstruction now preserves the native document and settings services
+until the user saves or approves closing. The render owner stops input admission,
+retires already admitted samples without GPU submission, keeps completed stroke
+history and cancels an unfinished stroke. It then releases rendering resources,
+cancels pending GPU readbacks and filter candidates, and continues CPU document
+operations. An accepted save keeps its worker; an uncaptured PNG export is
+canceled. Source assets and in-memory document history remain owned by the session.
+
+The unavailable-painting screen uses the current theme and exposes File, Save,
+Save As and Preferences. It restores the header even when failure occurs in Zen
+mode, without rewriting the saved Zen preference. Shared command/action policy
+rejects operations that need rendering. The ordinary and retirement input paths
+reuse the same native contact, dialog and chrome arbitration.
+
+Validation:
+
+- 578 ordinary Rust tests pass across engine, host, UI, Windows and workspace;
+  five opt-in hardware tests are excluded from that suite. New CPU-only tests
+  exercise more than one engine batch and an overflowing native input queue,
+  completed versus unfinished strokes, durable archive contents, an accepted
+  save, a waiting PNG export, and transform/filter-candidate cancellation.
+- Strict all-target engine/host/UI/Windows Clippy and C++ input tests pass.
+  Debug and Release builds pass.
+- Debug and Release native document fixtures pass exhausted recovery, Save and
+  Save As, canceled pickers, dirty-close Cancel/Discard, preferences, and clean
+  shutdown. Release also covers failure in Zen. Saved projects reopen and export
+  PNG bytes identical to the pre-failure drawing. The failure screen was inspected.
+- Ordinary repeated-removal and two-window recovery fixtures still pass in
+  Release. The complete Release editor regression passes after the final header
+  and failure-screen changes.
+
+This fixture removes the process-owned D3D12 device and prevents reconstruction
+only in an isolated test host. Arbitrary ABI panics keep their existing fatal
+handling. Concurrent document-operation recovery, physical input, mixed DPI,
+suspend/driver-reset behavior, installed MSIX/clean-machine delivery and 120 Hz
+painting/input latency remain open. No package or performance measurement was
+regenerated for this milestone.

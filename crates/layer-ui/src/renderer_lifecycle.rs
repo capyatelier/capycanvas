@@ -2,6 +2,86 @@
 use super::*;
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn rendering_suspended(&self) -> bool {
+        self.rendering_suspended
+    }
+
+    pub(super) fn command_without_renderer(command: CommandId) -> bool {
+        matches!(
+            command,
+            CommandId::SaveDocument
+                | CommandId::SaveDocumentAs
+                | CommandId::CloseDocument
+                | CommandId::Settings
+                | CommandId::KeyboardShortcuts
+                | CommandId::ToggleTheme
+                | CommandId::Fullscreen
+                | CommandId::NewWindow
+                | CommandId::About
+                | CommandId::Website
+                | CommandId::SourceCode
+        )
+    }
+
+    pub(super) fn action_without_renderer(action: &UiAction) -> bool {
+        match action {
+            UiAction::Invoke { command } => Self::command_without_renderer(*command),
+            UiAction::CompleteRequest { .. }
+            | UiAction::CloseSettings
+            | UiAction::OpenSettings { .. }
+            | UiAction::EditSettings { .. }
+            | UiAction::RestoreSettings { .. }
+            | UiAction::Preferences { .. }
+            | UiAction::SetTheme { .. }
+            | UiAction::SystemThemeChanged { .. }
+            | UiAction::WindowFullscreen { .. }
+            | UiAction::MeasurePanels { .. }
+            | UiAction::MeasureTitlebar { .. }
+            | UiAction::MeasureWorkspaceBottom { .. }
+            | UiAction::MeasureColumnDrawers { .. }
+            | UiAction::MeasureDrawerTiles { .. }
+            | UiAction::MeasureColumnScroll { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// CPU-only queue pressure relief on the sole input/render owner.
+    pub fn flush_input(&mut self) -> Result<UiChange, String> {
+        self.engine.flush_input().map_err(error)?;
+        self.input_pending = false;
+        self.refresh_document();
+        self.refresh_commands();
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
+    }
+
+    /// Preserve saveable source state after rendering cannot resume. The host
+    /// has stopped new canvas input and delivered every admitted sample first.
+    pub fn suspend_renderer(&mut self) -> Result<UiChange, String> {
+        let retired_regions = self.input(UiInput::Blur)?.change.regions;
+        self.engine.finish_input().map_err(error)?;
+        self.input_pending = false;
+        self.eyedropper.renderer_replaced();
+        self.region_tools.renderer_replaced();
+        self.navigator_preview = Default::default();
+        if self.pending_filters.take().is_some() {
+            self.state.filter_load.pending = false;
+            self.state.filter_load.error =
+                Some("Filter validation stopped because painting is unavailable".into());
+        }
+        self.rendering_suspended = true;
+        self.refresh_document();
+        self.poll_document_close();
+        self.refresh_commands();
+        Ok(self.changed(
+            retired_regions
+                | regions::DOCUMENT
+                | regions::BRUSH
+                | regions::COMMANDS
+                | regions::HOST,
+            false,
+        ))
+    }
+
     /// Prepare immutable source assets before publishing a replacement renderer.
     /// Retain document history, tool settings, camera and workspace. GPU-only
     /// readbacks are cancelled; pending filter validation resumes from retained
@@ -18,6 +98,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("The replacement GPU could not resume filter validation".into());
         }
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
+        self.rendering_suspended = false;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
         self.navigator_preview = Default::default();
@@ -124,10 +205,15 @@ mod tests {
         let workspace = s.capture_workspace().unwrap();
         let camera = s.state.camera.clone();
         let checkpoint = s.engine.checkpoint();
+        s.suspend_renderer().unwrap();
+        assert!(s.rendering_suspended());
+        assert!(s.capture_project_recovery().is_ok());
+        assert!(!s.command(CommandId::Redo).enabled);
         invoke(&mut s, CommandId::SaveDocument);
         let request = s.files.pending.as_ref().unwrap().0;
         let (previous, change) = s.replace_renderer(Backend::default()).unwrap();
         assert!(change.canvas_wake);
+        assert!(!s.rendering_suspended());
         assert_eq!(s.engine.document(), &document);
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_eq!(s.capture_workspace().unwrap(), workspace);
@@ -213,6 +299,64 @@ mod tests {
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
         s.eyedropper.poll(s.engine.backend_mut()).unwrap();
         assert_eq!(s.engine.backend().samples, 1);
+    }
+
+    #[test]
+    fn suspension_cancels_transform_and_filter_candidate_without_changing_sources() {
+        let mut s = UiSession::new(
+            Backend::default(),
+            Document::new("retire", 128, 128),
+            [128, 128],
+        )
+        .unwrap();
+        s.set_platform(Platform::Windows);
+        s.import_layer_asset(
+            "Source",
+            ProjectAsset {
+                extent: [1, 1],
+                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+                bytes: std::sync::Arc::from([20, 30, 40, 255]),
+            },
+        )
+        .unwrap();
+        s.frame(0, 0).unwrap();
+        let document = s.engine.document().clone();
+        let assets = s.files.assets.clone();
+        let catalog = s.effect_catalog.clone();
+        let mut package = layer_core::EffectPackage {
+            format: 1,
+            categories: catalog.categories().to_vec(),
+            filters: catalog.filters().to_vec(),
+        };
+        std::sync::Arc::make_mut(&mut package.filters[0].program).label =
+            "Unpublished candidate".into();
+        s.load_effect_library(
+            &serde_json::to_string(&package).unwrap(),
+            |_| panic!("owned sources"),
+            layer_core::EffectInstallMode::Merge,
+        )
+        .unwrap();
+        invoke(&mut s, CommandId::ScaleRotate);
+        assert!(s.operation.active());
+        assert!(s.state.filter_load.pending);
+        s.suspend_renderer().unwrap();
+        assert!(!s.operation.active());
+        assert!(!s.state.filter_load.pending);
+        assert!(s.state.filter_load.error.is_some());
+        assert_eq!(s.effect_catalog.filters(), catalog.filters());
+        assert_eq!(s.engine.document(), &document);
+        let source = s.capture_project_recovery().unwrap();
+        assert_eq!(source.assets, assets);
+        assert!(s.command(CommandId::SaveDocumentAs).enabled);
+        assert!(
+            s.dispatch(UiAction::Color {
+                action: ColorAction::Shape {
+                    shape: ColorShape::Triangle
+                }
+            })
+            .is_err()
+        );
+        assert_eq!(s.engine.document(), &document);
     }
 
     #[test]

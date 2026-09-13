@@ -151,6 +151,12 @@ impl CapyHost {
     }
 
     fn prepare_gpu(&mut self) -> Result<(), String> {
+        if self.device_is_lost() && std::env::var_os("CAPY_TEST_GPU_UNAVAILABLE").is_some()
+            && std::env::var_os("CAPY_SMOKE_TEST").is_some()
+            && std::env::var_os("CAPY_SETTINGS_DIRECTORY").map(std::path::PathBuf::from).is_some_and(|p| p.is_absolute())
+        {
+            return Err("Test GPU remains unavailable".into());
+        }
         if self.config.is_some() {
             return Ok(());
         }
@@ -474,6 +480,25 @@ pub unsafe extern "C" fn capy_pointer(
     records: *const CapyPointer,
     count: usize,
 ) -> i32 {
+    unsafe { pointer_records(host, records, count, false) }
+}
+/// # Safety
+/// Same ownership and buffer rules as capy_pointer. The host has stopped new
+/// canvas input; these samples were admitted before reconstruction failed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_retire_pointer(
+    host: *mut CapyHost,
+    records: *const CapyPointer,
+    count: usize,
+) -> i32 {
+    unsafe { pointer_records(host, records, count, true) }
+}
+unsafe fn pointer_records(
+    host: *mut CapyHost,
+    records: *const CapyPointer,
+    count: usize,
+    retiring: bool,
+) -> i32 {
     guard(host, |host| {
         if count > 32768 || (count > 0 && records.is_null()) {
             return Err("Invalid pointer batch".into());
@@ -481,7 +506,9 @@ pub unsafe extern "C" fn capy_pointer(
         if count > 0 {
             let batch = unsafe { std::slice::from_raw_parts(records, count) };
             validate_batch(batch).map_err(err)?;
-            host.poll_services()?;
+            if !retiring {
+                host.poll_services()?;
+            }
             let blocked = !host.accepts_workspace_input();
             for sample in batch {
                 if blocked && sample.phase != 0 {
@@ -493,14 +520,16 @@ pub unsafe extern "C" fn capy_pointer(
                     }
                     continue;
                 }
-                host.native.pointer_event(
-                    sample.event(),
-                    match sample.button {
-                        0 => PointerButton::Primary,
-                        1 => PointerButton::Pan,
-                        _ => PointerButton::Other,
-                    },
-                )?;
+                let button = match sample.button {
+                    0 => PointerButton::Primary,
+                    1 => PointerButton::Pan,
+                    _ => PointerButton::Other,
+                };
+                if retiring {
+                    host.native.retire_pointer_event(sample.event(), button)?;
+                } else {
+                    host.native.pointer_event(sample.event(), button)?;
+                }
             }
         }
         Ok(0)
@@ -512,6 +541,10 @@ pub unsafe extern "C" fn capy_pointer(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
+        if host.native.session.rendering_suspended() {
+            fail("Workspace changes are unavailable. Save the drawing and reopen it.");
+            return Ok(1);
+        }
         use crate::workspace_service::{WorkspaceAction, now_ms};
         let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
         let service = host
@@ -759,6 +792,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     guard(host, |host| {
         let metadata = crate::snapshots::WindowsMetadata {
             windows_gpu_generation: host.gpu_generation,
+            windows_rendering_suspended: host.native.session.rendering_suspended(),
             windows_importing: host
                 .documents
                 .as_ref()
@@ -965,6 +999,28 @@ pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
         }
         // Drop the HAL guard before polling wgpu's device-loss notification.
         let _ = gpu.device().poll(wgpu::PollType::Poll);
+        Ok(0)
+    })
+}
+
+/// # Safety
+/// Exclusive render-owner access after canvas input has stopped and every
+/// admitted sample has been delivered. Keep services alive until approved close.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_suspend_renderer(host: *mut CapyHost) -> i32 {
+    guard(host, |host| {
+        host.target = None;
+        host.native.suspend_renderer()?;
+        host.presenter = None;
+        drop(host.native.session.renderer_mut().0.take());
+        host.config = None;
+        if let Some(service) = host.documents.as_mut() {
+            service.renderer_unavailable(&mut host.native)?;
+        }
+        if let Some(mut service) = host.filters.take() {
+            service.stop();
+        }
+        host.native.invalidate_snapshot();
         Ok(0)
     })
 }

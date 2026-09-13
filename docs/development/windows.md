@@ -309,6 +309,7 @@ Run the document and lifecycle fixtures with actual D3D12 device removal enabled
 
 ```powershell
 ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailGpu
 ./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -RecoverGpu
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
 cargo test --locked -p layer-windows --lib device::tests::validation_error_releases_pipeline_and_allows_device_replacement -- --ignored --exact --nocapture
@@ -321,6 +322,19 @@ removal with startup, minimized windows and close decisions. The Rust regression
 checks failed-pipeline cleanup and replacement of a removed hardware device.
 The multiwindow fixture removes the shared device from each of two open windows,
 checking reconstruction in the idle sibling and independent document Undo/Redo.
+The `-FailGpu` variant removes the device and prevents reconstruction in its
+isolated test profile until the normal retry deadline expires. It checks Save,
+Save As, canceled pickers, Cancel/Discard close decisions, retained preferences,
+and durable reopen with identical exported pixels. It also checks failure in Zen
+mode: File remains accessible without changing the saved Zen preference.
+
+When reconstruction fails, painting stops and the existing drawing remains
+saveable. Completed admitted strokes are retained; an unfinished stroke is
+canceled. Document/settings services stay alive until an approved close, and
+GPU-dependent commands are disabled. An accepted save can finish; a PNG export
+that has not captured its image is canceled. Reopen the saved drawing in a new
+window to resume painting.
+
 Run these separately from performance measurements. They do not establish
-physical driver-reset or suspend behavior. Saving after all reconstruction
-retries fail still needs implementation and acceptance.
+physical driver-reset or suspend behavior, or acceptance of every concurrent
+New/Open/import/filter/export operation.

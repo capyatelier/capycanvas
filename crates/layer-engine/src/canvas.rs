@@ -797,6 +797,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
     }
 
+    /// Drain admitted samples without submitting GPU work. The producer must be
+    /// quiescent or owned by this caller; completed strokes retain their history.
+    pub fn flush_input(&mut self) -> Result<(), EngineError<B::Error>> {
+        while let Some(event) = self.input.pop() {
+            self.process_event(event)?;
+        }
+        Ok(())
+    }
+
+    /// Retire input after the host stops accepting samples. Commit completed
+    /// strokes, then cancel only an unfinished stroke and its predicted tail.
+    pub fn finish_input(&mut self) -> Result<(), EngineError<B::Error>> {
+        self.flush_input()?;
+        self.cancel_active();
+        Ok(())
+    }
+
     fn process_input(&mut self) -> Result<(), EngineError<B::Error>> {
         for _ in 0..INPUT_BATCH {
             let Some(event) = self.input.pop() else {
@@ -1853,6 +1870,49 @@ mod tests {
             assert_eq!(canvas.backend().persistent, committed, "{preset:?}");
             assert_eq!(canvas.checkpoint(), final_checkpoint);
         }
+    }
+
+    #[test]
+    fn input_retirement_commits_beyond_one_batch_and_discards_only_unfinished_ink() {
+        let (mut input, consumer) = input_queue(INPUT_BATCH + 10);
+        let mut canvas = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("CPU retirement", 128, 128),
+            consumer,
+            view(128, 128),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        for index in 0..=INPUT_BATCH + 1 {
+            let phase = if index == 0 {
+                PenPhase::Down
+            } else if index == INPUT_BATCH + 1 {
+                PenPhase::Up
+            } else {
+                PenPhase::Move
+            };
+            input.push(event(index as u64 + 1, phase, 30.)).unwrap();
+        }
+        input.push(event(9000, PenPhase::Down, 40.)).unwrap();
+        input.push(event(9001, PenPhase::Move, 80.)).unwrap();
+        canvas.finish_input().unwrap();
+        assert!(!canvas.has_active_stroke());
+        assert_eq!(canvas.document().strokes().count(), 1);
+        assert_eq!(
+            canvas.backend().persistent_dabs,
+            0,
+            "no GPU submit occurred"
+        );
+        let checkpoint = canvas.checkpoint();
+        assert!(canvas.undo().unwrap());
+        assert_eq!(canvas.document().strokes().count(), 0);
+        assert!(canvas.redo().unwrap());
+        assert_eq!(canvas.checkpoint(), checkpoint);
+        canvas.finish_input().unwrap();
+        assert_eq!(canvas.checkpoint(), checkpoint, "retirement is idempotent");
     }
 
     #[test]
