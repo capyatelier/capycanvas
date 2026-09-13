@@ -130,11 +130,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
     internal val documents = DocumentController(this, application)
+    internal val recovery = RecoveryController(this, application)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache()
     private var choreographer: Choreographer? = null
     private var attached = false
+    private var currentSurface: Surface? = null
     private var awaitingSurfaceFrame = false
     private var surfaceGeneration = 0
     @Volatile private var firstUiDraw = 0L
@@ -229,7 +231,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             main.post { continuation.resumeWith(result) }
         }) continuation.resumeWith(Result.failure(IllegalStateException("The editor has closed")))
     }
-    internal fun documentChanged() = post { refreshChrome(); publish(true); wake() }
+    internal fun documentChanged(complete: () -> Unit = {}) = post {
+        refreshChrome(); publish(true); wake(); main.post(complete)
+    }
     internal fun reportActionError(message: String) { actionError = message }
     fun clearActionError() { actionError = null }
     fun dispatch(action: JSONObject) = post {
@@ -318,6 +322,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private fun refreshChrome() { Native.input(handle, chromeInput(obj("kind" to "refresh")).toString()) }
 
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
+        currentSurface = surface
         surfaceReady = false
         val generation = ++surfaceGeneration
         post(canvas = true) {
@@ -338,6 +343,18 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             wake()
         }
     }
+    fun restartCanvas() {
+        val surface = currentSurface ?: return
+        surfaceReady = false
+        post(canvas = true) {
+            Native.resetGpu(handle)
+            check(surface.isValid) { "The canvas surface is unavailable" }
+            Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
+            attached = true; awaitingSurfaceFrame = true; startupCacheFinished = false
+            main.post { failure = null }
+            publish(true); wake()
+        }
+    }
     private var activeSurfaceGeneration = 0 // Render Looper only.
     fun resize(width: Int, height: Int, density: Float) = post {
         logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
@@ -348,6 +365,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     /** SurfaceHolder requires rendering to have stopped before this callback
      * returns. This wait is only at surface teardown, never in an input/frame. */
     fun detach() {
+        currentSurface = null
         surfaceReady = false
         ++surfaceGeneration
         val stopped = CountDownLatch(1)
@@ -609,6 +627,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }
     override fun onCleared() {
+        recovery.close()
         worker.post {
             disposed = true
             worker.removeCallbacks(workspaceTick)

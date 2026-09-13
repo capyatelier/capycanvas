@@ -10,7 +10,7 @@ android {
     buildToolsVersion = "37.0.0"
     ndkVersion = "29.0.14206865"
     defaultConfig {
-        applicationId = "art.capycanvas"
+        applicationId = providers.gradleProperty("capyApplicationId").getOrElse("art.capycanvas")
         minSdk = 29
         targetSdk = 37
         versionCode = 1

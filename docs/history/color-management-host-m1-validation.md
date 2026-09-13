@@ -33,7 +33,8 @@ Validation on Chrome 150 / NVIDIA driver 610.57.04, RTX PRO 6000 Blackwell:
 
 - Release Wasm build; 45 core, 49 engine and 356 UI/session tests passed.
 - 12 Web packaging tests passed, including dependency fingerprint rewriting.
-  The production PWA build includes all 251 precached files and both raster workers.
+  The production PWA build includes all 251 precached files and both raster workers;
+  the same offscreen acceptance journey also passes against that packaged build.
 - Real hardware WebGPU offscreen acceptance passed: paint and save, exact tile
   hashes after reopen, identical full-canvas PNGs, undo/redo, corrupt archive
   rejection without adoption, renderer replacement, and an abandoned tab's
@@ -75,3 +76,71 @@ LAYER_WEB_URL=http://127.0.0.1:4173 node apps/layer-web/test.mjs --headless --ra
 LAYER_WEB_URL=http://127.0.0.1:4173 node apps/layer-web/test.mjs --headless --raster-bench --offscreen-raster
 # Add --large-raster for a 6000 × 4000 canvas.
 ```
+
+## Android
+
+Android uses the shared immutable raster/project implementation through JNI.
+The render Looper captures a committed snapshot immediately, including during a
+live contact; the existing file worker waits for backing and writes the indexed
+archive. Storage Access Framework output is encoded completely in private cache
+before opening the provider destination. Provider writes still have the
+provider's durability/atomicity limits; private recovery uses local atomic rename.
+
+The 15-second/on-stop recovery controller owns one in-flight checkpoint per
+window. Private files use the atomic writer extracted from GTK into layer-core:
+mode 0600 sibling file, complete encoding, file sync, rename, then directory sync.
+Per-window file locks exclude live windows from recovery offers. Recovery adopts
+a prepared project as modified with no user file location, writes its new complete
+copy, then retires the old copy. Accepted immutable writes can finish after
+Activity teardown. Successful manual save/document replacement/explicit close
+retires the applicable recovery copy without acknowledging a different edit.
+
+Surface recreation retains the ViewModel/UiSession. Device replacement uses
+`replace_renderer`, keeps backed pixels and undo/redo, and retires capture workers
+off the render/input Looper. Device errors are recorded by callbacks, observed
+before preview/frame GPU use, and suspend the session. Restart Canvas creates a
+fresh renderer. File candidates carry a GPU generation and cannot reintroduce a
+retired device. A controlled device-destruction test exposed a queued thumbnail
+race in the original JNI path; this port closes that path before new GPU use.
+
+Android workspace startup also required an independent prerequisite fix:
+Rust's `File::try_lock` returned Unsupported on the tablet. The Android branch
+now calls Bionic `flock(LOCK_EX | LOCK_NB)` with the same held-file lifetime;
+SQLite ownership/fencing and permanent lock inodes are unchanged. Performance
+comparisons use old main `1756cfa` with this same platform lock fix and identical
+test harness, in a separate application ID. The user's installed app was retained.
+
+Validation hardware is the connected Wacom MovinkPad 14, Android 15, arm64 Vulkan.
+Rust is release-optimized in the debug instrumentation APK; CPU frame times are
+native frame creation and host render/present submission, not GPU completion or
+physical pen/display latency. The benchmark creates a sparse 6000 × 4000 document,
+uses synthetic pen events through the normal render Looper/display callbacks,
+warms the first contact, and measures four further 192-move contacts per run.
+Three runs include concurrent private recovery writes on the new backend. Tests
+wake the tablet before Activity launch and keep the screen on; interrupted/sleeping
+runs were rejected. This is not a dense-layer or total mobile memory qualification.
+
+## Shared regression checks after the ports
+
+Release checks passed: 45 core, 49 engine, 356 UI/session, 25 native host and
+86 native workspace tests. The hardware renderer passed 123 library tests
+(18 separate hardware workloads remain ignored) and all three GPU project tests.
+GTK's atomic-write failure/PNG test, both recovery failure/cancellation tests,
+actual New/Open/Save/Export/autosave/surface workflow and all seven native pacing
+workloads passed after extracting the shared writer.
+
+Two further 25-scenario runs sampled 21,840 frames, with no moving or contact-end
+frame above 8.33 ms and no reproducible CPU p95 gate breach against the established
+pre-change baseline. The first run overlapped an Android cross-compilation; the
+second ran after builds completed. Reports retain that scheduling noise instead
+of relabeling it as a renderer cost. Local records are
+`artifacts/color-m1/hosts-final.md`, `hosts-final-repeat.md`,
+`hosts-final-gtk-pacing.json`, and the `hosts-final-*` correctness logs.
+
+## Remaining host migrations
+
+macOS/iPadOS and Windows share the new core/renderer, but their complete host
+lifecycle and rendering performance were not qualified here. Comments at the
+Apple renderer-assignment/recovery barriers and Windows retirement/document
+paths identify deprecated assumptions and the current APIs to use. Existing
+Windows `replace_renderer` and shared project calls are explicitly retained.

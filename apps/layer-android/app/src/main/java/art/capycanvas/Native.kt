@@ -9,6 +9,8 @@ internal object Native {
     @JvmStatic external fun destroy(handle: Long)
     @JvmStatic external fun attach(handle: Long, surface: Surface, cacheDirectory: String)
     @JvmStatic external fun finishStartupCache(handle: Long)
+    @JvmStatic external fun resetGpu(handle: Long)
+    external fun destroyGpuForTest(handle: Long)
     @JvmStatic external fun detach(handle: Long)
     @JvmStatic external fun resize(handle: Long, width: Int, height: Int, density: Float)
     @JvmStatic external fun scroll(handle: Long, x: Float, y: Float, dx: Float, dy: Float, zoom: Boolean, horizontal: Boolean)
@@ -26,6 +28,9 @@ internal object Native {
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
     @JvmStatic external fun importLayer(handle: Long, name: String, width: Int, height: Int, rgba: ByteArray)
+    @JvmStatic external fun projectRecoveryTask(handle: Long, opening: Boolean): Long
+    /** File worker only: atomic publication of a captured recovery snapshot. */
+    @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
     /** File worker only; consumes the detached descriptor, retains the task. */
     @JvmStatic external fun projectWork(task: Long, fd: Int, width: Int, height: Int)

@@ -122,6 +122,10 @@ pub unsafe extern "C" fn capy_apple_project_task(
     };
     app.perform(|app| {
         let session = &mut app.host.session;
+        // DEPRECATED for Save/Recovery: requiring an idle contact predates
+        // immutable raster snapshots. Use capture_project_save/recovery at the
+        // committed boundary and await tile backing only in the file worker.
+        // Keep the idle/stale-edit checks for document replacement and PNG.
         session.require_document_idle()?;
         let epoch = session.state().document_file.epoch;
         let mut save_request = None;
@@ -205,6 +209,10 @@ pub unsafe extern "C" fn capy_apple_project_ready(app: *mut CapyApple) -> i32 {
 }
 
 /// # Safety
+/// DEPRECATED recovery barrier: input retirement alone does not establish host
+/// backing or durability. Migrate the Swift lifecycle caller to a committed
+/// capture_project_recovery snapshot, worker completion and atomic publication;
+/// use suspend_renderer/replace_renderer to preserve the session across loss.
 /// Owner only. Drain accepted input without acquiring/presenting a drawable so
 /// a backgrounded or detached surface cannot strand the last pen-up batch.
 /// Returns 1 while preparation or a live interaction still prevents capture.

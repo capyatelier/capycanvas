@@ -131,6 +131,10 @@ impl MetalHost {
                     ..Default::default()
                 }))
                 .map_err(error)?;
+            // DEPRECATED raster integration: direct renderer assignment bypasses
+            // retained source assets, raster restoration, history and device-loss
+            // bookkeeping. Port macOS/iPadOS to UiSession::replace_renderer, as
+            // used by GTK, Web and Android, before qualifying this host for M1.
             host.session.renderer_mut().0 = Some(
                 WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, cache)
                     .map_err(error)?,

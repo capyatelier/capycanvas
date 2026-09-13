@@ -21,3 +21,6 @@ async-channel = { version = "2", optional = true }
 [dev-dependencies]
 pollster = "0.4"
 layer-host = { path = "../layer-host" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
