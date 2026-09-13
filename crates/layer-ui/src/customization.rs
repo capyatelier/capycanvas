@@ -1108,8 +1108,18 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolDestination {
-    NewToolbar { group: Option<u32>, name: String },
-    Insert { panel: Panel, before: Option<u32> },
+    NewToolbar {
+        group: Option<u32>,
+        name: String,
+    },
+    Insert {
+        panel: Panel,
+        before: Option<u32>,
+    },
+    Header {
+        zone: HeaderZone,
+        before: Option<u32>,
+    },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolPicker {
@@ -1280,6 +1290,12 @@ impl ToolPicker {
                     return Err("The target tool no longer exists".into());
                 }
             }
+            ToolDestination::Header { zone, before } => {
+                layout.header.insertion(*zone, *before)?;
+                if layout.header.entries().count() + self.selected.len() > 128 {
+                    return Err("Too many window-bar items".into());
+                }
+            }
         }
         if self.selected.is_empty() {
             return Err("Select at least one tool".into());
@@ -1304,7 +1320,9 @@ impl ToolPicker {
             })
             .collect();
         ToolPickerView {
-            title: if name.is_some() {
+            title: if matches!(self.destination, ToolDestination::Header { .. }) {
+                "Add Tools to Window Bar"
+            } else if name.is_some() {
                 "New Toolbar"
             } else {
                 "Add Tools"
@@ -1325,6 +1343,7 @@ impl ToolPicker {
                 ToolDestination::NewToolbar { name, .. } => {
                     layout.validate_toolbar_name(name).err()
                 }
+                _ if !self.selected.is_empty() => self.validate(layout).err(),
                 _ => None,
             }),
         }
@@ -1502,7 +1521,17 @@ impl CustomizationState {
         self.committed_header(layout);
         self.header_original = None;
         self.header_editing = false;
+        self.close_header_picker();
         editing
+    }
+    fn close_header_picker(&mut self) {
+        if self
+            .picker
+            .as_ref()
+            .is_some_and(|p| matches!(p.destination, ToolDestination::Header { .. }))
+        {
+            self.picker = None;
+        }
     }
     pub fn has_drawer(&self) -> bool {
         self.expanded.is_some() || self.drawer.is_some() || !self.column_drawers.is_empty()
@@ -1537,7 +1566,15 @@ impl CustomizationState {
             return Err("This panel is not available on this platform yet".into());
         }
         let mut changed = regions::CUSTOMIZATION;
-        if !matches!(action, Header { .. }) && self.cancel_header(layout) {
+        let header_picker_action = self
+            .picker
+            .as_ref()
+            .is_some_and(|p| matches!(p.destination, ToolDestination::Header { .. }))
+            && matches!(
+                action,
+                PickerSearch { .. } | PickerSelect { .. } | ConfirmTools | CancelTools
+            );
+        if !matches!(action, Header { .. }) && !header_picker_action && self.cancel_header(layout) {
             changed |= regions::LAYOUT;
         }
         if matches!(
@@ -1561,6 +1598,7 @@ impl CustomizationState {
                         } else {
                             self.header_editing = false;
                             self.header_original = None;
+                            self.close_header_picker();
                             changed |= regions::LAYOUT;
                         }
                     }
@@ -1568,6 +1606,18 @@ impl CustomizationState {
                         self.cancel_header(layout);
                         self.drawer = None;
                         changed |= regions::LAYOUT;
+                    }
+                    H::InsertTools { zone, before } => {
+                        if !self.header_editing {
+                            return Err("Open window-bar customization first".into());
+                        }
+                        layout.header.insertion(zone, before)?;
+                        self.picker = Some(ToolPicker {
+                            destination: ToolDestination::Header { zone, before },
+                            query: String::new(),
+                            selected: Vec::new(),
+                            error: None,
+                        });
                     }
                     action => {
                         match action {
@@ -2038,6 +2088,15 @@ impl CustomizationState {
                         ToolDestination::Insert { panel, before } => {
                             layout.insert_tools(*panel, *before, &picker.selected)
                         }
+                        ToolDestination::Header { zone, before } => layout.header.add(
+                            *zone,
+                            *before,
+                            &picker
+                                .selected
+                                .iter()
+                                .map(|control| HeaderItem::Tool { control: *control })
+                                .collect::<Vec<_>>(),
+                        ),
                     });
                 if let Err(error) = result {
                     picker.error = Some(error);

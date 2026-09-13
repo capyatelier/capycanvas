@@ -189,6 +189,19 @@ fn native_header_managed_input() {
     );
     d.click_name("header-options");
     d.click_label("Show Zoom and Rotation");
+    d.click_name("header-zone-2");
+    d.click_name("header-add-tools");
+    d.named("tool-search")
+        .downcast::<gtk::SearchEntry>()
+        .unwrap()
+        .set_text("Brush opacity");
+    pump(300);
+    d.click_name(&format!(
+        "tool-choice-{}",
+        serde_json::to_string(&ToolbarControl::Opacity).unwrap()
+    ));
+    d.click_name("confirm-tools");
+    assert!(state(&d.w).customization.header_editing);
     d.click_name("header-edit-done");
     let saved = durable_layout(&state(&d.w).workspace.layout);
     for name in ["illustrator", "painter"] {
@@ -395,21 +408,17 @@ fn native_header_catalog_preview_input() {
             .unwrap();
     for (touch, grip, held) in [
         (false, false, false),
+        (false, false, true),
         (false, true, false),
         (true, false, false),
         (true, false, true),
         (true, true, false),
     ] {
         d.edit();
-        d.named("header-add-search")
-            .downcast::<gtk::SearchEntry>()
-            .unwrap()
-            .set_text("Brush opacity");
-        pump(250);
         let name = if grip {
-            "header-add-grip-brush-opacity"
+            "header-add-grip-clock"
         } else {
-            "header-add-row-brush-opacity"
+            "header-add-clock"
         };
         let source = d.point(&d.named(name));
         let destination = [d.w.surface.width() as f32 / 2., 30.];
@@ -441,18 +450,13 @@ fn native_header_catalog_preview_input() {
         let layout = state(&d.w).workspace.layout.header;
         assert_eq!(
             layout.entries().count(),
-            original.entries().count() + usize::from(!touch || grip || held),
+            original.entries().count() + usize::from(grip || held),
             "touch={touch} grip={grip} held={held}"
         );
-        if !touch || grip || held {
+        if grip || held {
             let entry = layout
                 .entries()
-                .find(|e| {
-                    e.item
-                        == HeaderItem::Tool {
-                            control: ToolbarControl::Opacity,
-                        }
-                })
+                .find(|e| e.item == HeaderItem::Clock)
                 .unwrap();
             assert_eq!(layout.location(entry.id).unwrap().0, HeaderZone::Center);
         }
@@ -475,12 +479,7 @@ fn native_header_catalog_preview_input() {
     d.edit();
     // Cancel outside, Escape, blur and replacement without ever creating a tile.
     for cancellation in 0..4 {
-        d.named("header-add-search")
-            .downcast::<gtk::SearchEntry>()
-            .unwrap()
-            .set_text("Brush opacity");
-        pump(250);
-        let source = d.point(&d.named("header-add-grip-brush-opacity"));
+        let source = d.point(&d.named("header-add-grip-clock"));
         let destination = [d.w.surface.width() as f32 / 2., 30.];
         d.perform(serde_json::json!([{"point":source},{"down":true},{"point":destination}]));
         assert!(d.w.dragging.get());
@@ -491,10 +490,18 @@ fn native_header_catalog_preview_input() {
                 d.w.interact(UiInput::Blur);
             }
             _ => {
-                d.named("header-add-search")
-                    .downcast::<gtk::SearchEntry>()
-                    .unwrap()
-                    .set_text("Clock");
+                d.w.dispatch(
+                    HeaderAction::SetSize {
+                        size: HeaderSize::Large,
+                    }
+                    .action(),
+                );
+                d.w.dispatch(
+                    HeaderAction::SetSize {
+                        size: original.size,
+                    }
+                    .action(),
+                );
                 pump(250);
             }
         }
@@ -503,17 +510,20 @@ fn native_header_catalog_preview_input() {
         assert_eq!(state(&d.w).workspace.layout.header, original);
         assert!(state(&d.w).customization.header_editing);
     }
-    // Keyboard/click alternative uses the same catalog and retains a single Done boundary.
-    d.named("header-add-search")
+    // The ordinary tool picker adds into this preview, not directly to storage.
+    d.click_name("header-zone-2");
+    d.click_name("header-add-tools");
+    d.named("tool-search")
         .downcast::<gtk::SearchEntry>()
         .unwrap()
         .set_text("Brush opacity");
     pump(250);
-    d.named("header-add-zone")
-        .downcast::<gtk::DropDown>()
-        .unwrap()
-        .set_selected(2);
-    d.click_name("header-add-brush-opacity");
+    d.click_name(&format!(
+        "tool-choice-{}",
+        serde_json::to_string(&ToolbarControl::Opacity).unwrap()
+    ));
+    d.click_name("confirm-tools");
+    assert!(state(&d.w).customization.header_editing);
     let preview = state(&d.w).workspace.layout.header;
     d.click_name("header-edit-done");
     assert_eq!(state(&d.w).workspace.layout.header, preview);
@@ -539,6 +549,169 @@ fn native_header_catalog_preview_input() {
         preview,
         "Escape cancels uncommitted edits"
     );
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_picker_journey"]
+fn native_header_picker_journey() {
+    let mut d = Driver::new("art.capycanvas.HeaderPickerJourney");
+    let original = state(&d.w).workspace.layout.header;
+    let opacity = format!(
+        "tool-choice-{}",
+        serde_json::to_string(&ToolbarControl::Opacity).unwrap()
+    );
+    let color = format!(
+        "tool-choice-{}",
+        serde_json::to_string(&ToolbarControl::Color).unwrap()
+    );
+    let search = |d: &Driver, query| {
+        d.named("tool-search")
+            .downcast::<gtk::SearchEntry>()
+            .unwrap()
+            .set_text(query);
+        pump(300);
+    };
+    for touch in [false, true] {
+        d.edit();
+        let before = original.zones[2][0].id;
+        let item = d.named(&format!("header-item-{before}"));
+        let b = item.compute_bounds(&d.w.window).unwrap();
+        let point = [b.x() + 25., b.y() + b.height() / 2.]; // Body, before its midpoint; not its grip.
+        d.perform(if touch {
+            serde_json::json!([{"touch":"down","point":point},{"touch":"up"}])
+        } else {
+            serde_json::json!([{"point":point},{"down":true},{"down":false}])
+        });
+        assert!(item.has_css_class("editing-selection"));
+        assert_eq!(
+            d.named("header-insertion-label")
+                .downcast::<gtk::Label>()
+                .unwrap()
+                .text(),
+            "Add to Right · before Brush"
+        );
+        d.click_name("header-add-tools");
+        assert!(d.w.window.visible_dialog().is_some());
+        assert!(!d.named("toolbar-name").is_mapped());
+        assert!(!d.named("confirm-tools").is_sensitive());
+        search(&d, "Brush opacity");
+        d.click_name(&opacity);
+        search(&d, "Color");
+        d.click_name(&color);
+        search(&d, "No tool matches this query");
+        assert!(d.label("No matching tools").is_mapped());
+        assert_eq!(
+            state(&d.w)
+                .customization
+                .picker
+                .as_ref()
+                .unwrap()
+                .selected
+                .len(),
+            2
+        );
+        assert!(
+            d.named("confirm-tools").is_sensitive(),
+            "Filtering retains selected tools"
+        );
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("picker-empty-{touch}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        if touch {
+            d.click_name("cancel-tools");
+        } else {
+            d.key(0xff1b);
+        }
+        assert!(
+            state(&d.w).customization.header_editing,
+            "Cancel/Escape closes the picker, not its parent preview"
+        );
+        assert!(state(&d.w).customization.picker.is_none());
+        assert_eq!(state(&d.w).workspace.layout.header, original);
+        d.click_name("header-add-tools");
+        assert_eq!(
+            d.named("tool-search")
+                .downcast::<gtk::SearchEntry>()
+                .unwrap()
+                .text(),
+            ""
+        );
+        assert!(!d.named("confirm-tools").is_sensitive());
+        search(&d, "Brush opacity");
+        d.click_name(&opacity);
+        search(&d, "Color");
+        d.click_name(&color);
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("picker-selected-{touch}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        d.click_name("confirm-tools");
+        let added = state(&d.w).workspace.layout.header;
+        assert_eq!(
+            added.zones[2][0].item,
+            HeaderItem::Tool {
+                control: ToolbarControl::Opacity
+            }
+        );
+        assert_eq!(
+            added.zones[2][1].item,
+            HeaderItem::Tool {
+                control: ToolbarControl::Color
+            }
+        );
+        assert_eq!(added.zones[2][2].id, before);
+        assert!(state(&d.w).customization.header_editing);
+        d.click_name("header-zone-1");
+        d.click_name("header-add-clock");
+        let clock = state(&d.w)
+            .workspace
+            .layout
+            .header
+            .entries()
+            .find(|e| e.item == HeaderItem::Clock)
+            .unwrap()
+            .id;
+        assert_eq!(
+            state(&d.w)
+                .workspace
+                .layout
+                .header
+                .location(clock)
+                .unwrap()
+                .0,
+            HeaderZone::Center
+        );
+        assert!(!d.named("header-add-clock").is_mapped());
+        d.click_name(&format!("header-item-{clock}"));
+        assert!(d.named("header-remove-item").is_sensitive());
+        d.click_name("header-remove-item");
+        assert!(d.named("header-add-clock").is_mapped());
+        // Keyboard users choose an exact slot using a focused item and Enter.
+        let target = d.named(&format!("header-item-{before}"));
+        target.grab_focus();
+        d.key(0xff0d);
+        d.click_name("header-add-space");
+        let current = state(&d.w).workspace.layout.header;
+        let (_, index) = current.location(before).unwrap();
+        assert_eq!(current.zones[2][index - 1].item, HeaderItem::Space);
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("editor-insertion-{touch}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        d.click_name("header-edit-cancel");
+        assert_eq!(state(&d.w).workspace.layout.header, original);
+    }
     d.finish();
 }
 
@@ -603,6 +776,8 @@ fn native_header_spacing_visual() {
             d.click(&tool);
             let button = find_css(&tool, "header-tool").unwrap();
             assert!(button.has_css_class("drawer-origin-bottom"));
+            assert!(button.has_css_class("drawer-open"));
+            assert!(!button.has_css_class("selected-tool"));
             crate::capture(
                 &d.w,
                 d.dir
@@ -666,6 +841,169 @@ fn native_header_spacing_visual() {
                 .to_str()
                 .unwrap(),
         );
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_drawer_dismissal_input"]
+fn native_drawer_dismissal_input() {
+    fn contact(d: &mut Driver, point: [f32; 2], touch: bool) {
+        d.perform(if touch {
+            serde_json::json!([{"touch":"down","point":point},{"touch":"up"}])
+        } else {
+            serde_json::json!([{"point":point},{"down":true},{"down":false}])
+        });
+    }
+    fn tap(d: &mut Driver, widget: &gtk::Widget, touch: bool) {
+        contact(d, d.point(widget), touch);
+    }
+    let mut d = Driver::new("art.capycanvas.DrawerDismissal");
+    for theme in [Theme::Dark, Theme::Light] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for touch in [false, true] {
+            d.w.dispatch(UiAction::RestoreWorkspace {
+                workspace: WorkspaceState {
+                    layout: WorkspacePreset::Painter.layout(Platform::Gtk),
+                    ..WorkspaceState::default()
+                },
+            });
+            pump(250);
+            let color = d.named(&d.header_tool(ToolbarControl::Color));
+            let color_button = find_css(&color, "header-tool").unwrap();
+            let brush = d.named(&d.header_tool(ToolbarControl::Command {
+                command: CommandId::Brush,
+            }));
+            let menu = d.named("header-item-2");
+            for outside in ["gap", "menu", "disabled", "canvas"] {
+                tap(&mut d, &color, touch);
+                assert!(state(&d.w).customization.drawer.is_some());
+                assert!(!color_button.has_css_class("selected-tool"));
+                assert!(color_button.has_css_class("drawer-open"));
+                match outside {
+                    "gap" => contact(&mut d, [420., 25.], touch),
+                    "menu" => tap(&mut d, &menu, touch),
+                    "disabled" => {
+                        let transform = d.named(&d.header_tool(ToolbarControl::Command {
+                            command: CommandId::ScaleRotate,
+                        }));
+                        tap(&mut d, &transform, touch);
+                    }
+                    _ => contact(&mut d, [800., 700.], touch),
+                }
+                assert!(
+                    state(&d.w).customization.drawer.is_none(),
+                    "{theme:?}/{touch}/{outside}"
+                );
+                assert!(!color_button.has_css_class("drawer-open"));
+                if outside == "menu" {
+                    assert!(
+                        d.w.popovers
+                            .borrow()
+                            .iter()
+                            .filter_map(|p| p.upgrade())
+                            .any(|p| p.is_visible()),
+                        "The same click must open the menu, not just dismiss the drawer"
+                    );
+                    d.key(0xff1b);
+                }
+                assert!(
+                    !state(&d.w)
+                        .commands
+                        .iter()
+                        .find(|c| c.id == CommandId::Undo)
+                        .unwrap()
+                        .enabled,
+                    "Dismissing on the canvas must not leave a mark"
+                );
+            }
+            tap(&mut d, &color, touch);
+            tap(&mut d, &brush, touch);
+            assert!(
+                find_css(&brush, "header-tool")
+                    .unwrap()
+                    .has_css_class("selected-tool")
+            );
+            assert!(
+                state(&d.w).customization.drawer.is_some(),
+                "Switch drawer and select in one click"
+            );
+            tap(&mut d, &brush, touch);
+            assert!(
+                state(&d.w).customization.drawer.is_none(),
+                "Current opener toggles closed"
+            );
+            // Docked and floating toolbar bodies also dismiss without consuming
+            // their normal grip/title-bar click or a menu's activation.
+            for floating in [false, true] {
+                let mut layout = DockLayout::default();
+                layout
+                    .move_panel(
+                        [1600., 1000.],
+                        Panel::Toolbar,
+                        if floating {
+                            DockTarget::Float {
+                                position: [420., 300.],
+                            }
+                        } else {
+                            DockTarget::Edge {
+                                edge: Edge::Top,
+                                outer: true,
+                            }
+                        },
+                    )
+                    .unwrap();
+                let color_id = layout
+                    .panel(Panel::Toolbar)
+                    .unwrap()
+                    .tiles()
+                    .iter()
+                    .find(|t| t.control == ToolbarControl::Color)
+                    .unwrap()
+                    .id;
+                d.w.dispatch(UiAction::RestoreWorkspace {
+                    workspace: WorkspaceState {
+                        layout,
+                        ..WorkspaceState::default()
+                    },
+                });
+                pump(250);
+                let color =
+                    d.w.customization
+                        .drawer_button(TileAnchor {
+                            panel: Panel::Toolbar,
+                            tile: color_id,
+                        })
+                        .unwrap();
+                tap(&mut d, color.upcast_ref(), touch);
+                assert!(state(&d.w).customization.drawer.is_some());
+                assert!(
+                    !color.has_css_class("selected-tool") && color.has_css_class("drawer-open")
+                );
+                let group =
+                    d.w.resolved()
+                        .groups
+                        .into_iter()
+                        .find(|g| g.panels.contains(&Panel::Toolbar))
+                        .unwrap();
+                let handle = {
+                    let groups = d.w.groups.borrow();
+                    let view = groups.iter().find(|g| g.id == group.id).unwrap();
+                    find_css(view.root.upcast_ref(), "panel-grip").unwrap()
+                };
+                tap(&mut d, &handle, touch);
+                assert!(
+                    state(&d.w).customization.drawer.is_none(),
+                    "toolbar handle {floating}/{touch}"
+                );
+                tap(&mut d, color.upcast_ref(), touch);
+                contact(&mut d, [500., 18.], touch);
+                assert!(
+                    state(&d.w).customization.drawer.is_none(),
+                    "toolbar to window bar {floating}/{touch}"
+                );
+            }
+        }
     }
     d.finish();
 }
@@ -1020,20 +1358,29 @@ fn native_header_editor_controls_input() {
         dropdown.set_selected(size as u32);
         pump(220);
         assert_eq!(state(&d.w).workspace.layout.header.size, size);
-        assert_eq!(d.w.header.root.height(), size.height() as i32 + 366);
+        let editor = d.named("header-editor");
+        assert!(
+            editor.height() < 240,
+            "The inline editor is compact at {size:?}"
+        );
+        assert!(d.w.header.root.height() < size.height() as i32 + 300);
         assert_eq!(d.w.area.height(), d.w.surface.height());
     }
+    for name in ["clock", "menu-labels"] {
+        d.click_name(&format!("header-add-{name}"));
+    }
+    d.click_name("header-add-tools");
+    d.named("tool-search")
+        .downcast::<gtk::SearchEntry>()
+        .unwrap()
+        .set_text("Brush opacity");
+    pump(250);
+    d.click_name(&format!(
+        "tool-choice-{}",
+        serde_json::to_string(&ToolbarControl::Opacity).unwrap()
+    ));
+    d.click_name("confirm-tools");
     for label in ["Brush opacity", "Clock", "Menu Labels"] {
-        let search = d
-            .named("header-add-search")
-            .downcast::<gtk::SearchEntry>()
-            .unwrap();
-        search.set_text(label);
-        pump(250);
-        d.click_name(&format!(
-            "header-add-{}",
-            label.to_lowercase().replace(' ', "-")
-        ));
         assert!(
             state(&d.w)
                 .workspace
@@ -1043,15 +1390,9 @@ fn native_header_editor_controls_input() {
                 .any(|e| e.item.label() == label)
         );
     }
-    let search = d
-        .named("header-add-search")
-        .downcast::<gtk::SearchEntry>()
-        .unwrap();
-    search.set_text("Clock");
-    pump(250);
     assert!(
-        !d.named("header-add-clock").is_sensitive(),
-        "singleton remains unavailable on a reopened picker"
+        !d.named("header-add-clock").is_mapped(),
+        "Existing singleton components do not clutter the palette"
     );
     d.click_name("header-options");
     d.click_label("Show Zoom and Rotation");
@@ -1079,6 +1420,25 @@ fn native_header_editor_controls_input() {
     d.click_label("Window");
     d.click_label("Customize Workspace UI…");
     assert!(state(&d.w).customization.header_editing);
+    crate::capture(&d.w, d.dir.join("empty-bar-palette.png").to_str().unwrap());
+    for (i, item) in HeaderItem::COMPONENTS.into_iter().enumerate() {
+        let zone = HeaderZone::ALL[i % 3];
+        d.click_name(&format!("header-zone-{}", zone.index()));
+        let name = format!(
+            "header-add-{}",
+            item.label().to_lowercase().replace(' ', "-")
+        );
+        d.click_name(&name);
+        let model = state(&d.w).workspace.layout.header;
+        let id = model.entries().find(|e| e.item == item).unwrap().id;
+        assert_eq!(model.location(id).unwrap().0, zone);
+        assert_eq!(d.named(&name).is_mapped(), !item.singleton());
+    }
+    crate::capture(
+        &d.w,
+        d.dir.join("all-components-added.png").to_str().unwrap(),
+    );
+    d.click_name("header-edit-done");
     d.finish();
 }
 
@@ -1101,9 +1461,12 @@ fn native_header_overflow_input() {
                     let overflow = d.named(&format!("header-overflow-{}", zone.index()));
                     d.click(&overflow);
                     let row = d.named(&format!("header-overflow-item-{}", entry.id));
+                    if !row.is_mapped() {
+                        crate::capture(&d.w, d.dir.join("overflow-failure.png").to_str().unwrap());
+                    }
                     assert!(
                         row.is_mapped(),
-                        "hidden item {} must be reachable",
+                        "hidden item {} must be reachable at {size:?}",
                         entry.item.label()
                     );
                     if row.is_sensitive() {
@@ -1141,7 +1504,44 @@ fn native_header_overflow_input() {
         d.w.dispatch(HeaderAction::Edit { editing: true }.action());
         pump(160);
         assert!(d.named("header-edit-done").is_mapped());
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("narrow-editor-{size:?}.png"))
+                .to_str()
+                .unwrap(),
+        );
+        if let Some(entry) = model
+            .entries()
+            .find(|e| !d.named(&format!("header-item-{}", e.id)).is_mapped())
+        {
+            let zone = model.location(entry.id).unwrap().0;
+            d.click_name(&format!("header-overflow-{}", zone.index()));
+            d.click_name(&format!("header-overflow-item-{}", entry.id));
+            assert!(
+                d.named("header-insertion-label")
+                    .downcast::<gtk::Label>()
+                    .unwrap()
+                    .text()
+                    .contains(&format!("before {}", entry.item.label()))
+            );
+            assert!(d.named("header-remove-item").is_sensitive());
+            d.click_name("header-add-tools");
+            assert!(d.w.window.visible_dialog().is_some());
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("narrow-picker-{size:?}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            d.key(0xff1b);
+            assert!(state(&d.w).customization.header_editing);
+            assert!(state(&d.w).customization.picker.is_none());
+            assert!(d.w.window.visible_dialog().is_none());
+        }
         d.click_name("header-edit-done");
+        assert!(!state(&d.w).customization.header_editing);
     }
     assert_eq!(
         state(&d.w).workspace.layout.header.zones,

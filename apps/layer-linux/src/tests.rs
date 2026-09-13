@@ -10702,6 +10702,22 @@ fn native_window_drag_input() {
                 (0., 0.),
                 "exercise CSD shadow offsets"
             );
+            let color = state(&w)
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|tile| tile.control == ToolbarControl::Color)
+                .unwrap()
+                .id;
+            w.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: color,
+            });
+            pump(300);
+            assert!(state(&w).customization.drawer.is_some());
             let before = saved(&w);
             let title = find_css(w.header.root.upcast_ref(), "document-title").unwrap();
             let b = title.compute_bounds(&w.surface).unwrap();
@@ -10724,6 +10740,10 @@ fn native_window_drag_input() {
                 w.workspace_drag.borrow().is_some()
             );
             assert_eq!(saved(&w), before, "window movement must not drag a panel");
+            assert!(
+                state(&w).customization.drawer.is_none(),
+                "The same title-bar contact dismisses the drawer and moves the window"
+            );
             assert!(w.workspace_drag.borrow().is_none());
             assert!(!w.chrome_held.get());
             origin = moved;

@@ -681,7 +681,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled |= canvas;
                     }
                 }
-                if let ChromeEvent::Contact { position, .. } = event
+                if let ChromeEvent::Contact { position, canvas } = event
                     && let Some(drawer) = &self.state.customization.drawer
                     && drawer.dismissal == DrawerDismissal::OutsideContact
                     && !facts.popup_open
@@ -717,7 +717,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .iter()
                         .find(|m| m.bounds.contains(position[0], position[1]))
                         .and_then(|m| self.state.workspace.layout.header.entry(m.id).ok());
-                    let header_hit = header_item.is_some();
                     let switches_header = matches!(drawer.anchor, DrawerAnchor::Header { .. })
                         && header_item.is_some_and(|e| matches!(e.item, HeaderItem::Tool { control } if control.selectable() && control.drawer_columns().is_some()));
                     if !switches_header
@@ -726,8 +725,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.change = self.dispatch(UiAction::Customize {
                             action: CustomizationAction::CloseExpanded,
                         })?;
-                        // Other tiles can still activate; bare canvas only dismisses.
-                        reply.handled = tile.is_none() && !header_hit;
+                        // Canvas contact only dismisses; native chrome must keep
+                        // its click/drag (menus, title-bar grabs, toolbar grips).
+                        reply.handled |= canvas;
                     }
                 }
                 if let ChromeEvent::Contact { position, .. } = event
@@ -4200,6 +4200,250 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn header_tool_picker_is_a_nested_preview_not_a_toolbar_transaction() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let original = s.capture_workspace().unwrap();
+        let header = s.state.workspace.layout.header.clone();
+        let before = header.zones[2][0].id;
+        for commit in [false, true] {
+            s.dispatch(HeaderAction::Edit { editing: true }.action())
+                .unwrap();
+            s.dispatch(
+                HeaderAction::SetSize {
+                    size: HeaderSize::Large,
+                }
+                .action(),
+            )
+            .unwrap();
+            let preview = s.state.workspace.layout.header.clone();
+            s.dispatch(
+                HeaderAction::InsertTools {
+                    zone: HeaderZone::Right,
+                    before: Some(before),
+                }
+                .action(),
+            )
+            .unwrap();
+            for control in [ToolbarControl::Opacity, ToolbarControl::Color] {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSelect {
+                        control,
+                        selected: true,
+                    },
+                })
+                .unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSearch {
+                        query: "not a matching tool".into(),
+                    },
+                })
+                .unwrap();
+            }
+            assert_eq!(
+                s.state
+                    .customization
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .selected
+                    .len(),
+                2
+            );
+            assert!(s.state.customization.header_editing);
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::CancelTools,
+            })
+            .unwrap();
+            assert_eq!(s.state.workspace.layout.header, preview);
+            assert!(s.state.customization.header_editing);
+            s.dispatch(
+                HeaderAction::InsertTools {
+                    zone: HeaderZone::Right,
+                    before: Some(before),
+                }
+                .action(),
+            )
+            .unwrap();
+            for control in [ToolbarControl::Opacity, ToolbarControl::Color] {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSelect {
+                        control,
+                        selected: true,
+                    },
+                })
+                .unwrap();
+            }
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ConfirmTools,
+            })
+            .unwrap();
+            assert!(s.state.customization.picker.is_none());
+            assert!(s.state.customization.header_editing);
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            assert_eq!(
+                s.state.workspace.layout.header.zones[2][0].item,
+                HeaderItem::Tool {
+                    control: ToolbarControl::Opacity
+                }
+            );
+            assert_eq!(
+                s.state.workspace.layout.header.zones[2][1].item,
+                HeaderItem::Tool {
+                    control: ToolbarControl::Color
+                }
+            );
+            assert_eq!(s.state.workspace.layout.header.zones[2][2].id, before);
+            s.dispatch(
+                if commit {
+                    HeaderAction::Edit { editing: false }
+                } else {
+                    HeaderAction::Cancel
+                }
+                .action(),
+            )
+            .unwrap();
+            if !commit {
+                assert_eq!(s.state.workspace.layout.header, header);
+                assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            }
+        }
+        assert_eq!(
+            s.capture_workspace().unwrap().history.generation,
+            original.history.generation + 1
+        );
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.header, header);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Left,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+        assert!(
+            s.state.customization.picker.is_none(),
+            "Closing the editor also retires its picker"
+        );
+    }
+
+    #[test]
+    fn header_picker_revalidates_destination_and_capacity() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        let before = s.state.workspace.layout.header.zones[0][0].id;
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Left,
+                before: Some(before),
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::PickerSelect {
+                control: ToolbarControl::Color,
+                selected: true,
+            },
+        })
+        .unwrap();
+        s.dispatch(HeaderAction::Remove { id: before }.action())
+            .unwrap();
+        let view = s
+            .state
+            .customization
+            .picker
+            .as_ref()
+            .unwrap()
+            .view(&s.state.workspace.layout, Platform::Gtk);
+        assert!(!view.can_confirm && view.error.is_some());
+        let changed = s.state.workspace.layout.header.clone();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert!(
+            s.state
+                .customization
+                .picker
+                .as_ref()
+                .unwrap()
+                .error
+                .is_some()
+        );
+        assert_eq!(s.state.workspace.layout.header, changed);
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::CancelTools,
+        })
+        .unwrap();
+        while s.state.workspace.layout.header.entries().count() < 127 {
+            s.dispatch(
+                HeaderAction::Add {
+                    zone: HeaderZone::Left,
+                    before: None,
+                    item: HeaderItem::Space,
+                }
+                .action(),
+            )
+            .unwrap();
+        }
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        for control in [ToolbarControl::Color, ToolbarControl::Opacity] {
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::PickerSelect {
+                    control,
+                    selected: true,
+                },
+            })
+            .unwrap();
+        }
+        let view = s
+            .state
+            .customization
+            .picker
+            .as_ref()
+            .unwrap()
+            .view(&s.state.workspace.layout, Platform::Gtk);
+        assert!(!view.can_confirm && view.error.is_some());
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert_eq!(
+            s.state.workspace.layout.header.entries().count(),
+            127,
+            "Multi-add is atomic at the capacity limit"
+        );
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::PickerSelect {
+                control: ToolbarControl::Opacity,
+                selected: false,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert_eq!(s.state.workspace.layout.header.entries().count(), 128);
+        assert!(s.state.customization.picker.is_none());
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
     }
 
     #[test]
@@ -12993,6 +13237,58 @@ mod tests {
                     s.state.customization.drawer.is_none(),
                     "Tool shortcuts still dismiss the drawer"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let color = s
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| t.control == ToolbarControl::Color)
+                .unwrap()
+                .id;
+            for (position, canvas) in [
+                ([500., 15.], false),
+                ([1000., 850.], false),
+                ([1000., 850.], true),
+            ] {
+                s.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: color,
+                })
+                .unwrap();
+                assert!(s.state.customization.drawer.is_some());
+                assert!(
+                    !s.panel_view(Panel::Toolbar)
+                        .unwrap()
+                        .tiles
+                        .iter()
+                        .find(|t| t.id == color)
+                        .unwrap()
+                        .choice
+                        .selected
+                );
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Contact { position, canvas },
+                    ChromeFacts::default(),
+                );
+                assert!(s.state.customization.drawer.is_none());
+                assert_eq!(
+                    reply.handled, canvas,
+                    "Native clicks/drags must reach their target"
+                );
+                assert!(!reply.paint);
             }
         }
     }

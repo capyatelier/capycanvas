@@ -245,8 +245,8 @@ fn check_theme(
                     && i16::from(rgb[2]) - i16::from(rgb[1]) > 6;
                 assert_eq!(
                     blue,
-                    other == id,
-                    "{theme:?}/{edge:?}: tile {other} active blue follows the drawer: {rgb:?}"
+                    button(other).has_css_class("selected-tool"),
+                    "{theme:?}/{edge:?}: tile {other} blue means selected, not drawer-open: {rgb:?}"
                 );
             }
             texture
@@ -498,9 +498,10 @@ fn check_connected_pixels(
         Edge::Top => 2,
         Edge::Bottom => 3,
     }];
-    assert!(
+    assert_eq!(
         i16::from(fill[2]) - i16::from(fill[0]) > 12,
-        "active tile is blue: {fill:?} ({path:?})"
+        opener.has_css_class("selected-tool"),
+        "blue means selected; action drawer openers stay grey: {fill:?} ({path:?})"
     );
     for (joined, corner) in corners.into_iter().zip(&pixels[4..8]) {
         if joined {

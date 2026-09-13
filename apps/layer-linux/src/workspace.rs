@@ -1236,8 +1236,12 @@ impl Workspace {
                 if matches!(
                     event.event_type(),
                     gdk::EventType::ButtonPress | gdk::EventType::TouchBegin
-                ) && this.customization.placement().is_some()
+                ) && this.window.visible_dialog().is_none()
                     && let Some(position) = point
+                    // Canvas input has its own reveal/dismiss boundary before
+                    // any pen samples are queued. Do not process it twice.
+                    && !this.surface.pick(position[0] as f64, position[1] as f64, gtk::PickFlags::DEFAULT)
+                        .is_some_and(|picked| picked == this.area)
                     && this
                         .chrome_event(ChromeEvent::Contact {
                             position,
@@ -2766,6 +2770,7 @@ impl Workspace {
                             DragTarget::HeaderAdd(item) => HeaderAction::Add { item, zone, before },
                             _ => unreachable!(),
                         };
+                        self.header.select_drop(self, zone, before);
                         self.dispatch(action.action());
                     }
                     self.header.clear_drop();

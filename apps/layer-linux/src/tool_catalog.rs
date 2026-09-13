@@ -5,6 +5,7 @@ pub(super) struct ToolCatalog {
     pub root: gtk::Box,
     pub search: gtk::SearchEntry,
     pub choices: gtk::ListBox,
+    empty: gtk::Label,
     key: RefCell<String>,
 }
 impl ToolCatalog {
@@ -23,10 +24,15 @@ impl ToolCatalog {
             .child(&choices)
             .build();
         root.append(&scroll);
+        let empty = gtk::Label::new(Some("No matching tools"));
+        empty.add_css_class("dim-label");
+        empty.set_visible(false);
+        root.append(&empty);
         Self {
             root,
             search,
             choices,
+            empty,
             key: RefCell::new(String::new()),
         }
     }
@@ -42,6 +48,7 @@ impl ToolCatalog {
             self.choices.remove(&child);
         }
         build(self);
+        self.empty.set_visible(self.choices.first_child().is_none());
     }
     pub fn row(&self, label: &str, description: &str, icon: &str) -> adw::ActionRow {
         let row = adw::ActionRow::new();

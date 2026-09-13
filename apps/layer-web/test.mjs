@@ -30,7 +30,7 @@ import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
 import { checkMediumTiles } from "./tiles.test.mjs";
-import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
+import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager, checkToolPicker } from "./customization.test.mjs";
 import { checkWorkspaceMotion } from "./workspace-motion.test.mjs";
 import { checkWorkspaceResize } from "./workspace-resize.test.mjs";
 import { checkResizeRendering } from "./workspace-resize-rendering.test.mjs";
@@ -313,6 +313,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace")) {
     await checkWorkspace({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--tool-picker")) {
+    await checkToolPicker({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--customization")) {
     await checkCustomization({ call, evaluate, settle, canvasPixels });

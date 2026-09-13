@@ -3,6 +3,11 @@
 use super::*;
 
 pub(super) fn drawer_origin(button: &gtk::Button, direction: Option<Edge>) {
+    if direction.is_some() {
+        button.add_css_class("drawer-open");
+    } else {
+        button.remove_css_class("drawer-open");
+    }
     for (edge, class) in [
         (Edge::Top, "drawer-origin-top"),
         (Edge::Bottom, "drawer-origin-bottom"),
@@ -424,6 +429,7 @@ impl Customization {
                 action: CustomizationAction::CancelTools,
             },
         );
+        cancel.set_widget_name("cancel-tools");
         header.pack_start(&cancel);
         self.confirm.add_css_class("suggested-action");
         self.confirm.set_widget_name("confirm-tools");
@@ -452,6 +458,15 @@ impl Customization {
             }
         ));
         self.catalog.search.set_widget_name("tool-search");
+        self.catalog.search.connect_stop_search(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                if w.customization.picker_shown.get() {
+                    w.customize(CustomizationAction::CancelTools);
+                }
+            }
+        ));
         self.catalog.search.connect_search_changed(glib::clone!(
             #[weak]
             w,

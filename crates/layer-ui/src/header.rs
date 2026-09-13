@@ -323,7 +323,7 @@ impl HeaderLayout {
         *self = next;
         Ok(())
     }
-    fn insertion(&self, zone: HeaderZone, before: Option<u32>) -> Result<usize, String> {
+    pub(crate) fn insertion(&self, zone: HeaderZone, before: Option<u32>) -> Result<usize, String> {
         let entries = &self.zones[zone.index()];
         before.map_or(Ok(entries.len()), |id| {
             entries
@@ -477,15 +477,21 @@ impl HeaderLayout {
         ];
         if self.zones[1].is_empty() {
             let split = (mid).clamp(left, right);
-            result.zones[0].width = (split - gap - left).max(0.);
+            // Keep the empty Center region's editor label and drop target usable.
+            let half = if editing {
+                40_f32.min((right - left) / 2.)
+            } else {
+                gap
+            };
+            result.zones[0].width = (split - half - left).max(0.);
             result.zones[1] = Bounds {
-                x: split - gap,
+                x: split - half,
                 y,
-                width: 2. * gap,
+                width: 2. * half,
                 height: tile,
             };
-            result.zones[2].x = split + gap;
-            result.zones[2].width = (right - split - gap).max(0.);
+            result.zones[2].x = split + half;
+            result.zones[2].width = (right - split - half).max(0.);
         }
         for zone in 0..3 {
             let bounds = result.zones[zone];
@@ -568,6 +574,10 @@ pub enum HeaderAction {
         before: Option<u32>,
         item: HeaderItem,
     },
+    InsertTools {
+        zone: HeaderZone,
+        before: Option<u32>,
+    },
     Move {
         id: u32,
         zone: HeaderZone,
@@ -611,13 +621,6 @@ pub fn tool_state(state: &UiState, control: ToolbarControl) -> (bool, bool) {
         _ => (true, false),
     }
 }
-pub fn header_tool_catalog(platform: Platform) -> Vec<HeaderItem> {
-    crate::customization::tool_catalog(platform)
-        .into_iter()
-        .map(|c| HeaderItem::Tool { control: c.control })
-        .collect()
-}
-
 impl<R: layer_render::CanvasRenderer> UiSession<R> {
     pub(crate) fn activate_tool(
         &mut self,

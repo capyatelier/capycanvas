@@ -1,6 +1,9 @@
 //! GTK projection of workspace-owned window-bar items.
 use super::*;
 
+#[path = "workspace_header_editor.rs"]
+mod editor;
+
 mod imp {
     use super::*;
     #[derive(Default)]
@@ -85,10 +88,7 @@ pub(super) struct Header {
     items: RefCell<Vec<Item>>,
     overflow: [gtk::MenuButton; 3],
     recovery: gtk::MenuButton,
-    editor: gtk::Box,
-    catalog: tool_catalog::ToolCatalog,
-    add_zone: gtk::DropDown,
-    size: gtk::DropDown,
+    editor: editor::Editor,
     model: RefCell<Option<HeaderLayout>>,
     pub editing: Cell<bool>,
     geometry: RefCell<HeaderGeometry>,
@@ -130,12 +130,11 @@ impl Header {
         recovery.set_widget_name("header-recovery");
         recovery.add_css_class("flat");
         root.add(&recovery);
-        let editor = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        editor.set_widget_name("header-editor");
-        editor.add_css_class("header-editor");
-        let size = gtk::DropDown::from_strings(&["Small", "Medium", "Large"]);
-        size.set_widget_name("header-size");
-        root.add(&editor);
+        let editor = editor::Editor::new();
+        root.add(&editor.root);
+        for zone in &editor.zones {
+            root.add(zone);
+        }
         Self {
             root,
             handle,
@@ -143,9 +142,6 @@ impl Header {
             overflow,
             recovery,
             editor,
-            catalog: tool_catalog::ToolCatalog::new(),
-            add_zone: gtk::DropDown::from_strings(&["Left", "Center", "Right"]),
-            size,
             items: RefCell::new(Vec::new()),
             model: RefCell::new(None),
             editing: Cell::new(false),
@@ -159,7 +155,11 @@ impl Header {
             .borrow()
             .as_ref()
             .map_or(HEADER_HEIGHT, |m| m.size.height())
-            + if self.editing.get() { 366. } else { 0. }
+            + if self.editing.get() {
+                self.editor.height.get()
+            } else {
+                0.
+            }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
         *self.root.imp().owner.borrow_mut() = Rc::downgrade(w);
@@ -168,102 +168,27 @@ impl Header {
             w,
             move |_| w.header.root.queue_allocate()
         ));
-        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        controls.set_vexpand(false);
-        controls.set_valign(gtk::Align::Start);
-        controls.append(&self.size);
-        self.size.connect_selected_notify(glib::clone!(
+        self.editor.bind(w);
+        let pick = gtk::GestureClick::new();
+        pick.set_button(1);
+        pick.connect_released(glib::clone!(
             #[weak]
             w,
-            move |size| {
-                if !w.refreshing.get() {
-                    w.dispatch(
-                        HeaderAction::SetSize {
-                            size: HeaderSize::ALL[size.selected().min(2) as usize],
-                        }
-                        .action(),
-                    );
+            move |_, _, x, y| {
+                if let Some((zone, before)) = w.header.drop_at([x as f32, y as f32]) {
+                    let selected = w
+                        .header
+                        .geometry
+                        .borrow()
+                        .items
+                        .iter()
+                        .find(|m| m.bounds.contains(x as f32, y as f32))
+                        .map(|m| m.id);
+                    w.header.editor.select(&w, zone, before, selected);
                 }
             }
         ));
-        let options = gtk::MenuButton::builder().label("Options").build();
-        options.set_widget_name("header-options");
-        options.set_create_popup_func(glib::clone!(
-            #[weak]
-            w,
-            move |button| {
-                let Some(state) = w.gpu.borrow().as_ref().map(|g| g.session.state().clone()) else {
-                    return;
-                };
-                let info = state.workspace.layout.canvas_info;
-                let mut visible = ContextMenuItem::command(
-                    "Show Zoom and Rotation",
-                    HeaderAction::CanvasInfo {
-                        visible: !info.visible,
-                    }
-                    .action(),
-                );
-                visible.selected = Some(info.visible);
-                let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
-                w.populate_workspace_menu(
-                    &popup,
-                    ContextMenu {
-                        title: "Workspace UI".into(),
-                        sections: vec![
-                            vec![visible],
-                            vec![ContextMenuItem::command(
-                                "Restore Window Bar Defaults",
-                                HeaderAction::RestoreDefaults.action(),
-                            )],
-                        ],
-                    },
-                );
-                w.watch_popover(popup.upcast_ref());
-                button.set_popover(Some(&popup));
-            }
-        ));
-        controls.append(&options);
-        let space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        space.set_hexpand(true);
-        controls.append(&space);
-        let cancel = gtk::Button::with_label("Cancel");
-        cancel.set_widget_name("header-edit-cancel");
-        cancel.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            move |_| w.dispatch(HeaderAction::Cancel.action())
-        ));
-        controls.append(&cancel);
-        let done = gtk::Button::with_label("Done");
-        done.set_widget_name("header-edit-done");
-        done.add_css_class("suggested-action");
-        done.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            move |_| w.dispatch(HeaderAction::Edit { editing: false }.action())
-        ));
-        controls.append(&done);
-        self.editor.append(&controls);
-        let hint = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        hint.set_vexpand(false);
-        hint.set_valign(gtk::Align::Start);
-        let label = gtk::Label::new(Some("Drag items into the bar, or add to:"));
-        label.set_hexpand(true);
-        label.set_xalign(0.);
-        hint.append(&label);
-        self.add_zone.set_widget_name("header-add-zone");
-        hint.append(&self.add_zone);
-        self.editor.append(&hint);
-        self.catalog.search.set_widget_name("header-add-search");
-        self.catalog
-            .search
-            .set_placeholder_text(Some("Search controls and tools"));
-        self.catalog.search.connect_search_changed(glib::clone!(
-            #[weak]
-            w,
-            move |_| w.header.refresh_catalog(&w)
-        ));
-        self.editor.append(&self.catalog.root);
+        self.root.add_controller(pick);
         for (i, button) in self.overflow.iter().enumerate() {
             button.set_create_popup_func(glib::clone!(
                 #[weak]
@@ -299,7 +224,10 @@ impl Header {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, key, _, _modifiers| {
-                if key == gdk::Key::Escape && w.header.editing.get() {
+                if key == gdk::Key::Escape
+                    && w.header.editing.get()
+                    && w.window.visible_dialog().is_none()
+                {
                     let drag = w.workspace_drag.borrow().clone();
                     if let Some(drag) = drag {
                         w.workspace_drag_input(ContactPhase::Cancel, drag.point, drag.sequence);
@@ -326,8 +254,8 @@ impl Header {
         let editing = state.customization.header_editing;
         let rebuild =
             self.editing.replace(editing) != editing || self.model.borrow().as_ref() != Some(model);
-        self.editor.set_visible(editing);
-        self.size.set_selected(model.size as u32);
+        self.editor.refresh(model, editing);
+        self.handle.set_can_target(!editing);
         if rebuild {
             // Replacement invalidates the native source. Never complete a
             // pending drop against a different workspace or newly rebuilt item.
@@ -390,14 +318,11 @@ impl Header {
                 if let Some(item) = next {
                     item.root.grab_focus();
                 } else {
-                    self.size.grab_focus();
+                    self.editor.size.grab_focus();
                 }
             }
             self.root.queue_allocate();
             w.surface.queue_allocate();
-        }
-        if editing {
-            self.refresh_catalog(w);
         }
         for size in HeaderSize::ALL {
             let class = format!("header-{}", size.label().to_lowercase());
@@ -424,7 +349,7 @@ impl Header {
                     .drawer
                     .as_ref()
                     .is_some_and(|d| d.anchor == DrawerAnchor::Header { id: item.entry.id });
-                selected(button, active || drawer);
+                selected(button, active);
                 customization::drawer_origin(button, drawer.then_some(Edge::Bottom));
                 if item.entry.item == HeaderItem::Capy {
                     if let Some(image) = button.child().and_downcast::<gtk::Image>() {
@@ -458,7 +383,20 @@ impl Header {
         for controls in &self.native {
             controls.set_visible(!w.window.is_fullscreen());
         }
+        self.refresh_selection();
         self.root.queue_allocate();
+    }
+    fn refresh_selection(&self) {
+        for item in self.items.borrow().iter() {
+            if self.editing.get() && self.editor.selected_item() == Some(item.entry.id) {
+                item.root.add_css_class("editing-selection");
+            } else {
+                item.root.remove_css_class("editing-selection");
+            }
+        }
+    }
+    pub fn select_drop(&self, w: &Workspace, zone: HeaderZone, before: Option<u32>) {
+        self.editor.select(w, zone, before, None);
     }
     fn build_item(
         &self,
@@ -645,24 +583,6 @@ impl Header {
         w.register_drag(&root, DragTarget::Header(entry.id));
         w.install_context(&root, ContextTarget::Header { id: Some(entry.id) });
         let id = entry.id;
-        let click = gtk::GestureClick::new();
-        click.set_propagation_phase(gtk::PropagationPhase::Capture);
-        click.connect_released(glib::clone!(
-            #[weak]
-            w,
-            move |g, _, x, y| {
-                if w.header.editing.get()
-                    && let Some(widget) = g.widget()
-                    && x >= 0.
-                    && y >= 0.
-                    && x <= widget.width() as f64
-                    && y <= widget.height() as f64
-                {
-                    w.show_context(&widget, ContextTarget::Header { id: Some(id) }, x, y);
-                }
-            }
-        ));
-        root.add_controller(click);
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed(glib::clone!(
@@ -682,6 +602,18 @@ impl Header {
                         0.,
                         root.height() as f64,
                     );
+                    return glib::Propagation::Stop;
+                }
+                if matches!(key, gdk::Key::Return | gdk::Key::space) && w.header.editing.get() {
+                    if let Some((zone, _)) = w
+                        .header
+                        .model
+                        .borrow()
+                        .as_ref()
+                        .and_then(|m| m.location(id))
+                    {
+                        w.header.editor.select(&w, zone, Some(id), Some(id));
+                    }
                     return glib::Propagation::Stop;
                 }
                 if key == gdk::Key::Delete && w.header.editing.get() {
@@ -844,15 +776,11 @@ impl Header {
             }
         }
         if self.editing.get() {
-            allocate_at(
-                self.editor.upcast_ref(),
-                Bounds {
-                    x: 6.,
-                    y: height,
-                    width: (width - 12.).clamp(1., 480.),
-                    height: 360.,
-                },
-            );
+            let old_height = self.editor.height.get();
+            self.editor.allocate(width, height, &geometry);
+            if old_height != self.editor.height.get() {
+                w.surface.queue_allocate();
+            }
         }
         *self.geometry.borrow_mut() = geometry;
         if !self.measuring.replace(true) {
@@ -950,7 +878,7 @@ impl Header {
                 );
             }
         }
-        if let Some((zone, before)) = self.drop.get() {
+        if let Some((zone, before)) = self.drop.get().or(Some(self.editor.insertion.get())) {
             let bounds = geometry.zones[zone.index()];
             let x = before
                 .and_then(|id| {
@@ -998,14 +926,12 @@ impl Header {
                     w,
                     #[weak]
                     popover,
-                    move |button| {
+                    move |_| {
                         if w.header.editing.get() {
-                            w.show_context(
-                                button.upcast_ref(),
-                                ContextTarget::Header { id: Some(id) },
-                                0.,
-                                0.,
-                            );
+                            popover.popdown();
+                            w.header
+                                .editor
+                                .select(&w, HeaderZone::ALL[zone], Some(id), Some(id));
                         } else {
                             popover.popdown();
                             w.header.activate_overflow(&w, id);
@@ -1089,91 +1015,5 @@ impl Header {
                 }
             }
         }
-    }
-    fn refresh_catalog(&self, w: &Rc<Workspace>) {
-        if !self.editing.get() {
-            return;
-        }
-        let Some(model) = self.model.borrow().clone() else {
-            return;
-        };
-        let query = self.catalog.search.text().to_lowercase();
-        let key = format!("{query}|{}", serde_json::to_string(&model).unwrap());
-        self.catalog.update(key, |catalog| {
-            let mut entries = HeaderItem::COMPONENTS.to_vec();
-            entries.extend(layer_ui::header_tool_catalog(Platform::Gtk));
-            for item in entries {
-                let label = item.label();
-                let (description, icon) = match item {
-                    HeaderItem::Tool { control } => {
-                        let choice = tool_choice(control);
-                        (choice.description, choice.icon)
-                    }
-                    HeaderItem::Capy => ("Toggle Zen mode".into(), ZenIcon::LookingUp.icon()),
-                    _ => ("Window-bar control".into(), "menu"),
-                };
-                let text = format!("{label} {description}").to_lowercase();
-                if !query.split_whitespace().all(|word| text.contains(word)) {
-                    continue;
-                }
-                let row = catalog.row(&label, &description, icon);
-                let name = label.to_lowercase().replace(' ', "-");
-                row.set_widget_name(&format!("header-add-row-{name}"));
-                let enabled = model.entries().count() < 128
-                    && (!item.singleton() || !model.entries().any(|e| e.item == item));
-                row.set_sensitive(enabled);
-                let grip = gtk::Button::from_icon_name("layer-grip-symbolic");
-                grip.add_css_class("flat");
-                grip.set_valign(gtk::Align::Center);
-                grip.set_widget_name(&format!("header-add-grip-{name}"));
-                grip.set_tooltip_text(Some("Drag into the window bar"));
-                row.add_prefix(&grip);
-                let add = gtk::Button::from_icon_name("list-add-symbolic");
-                add.add_css_class("flat");
-                add.add_css_class("catalog-add");
-                add.set_valign(gtk::Align::Center);
-                add.set_widget_name(&format!("header-add-{name}"));
-                add.set_tooltip_text(Some(&format!("Add {label}")));
-                add.connect_clicked(glib::clone!(
-                    #[weak]
-                    w,
-                    move |_| w.dispatch(
-                        HeaderAction::Add {
-                            zone: HeaderZone::ALL[w.header.add_zone.selected().min(2) as usize],
-                            before: None,
-                            item,
-                        }
-                        .action()
-                    )
-                ));
-                row.add_suffix(&add);
-                row.set_activatable_widget(Some(&add));
-                if enabled {
-                    w.register_drag(&grip, DragTarget::HeaderAdd(item));
-                    row.add_css_class("drag-row");
-                    w.register_drag(&row, DragTarget::HeaderAdd(item));
-                    let hold = gtk::GestureLongPress::new();
-                    hold.set_touch_only(false);
-                    hold.set_propagation_phase(gtk::PropagationPhase::Capture);
-                    hold.connect_pressed(glib::clone!(
-                        #[weak]
-                        w,
-                        move |gesture, _, _| {
-                            if crate::input::touch_or_pen(gesture)
-                                && let Some(drag) = w.workspace_drag.borrow_mut().as_mut()
-                                && drag.wait_for_hold
-                                && !drag.started
-                                && gesture.widget().as_ref() == Some(&drag.source)
-                            {
-                                drag.held = true;
-                                w.set_drag_cursor(drag, "grab");
-                                gesture.set_state(gtk::EventSequenceState::Claimed);
-                            }
-                        }
-                    ));
-                    row.add_controller(hold);
-                }
-            }
-        });
     }
 }
