@@ -127,13 +127,6 @@ function Set-Zen {
     if($button){$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
     else{(Control 'Drawing canvas' -Name).SetFocus();[CapyEditorKeys]::Tab([uint32]$review.Id)}
 }
-function Select-Command([string]$Id,[switch]$Zen){
-    foreach($panel in (Model).panels){
-        $tile=$panel.tiles|Where-Object {$_.control.kind -eq 'command' -and $_.control.command -eq $Id}|Select-Object -First 1
-        if($tile){$prefix=if($Zen){'zen-tile'}else{'tile'};Invoke "$prefix-$($panel.id)-$($tile.id)";return}
-    }
-    throw "No native tile for $Id"
-}
 function Check-Rect($Control,$Box,[double]$X=0,[double]$Y=0){
     $origin=[CapyEditorKeys+Point]::new()
     if(![CapyEditorKeys]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
@@ -167,27 +160,11 @@ function Check-Editor {
 }
 function Check-Zen {
     $model=Model
-    if(!$model.partial_zen -or !$model.chrome_hidden -or !$model.zen_toolbars.sections.Count){throw 'Partial Zen projection is missing'}
-    $insets=$model.titlebar_insets
-    if($insets.Count -ne 3 -or $insets[1] -le 0){throw 'Native caption measurements did not reach Core'}
-    foreach($section in $model.zen_toolbars.sections){
-        if($section.bounds.y -lt $insets[2] -and $section.bounds.width -gt 0){
-            $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
-            $viewport=(Control 'Drawing canvas' -Name).Current.BoundingRectangle.Width/$scale
-            if($section.bounds.x -lt $insets[0] -or $section.bounds.x+$section.bounds.width -gt $viewport-$insets[1]){throw 'Zen overlaps native caption controls'}
-        }
-        foreach($pair in $section.tiles){
-            $box=$pair[1]
-            if($box.x+$box.width -gt $section.bounds.width -or $box.y+$box.height -gt $section.bounds.height){continue}
-            $native=Control "zen-tile-$($section.panel)-$($pair[0])"
-            Check-Rect $native $box $section.bounds.x $section.bounds.y
-            if($section.bounds.y -lt $insets[2]){
-                $bounds=$native.Current.BoundingRectangle
-                $x=[int]($bounds.Left+$bounds.Width/2);$y=[int]($bounds.Top+$bounds.Height/2)
-                $point=[IntPtr](([int64]($y -band 65535) -shl 16) -bor ($x -band 65535))
-                if([CapyEditorKeys]::SendMessage($review.MainWindowHandle,0x84,[IntPtr]::Zero,$point).ToInt64() -ne 1){throw 'Zen control is inside a native window-drag region'}
-            }
-        }
+    if(!$model.state.workspace.zen_mode -or !$model.chrome_hidden -or $model.partial_zen -or $model.zen_toolbars.sections.Count){throw 'Full Zen projection differs from the shared model'}
+    $elements=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+    foreach($element in $elements){
+        $id=$element.Current.AutomationId
+        if(($id -match '^(tile-|panel-tab-|group-grip-|zen-tile-|application-menu-)' -or $id -in @('zen-button','settings-button','application-menus')) -and !$element.Current.IsOffscreen){throw "Full Zen retained visible chrome: $id"}
     }
 }
 function Check-Header {
@@ -254,32 +231,21 @@ try{
     if(((Model).panel_measurements|ConvertTo-Json -Compress) -ne $measured){throw 'Native measurements did not settle'}
     & (Join-Path $PSScriptRoot 'exercise-tools.ps1') -ProcessId $review.Id -StateFile (Join-Path $directory 'ui-state.json')
     $normal=(Model).layout|ConvertTo-Json -Compress -Depth 70
+    $retained=(Control 'Drawing canvas' -Name).GetRuntimeId() -join ':'
+    $generation=(Model).windows_gpu_generation
     Set-Zen
-    Wait-Until {(Model).partial_zen -and $null -ne (Find 'zen-tile-toolbar-1')} 'Native Zen toolbar did not appear'
-    Start-Sleep -Milliseconds 300
+    Wait-Until {(Model).chrome_hidden -and !(Model).partial_zen} 'Full Zen did not hide workspace chrome'
     Check-Zen
-    Select-Command 'brush' -Zen
-    Wait-Until {(Command 'brush').selected} 'Zen tool did not reach shared state'
-    $tileId=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -ExpandProperty id
-    Invoke "zen-tile-toolbar-$tileId"
-    Wait-Until {$null -ne (Model).state.customization.drawer -and $null -ne (Find 'tool-drawer')} 'Zen color tile did not open drawer'
-    $drawer=Control 'tool-drawer'
-    Wait-Until {try{($drawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 280}catch{$false}} 'Zen drawer did not reach shared geometry'
-    Capture 'zen-color'
-    Invoke "zen-tile-toolbar-$tileId"
-    Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Find 'tool-drawer')} 'Zen color tile did not close drawer'
-    Capture 'partial-zen'
-    $retained=(Control 'zen-tile-toolbar-1').GetRuntimeId() -join ':'
+    Capture 'zen-dark'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 900 -Height 720
     Start-Sleep -Milliseconds 400
     Check-Zen
-    if(((Control 'zen-tile-toolbar-1').GetRuntimeId() -join ':') -ne $retained){throw 'Zen resize replaced native tile controls'}
+    if(((Control 'Drawing canvas' -Name).GetRuntimeId() -join ':') -ne $retained -or (Model).windows_gpu_generation -ne $generation){throw 'Zen resize replaced the native canvas or its device'}
     Capture 'zen-narrow'
     Set-Viewport
     Set-Zen
-    Wait-Until {!(Model).chrome_hidden -and $null -eq (Find 'zen-tile-toolbar-1')} 'Leaving Zen did not restore workspace'
-    Start-Sleep -Milliseconds 400
-    if(((Model).layout|ConvertTo-Json -Compress -Depth 70) -ne $normal){throw 'Zen changed saved workspace geometry'}
+    Wait-Until {!(Model).chrome_hidden} 'Leaving Zen did not restore workspace'
+    Wait-Until {((Model).layout|ConvertTo-Json -Compress -Depth 70) -eq $normal} 'Zen changed saved workspace geometry'
     Check-Editor
     $dialog=Preferences
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
@@ -291,20 +257,14 @@ try{
     Check-Header
     Capture 'editor-light'
     Set-Zen
-    Wait-Until {(Model).partial_zen} 'Light Zen did not activate'
+    Wait-Until {(Model).chrome_hidden -and !(Model).partial_zen} 'Light full Zen did not activate'
     Start-Sleep -Milliseconds 300
     Check-Zen
     Capture 'zen-light'
     Set-Zen
-    $dialog=Preferences
-    (Control 'Total zen' -Name -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Close-Preferences $dialog
-    Set-Zen
-    Wait-Until {(Model).chrome_hidden -and !(Model).partial_zen -and $null -eq (Find 'zen-tile-toolbar-1')} 'Total Zen retained native toolbars'
-    Set-Zen
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{full_editor='passed';titlebar_hit_regions='passed';core_rectangles='passed';native_measurements='passed';tools='passed';partial_zen='passed';zen_activation='passed';zen_drawer='passed';retained_resize='passed';restored_workspace='passed';themes='passed';total_zen='passed';zero_exit='passed';scope='native projection; complete visual and physical input acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{full_editor='passed';titlebar_hit_regions='passed';core_rectangles='passed';native_measurements='passed';tools='passed';full_zen='passed';zen_activation='passed';retained_canvas_resize='passed';restored_workspace='passed';themes='passed';zero_exit='passed';scope='native projection; complete visual and physical input acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

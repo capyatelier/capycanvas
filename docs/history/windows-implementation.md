@@ -2536,3 +2536,24 @@ exact labels/selection/settings/actions on freshly acquired native controls;
 the shared snapshot can arrive before XAML replaces the old schema. The original
 assertions passed on the same failed window after publication settled, so only
 the fixture needed adjustment.
+
+### Shared title-bar and native ownership integration
+
+Upstream integration brings the shared workspace-owned title-bar model, native
+per-item kernel ownership locks and full Zen. The Windows editor fixture now
+checks full Zen in both themes, hidden chrome, retained canvas/device on resize,
+and restored workspace geometry. Its obsolete partial-Zen toolbars and Total Zen
+preference checks were removed to match the shared behavior.
+
+The integrated tree passes 652 ordinary core/engine/host/UI/Windows/workspace
+tests, a normal Release build and the Web Wasm check. Native Release queued/active
+pen recovery, exhausted-recovery Save/Save As with tail cancellation, full editor
+and two-window recovery checks pass with clean shutdown. Strict Clippy currently
+reports three incoming shared UI issues: the header measurement clamp, the drag
+constructor argument count, and the large workspace-restore action variant.
+These were not suppressed or represented as a passing check.
+
+Windows still uses its existing native header projection, as allowed by the
+shared port handoff. Projecting the new customizable title bar is remaining
+Windows design work. Physical input/display, packaging and performance acceptance
+remain open as described above.
