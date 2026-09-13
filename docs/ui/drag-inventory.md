@@ -19,7 +19,7 @@ toolkit behavior is implicit and cannot be established from source alone.
 | --- | --- | --- | --- |
 | G1 | Toolbar/ribbon tile bodies, including disabled commands and dividers | [`workspace_customization.rs`](../../apps/layer-linux/src/workspace_customization.rs) registers held tile wrappers. [`workspace.rs`](../../apps/layer-linux/src/workspace.rs) uses stable capture for mouse, touch, and pen; native long press arms pickup. | **Migrated.** Movement before hold retires pickup; clicks and shared insertion/drop actions remain. |
 | G2 | Toolbar tiles in column drawers | [`workspace_drawer.rs`](../../apps/layer-linux/src/workspace_drawer.rs) registers the same held wrappers and context handlers as main toolbars. | **Migrated.** Shared drawer projections now supply tile insertion geometry. |
-| G3 | Partial-Zen toolbar tiles | [`workspace_zen.rs`](../../apps/layer-linux/src/workspace_zen.rs) creates `tile_button` controls without tile drag registration. | **Gap / current presentation restriction**, not an immediate-pickup violation. The convention does not itself enable rearranging Zen projections. Any future support must require a hold. |
+| G3 | Partial-Zen toolbar tiles | Retired: Zen now has one mode, without alternate toolbar projections. | No remaining GTK source. |
 | G4 | Collapsed-column icon tiles | [`workspace_columns.rs`](../../apps/layer-linux/src/workspace_columns.rs) registers held panel sources. Shared Rust resolves the collapsed icon as the source. | **Migrated.** The footer grip remains immediate; native strip scrolling stays available before hold. |
 | G5 | Individual docked/floating panel tabs; active and inactive tabs, including toolbar tabs | [`workspace.rs`](../../apps/layer-linux/src/workspace.rs), `install_panel_drag(DockItem::Panel)`; [`workspace_tab_drag.rs`](../../apps/layer-linux/src/workspace_tab_drag.rs) captures stable tab slots. The stable controller begins after native movement slop. | **Keep immediate pickup for all devices.** Preserve tab sliding, tear-off, grab offsets, and cancellation. |
 | G6 | Panel/group title and tab-bar background, group grips, lone-panel footer strips | [`workspace.rs`](../../apps/layer-linux/src/workspace.rs) registers headers/footers as `DockItem::Group`; the common captured controller has no hold requirement. | **Keep immediate pickup for all devices.** Do not accidentally apply G1's delay to a containing group. |
@@ -29,11 +29,32 @@ toolkit behavior is implicit and cannot be established from source alone.
 | G10 | Layer-list row bodies, including names, whitespace, content/mask thumbnails and child controls | [`layers.rs`](../../apps/layer-linux/src/layers.rs), `row_drag`, checks the actual device/tool for touchscreen and pen hold eligibility. | **Migrated.** Mouse remains immediate; row grips bypass the hold gate. Native pen hardware validation remains outstanding. |
 | G11 | Layer-row trailing grip | The same [`row_drag`](../../apps/layer-linux/src/layers.rs) helper is installed with its direct/touch-enabled override on the grip. | **Keep immediate pickup for all devices.** Exempt the grip from the new pen row-body guard. |
 | G12 | Dock/column split dividers and floating-window edge/corner resize handles | [`workspace.rs`](../../apps/layer-linux/src/workspace.rs), `register_drag` with `Divider` / `Resize`; any movement starts resizing. | **Keep.** These are direct resize controls, not reordered tiles or list rows. |
-| G13 | Native application window title/header drag region | [`workspace.rs`](../../apps/layer-linux/src/workspace.rs) uses `AdwHeaderBar` in the native window. | **Keep native immediate window movement.** Do not intercept it with the tile hold recognizer. |
+| G13 | Native application window title/header drag region | [`workspace_header.rs`](../../apps/layer-linux/src/workspace_header.rs) uses `GtkWindowHandle` for the caption background and informational items. | **Keep native immediate window movement.** Real windowed/restored movement, double-click maximize, native close and control secondary-click checks pass. |
 | G14 | Manage Workspaces: all row bodies and narrow left grab handles | [`workspace_switcher_dialog.rs`](../../apps/layer-linux/src/workspace_switcher_dialog.rs), grouped native drag/click/hold recognizers | Mouse bodies drag immediately; touch/pen bodies hold first; handles start immediately for every device. Right-click and touch/pen hold open the row menu; same-contact movement closes it and drags. Mouse holds do not open menus. Real mouse/touch and keyboard checks cover scrolling, cancellation, and preview preservation. Hardware pen timing remains to be checked. Switcher order is an app preference and does not enter workspace layout history. |
 
 GTK workspace pickup now has one captured path. Native hold timing arms tile
 reordering; source classification leaves G5–G9 immediate.
+
+The GTK [window-bar builder](window-bar.md) adds individual header-item bodies
+only while editing: the full item drags immediately with movement slop for every
+device, as explicitly requested for this placement-only editor on 2026-09-13.
+Grips are decorative, not separate hit targets. Shared Rust uses frozen tab-group slot
+thresholds and validates the final atomic move/removal. Neighbors animate;
+crossing half a tile outside detaches the item with its original grab offset.
+Re-entry docks it again; an outside release removes it. Escape, focus loss,
+resize or an invalidated source cancels. Context actions offer
+move/order/remove without dragging. Native mouse/touch checks cover hold-release,
+same-contact dragging, cancellation and context menus at 1× and 2×;
+physical stylus acceptance remains a hardware check, not inferred from touch.
+The compact component bank has one inert, immediately draggable chip per item;
+its padding, icon and label all belong to the same source. There is no click/tap
+activation or persistent insertion cursor. Add Tools is itself a bank source:
+dropping it opens the toolbar's separate shared picker at the
+destination. Dropping a new palette source outside discards it. The inline editor
+uses one preview baseline with Done/Cancel, not per-move undo entries. Done is
+one ordinary workspace-history transaction. Native catalog tests cover both
+mouse and touch at 1×/2×, invalidated sources, blur/Escape/outside cancellation,
+inert click/hold behavior and previews excluded from saved captures.
 
 ### Other GTK pointer drags and non-draggable collections
 

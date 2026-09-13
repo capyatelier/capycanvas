@@ -12,6 +12,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         let ids = strings(&tx, "SELECT id FROM items")?;
         let mut items = Vec::new();
         for id in ids {
@@ -38,15 +39,27 @@ impl SqliteStore {
             |r| r.get::<_, i64>(0),
         )? as u64;
         if apply {
-            for entity in plan.changed {
+            // Only the transaction sees these reserved keys. Readers keep the
+            // old pair until both final names and their indexes commit together.
+            for id in &plan.renamed {
+                tx.execute(
+                    "UPDATE items SET name_key=?2 WHERE id=?1",
+                    params![id, format!("\0catalog:{id}")],
+                )?;
+            }
+            for mut entity in plan.changed {
+                entity.metadata =
+                    resolve_name(&tx, entity.metadata, &entity.id, NamePolicy::Unique)?;
                 let old = items.iter().find(|s| s.entity.id == entity.id).unwrap();
                 if old.entity.metadata != entity.metadata {
                     tx.execute(
-                        "UPDATE items SET metadata=?2,metadata_generation=?3 WHERE id=?1",
+                        "UPDATE items SET metadata=?2,metadata_generation=?3,name=?4,name_key=?5 WHERE id=?1",
                         params![
                             entity.id,
                             serde_json::to_string(&entity.metadata)?,
-                            advance(old.generations.metadata)?.to_string()
+                            advance(old.generations.metadata)?.to_string(),
+                            entity.metadata.name,
+                            name_key(&entity.metadata.name)
                         ],
                     )?;
                 }
@@ -90,6 +103,7 @@ impl SqliteStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.ownership.reconcile(&tx, now)?;
         let row = header(&tx, id)?;
         check_owner(&row, owner, fence, now)?;
         if !row.deleted || row.builtin {
@@ -100,6 +114,7 @@ impl SqliteStore {
         remove(&tx, id)?;
         collect_components(&tx)?;
         tx.commit()?;
+        self.ownership.release(id, owner, fence);
         Ok(())
     }
 }

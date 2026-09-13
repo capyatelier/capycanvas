@@ -1,6 +1,7 @@
-// Configure only workspace-motion.sh's private Mutter display. GDK_SCALE alone
-// does not establish the monitor scale on a Wayland compositor.
+// Test-only monitor scaling. GDK_SCALE does not establish Wayland monitor scale.
 const {Gio, GLib} = imports.gi;
+if (!GLib.getenv('WAYLAND_DISPLAY')?.startsWith('layer-bench-'))
+    throw Error('Requires the isolated workspace-motion.sh compositor');
 const scale = Number(ARGV[0]);
 if (!Number.isFinite(scale) || scale < 1 || scale > 4) throw Error('Expected display scale 1..4');
 const dest = 'org.gnome.Mutter.DisplayConfig';

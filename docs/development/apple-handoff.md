@@ -73,10 +73,12 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
   input retirement for renderer failure.
 - Quick restart tests exposed a shared native ownership bug: a killed process
   left Illustrator claimed, so restart selected Painter and hid the expected
-  Color/Layers panels. `SqliteStore` now holds a standard OS file lock for each
-  connection's lifetime; the first opener after all clients exit clears abandoned
-  claims transactionally. Existing clients retain normal leases/fencing. The
-  lock sidecar is protected from export overwrite.
+  Color/Layers panels. The initial connection-lifetime lock has since been
+  replaced by per-workspace kernel locks, preserving live owners through missed
+  heartbeats and reclaiming dead owners while other clients remain open. See
+  [native ownership](workspace-ownership.md) for lifecycle, protocol and tests.
+  This later shared change has Linux acceptance; it does not imply a new Apple
+  device acceptance run.
 - Included workspace Layout History now permits restoring an earlier layout.
   Its names and deletion remain protected, as do competing owners and busy or
   current history entries. Both native hosts pass the history workflow.

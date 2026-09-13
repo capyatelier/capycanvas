@@ -29,12 +29,12 @@ struct DrawerQuery {
 
 #[wasm_bindgen]
 impl WebApp {
-    pub fn editor_models(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
+    pub fn editor_models(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
         let state = self.session.state();
         js_sys::JSON::parse(&serde_json::to_string(&json!({
             "color_panel": state.colors.view(),
-            "partial_zen": state.partial_zen(),
-            "zen_toolbars": if state.partial_zen() { state.workspace.layout.zen_toolbars([width,height]) } else { Default::default() },
+            "partial_zen": false,
+            "zen_toolbars": {"sections": []},
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
             "document_options": json!({
                 "extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
@@ -75,16 +75,9 @@ impl WebApp {
         }
         Ok(pixels)
     }
-    pub fn workspace_projection(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
-        let state = self.session.state();
-        serialize(&(
-            state.partial_zen(),
-            if state.partial_zen() {
-                state.workspace.layout.zen_toolbars([width, height])
-            } else {
-                Default::default()
-            },
-        ))
+    // Legacy host contract: Zen no longer projects an alternative layout.
+    pub fn workspace_projection(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
+        serialize(&(false, json!({"sections": []})))
     }
     pub fn workspace_persistence(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.durable_workspace())
@@ -167,7 +160,6 @@ impl WebApp {
                     &state.workspace.layout,
                     q.viewport,
                     &q.heights,
-                    state.partial_zen(),
                 )
             })
         };

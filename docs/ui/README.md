@@ -62,6 +62,11 @@ serialize and restore the workspace; automatic storage depends on the host.
 The detailed [panel contract](panel-customization.md) covers drag targets, menus,
 resize behavior and configuration.
 
+GTK also has a [workspace window-bar builder](window-bar.md) for arranging
+individual application controls and tools in left, center and right regions,
+with workspace-owned size and canvas-info visibility. It does not dock toolbar
+containers into native chrome.
+
 The [drag and reorder convention](drag-and-reorder.md) specifies required pickup
 behavior across devices: tiles require a hold for everyone; list bodies require
 a hold for touch and pen; handles and title/tab bars drag without a hold. The

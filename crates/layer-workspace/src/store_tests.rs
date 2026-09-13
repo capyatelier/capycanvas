@@ -389,7 +389,7 @@ fn schema_one_upgrade_keeps_entities_and_existing_delivery_hashes() {
             .connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        SCHEMA_VERSION
+        SQLITE_SCHEMA_VERSION
     );
     for (id, hash) in hashes {
         assert_eq!(
@@ -697,7 +697,7 @@ fn lost_acknowledgements_and_repeated_delivery_keep_one_original_receipt() {
     assert_eq!(reopened.commit(batch).unwrap(), original);
 }
 #[test]
-fn owner_takeover_fences_suspended_writers_and_delayed_releases() {
+fn native_lock_protects_suspended_writers_and_fences_released_owners() {
     let mut f = Fixture::new();
     let old = f.create("Painting");
     let id = old.entity.id.clone();
@@ -708,6 +708,21 @@ fn owner_takeover_fences_suspended_writers_and_delayed_releases() {
         ErrorKind::OwnedElsewhere
     );
     f.clock.0.fetch_add(OWNER_LEASE_MS + 1, Ordering::Relaxed);
+    assert_eq!(
+        other.claim(&id, second.clone()).unwrap_err().kind,
+        ErrorKind::OwnedElsewhere
+    );
+    let live = other
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|i| i.id == id)
+        .unwrap();
+    assert_eq!(live.claim.as_ref().unwrap().owner, f.owner);
+    assert!(live.claim.unwrap().expires_at_ms > f.clock.now_ms());
+    // Drop the owning connection without releasing the database claim. Other
+    // native clients are still running; reclamation must not require reopening.
+    f.store = f.connection();
     let claimed = other.claim(&id, second.clone()).unwrap();
     assert!(claimed.claim.as_ref().unwrap().fence > old.claim.as_ref().unwrap().fence);
     assert!(
@@ -914,7 +929,7 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
     );
     f.store
         .connection
-        .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION + 1)
         .unwrap();
     assert!(matches!(
         SqliteStore::open(&f.directory.join("workspaces.sqlite3")),
@@ -928,7 +943,7 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
         .connection
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, SCHEMA_VERSION + 1);
+    assert_eq!(version, SQLITE_SCHEMA_VERSION + 1);
 }
 
 #[test]
@@ -1016,7 +1031,10 @@ fn concurrent_claims_have_exactly_one_editable_owner() {
             std::thread::spawn(move || {
                 let mut store = SqliteStore::with_clock(&path, clock).unwrap();
                 barrier.wait();
-                store.claim(&id, Owner::fresh())
+                let result = store.claim(&id, Owner::fresh());
+                // Keep the winning lock alive until both attempts complete.
+                barrier.wait();
+                result
             })
         })
         .collect();
@@ -1054,9 +1072,25 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
                 .unwrap(),
             )
             .unwrap();
+        let saved = store.load(&id).unwrap();
+        let mut working = saved.entity.working.clone().unwrap();
+        working.zen_mode = true;
+        let pending = CommitBatch::prepare(
+            saved.claim.as_ref().unwrap().owner.clone(),
+            vec![change(&saved, None, None, Some(working))],
+        )
+        .unwrap();
+        // The delivery is durable, but publication is interrupted after its
+        // updates and before the receipt. Neither updates nor locks may leak.
+        store.connection.execute_batch("CREATE TRIGGER interrupt_save BEFORE INSERT ON receipts BEGIN SELECT RAISE(ABORT, 'interrupted save'); END;").unwrap();
+        assert!(store.commit(pending.clone()).is_err());
+        store
+            .connection
+            .execute_batch("DROP TRIGGER interrupt_save")
+            .unwrap();
         std::fs::write(
             directory.join("ready.json"),
-            serde_json::to_vec(&store.load(&id).unwrap()).unwrap(),
+            serde_json::to_vec(&(saved, pending)).unwrap(),
         )
         .unwrap();
         // Keep the real process and its storage handle alive until the parent
@@ -1086,7 +1120,7 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
             .unwrap(),
     );
     let started = std::time::Instant::now();
-    let saved: StoredEntity = loop {
+    let (saved, pending): (StoredEntity, CommitBatch) = loop {
         if let Ok(bytes) = std::fs::read(directory.join("ready.json"))
             && let Ok(saved) = serde_json::from_slice(&bytes)
         {
@@ -1112,9 +1146,46 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
             .kind,
         ErrorKind::OwnedElsewhere
     );
-    drop(concurrent);
+    let survivor = workspace("Still open in the other process");
+    let survivor_id = survivor.id.clone();
+    let survivor_owner = Owner::fresh();
+    concurrent
+        .commit(
+            CommitBatch::prepare(
+                survivor_owner.clone(),
+                vec![Mutation::Create {
+                    entity: survivor,
+                    claim: true,
+                    name_policy: NamePolicy::Exact,
+                }],
+            )
+            .unwrap(),
+        )
+        .unwrap();
     child.0.kill().unwrap();
     child.0.wait().unwrap();
+    let catalog = concurrent.list().unwrap();
+    assert!(
+        catalog
+            .iter()
+            .find(|i| i.id == saved.entity.id)
+            .unwrap()
+            .claim
+            .is_none()
+    );
+    assert_eq!(
+        catalog
+            .iter()
+            .find(|i| i.id == survivor_id)
+            .unwrap()
+            .claim
+            .as_ref()
+            .unwrap()
+            .owner,
+        survivor_owner
+    );
+    assert!(matches!(concurrent.handle(StoreRequest::Pending).unwrap(),
+        StoreResponse::Pending(deliveries) if deliveries.iter().any(|p| p.encoded().unwrap() == pending.encoded().unwrap())));
     let mut restarted = SqliteStore::with_clock(&path, clock()).unwrap();
     assert_eq!(
         restarted.load(&saved.entity.id).unwrap().entity,
@@ -1123,6 +1194,10 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
     let successor = restarted.claim(&saved.entity.id, Owner::fresh()).unwrap();
     let old_claim = saved.claim.unwrap();
     assert!(successor.claim.as_ref().unwrap().fence > old_claim.fence);
+    assert_eq!(
+        restarted.commit(pending).unwrap_err().kind,
+        ErrorKind::Conflict
+    );
     assert!(
         restarted
             .renew(&saved.entity.id, &old_claim.owner, old_claim.fence)
@@ -1133,7 +1208,195 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
         .unwrap();
     assert_eq!(restarted.load(&saved.entity.id).unwrap(), successor);
     drop(restarted);
+    drop(concurrent);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn dropped_window_retires_all_its_claims_after_queued_writes_not_other_windows() {
+    let mut f = Fixture::new();
+    let surviving = f.create("Surviving window");
+    let closing = f.create("Closing window");
+    f.store
+        .release(&closing.entity.id, &f.owner, closing.claim.unwrap().fence)
+        .unwrap();
+    let worker = StoreWorker::shared(&f.directory).unwrap();
+    let manager = WorkspaceManager::new(worker.clone(), layer_ui::Platform::Gtk);
+    let incoming =
+        pollster::block_on(manager.prepare_switch(&closing.entity.id, 1_000_000)).unwrap();
+    manager.activate(incoming);
+    // An accepted creation may finish after its window disappears, before its
+    // result is adopted. Teardown must retire that claim as well as the active one.
+    let pending = workspace("Unadopted queued creation");
+    let pending_id = pending.id.clone();
+    let reply = worker.request(StoreRequest::Commit {
+        batch: CommitBatch::prepare(
+            manager.owner.clone(),
+            vec![Mutation::Create {
+                entity: pending,
+                claim: true,
+                name_policy: NamePolicy::Exact,
+            }],
+        )
+        .unwrap(),
+    });
+    drop(manager);
+    let StoreResponse::List(items) = worker.request(StoreRequest::List).wait().unwrap() else {
+        panic!()
+    };
+    assert!(
+        items
+            .iter()
+            .find(|i| i.id == closing.entity.id)
+            .unwrap()
+            .claim
+            .is_none()
+    );
+    assert!(
+        items
+            .iter()
+            .find(|i| i.id == pending_id)
+            .unwrap()
+            .claim
+            .is_none()
+    );
+    assert_eq!(
+        items
+            .iter()
+            .find(|i| i.id == surviving.entity.id)
+            .unwrap()
+            .claim
+            .as_ref()
+            .unwrap()
+            .owner,
+        f.owner
+    );
+    assert!(matches!(reply.wait().unwrap(), StoreResponse::Committed(_)));
+    assert!(f.store.claim(&closing.entity.id, Owner::fresh()).is_ok());
+}
+
+#[test]
+fn failed_teardown_cleanup_does_not_pin_a_dead_windows_kernel_locks() {
+    let mut f = Fixture::new();
+    let saved = f.create("Failed cleanup");
+    f.store.connection.execute_batch("CREATE TRIGGER fail_cleanup BEFORE UPDATE OF owner ON items BEGIN SELECT RAISE(ABORT, 'cleanup unavailable'); END;").unwrap();
+    f.store.retire_owner(&f.owner);
+    assert!(
+        header(&f.store.connection, &saved.entity.id)
+            .unwrap()
+            .claim
+            .is_some()
+    );
+    f.store
+        .connection
+        .execute_batch("DROP TRIGGER fail_cleanup")
+        .unwrap();
+    let mut other = f.connection();
+    let successor = other.claim(&saved.entity.id, Owner::fresh()).unwrap();
+    assert!(successor.claim.unwrap().fence > saved.claim.unwrap().fence);
+}
+
+#[test]
+fn failed_claim_and_creation_drop_unpublished_locks() {
+    let mut f = Fixture::new();
+    let saved = f.create("Rollback ownership");
+    let id = &saved.entity.id;
+    f.store
+        .release(id, &f.owner, saved.claim.unwrap().fence)
+        .unwrap();
+    f.store.connection.execute_batch("CREATE TRIGGER fail_claim BEFORE UPDATE OF owner ON items BEGIN SELECT RAISE(ABORT, 'claim failed'); END;").unwrap();
+    assert!(f.store.claim(id, f.owner.clone()).is_err());
+    f.store
+        .connection
+        .execute_batch("DROP TRIGGER fail_claim")
+        .unwrap();
+    let mut other = f.connection();
+    let other_owner = Owner::fresh();
+    let claimed = other.claim(id, other_owner.clone()).unwrap();
+    assert_eq!(claimed.claim.unwrap().owner, other_owner);
+
+    let entity = workspace("Rolled back creation");
+    let create = CommitBatch::prepare(
+        f.owner.clone(),
+        vec![Mutation::Create {
+            entity: entity.clone(),
+            claim: true,
+            name_policy: NamePolicy::Exact,
+        }],
+    )
+    .unwrap();
+    f.store.connection.execute_batch("CREATE TRIGGER fail_receipt BEFORE INSERT ON receipts BEGIN SELECT RAISE(ABORT, 'receipt failed'); END;").unwrap();
+    assert!(f.store.commit(create).is_err());
+    f.store
+        .connection
+        .execute_batch("DROP TRIGGER fail_receipt")
+        .unwrap();
+    other
+        .commit(
+            CommitBatch::prepare(
+                other_owner,
+                vec![Mutation::Create {
+                    entity: entity.clone(),
+                    claim: true,
+                    name_policy: NamePolicy::Exact,
+                }],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(other.load(&entity.id).unwrap().entity, entity);
+}
+
+#[test]
+fn ownership_io_errors_fail_closed_and_exports_cannot_replace_lock_files() {
+    let mut f = Fixture::new();
+    let saved = f.create("Protected lock");
+    let database = f.directory.join("workspaces.sqlite3");
+    let lock_dir = ownership::lock_directory(&database);
+    let lock_file = lock_dir.join(content_id(saved.entity.id.as_bytes()));
+    assert!(validate_database_export_destination(&database, &lock_file).is_err());
+    assert!(validate_database_export_destination(&database, &lock_dir.join("new-file")).is_err());
+    assert!(
+        validate_database_export_destination(&database, &f.directory.join("backup.sqlite3"))
+            .is_ok()
+    );
+    let mut other = f.connection();
+    // Point only this test client's probe at a non-directory. Do not delete or
+    // replace the real guard file, which would break the ownership protocol.
+    std::fs::write(f.directory.join("not-a-directory"), b"blocked").unwrap();
+    other.ownership.directory = f.directory.join("not-a-directory");
+    assert_eq!(
+        other
+            .claim(&saved.entity.id, Owner::fresh())
+            .unwrap_err()
+            .kind,
+        ErrorKind::Unavailable
+    );
+    assert_eq!(f.store.load(&saved.entity.id).unwrap().claim, saved.claim);
+}
+
+#[cfg(unix)]
+#[test]
+fn database_symlinks_share_native_ownership() {
+    let mut f = Fixture::new();
+    let saved = f.create("Aliased database");
+    let alias = f.directory.join("alias.sqlite3");
+    std::os::unix::fs::symlink(f.directory.join("workspaces.sqlite3"), &alias).unwrap();
+    let mut other = SqliteStore::with_clock(&alias, f.clock.clone()).unwrap();
+    assert_eq!(
+        other
+            .claim(&saved.entity.id, Owner::fresh())
+            .unwrap_err()
+            .kind,
+        ErrorKind::OwnedElsewhere
+    );
+    assert!(
+        validate_database_export_destination(
+            &alias,
+            &ownership::lock_directory(&f.directory.join("workspaces.sqlite3")).join("new-file")
+        )
+        .is_err()
+    );
 }
 
 #[test]

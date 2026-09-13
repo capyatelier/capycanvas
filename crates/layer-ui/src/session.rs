@@ -229,6 +229,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         workspace.layout.column_scroll.clear();
         workspace.layout.titlebar_insets = [0.0; 3];
         workspace.layout.bottom_inset = 0.0;
+        workspace.layout.header_presentation = Default::default();
         workspace.zen_mode = self
             .workspace_preview
             .as_ref()
@@ -303,6 +304,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let mut menu = match target {
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
+            ContextTarget::Header { id } => self
+                .state
+                .workspace
+                .layout
+                .header
+                .projected_for(self.state.platform)
+                .context_menu(id, self.state.customization.header_editing),
             _ => self
                 .state
                 .workspace
@@ -419,6 +427,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
             menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
+        if CommandId::CustomizeWorkspaceUi.available_on(self.state.platform) {
+            // Keep the editor entry reachable above the long panel list, also
+            // in the recovery menu on a short tablet-sized window.
+            menu.sections
+                .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
+        }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
     pub fn toolbar_prompt(&self) -> Option<crate::customization::ToolbarPromptView> {
@@ -530,7 +544,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         true
     }
-    fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
+    pub(crate) fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
         matches!(
             self.state.platform,
             Platform::Gtk | Platform::Android | Platform::Web
@@ -557,10 +571,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply {
-            chrome_hidden: self.state.partial_zen(),
-            hide_floating_panels: self.state.partial_zen(),
-            keep_zen_button: !self.state.settings.total_zen,
-            partial_zen: self.state.partial_zen(),
+            chrome_hidden: self.interaction.hidden,
             ..Default::default()
         };
         let mut contact = None;
@@ -658,7 +669,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                                     &self.state.workspace.layout,
                                     viewport,
                                     &vec![0.; d.columns.len()],
-                                    false,
                                 )
                                 .and_then(|p| p.connection());
                             (!strip.bounds.contains(position[0], position[1])
@@ -683,7 +693,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled |= canvas;
                     }
                 }
-                if let ChromeEvent::Contact { position, .. } = event
+                if let ChromeEvent::Contact { position, canvas } = event
                     && let Some(drawer) = &self.state.customization.drawer
                     && drawer.dismissal == DrawerDismissal::OutsideContact
                     && !facts.popup_open
@@ -701,34 +711,39 @@ impl<R: CanvasRenderer> UiSession<R> {
                             &self.state.workspace.layout,
                             viewport,
                             &vec![0.0; drawer.columns.len()],
-                            self.state.partial_zen(),
                         )
                         .is_some_and(|p| p.anchor.contains(position[0], position[1]))
                 {
-                    let tile = if self.state.partial_zen() {
-                        self.state
-                            .workspace
-                            .layout
-                            .zen_toolbars(viewport)
-                            .tile_at(position)
-                    } else {
-                        self.layout(viewport)
-                            .tile_at(&self.state.workspace.layout, position)
-                            .or_else(|| self.state.customization.drawer_tile_at(position))
-                    };
+                    let tile = self
+                        .layout(viewport)
+                        .tile_at(&self.state.workspace.layout, position)
+                        .or_else(|| self.state.customization.drawer_tile_at(position));
                     // Preserve the open drawer until an eligible button in its
                     // toolbar activates on release (or the contact is cancelled).
-                    if !tile.is_some_and(|anchor| self.switches_toolbar_drawer(anchor)) {
+                    let header_item = self
+                        .state
+                        .workspace
+                        .layout
+                        .header_presentation
+                        .items
+                        .iter()
+                        .find(|m| m.bounds.contains(position[0], position[1]))
+                        .and_then(|m| self.state.workspace.layout.header.entry(m.id).ok());
+                    let switches_header = matches!(drawer.anchor, DrawerAnchor::Header { .. })
+                        && header_item.is_some_and(|e| matches!(e.item, HeaderItem::Tool { control } if control.selectable() && control.drawer_columns().is_some()));
+                    if !switches_header
+                        && !tile.is_some_and(|anchor| self.switches_toolbar_drawer(anchor))
+                    {
                         reply.change = self.dispatch(UiAction::Customize {
                             action: CustomizationAction::CloseExpanded,
                         })?;
-                        // Other tiles can still activate; bare canvas only dismisses.
-                        reply.handled = tile.is_none();
+                        // Canvas contact only dismisses; native chrome must keep
+                        // its click/drag (menus, title-bar grabs, toolbar grips).
+                        reply.handled |= canvas;
                     }
                 }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
-                    && !self.state.partial_zen()
                     && !facts.popup_open
                     && !facts.expanded_panel.is_some_and(|e| {
                         // Tabs activate on release. Leave the press available
@@ -866,6 +881,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled = true;
                     }
                     let blocked = editing
+                        || (self.state.customization.header_editing && !modifiers.command)
                         || self.state.settings_open
                         || self.state.customization.blocks_shortcuts()
                         || self.interaction.facts.popup_open;
@@ -1004,24 +1020,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
-        reply.hide_floating_panels = self.state.partial_zen();
-        reply.keep_zen_button = !self.state.settings.total_zen;
-        reply.partial_zen = self.state.partial_zen();
         reply.pan_cursor = self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand;
         Ok(reply)
     }
 
     fn refresh_chrome(&mut self) {
-        // Explicit exit only: proximity, first contact, keyboard chrome hints
-        // and drag/popup pins must not reveal the editor in this mode.
-        if self.state.partial_zen() {
-            self.interaction.hidden = true;
-            self.interaction.zen_entry_guard = false;
-            self.interaction.keep_chrome_until_contact = false;
-            self.interaction.keyboard_chrome = false;
-            return;
-        }
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
             self.interaction.zen_entry_guard = false;
@@ -1514,9 +1518,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return None;
         }
-        if self.state.partial_zen() {
-            return None;
-        }
         let mut resolved = self.layout(viewport);
         resolved.groups.extend(
             self.state
@@ -1750,8 +1751,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !document.is_locked(document.active_layer)
                     && (id == CommandId::ClearLayer || document.selection.is_some())
             }
-            CommandId::UndoWorkspace => self.workspace_history.can_undo(),
-            CommandId::RedoWorkspace => self.workspace_history.can_redo(),
+            CommandId::UndoWorkspace => {
+                !self.state.customization.header_editing && self.workspace_history.can_undo()
+            }
+            CommandId::RedoWorkspace => {
+                !self.state.customization.header_editing && self.workspace_history.can_redo()
+            }
             CommandId::AddLayer => idle,
             CommandId::DeleteLayer => idle && editable && paint_layers > 1,
             CommandId::RaiseLayer => idle && editable && index > 0,
@@ -1854,6 +1859,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
+                    | UiAction::MeasureHeader { .. }
                     | UiAction::MeasureWorkspaceBottom { .. }
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::WindowFullscreen { .. }
@@ -1895,6 +1901,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
+                    | UiAction::MeasureHeader { .. }
                     | UiAction::MeasureWorkspaceBottom { .. }
                     | UiAction::WindowFullscreen { .. }
             )
@@ -1914,7 +1921,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         );
         let layout_only = (!self.state.customization.is_open() || column_resize)
-            && !self.state.partial_zen()
             && matches!(
                 &action,
                 UiAction::DragDivider {
@@ -1960,7 +1966,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar
                 }
         )
-        .then(|| self.state.workspace.clone());
+        .then(|| {
+            let mut before = self.state.workspace.clone();
+            self.state
+                .customization
+                .committed_header(&mut before.layout);
+            before
+        });
         let move_item = match &action {
             UiAction::MovePanel { panel, .. } => Some(DockItem::Panel { panel: *panel }),
             UiAction::MoveGroup { group, .. } => Some(DockItem::Group { group: *group }),
@@ -2119,6 +2131,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                     (LAYOUT, false)
                 }
             }
+            UiAction::MeasureHeader { height, items } => {
+                if !height.is_finite()
+                    || !(0.0..1_000_000.).contains(&height)
+                    || items.len() > 128
+                    || items.iter().enumerate().any(|(i, m)| {
+                        self.state.workspace.layout.header.entry(m.id).is_err()
+                            || items[..i].iter().any(|n| n.id == m.id)
+                            || ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
+                                .into_iter()
+                                .all(|v| v.is_finite() && (0.0..1_000_000.).contains(&v))
+                    })
+                {
+                    return Err("Invalid window-bar measurement".into());
+                }
+                let presentation = HeaderPresentation { height, items };
+                if self.state.workspace.layout.header_presentation == presentation {
+                    (0, false)
+                } else {
+                    self.state.workspace.layout.header_presentation = presentation;
+                    (LAYOUT, false)
+                }
+            }
             UiAction::MeasurePanels { measurements } => {
                 let mut accepted = Vec::new();
                 for measurement in measurements {
@@ -2253,18 +2287,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (LAYOUT, false)
             }
             UiAction::Customize { action } => {
+                let editing_header = matches!(
+                    &action,
+                    CustomizationAction::Header {
+                        action: HeaderAction::Edit { editing: true }
+                    }
+                );
                 let viewport = self
                     .logical_viewport
                     .or(self.interaction.viewport)
                     .unwrap_or(self.state.camera.viewport.map(|v| v as f32));
-                let partial_zen = self.state.partial_zen();
-                let changed = self.state.customization.edit(
+                let mut changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
                     action,
                     self.state.platform,
                     viewport,
-                    partial_zen,
                 )?;
+                if editing_header && self.state.workspace.zen_mode {
+                    self.state.workspace.zen_mode = false;
+                    changed |= LAYOUT;
+                }
                 if changed & LAYOUT != 0
                     && let Some(before) = workspace_before.as_ref()
                 {
@@ -2292,72 +2334,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .find(|t| t.id == tile)
                     .ok_or("The tool no longer exists")?
                     .control;
-                if control == ToolbarControl::Divider {
-                    return Ok(UiChange::default());
-                }
-                let selected = self
-                    .panel_view(panel)?
-                    .tiles
-                    .iter()
-                    .find(|t| t.id == tile)
-                    .is_some_and(|t| t.choice.selected && t.enabled);
-                if !selected
-                    && control.selectable()
-                    && self.switches_toolbar_drawer(TileAnchor { panel, tile })
-                {
-                    let selected =
-                        self.dispatch(control.action().ok_or("This tool is unavailable")?)?;
-                    let mut opened = self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::ToggleToolDrawer {
-                            anchor: TileAnchor { panel, tile },
-                        },
-                    })?;
-                    opened.regions |= selected.regions;
-                    opened.canvas_wake |= selected.canvas_wake;
-                    return Ok(opened);
-                }
-                if matches!(
-                    self.state.platform,
-                    Platform::Gtk
-                        | Platform::Generic
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Windows
-                ) && control.drawer_columns().is_some()
-                    && (!control.selectable()
-                        || selected
-                        || self
-                            .state
-                            .customization
-                            .drawer
-                            .as_ref()
-                            .is_some_and(|d| d.anchor.tile() == Some(TileAnchor { panel, tile })))
-                {
-                    return self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::ToggleToolDrawer {
-                            anchor: TileAnchor { panel, tile },
-                        },
-                    });
-                }
-                let action = control.action().ok_or("This panel drawer is unavailable")?;
-                if let UiAction::Customize {
-                    action: CustomizationAction::OpenControl { control },
-                } = &action
-                    && self.state.customization.control == Some(*control)
-                {
-                    return self.dispatch(UiAction::Customize {
-                        action: CustomizationAction::CloseControl,
-                    });
-                }
-                return self.dispatch(action);
+                return self.activate_tool(control, DrawerAnchor::Tile { panel, tile });
+            }
+            UiAction::ActivateHeaderItem { id } => {
+                let HeaderItem::Tool { control } =
+                    self.state.workspace.layout.header.entry(id)?.item
+                else {
+                    return Err("Not a window-bar tool".into());
+                };
+                return self.activate_tool(control, DrawerAnchor::Header { id });
             }
             UiAction::RestoreWorkspace { mut workspace } => {
                 workspace.validate()?;
                 workspace.layout.collapse_empty_toolbar_groups();
                 workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                 workspace.layout.bottom_inset = self.state.workspace.layout.bottom_inset;
+                workspace.layout.header_presentation =
+                    self.state.workspace.layout.header_presentation.clone();
                 self.state.workspace = workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.column_panel_drag = None;
@@ -2558,7 +2551,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         CustomizationAction::ShowAllControls { panel }
                     };
-                    let partial_zen = self.state.partial_zen();
                     self.state.customization.edit(
                         &mut self.state.workspace.layout,
                         action,
@@ -2566,7 +2558,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.logical_viewport
                             .or(self.interaction.viewport)
                             .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
-                        partial_zen,
                     )?;
                 } else if let Some(previous) = self.state.customization.expanded {
                     self.state.customization.expanded =
@@ -2851,11 +2842,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
+            let mut after = self.state.workspace.clone();
+            self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
                 self.workspace_history
-                    .record_named(before, &self.state.workspace, &description);
+                    .record_named(before, &after, &description);
             } else {
-                self.workspace_history.record(before, &self.state.workspace);
+                self.workspace_history.record(before, &after);
             }
         }
         if explicit_color
@@ -2879,12 +2872,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
                         let layout = &self.state.workspace.layout;
-                        d.anchor.tile().is_none_or(|a| {
-                            layout.active_panel(a.panel) != Some(a.panel)
-                                || layout
-                                    .panel(a.panel)
-                                    .map_or(true, |p| !p.tiles().iter().any(|t| t.id == a.tile))
-                        })
+                        if let DrawerAnchor::Header { id } = d.anchor {
+                            layout.header.entry(id).is_err()
+                                || !layout.header_presentation.items.iter().any(|m| m.id == id)
+                        } else {
+                            d.anchor.tile().is_none_or(|a| {
+                                layout.active_panel(a.panel) != Some(a.panel)
+                                    || layout
+                                        .panel(a.panel)
+                                        .map_or(true, |p| !p.tiles().iter().any(|t| t.id == a.tile))
+                            })
+                        }
                     })))
         {
             self.state.customization.drawer = None;
@@ -3340,6 +3338,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .clone_from(&self.state.workspace.layout.column_scroll);
                         restored.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                         restored.bottom_inset = self.state.workspace.layout.bottom_inset;
+                        restored.header_presentation =
+                            self.state.workspace.layout.header_presentation.clone();
                         self.state.workspace.layout = restored;
                         drag.phase = ResizeDragPhase::Expand {
                             columns,
@@ -3654,13 +3654,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((CAMERA, true))
             }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
+                let canceled = self
+                    .state
+                    .customization
+                    .cancel_header(&mut self.state.workspace.layout);
                 self.state.customization = CustomizationState::default();
                 self.open_settings(match command {
                     CommandId::KeyboardShortcuts => SettingsPage::Shortcuts,
                     CommandId::About => SettingsPage::About,
                     _ => SettingsPage::Appearance,
                 });
-                Ok((SETTINGS | CUSTOMIZATION, false))
+                Ok((
+                    SETTINGS | CUSTOMIZATION | if canceled { LAYOUT } else { 0 },
+                    false,
+                ))
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
@@ -3699,6 +3706,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((LAYOUT, false))
             }
             CommandId::UndoWorkspace | CommandId::RedoWorkspace => {
+                let header_editing = self.state.customization.header_editing;
                 if command == CommandId::UndoWorkspace {
                     self.workspace_history.undo(&mut self.state.workspace);
                 } else {
@@ -3706,11 +3714,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.column_panel_drag = None;
                 self.divider_drag = None;
-                self.state.customization = CustomizationState::default();
+                self.state.customization = CustomizationState {
+                    header_editing,
+                    ..Default::default()
+                };
                 self.floating_resize = None;
                 self.workspace_drag = None;
                 self.workspace_tab_drag = None;
                 self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
+                Ok((LAYOUT | CUSTOMIZATION, false))
+            }
+            CommandId::CustomizeWorkspaceUi => {
+                self.state
+                    .customization
+                    .begin_header(&self.state.workspace.layout);
+                self.state.workspace.zen_mode = false;
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
             CommandId::NewToolbar | CommandId::ManageToolbars => {
@@ -3724,7 +3742,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })?;
                     return Ok((HOST, false));
                 }
-                let partial_zen = self.state.partial_zen();
                 let changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
                     if command == CommandId::ManageToolbars {
@@ -3736,7 +3753,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.logical_viewport
                         .or(self.interaction.viewport)
                         .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
-                    partial_zen,
                 )?;
                 Ok((changed, false))
             }
@@ -4279,6 +4295,342 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn header_tool_picker_is_a_nested_preview_not_a_toolbar_transaction() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let original = s.capture_workspace().unwrap();
+        let header = s.state.workspace.layout.header.clone();
+        let before = header.zones[2][0].id;
+        for commit in [false, true] {
+            s.dispatch(HeaderAction::Edit { editing: true }.action())
+                .unwrap();
+            s.dispatch(
+                HeaderAction::SetSize {
+                    size: HeaderSize::Large,
+                }
+                .action(),
+            )
+            .unwrap();
+            let preview = s.state.workspace.layout.header.clone();
+            s.dispatch(
+                HeaderAction::InsertTools {
+                    zone: HeaderZone::Right,
+                    before: Some(before),
+                }
+                .action(),
+            )
+            .unwrap();
+            for control in [ToolbarControl::Opacity, ToolbarControl::Color] {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSelect {
+                        control,
+                        selected: true,
+                    },
+                })
+                .unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSearch {
+                        query: "not a matching tool".into(),
+                    },
+                })
+                .unwrap();
+            }
+            assert_eq!(
+                s.state
+                    .customization
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .selected
+                    .len(),
+                2
+            );
+            assert!(s.state.customization.header_editing);
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::CancelTools,
+            })
+            .unwrap();
+            assert_eq!(s.state.workspace.layout.header, preview);
+            assert!(s.state.customization.header_editing);
+            s.dispatch(
+                HeaderAction::InsertTools {
+                    zone: HeaderZone::Right,
+                    before: Some(before),
+                }
+                .action(),
+            )
+            .unwrap();
+            for control in [ToolbarControl::Opacity, ToolbarControl::Color] {
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::PickerSelect {
+                        control,
+                        selected: true,
+                    },
+                })
+                .unwrap();
+            }
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ConfirmTools,
+            })
+            .unwrap();
+            assert!(s.state.customization.picker.is_none());
+            assert!(s.state.customization.header_editing);
+            assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            assert_eq!(
+                s.state.workspace.layout.header.zones[2][0].item,
+                HeaderItem::Tool {
+                    control: ToolbarControl::Opacity
+                }
+            );
+            assert_eq!(
+                s.state.workspace.layout.header.zones[2][1].item,
+                HeaderItem::Tool {
+                    control: ToolbarControl::Color
+                }
+            );
+            assert_eq!(s.state.workspace.layout.header.zones[2][2].id, before);
+            s.dispatch(
+                if commit {
+                    HeaderAction::Edit { editing: false }
+                } else {
+                    HeaderAction::Cancel
+                }
+                .action(),
+            )
+            .unwrap();
+            if !commit {
+                assert_eq!(s.state.workspace.layout.header, header);
+                assert_eq!(s.capture_workspace().unwrap().history, original.history);
+            }
+        }
+        assert_eq!(
+            s.capture_workspace().unwrap().history.generation,
+            original.history.generation + 1
+        );
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.header, header);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Left,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+        assert!(
+            s.state.customization.picker.is_none(),
+            "Closing the editor also retires its picker"
+        );
+    }
+
+    #[test]
+    fn header_picker_revalidates_destination_and_capacity() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        let before = s.state.workspace.layout.header.zones[0][0].id;
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Left,
+                before: Some(before),
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::PickerSelect {
+                control: ToolbarControl::Color,
+                selected: true,
+            },
+        })
+        .unwrap();
+        s.dispatch(HeaderAction::Remove { id: before }.action())
+            .unwrap();
+        let view = s
+            .state
+            .customization
+            .picker
+            .as_ref()
+            .unwrap()
+            .view(&s.state.workspace.layout, Platform::Gtk);
+        assert!(!view.can_confirm && view.error.is_some());
+        let changed = s.state.workspace.layout.header.clone();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert!(
+            s.state
+                .customization
+                .picker
+                .as_ref()
+                .unwrap()
+                .error
+                .is_some()
+        );
+        assert_eq!(s.state.workspace.layout.header, changed);
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::CancelTools,
+        })
+        .unwrap();
+        while s.state.workspace.layout.header.entries().count() < 127 {
+            s.dispatch(
+                HeaderAction::Add {
+                    zone: HeaderZone::Left,
+                    before: None,
+                    item: HeaderItem::Space,
+                }
+                .action(),
+            )
+            .unwrap();
+        }
+        s.dispatch(
+            HeaderAction::InsertTools {
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        for control in [ToolbarControl::Color, ToolbarControl::Opacity] {
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::PickerSelect {
+                    control,
+                    selected: true,
+                },
+            })
+            .unwrap();
+        }
+        let view = s
+            .state
+            .customization
+            .picker
+            .as_ref()
+            .unwrap()
+            .view(&s.state.workspace.layout, Platform::Gtk);
+        assert!(!view.can_confirm && view.error.is_some());
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert_eq!(
+            s.state.workspace.layout.header.entries().count(),
+            127,
+            "Multi-add is atomic at the capacity limit"
+        );
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::PickerSelect {
+                control: ToolbarControl::Opacity,
+                selected: false,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ConfirmTools,
+        })
+        .unwrap();
+        assert_eq!(s.state.workspace.layout.header.entries().count(), 128);
+        assert!(s.state.customization.picker.is_none());
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+    }
+
+    #[test]
+    fn header_preview_cancel_and_done_are_transactional() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let original = s.capture_workspace().unwrap();
+        let model = original.history.layout().header.clone();
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        s.dispatch(UiAction::MeasureHeader {
+            height: 60.,
+            items: vec![],
+        })
+        .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        let id = model.zones[0][0].id;
+        s.dispatch(
+            HeaderAction::Move {
+                id,
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        assert_eq!(
+            s.capture_workspace().unwrap().history.generation,
+            original.history.generation
+        );
+        assert!(!s.command(CommandId::UndoWorkspace).enabled);
+        assert!(s.state.customization.header_editing);
+        assert_eq!(s.state.workspace.layout.header_presentation.height, 60.);
+        assert_eq!(
+            s.state.workspace.layout.header.location(id).unwrap().0,
+            HeaderZone::Right
+        );
+        assert!(s.state.customization.header_editing);
+        let before = s.capture_workspace().unwrap();
+        assert!(
+            s.dispatch(
+                HeaderAction::Move {
+                    id,
+                    zone: HeaderZone::Center,
+                    before: Some(9999)
+                }
+                .action()
+            )
+            .is_err()
+        );
+        assert_eq!(s.capture_workspace().unwrap(), before);
+        s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+            .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        invoke(&mut s, CommandId::CustomizeWorkspaceUi);
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(s.state.workspace.layout.canvas_info.visible);
+        assert!(!s.state.customization.header_editing);
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        s.dispatch(
+            HeaderAction::Move {
+                id,
+                zone: HeaderZone::Right,
+                before: None,
+            }
+            .action(),
+        )
+        .unwrap();
+        s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+            .unwrap();
+        s.dispatch(HeaderAction::Edit { editing: false }.action())
+            .unwrap();
+        let saved = s.capture_workspace().unwrap();
+        saved.validate().unwrap();
+        assert!(!saved.history.layout().canvas_info.visible);
+        assert_eq!(saved.history.generation, original.history.generation + 1);
+        assert_eq!(
+            saved.history.layout().header_presentation,
+            HeaderPresentation::default()
+        );
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(s.state.workspace.layout.canvas_info.visible);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(
+            s.state.workspace.layout.header,
+            saved.history.layout().header
+        );
     }
 
     #[test]
@@ -7828,7 +8180,12 @@ mod tests {
             let edit = |s: &mut UiSession<Recorder>, action| {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
-            let menu = s.workspace_menu();
+            let mut menu = s.workspace_menu();
+            if CommandId::CustomizeWorkspaceUi.available_on(platform) {
+                assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
+                assert!(!format!("{menu:?}").contains("Show Menu Bar"));
+                menu.sections.remove(0);
+            }
             assert_eq!(
                 menu.sections[1].len(),
                 Panel::ALL
@@ -7867,7 +8224,21 @@ mod tests {
                 s.state.workspace.layout.panel(Panel::Brushes).unwrap(),
                 original.layout.panel(Panel::Brushes).unwrap()
             );
-            assert_eq!(s.workspace_menu().sections[1][0].selected, Some(false));
+            assert_eq!(
+                s.workspace_menu()
+                    .sections
+                    .iter()
+                    .flatten()
+                    .find(|item| matches!(
+                        item.action,
+                        Some(UiAction::Customize {
+                            action: CustomizationAction::SetPanelVisible { panel: Panel::Brushes, .. }
+                        })
+                    ))
+                    .unwrap()
+                    .selected,
+                Some(false)
+            );
             let saved = s.state.workspace.clone();
             saved.validate().unwrap();
             invoke(&mut s, CommandId::UndoWorkspace);
@@ -8026,7 +8397,8 @@ mod tests {
             assert_eq!(
                 s.workspace_menu()
                     .sections
-                    .last()
+                    .iter()
+                    .find(|section| section.first().is_some_and(|i| i.label == "New Toolbar…"))
                     .unwrap()
                     .iter()
                     .map(|i| i.label.as_str())
@@ -8177,231 +8549,20 @@ mod tests {
         })
         .unwrap()
     }
-    #[test]
-    fn partial_zen_never_reveals_on_proximity_or_consumes_drawing() {
-        let mut s = session();
-        s.state.settings.total_zen = true;
-        s.set_platform(Platform::Gtk);
-        invoke(&mut s, CommandId::Settings);
-        edit_preference(&mut s, PreferenceId::TotalZen, PreferenceValue::Bool(false));
-        assert!(matches!(s.state.requests.last().unwrap().kind,
-            HostRequestKind::SaveSettings { ref settings }
-                if !settings.total_zen));
-        s.dispatch(UiAction::CloseSettings).unwrap();
-        let viewport = [1200.0, 900.0];
-        s.dispatch(UiAction::MovePanel {
-            panel: Panel::Sizes,
-            viewport,
-            target: DockTarget::Float {
-                position: [600.0, 450.0],
-            },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ShowAllControls {
-                panel: Panel::Sizes,
-            },
-        })
-        .unwrap();
-        assert!(s.state.customization.expanded.is_some());
-        let camera = s.state.camera.clone();
-        let layout = s.state.workspace.layout.clone();
-        invoke(&mut s, CommandId::ZenMode);
-        let assert_hidden = |reply: InputReply| {
-            assert!(reply.chrome_hidden && reply.hide_floating_panels);
-            reply
-        };
-        let facts = ChromeFacts::default();
-        for position in [
-            [6.0, 6.0],
-            [600.0, 450.0],
-            [1199.0, 450.0],
-            [600.0, 899.0],
-            [1.0, 450.0],
-            [600.0, 1.0],
-        ] {
-            assert_hidden(chrome(&mut s, ChromeEvent::Motion { position }, facts));
-            let reply = assert_hidden(chrome(
-                &mut s,
-                ChromeEvent::Contact {
-                    position,
-                    canvas: true,
-                },
-                facts,
-            ));
-            assert!(
-                !reply.handled,
-                "hidden panels/drawers must not eat the first contact"
-            );
-            assert!(
-                s.drop_hint(
-                    viewport,
-                    position,
-                    &[],
-                    DockItem::Panel {
-                        panel: Panel::Brushes,
-                    },
-                    None
-                )
-                .is_none(),
-                "normal docking targets are hidden in partial Zen"
-            );
-        }
-        for facts in [
-            ChromeFacts {
-                held: true,
-                ..facts
-            },
-            ChromeFacts {
-                dragging: true,
-                ..facts
-            },
-            ChromeFacts {
-                popup_open: true,
-                ..facts
-            },
-        ] {
-            assert_hidden(chrome(&mut s, ChromeEvent::Refresh, facts));
-        }
-        assert_hidden(chrome(&mut s, ChromeEvent::Leave { touch: false }, facts));
-        assert_hidden(s.input(UiInput::Blur).unwrap());
-        assert_hidden(key(&mut s, "Escape", true, false, false));
-        assert_hidden(key(&mut s, "Escape", false, false, false));
-        assert!(
-            assert_hidden(pointer(
-                &mut s,
-                1,
-                ContactPhase::Down,
-                [1.0, 450.0],
-                PointerButton::Primary
-            ))
-            .paint
-        );
-        assert!(
-            assert_hidden(pointer(
-                &mut s,
-                1,
-                ContactPhase::Move,
-                [600.0, 450.0],
-                PointerButton::Primary
-            ))
-            .paint
-        );
-        assert!(
-            assert_hidden(pointer(
-                &mut s,
-                1,
-                ContactPhase::Up,
-                [600.0, 450.0],
-                PointerButton::Primary
-            ))
-            .paint
-        );
-        // Explicit modal shortcuts remain usable, without revealing the editor
-        // behind them, including the early search/shortcut-capture replies.
-        invoke(&mut s, CommandId::Settings);
-        assert_hidden(key(&mut s, "p", true, false, false));
-        assert_eq!(s.preferences().unwrap().query, "p");
-        preference(
-            &mut s,
-            PreferenceAction::BeginShortcut {
-                id: CommandId::Brush.shortcut_id(),
-            },
-        );
-        assert_hidden(key(&mut s, "w", true, false, false));
-        assert!(s.preferences().unwrap().capture.unwrap().chord.is_some());
-        s.dispatch(UiAction::CloseSettings).unwrap();
-        invoke(&mut s, CommandId::ZenMode);
-        let reply = chrome(&mut s, ChromeEvent::Refresh, facts);
-        assert!(!reply.chrome_hidden && !reply.hide_floating_panels);
-        assert!(!s.state.workspace.zen_mode);
-        assert_eq!(s.state.workspace.layout, layout);
-        assert_eq!(s.state.camera, camera);
-    }
 
     #[test]
-    fn partial_zen_has_the_same_policy_on_all_hosts() {
-        for platform in [
-            Platform::Generic,
-            Platform::Gtk,
-            Platform::Web,
-            Platform::Android,
-            Platform::Mac,
-            Platform::Ios,
-            Platform::Windows,
-        ] {
-            let mut s = session();
-            s.set_platform(platform);
-            s.dispatch(UiAction::RestoreSettings {
-                settings: Settings {
-                    total_zen: false,
-                    ..Settings::default()
-                },
-            })
-            .unwrap();
-            invoke(&mut s, CommandId::ZenMode);
-            let facts = ChromeFacts::default();
-            assert!(
-                chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [600.0, 450.0]
-                    },
-                    facts
-                )
-                .chrome_hidden
-            );
-            let reply = chrome(
-                &mut s,
-                ChromeEvent::Motion {
-                    position: [6.0, 6.0],
-                },
-                facts,
-            );
-            assert!(reply.chrome_hidden);
-            assert!(reply.hide_floating_panels);
-        }
-    }
-
-    #[test]
-    fn zen_context_menu_uses_preference_options_and_edits_without_a_dialog() {
+    fn zen_context_menu_contains_only_icon_customization() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         let target = ContextTarget::ZenMode;
-        for total in [true, false] {
-            let menu = s.context_menu(target).unwrap();
-            assert_eq!(menu.title, "Zen mode");
-            assert_eq!(menu.sections.len(), 2);
-            assert_eq!(menu.sections[0].len(), 1);
-            assert_eq!(menu.sections[0][0].label, "Total zen");
-            let change = s
-                .dispatch(menu.sections[0][0].action.clone().unwrap())
-                .unwrap();
-            assert_eq!(s.state.settings.total_zen, total);
-            assert!(!s.state.settings_open && !s.state.workspace.zen_mode);
-            assert_ne!(change.regions & regions::SETTINGS, 0);
-            assert_eq!(
-                s.context_menu(target).unwrap().sections[0][0].selected,
-                Some(total)
-            );
-            assert!(matches!(
-                s.state.requests.last().unwrap().kind,
-                HostRequestKind::SaveSettings { .. }
-            ));
-        }
-        assert!(
-            s.dispatch(UiAction::Preferences {
-                action: PreferenceAction::Search {
-                    query: "Zen".into()
-                },
-            })
-            .is_err()
-        );
+        let menu = s.context_menu(target).unwrap();
+        assert_eq!(menu.title, "Zen mode");
+        assert_eq!(menu.sections.len(), 1);
+        assert_eq!(menu.sections[0].len(), 1);
+        assert_eq!(menu.sections[0][0].label, "Change icon…");
         let saved = s.state.settings.clone();
         let requests = s.state.requests.len();
-        let menu = s.context_menu(target).unwrap();
-        assert_eq!(menu.sections[1][0].label, "Change icon…");
-        s.dispatch(menu.sections[1][0].action.clone().unwrap())
+        s.dispatch(menu.sections[0][0].action.clone().unwrap())
             .unwrap();
         let view = s.preferences().unwrap();
         assert_eq!(view.page, SettingsPage::Appearance);
@@ -8531,18 +8692,22 @@ mod tests {
     }
 
     #[test]
-    fn total_and_partial_zen_have_one_shared_policy() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    fn legacy_settings_use_the_same_total_zen_policy_on_every_host() {
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
             for total in [false, true] {
                 let mut s = session();
                 s.set_platform(platform);
-                s.dispatch(UiAction::RestoreSettings {
-                    settings: Settings {
-                        total_zen: total,
-                        ..Settings::default()
-                    },
-                })
-                .unwrap();
+                let saved =
+                    serde_json::json!({"type":"restore_settings", "settings":{"total_zen":total}});
+                s.dispatch(serde_json::from_value(saved).unwrap()).unwrap();
                 let layout = s.state.workspace.layout.clone();
                 invoke(&mut s, CommandId::ZenMode);
                 let reply = chrome(
@@ -8553,9 +8718,9 @@ mod tests {
                     ChromeFacts::default(),
                 );
                 assert!(reply.chrome_hidden);
-                assert_eq!(reply.hide_floating_panels, !total);
-                assert_eq!(reply.keep_zen_button, !total);
-                assert_eq!(reply.partial_zen, !total);
+                assert!(!reply.hide_floating_panels);
+                assert!(!reply.keep_zen_button);
+                assert!(!reply.partial_zen);
                 let reply = chrome(
                     &mut s,
                     ChromeEvent::Motion {
@@ -8563,8 +8728,8 @@ mod tests {
                     },
                     ChromeFacts::default(),
                 );
-                assert_eq!(reply.chrome_hidden, !total);
-                assert_eq!(reply.keep_zen_button, !total);
+                assert!(!reply.chrome_hidden);
+                assert!(!reply.keep_zen_button);
                 let exit = key(&mut s, "Tab", true, false, false);
                 assert!(
                     exit.handled
@@ -8637,7 +8802,6 @@ mod tests {
     #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
         let mut s = session();
-        s.state.settings.total_zen = true;
         invoke(&mut s, CommandId::ZenMode);
         let motion = |p| ChromeEvent::Motion { position: p };
         let touch = |p| ChromeEvent::Contact {
@@ -8692,7 +8856,6 @@ mod tests {
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
-            s.state.settings.total_zen = true;
             s.set_platform(platform);
             let facts = ChromeFacts::default();
             chrome(
@@ -8758,7 +8921,6 @@ mod tests {
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
         let mut s = session();
-        s.state.settings.total_zen = true;
         invoke(&mut s, CommandId::ZenMode);
         let dragging = ChromeFacts {
             dragging: true,
@@ -9721,7 +9883,7 @@ mod tests {
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
                 );
-                assert_eq!(app.workspace_menu().sections[1].iter().any(|i| matches!(
+                assert_eq!(app.workspace_menu().sections.iter().flatten().any(|i| matches!(
                         i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
                     )), available);
                 let result = app.dispatch(UiAction::Customize {
@@ -10390,8 +10552,7 @@ mod tests {
         let viewport = [1200., 900.];
         s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
             .unwrap();
-        let mut settings = s.state.settings.clone();
-        settings.total_zen = true;
+        let settings = s.state.settings.clone();
         s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
         s.dispatch(UiAction::Invoke {
             command: CommandId::ZenMode,
@@ -11475,10 +11636,7 @@ mod tests {
                 .intersection(column.content)
                 .unwrap();
             assert_eq!(
-                drawer
-                    .placement(layout, viewport, &[500.], false)
-                    .unwrap()
-                    .anchor,
+                drawer.placement(layout, viewport, &[500.]).unwrap().anchor,
                 expected
             );
             // The former opening button switches back; the current one closes the drawer.
@@ -11596,7 +11754,7 @@ mod tests {
             .unwrap();
             let drawer = s.state.customization.column_drawers[0].clone();
             let bounds = drawer
-                .placement(&s.state.workspace.layout, viewport, &[450.], false)
+                .placement(&s.state.workspace.layout, viewport, &[450.])
                 .unwrap()
                 .bounds;
             let before = s.state.workspace.clone();
@@ -11845,7 +12003,7 @@ mod tests {
             })
             .unwrap();
             let bounds = s.state.customization.column_drawers[0]
-                .placement(&s.state.workspace.layout, viewport, &[450.], false)
+                .placement(&s.state.workspace.layout, viewport, &[450.])
                 .unwrap()
                 .bounds;
             s.dispatch(UiAction::MeasureColumnDrawers {
@@ -11983,7 +12141,6 @@ mod tests {
                         &s.state.workspace.layout,
                         viewport,
                         &[400., 450.],
-                        false,
                     )
                     .unwrap()
             };
@@ -12238,7 +12395,6 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
-            app.state.settings.total_zen = true;
             app.set_platform(platform);
             let panel = Panel::Toolbar;
             let item = DockItem::Panel { panel };
@@ -12350,7 +12506,6 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
-            app.state.settings.total_zen = true;
             app.set_platform(platform);
             app.dispatch(UiAction::MovePanel {
                 panel: Panel::Sizes,
@@ -13154,7 +13309,6 @@ mod tests {
     #[test]
     fn expanded_panel_dismissal_is_core_policy_and_never_paints() {
         let mut app = session();
-        app.state.settings.total_zen = true;
         invoke(&mut app, CommandId::ZenMode);
         let open = |app: &mut UiSession<Recorder>| {
             app.dispatch(UiAction::Customize {
@@ -13380,7 +13534,6 @@ mod tests {
                 let mut s = session();
                 s.set_platform(platform);
                 s.state.workspace.zen_mode = zen;
-                s.state.settings.total_zen = false;
                 let viewport = [1200., 900.];
                 let tiles = s
                     .state
@@ -13435,7 +13588,6 @@ mod tests {
                             &s.state.workspace.layout,
                             viewport,
                             &vec![400.; previous.columns.len()],
-                            zen,
                         )
                         .unwrap();
                     let next = ContentDrawer::for_tile(
@@ -13451,7 +13603,6 @@ mod tests {
                             &s.state.workspace.layout,
                             viewport,
                             &vec![400.; next.columns.len()],
-                            zen,
                         )
                         .unwrap();
                     let reply = chrome(
@@ -13524,9 +13675,60 @@ mod tests {
     }
 
     #[test]
+    fn drawer_dismissal_preserves_native_chrome_clicks_but_consumes_canvas_contact() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let color = s
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| t.control == ToolbarControl::Color)
+                .unwrap()
+                .id;
+            for (position, canvas) in [
+                ([500., 15.], false),
+                ([1000., 850.], false),
+                ([1000., 850.], true),
+            ] {
+                s.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile: color,
+                })
+                .unwrap();
+                assert!(s.state.customization.drawer.is_some());
+                assert!(
+                    !s.panel_view(Panel::Toolbar)
+                        .unwrap()
+                        .tiles
+                        .iter()
+                        .find(|t| t.id == color)
+                        .unwrap()
+                        .choice
+                        .selected
+                );
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Contact { position, canvas },
+                    ChromeFacts::default(),
+                );
+                assert!(s.state.customization.drawer.is_none());
+                assert_eq!(
+                    reply.handled, canvas,
+                    "Native clicks/drags must reach their target"
+                );
+                assert!(!reply.paint);
+            }
+        }
+    }
+
+    #[test]
     fn tool_drawer_selection_dismissal_and_configuration_are_core_policy() {
         let mut s = session();
-        s.state.settings.total_zen = true;
         s.set_platform(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
@@ -13562,7 +13764,7 @@ mod tests {
             .drawer
             .as_ref()
             .unwrap()
-            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0], false)
+            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0])
             .unwrap();
         let facts = ChromeFacts {
             content_drawer: Some(placement.bounds),
@@ -13592,7 +13794,7 @@ mod tests {
             },
         )
         .unwrap()
-        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0], false)
+        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0])
         .unwrap();
         assert!(
             !chrome(

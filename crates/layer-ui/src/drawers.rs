@@ -28,6 +28,9 @@ pub struct ColumnDrawerMeasurement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawerAnchor {
+    Header {
+        id: u32,
+    },
     Tile {
         panel: Panel,
         tile: u32,
@@ -315,6 +318,19 @@ impl ToolbarControl {
 }
 
 impl ContentDrawer {
+    pub(crate) fn for_header(layout: &DockLayout, id: u32) -> Result<Self, String> {
+        let HeaderItem::Tool { control } = layout.header.entry(id)?.item else {
+            return Err("This item has no tool drawer".into());
+        };
+        Ok(Self {
+            anchor: DrawerAnchor::Header { id },
+            columns: control
+                .drawer_columns()
+                .ok_or("This item has no tool drawer")?,
+            dismissal: DrawerDismissal::OutsideContact,
+            tabs: None,
+        })
+    }
     pub(crate) fn for_tile(layout: &DockLayout, anchor: TileAnchor) -> Result<Self, String> {
         let control = layout
             .panel(anchor.panel)?
@@ -391,9 +407,8 @@ impl ContentDrawer {
         layout: &DockLayout,
         viewport: [f32; 2],
         heights: &[f32],
-        partial_zen: bool,
     ) -> Option<DrawerPlacement> {
-        self.place(layout, viewport, heights, partial_zen, None)
+        self.place(layout, viewport, heights, None)
     }
 
     fn place(
@@ -401,7 +416,6 @@ impl ContentDrawer {
         layout: &DockLayout,
         viewport: [f32; 2],
         heights: &[f32],
-        partial_zen: bool,
         measured_tile: Option<Bounds>,
     ) -> Option<DrawerPlacement> {
         if heights.len() != self.columns.len()
@@ -418,7 +432,6 @@ impl ContentDrawer {
         let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
         if let DrawerAnchor::Column { column, group, .. } = self.anchor
             && self.is_group_panel()
-            && !partial_zen
         {
             let column = resolved.collapsed.iter().find(|c| c.id == column)?;
             let panel = column.group_panel.as_ref().filter(|p| p.group == group)?;
@@ -448,15 +461,21 @@ impl ContentDrawer {
                     .collect(),
             });
         }
-        let (anchor, edge, axis) = if let DrawerAnchor::Column {
+        let (anchor, edge, axis) = if let DrawerAnchor::Header { id } = self.anchor {
+            layout.header.entry(id).ok()?;
+            let anchor = layout
+                .header_presentation
+                .items
+                .iter()
+                .find(|m| m.id == id)?
+                .bounds;
+            (anchor, Some(Edge::Top), Axis::Horizontal)
+        } else if let DrawerAnchor::Column {
             column,
             group,
             origin,
         } = self.anchor
         {
-            if partial_zen {
-                return None;
-            }
             let column = resolved.collapsed.iter().find(|c| c.id == column)?;
             let group = column.groups.iter().find(|g| g.group == group)?;
             let anchor = group
@@ -466,7 +485,7 @@ impl ContentDrawer {
                 .bounds
                 .intersection(column.content)?;
             (anchor, layout.group_edge(group.group), Axis::Vertical)
-        } else if let Some(anchor) = measured_tile.filter(|_| !partial_zen) {
+        } else if let Some(anchor) = measured_tile {
             let group = layout.panel_group(self.anchor.tile()?.panel)?;
             (anchor, layout.group_edge(group), Axis::Vertical)
         } else {
@@ -494,24 +513,9 @@ impl ContentDrawer {
                 ..tile
             }
             .intersection(group.bounds);
-            let zen_anchor = partial_zen
-                .then(|| layout.zen_toolbars(viewport).anchor(tile_anchor))
-                .flatten();
-            let anchor = if partial_zen {
-                zen_anchor?.0
-            } else {
-                normal_anchor?
-            };
-            let edge = zen_anchor
-                .map(|a| a.1)
-                .or_else(|| layout.group_edge(group.id));
-            (anchor, edge, group.axis)
+            (normal_anchor?, layout.group_edge(group.id), group.axis)
         };
-        let top = if partial_zen {
-            WORKSPACE_SPACING
-        } else {
-            HEADER_HEIGHT
-        };
+        let top = layout.header_presentation.height.max(HEADER_HEIGHT);
         let available = Bounds {
             x: WORKSPACE_SPACING,
             y: top,
@@ -728,27 +732,20 @@ impl CustomizationState {
     }
 
     /// All hosts use this for current drawer geometry, including live projected
-    /// toolbar origins. Normal dock and partial-Zen origins need no measurements.
+    /// toolbar origins. Normal dock origins need no measurements.
     pub fn drawer_placement(
         &self,
         drawer: &ContentDrawer,
         layout: &DockLayout,
         viewport: [f32; 2],
         heights: &[f32],
-        partial_zen: bool,
     ) -> Option<DrawerPlacement> {
         let measured = drawer.anchor.tile().and_then(|anchor| {
             self.drawer_tiles
                 .iter()
                 .find(|m| m.anchor == anchor && self.accepts_drawer_tile(m))
         });
-        drawer.place(
-            layout,
-            viewport,
-            heights,
-            partial_zen,
-            measured.map(|m| m.bounds),
-        )
+        drawer.place(layout, viewport, heights, measured.map(|m| m.bounds))
     }
 }
 
@@ -794,16 +791,10 @@ mod tests {
                 .unwrap();
             layout.bottom_inset = TILE_SIZE;
             let d = drawer(&layout);
-            for partial in [false, true] {
-                if let Some(p) = d.placement(&layout, VIEWPORT, &[3000., 3000.], partial) {
-                    assert!(
-                        p.bounds.y + p.bounds.height
-                            <= VIEWPORT[1] - TILE_SIZE - WORKSPACE_SPACING + 0.001
-                    );
-                } else {
-                    assert!(partial, "The visible toolbar must open its drawer");
-                }
-            }
+            let p = d.placement(&layout, VIEWPORT, &[3000., 3000.]).unwrap();
+            assert!(
+                p.bounds.y + p.bounds.height <= VIEWPORT[1] - TILE_SIZE - WORKSPACE_SPACING + 0.001
+            );
         }
     }
 
@@ -822,7 +813,7 @@ mod tests {
             assert_eq!(d.column_widths(), [272.0, 320.0]);
             for viewport in [VIEWPORT, [640.0, 480.0], [320.0, 240.0]] {
                 for heights in [[80.0, 120.0], [700.0, 3000.0]] {
-                    let Some(p) = d.placement(&layout, viewport, &heights, false) else {
+                    let Some(p) = d.placement(&layout, viewport, &heights) else {
                         let resolved = layout.workspace(
                             viewport[0],
                             viewport[1],
@@ -868,11 +859,8 @@ mod tests {
                     }
                 }
             }
-            assert!(
-                d.placement(&layout, VIEWPORT, &[f32::NAN, 10.0], false)
-                    .is_none()
-            );
-            assert!(d.placement(&layout, VIEWPORT, &[], false).is_none());
+            assert!(d.placement(&layout, VIEWPORT, &[f32::NAN, 10.0]).is_none());
+            assert!(d.placement(&layout, VIEWPORT, &[]).is_none());
         }
     }
     #[test]
@@ -1007,9 +995,7 @@ mod tests {
             let mut d = drawer(&layout);
             d.columns = vec![vec![Panel::Sizes, Panel::Layers], vec![Panel::Color]];
             assert_eq!(d.column_widths(), [320.0, 280.0]);
-            let p = d
-                .placement(&layout, VIEWPORT, &[500.0, 200.0], false)
-                .unwrap();
+            let p = d.placement(&layout, VIEWPORT, &[500.0, 200.0]).unwrap();
             contained(&p, VIEWPORT);
             if matches!(p.direction, Edge::Left | Edge::Top) {
                 assert_eq!(position[0], 960.0);

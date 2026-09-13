@@ -161,12 +161,41 @@ impl NativeWorkspaces {
             .as_ref()
             .ok_or_else(|| StoreError::invalid("Workspace storage is unavailable."))?;
         match action {
-            A::Switch(id) => {
+            A::Switch(id) | A::SwitchToWindow(id) => {
                 if manager.active_id().as_deref() == Some(&id) {
                     return Ok(());
                 }
                 let _operation = self.begin_operation(w).await?;
-                let incoming = manager.prepare_switch(&id, now_ms()).await;
+                // Always ask storage to claim first. Catalog snapshots (and an
+                // already-open context menu) can outlive the previous window.
+                let mut incoming = manager.prepare_switch(&id, now_ms()).await;
+                if incoming
+                    .as_ref()
+                    .is_err_and(|e| e.kind == layer_workspace::ErrorKind::OwnedElsewhere)
+                {
+                    manager.refresh().await?;
+                    let target = manager
+                        .items()
+                        .into_iter()
+                        .find(|item| item.id == id)
+                        .and_then(|item| item.claim)
+                        .and_then(|claim| {
+                            WINDOWS.with(|windows| {
+                                windows
+                                    .borrow()
+                                    .get(&claim.owner.id)
+                                    .and_then(std::rc::Weak::upgrade)
+                            })
+                        });
+                    if let Some(target) = target {
+                        target.window.present();
+                        self.ui.close();
+                        return Ok(());
+                    }
+                    // A different process may have exited since the failed
+                    // claim. Recheck instead of presenting a stale-window error.
+                    incoming = manager.prepare_switch(&id, now_ms()).await;
+                }
                 match incoming {
                     Ok(incoming) => {
                         self.ui.close();
@@ -289,26 +318,6 @@ impl NativeWorkspaces {
             }
             A::History(id) => {
                 history::show(w, &id).await?;
-            }
-            A::SwitchToWindow(id) => {
-                let stored = self.selected(&id).await?;
-                let target = stored.claim.and_then(|claim| {
-                    WINDOWS.with(|windows| {
-                        windows
-                            .borrow()
-                            .get(&claim.owner.id)
-                            .and_then(std::rc::Weak::upgrade)
-                    })
-                });
-                if let Some(target) = target {
-                    target.window.present();
-                    self.ui.close();
-                } else {
-                    return Err(StoreError::new(
-                        layer_workspace::ErrorKind::OwnedElsewhere,
-                        "This workspace is open in another window. Switch to that window to use it.",
-                    ));
-                }
             }
             A::AddToolbar(id) => {
                 self.add_toolbar(w, &id, None, None, None).await?;

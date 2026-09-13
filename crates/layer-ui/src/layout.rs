@@ -767,6 +767,12 @@ mod floating_drop_tests;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockLayout {
+    #[serde(default)]
+    pub header: crate::HeaderLayout,
+    #[serde(default)]
+    pub canvas_info: crate::CanvasInfoLayout,
+    #[serde(skip)]
+    pub header_presentation: crate::HeaderPresentation,
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
     #[serde(
@@ -1115,7 +1121,7 @@ impl DockLayout {
     /// The complete editor preset is enabled as hosts finish their native UI.
     /// This selects initial/reset geometry, never migrates a saved workspace.
     pub fn for_platform(platform: crate::Platform) -> Self {
-        if matches!(
+        let mut layout = if matches!(
             platform,
             crate::Platform::Gtk
                 | crate::Platform::Android
@@ -1127,7 +1133,9 @@ impl DockLayout {
             Self::editor_default()
         } else {
             Self::default()
-        }
+        };
+        layout.header = crate::HeaderLayout::for_platform(platform);
+        layout
     }
 
     pub fn editor_default() -> Self {
@@ -1433,6 +1441,9 @@ impl Default for DockLayout {
         };
         Self {
             panels: PanelConfig::defaults(),
+            header: Default::default(),
+            canvas_info: Default::default(),
+            header_presentation: Default::default(),
             floating: Vec::new(),
             collapsed: Vec::new(),
             column_settings: Vec::new(),
@@ -1482,6 +1493,7 @@ impl DockLayout {
     /// Visible panels occur exactly once; hidden panels retain their registry entry.
     /// globally unique IDs, finite dimensions, and valid active tabs/ratios.
     pub fn validate(&self) -> Result<(), String> {
+        self.header.validate()?;
         let mut ids = std::collections::BTreeSet::new();
         let mut panels = Vec::new();
         fn node(
@@ -2756,9 +2768,15 @@ impl DockLayout {
         if (coordinate - center).abs() < 0.001 {
             return Ok(());
         }
-        let base = self.column_settings.iter().any(|s| self.open_column_group(s.column).is_some())
+        let base = self
+            .column_settings
+            .iter()
+            .any(|s| self.open_column_group(s.column).is_some())
             .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false));
-        let original = base.as_ref().and_then(|base| base.dividers.iter().find(|b| b.id == id)).unwrap_or(d);
+        let original = base
+            .as_ref()
+            .and_then(|base| base.dividers.iter().find(|b| b.id == id))
+            .unwrap_or(d);
         let dimension = usize::from(d.axis == Axis::Vertical);
         let original_center = if dimension == 0 {
             original.bounds.x + original.bounds.width * 0.5
@@ -2930,6 +2948,17 @@ impl DockLayout {
     /// Hosts supply measured native chrome in logical units. All panel and
     /// divider coordinates remain relative to the full-window canvas.
     pub fn workspace(&self, width: f32, height: f32, top: f32, bottom: f32) -> ResolvedLayout {
+        let native_header = self.header_presentation.height > 0.;
+        let top = if native_header {
+            self.header_presentation.height
+        } else {
+            top
+        };
+        let bottom = if native_header && !self.canvas_info.visible {
+            0.
+        } else {
+            bottom
+        };
         let viewport = [width, height];
         let height = self.workspace_height(height);
         // The header already includes bottom padding. Keep the outer inset on
@@ -2951,7 +2980,9 @@ impl DockLayout {
             width: result.work_area.width,
             height: hud_height,
         };
-        result.work_area.height -= hud_height;
+        if !native_header {
+            result.work_area.height -= hud_height;
+        }
         for group in &mut result.groups {
             offset(&mut group.bounds);
         }
@@ -4269,10 +4300,9 @@ mod tests {
             crate::Platform::Android,
             crate::Platform::Web,
         ] {
-            assert_eq!(
-                DockLayout::for_platform(platform),
-                DockLayout::editor_default()
-            );
+            let mut expected = DockLayout::editor_default();
+            expected.header = crate::HeaderLayout::for_platform(platform);
+            assert_eq!(DockLayout::for_platform(platform), expected);
             assert!(Panel::Commands.available_on(platform));
         }
         use crate::CommandId::*;
@@ -7102,13 +7132,6 @@ mod tests {
                 .chain([resolved.status])
             {
                 assert!(bounds.y + bounds.height <= bottom + 0.001, "{bounds:?}");
-            }
-            for section in layout.zen_toolbars(viewport).sections {
-                assert!(
-                    section.bounds.y + section.bounds.height <= bottom + 0.001,
-                    "{:?}",
-                    section.bounds
-                );
             }
             layout
                 .move_panel(

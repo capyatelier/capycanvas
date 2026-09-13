@@ -9,6 +9,7 @@ type Result<T> = std::result::Result<T, StoreError>;
 enum WorkerRequest {
     Store(StoreRequest),
     Backup(PathBuf),
+    RetireOwner(Owner),
 }
 type Message = (WorkerRequest, async_channel::Sender<Result<StoreResponse>>);
 pub struct StoreReply(async_channel::Receiver<Result<StoreResponse>>);
@@ -51,7 +52,7 @@ impl Drop for Worker {
 pub struct StoreWorker(Arc<Worker>);
 impl StoreWorker {
     /// Windows using one private directory share the same native I/O worker.
-    /// Other processes coordinate through SQLite transactions and owner fences.
+    /// Other processes coordinate through kernel locks and SQLite owner fences.
     pub fn shared(directory: &Path) -> Result<Self> {
         static WORKERS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Worker>>>> = OnceLock::new();
         let path = if directory.is_absolute() {
@@ -79,6 +80,12 @@ impl StoreWorker {
                 let mut store = SqliteStore::open(&database);
                 while let Ok((request, reply)) = receiver.recv() {
                     let request = match request {
+                        WorkerRequest::RetireOwner(owner) => {
+                            if let Ok(store) = &mut store {
+                                store.retire_owner(&owner);
+                            }
+                            continue;
+                        }
                         WorkerRequest::Backup(destination) => {
                             let _ = reply.try_send(
                                 backup_database(&database, &destination)
@@ -145,6 +152,22 @@ pub fn validate_database_export_destination(source: &Path, destination: &Path) -
             .unwrap_or_else(|_| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
     }
     let destination = resolved(destination);
+    let lock_directory = resolved(&crate::sqlite::ownership::lock_directory(&resolved(source)));
+    #[cfg(windows)]
+    let in_locks = destination
+        .to_string_lossy()
+        .to_lowercase()
+        .starts_with(&(lock_directory.to_string_lossy().to_lowercase() + "\\"))
+        || destination
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&lock_directory.to_string_lossy());
+    #[cfg(not(windows))]
+    let in_locks = destination.starts_with(&lock_directory);
+    if in_locks {
+        return Err(StoreError::invalid(
+            "Choose an export file outside the live workspace ownership files.",
+        ));
+    }
     for protected in [
         source.to_path_buf(),
         PathBuf::from(format!("{}-wal", source.display())),
@@ -226,6 +249,15 @@ impl std::future::IntoFuture for StoreReply {
     }
 }
 impl WorkspaceStore for StoreWorker {
+    fn retire_owner(&self, owner: &Owner) {
+        let (reply, _) = async_channel::bounded(1);
+        let _ = self
+            .0
+            .sender
+            .as_ref()
+            .unwrap()
+            .send((WorkerRequest::RetireOwner(owner.clone()), reply));
+    }
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
         self.request(request).await
     }

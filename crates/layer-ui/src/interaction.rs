@@ -99,9 +99,8 @@ pub struct InputReply {
     pub cancel_paint: bool,
     pub dismiss_popups: bool,
     pub chrome_hidden: bool,
-    /// Include floating panels when hiding the chrome.
+    /// Retired partial-Zen wire fields; current interaction always leaves these false.
     pub hide_floating_panels: bool,
-    /// Keep the Zen button visible, in its inactive style, when chrome is hidden.
     pub keep_zen_button: bool,
     pub partial_zen: bool,
     pub pan_cursor: bool,

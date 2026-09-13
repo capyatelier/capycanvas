@@ -1,8 +1,7 @@
 // Shared dock projections. The browser supplies widgets and measured body sizes.
 export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel}) {
-  const columns=new Map(),drawers=new Map(),zen=element("div","zen-toolbars");
-  workspace.append(zen);
-  let resolved,zenKey="",animating=false;
+  const columns=new Map(),drawers=new Map();
+  let resolved,animating=false;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
   function intersect(a,b) {
@@ -93,17 +92,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   function dispose(record) {customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
     if(!resolved)return;
-    const [partial_zen,zen_toolbars]=app.workspace_projection(workspace.clientWidth,workspace.clientHeight);
-    const model={partial_zen,zen_toolbars};
-    workspace.classList.toggle("partial-zen",model.partial_zen);
-    const key=model.partial_zen ? JSON.stringify([model.zen_toolbars,model.zen_toolbars.sections.map(s=>customization.view(s.panel)?.tiles)]) : "";
-    if(key!==zenKey) {
-      zenKey=key;zen.replaceChildren();
-      for(const section of model.zen_toolbars.sections) {
-        const root=element("div","zen-toolbar");root.dataset.edge=section.edge;place(root,section.bounds);
-        root.append(toolbar(section.panel,section.tiles,['left','right'].includes(section.edge)?'vertical':'horizontal'));zen.append(root);
-      }
-    }
     const live=new Set();
     for(const drawer of [...state().customization.column_drawers,...(state().customization.drawer?[state().customization.drawer]:[])]) {
       const column=drawer.anchor.kind==="column"?drawer.anchor.column:null,id=column??"tool";
@@ -158,7 +146,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
       place(r.shadow,r.placement.bounds);
       const anchor=r.drawer.anchor;
-      const source=r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
+      const source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
         [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
       r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
       if(source&&r.connection&&!r.closing) {

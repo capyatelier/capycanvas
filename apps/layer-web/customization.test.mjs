@@ -1,6 +1,69 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+// The header now shares this transaction: keep the existing toolbar destinations covered.
+export async function checkToolPicker({ call, evaluate, settle }) {
+  await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
+  const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle(); };
+  const edit = action => send({ type: 'customize', action });
+  const model = () => evaluate("JSON.parse(JSON.stringify(layerApp.app.tool_picker() ?? null, (_,v)=>typeof v==='bigint'?Number(v):v))");
+  const workspace = () => evaluate('layerApp.state().workspace');
+  const tiles = () => evaluate("layerApp.state().workspace.layout.panels.find(p=>p.id==='toolbar').content.tiles");
+  const click = async selector => {
+    const point = await evaluate(`(() => { const n=document.querySelector(${JSON.stringify(selector)}); n.scrollIntoView({block:'nearest'}); const r=n.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
+      await call('Input.dispatchMouseEvent', { type, ...point, button: 'left', clickCount: 1 });
+    await settle();
+  };
+  const input = async (selector, value) => {
+    await evaluate(`{ const n=document.querySelector(${JSON.stringify(selector)}); n.value=${JSON.stringify(value)}; n.dispatchEvent(new Event('input',{bubbles:true})); }`);
+    await settle();
+  };
+  const initial = await workspace();
+  for (const theme of ['dark', 'light']) {
+    await send({type:'restore_workspace',workspace:initial}); await send({type:'set_theme',theme});
+    const original = await workspace(), before = (await tiles())[0].id;
+    const open = () => edit({type:'insert_tools',panel:'toolbar',before});
+    await open();
+    assert.equal(await evaluate("document.querySelector('#tool-picker').open"), true);
+    assert.equal(await evaluate("document.querySelector('#toolbar-name').parentElement.hidden"), true);
+    assert.equal((await model()).can_confirm, false);
+    const selected = [];
+    for (const query of ['opacity', 'color']) {
+      await input('#tool-search', query);
+      selected.push((await model()).choices[0].control);
+      await click('.tool-choice:first-child');
+    }
+    await input('#tool-search','no-matching-tool-xyz');
+    assert.equal((await model()).choices.length, 0);
+    assert.equal((await model()).selected_count, 2);
+    assert.equal((await model()).can_confirm, true);
+    await click('#tool-picker .dialog-header > button:first-child');
+    assert.equal(await model(), null); assert.deepEqual(await workspace(), original);
+    await open();
+    assert.equal((await model()).query, ''); assert.equal((await model()).selected_count, 0);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}); await settle();
+    assert.equal(await model(), null); assert.deepEqual(await workspace(), original);
+    await open();
+    for (const query of ['opacity','color']) { await input('#tool-search',query); await click('.tool-choice:first-child'); }
+    await click('#confirm-tools');
+    assert.equal(await model(), null);
+    assert.deepEqual((await tiles()).slice(0,2).map(t=>t.control), selected);
+    assert.equal((await tiles())[2].id, before);
+    await edit({type:'new_toolbar',group:null});
+    await input('#toolbar-name','Layers');
+    assert.equal((await model()).can_confirm, false, 'Existing panel names remain reserved');
+    await input('#toolbar-name',`Picker regression ${theme}`);
+    await input('#tool-search','opacity'); await click('.tool-choice:first-child');
+    await click('#confirm-tools');
+    assert.equal(await model(), null);
+    assert.equal((await workspace()).layout.panels.find(p=>p.content.name===`Picker regression ${theme}`).content.tiles.length, 1);
+  }
+  await send({type:'restore_workspace',workspace:initial});
+  console.log('PASS: shared toolbar picker filtering, multi-selection, Cancel, Escape, insertion order and new-toolbar validation in both themes');
+}
+
 export async function checkToolbarManager({ call, evaluate, settle }) {
   const dir = 'artifacts/ui/toolbar-manager'; await mkdir(dir, { recursive: true });
   await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });

@@ -1,6 +1,7 @@
 //! Shipped arrangements, shared by every host. Hidden panel registrations stay
 //! available for drawers and the Window menu; only docked content is visible.
 use super::*;
+use crate::HeaderLayout;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePreset {
@@ -14,9 +15,9 @@ impl WorkspacePreset {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Painter => "Painter",
-            Self::Illustrator => "Illustrator",
-            Self::Photographer => "Photographer",
+            Self::Painter => "Sketch",
+            Self::Illustrator => "Paint",
+            Self::Photographer => "Photo",
         }
     }
 
@@ -45,6 +46,11 @@ impl WorkspacePreset {
         let command = |command| ToolbarControl::Command { command };
         let drawer = |panel| ToolbarControl::Panel { panel };
         let mut layout = DockLayout::editor_default();
+        layout.header = if self == Self::Painter {
+            HeaderLayout::painter_for_platform(platform)
+        } else {
+            HeaderLayout::for_platform(platform)
+        };
         let tile_style = if self == Self::Painter {
             TileStyle::Medium
         } else {
@@ -146,6 +152,11 @@ impl WorkspacePreset {
             root: tabs(2, &[Panel::Toolbar]),
         }];
         if self == Self::Painter {
+            if platform == crate::Platform::Gtk {
+                layout.bands.clear();
+                layout.canvas_info.visible = false;
+                return layout;
+            }
             layout.bands.push(DockBand {
                 id: 3,
                 edge: Edge::Top,
@@ -194,6 +205,58 @@ impl WorkspacePreset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{HeaderItem, HeaderZone, Platform};
+
+    #[test]
+    fn preset_title_bar_controls_follow_the_host_platform() {
+        assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
+        assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
+        assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            for preset in WorkspacePreset::ALL {
+                let layout = preset.layout(platform);
+                let items: Vec<_> = layout.header.entries().map(|e| e.item).collect();
+                assert!(items.iter().all(|item| item.available_on(platform)));
+                assert_eq!(
+                    items.contains(&HeaderItem::Fullscreen),
+                    platform == Platform::Web
+                );
+                assert_eq!(
+                    layout.header.zones[2].last().unwrap().item,
+                    HeaderItem::Settings
+                );
+                assert!(
+                    items.contains(&HeaderItem::Capy) && items.contains(&HeaderItem::Workspaces)
+                );
+                let minimal = preset == WorkspacePreset::Painter;
+                assert_eq!(items.contains(&HeaderItem::Clock), !minimal);
+                assert_eq!(items.contains(&HeaderItem::Battery), !minimal);
+                assert_eq!(items.contains(&HeaderItem::MenuLabels), !minimal);
+                assert_eq!(items.contains(&HeaderItem::Menu), minimal);
+                let native = preset.layout(Platform::Gtk).header;
+                for zone in HeaderZone::ALL {
+                    assert_eq!(
+                        layout.header.zones[zone.index()]
+                            .iter()
+                            .filter(|e| e.item != HeaderItem::Fullscreen)
+                            .map(|e| e.item)
+                            .collect::<Vec<_>>(),
+                        native.zones[zone.index()]
+                            .iter()
+                            .map(|e| e.item)
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn presets_are_portable_and_preserve_illustrator() {
@@ -228,7 +291,8 @@ mod tests {
 
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        // Hosts without the new header projection keep their existing controls.
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Web);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -252,6 +316,22 @@ mod tests {
                     .any(|t| t.control == ToolbarControl::Panel { panel })
             );
         }
+    }
+
+    #[test]
+    fn gtk_painter_has_individual_header_tools_and_no_reserved_status() {
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        assert!(layout.bands.is_empty() && layout.floating.is_empty());
+        assert_eq!(layout.header, crate::HeaderLayout::painter());
+        assert_eq!(layout.header.size, crate::HeaderSize::Medium);
+        assert!(
+            !layout
+                .header
+                .entries()
+                .any(|e| e.item == crate::HeaderItem::MenuLabels)
+        );
+        assert!(!layout.canvas_info.visible);
+        assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
     }
 
     #[test]
