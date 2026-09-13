@@ -174,6 +174,7 @@ impl NativeHost {
                     layers: &layers,
                     dabs: &[],
                     dab_batches: &[],
+                    restore_rasters: &[],
                     reset_layers: true,
                     composite_all: true,
                 })

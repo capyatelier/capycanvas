@@ -27,7 +27,7 @@ The viewport is the presentation of that document at the current camera position
 zoom and rotation. The shared
 [`ViewportPresenter`](../../crates/layer-render-wgpu/src/present.rs) samples the
 composed image into the platform's target. Panning the view does not, by itself,
-require reconstructing every stroke.
+require repainting committed raster tiles.
 
 ## Incremental composition
 
@@ -108,10 +108,12 @@ cost of large filters or densely painted documents.
 
 ## GPU resources and unified memory
 
-Drawing and presenting do not read the canvas back into CPU memory. Export explicitly
-requests a full image; UI thumbnails and color sampling use separate bounded
-requests. These are deliberate interfaces, not an alternate path for painting.
-Imported source bytes can remain in CPU memory for project persistence.
+Committed edits queue exact readback of changed 256² tiles for raster history
+and persistence. Mapping and lossless compression run on a bounded worker; GTK
+input never waits on the GPU. Move frames and presentation do not perform full
+canvas readback. Export explicitly requests a full image; thumbnails and color
+sampling use separate bounded requests. Source bytes and immutable compressed
+tile backing are shared with save snapshots. See the [raster project contract](../reference/project-format.md).
 
 On unified-memory hardware, CPU and GPU share physical RAM. Keeping separate
 copies solely to move an image between processors can waste both memory and

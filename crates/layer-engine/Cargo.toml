@@ -6,6 +6,7 @@ description = "Portable input, brush, document orchestration, and render submiss
 license.workspace = true
 
 [dependencies]
+web-time = "1.1.0"
 layer-core = { path = "../layer-core" }
 layer-render = { path = "../layer-render" }
 rtrb = "0.4.0"

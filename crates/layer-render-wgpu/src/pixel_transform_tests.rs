@@ -372,7 +372,16 @@ fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
                         return [0.; 4];
                     }
                     let i = (y * size[0] as i32 + x) as usize * 4;
-                    std::array::from_fn(|c| pixels[i + c] as f64 / 255.)
+                    std::array::from_fn(|c| {
+                        let v = pixels[i + c] as f64 / 255.;
+                        if c == 3 {
+                            v
+                        } else if v <= 0.04045 {
+                            v / 12.92
+                        } else {
+                            ((v + 0.055) / 1.055).powf(2.4)
+                        }
+                    })
                 };
                 // Independently invert in f64; use weighted integer neighbors,
                 // not the shader's nested mix or the core inverse implementation.
@@ -420,7 +429,15 @@ fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
                             } else {
                                 moved[k] + base[k] * (1. - m) * (1. - moved[3])
                             };
-                            let expected = (expected.clamp(0., 1.) * 255.).round() as u8;
+                            let v = expected.clamp(0., 1.);
+                            let encoded = if k == 3 {
+                                v
+                            } else if v <= 0.0031308 {
+                                v * 12.92
+                            } else {
+                                1.055 * v.powf(1. / 2.4) - 0.055
+                            };
+                            let expected = (encoded * 255.).round() as u8;
                             assert!(
                                 actual[i + k].abs_diff(expected) <= 2,
                                 "mode {mode}, {transform:?}, {x},{y},{k}: {} != {expected}",

@@ -26,7 +26,9 @@ mod builtin_masks;
 mod canvas_preview;
 mod color_sample;
 mod export_readback;
+mod raster;
 pub use export_readback::ExportReadback;
+pub use raster::RasterCapture;
 mod deferred;
 mod paint_transform;
 mod pixel_transform;
@@ -56,7 +58,9 @@ pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
 pub use present::{OverviewPlacement, ViewportPresenter};
 
-const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+// RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear
+// premultiplied values. Alpha is ordinary, unencoded UNORM8 coverage.
+const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const INITIAL_DAB_BYTES: u64 = 4 * 1024 * 1024;
 const INITIAL_STYLE_RECORDS: usize = 128;
@@ -83,8 +87,8 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
         !packet
             .layers
             .iter()
-            .find_map(|l| l.target_history(b.layer_id))
-            .and_then(|(_, operations)| operations.get(index as usize))
+            .find_map(|l| l.target_operations(b.layer_id))
+            .and_then(|operations| operations.get(index as usize))
             .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
     }) || packet.layers.iter().any(|l| {
         l.mask.is_some()
@@ -642,6 +646,7 @@ pub struct WgpuRasterizer {
     surface_extent: [u32; 2],
     document_extent: [u32; 2],
     paint_layers: Vec<PaintLayer>,
+    raster: Option<raster::RasterRuntime>,
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
     display_selection: Option<(layer_core::Selection, wgpu::Buffer)>,
@@ -985,6 +990,7 @@ impl WgpuRasterizer {
             images: Default::default(),
             image_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
+            raster: None,
             composite_texture: None,
             composite_view: None,
             composite_bind_group: None,
@@ -3617,6 +3623,7 @@ impl WgpuRasterizer {
                     layers,
                     dabs: &[],
                     dab_batches: &[],
+                    restore_rasters: &[],
                     reset_layers: false,
                     time_seconds: *time,
                     composite_all: true,
@@ -3685,6 +3692,7 @@ impl WgpuRasterizer {
                     layers,
                     dabs: &[],
                     dab_batches: &[],
+                    restore_rasters: &[],
                     reset_layers: false,
                     time_seconds: *time,
                     composite_all: true,
@@ -3728,6 +3736,9 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn can_submit(&self) -> bool {
+        self.raster_ready()
+    }
     fn set_transform_preview(
         &mut self,
         preview: Option<&layer_render::TransformPreview>,
@@ -3790,7 +3801,8 @@ impl CanvasRenderer for WgpuRasterizer {
         t.submissions = m.submissions;
         t.dabs = m.dabs;
         t.dirty_pixels = m.composited_pixels;
-        t.resident_bytes = m.paint_storage_bytes
+        t.resident_bytes = self.raster_staging_bytes()
+            + m.paint_storage_bytes
             + m.preview_storage_bytes
             + m.destination_storage_bytes
             + m.paint_state_storage_bytes
@@ -4023,15 +4035,7 @@ impl CanvasRenderer for WgpuRasterizer {
             .then(|| {
                 (
                     packet.view,
-                    packet
-                        .layers
-                        .iter()
-                        .map(|l| {
-                            let mut layer = l.clone();
-                            layer.strokes.clear();
-                            layer
-                        })
-                        .collect(),
+                    packet.layers.iter().cloned().collect(),
                     packet.time_seconds,
                 )
             });
@@ -4067,6 +4071,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
         let reset = packet.reset_layers || resized;
         if reset {
+            self.layer_masks.pages.clear();
             if let Some(t) = &mut self.transforms {
                 t.discard_preview();
             }
@@ -4108,6 +4113,13 @@ impl CanvasRenderer for WgpuRasterizer {
             self.transform_damage.extend(result?);
             self.transform_preview = None;
         }
+        self.reconcile_rasters(
+            FramePacket {
+                dab_batches: original_batches,
+                ..packet
+            },
+            reset,
+        )?;
         self.ensure_persistent_pages(packet.dab_batches)?;
         self.ensure_destination_companions(packet.dab_batches);
         self.ensure_paint_state_pages(packet.dab_batches)?;
@@ -4241,7 +4253,7 @@ impl CanvasRenderer for WgpuRasterizer {
             &mut encoder,
             (packet.layers, original_batches),
             packet.document_extent,
-            reset,
+            false,
             &mut self.selection_clip,
         )?;
         for layer in packet.layers {
@@ -4249,6 +4261,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 continue;
             };
             if reset
+                && !self.has_raster_source(layer.id)
                 && let Some((_, extent)) = layer.asset.as_ref().and_then(|a| self.images.get(a))
             {
                 for c in page_coordinates(PixelRect::full([
@@ -4269,7 +4282,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 let DabBatchKind::LayerOperation(operation_index) = batch.kind else {
                     continue;
                 };
-                let op = &layer.operations[operation_index as usize];
+                let op = &layer.pending_operations[operation_index as usize];
                 if matches!(
                     op.kind,
                     layer_core::LayerOperationKind::Fill { .. }
@@ -4293,12 +4306,6 @@ impl CanvasRenderer for WgpuRasterizer {
                 }
             }
         }
-        self.encode_mask_dabs(
-            &mut encoder,
-            packet.layers,
-            original_batches,
-            &committed_preview,
-        )?;
         for batch in original_batches
             .iter()
             .filter(|b| layer_masks::MaskRenderer::is_mask(packet.layers, b.layer_id))
@@ -4394,6 +4401,13 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
+        self.encode_mask_dabs(
+            &mut encoder,
+            packet.layers,
+            original_batches,
+            &committed_preview,
+        )?;
+
         // Persistent work is encoded before preview copies so prediction sees
         // this frame's committed ink.
         for (index, batch) in packet
@@ -4411,7 +4425,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     .iter()
                     .position(|l| l.id == batch.layer_id)
                     .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-                let operation = &packet.layers[layer_index].operations[op as usize];
+                let operation = &packet.layers[layer_index].pending_operations[op as usize];
                 if committed_preview.contains(&(batch.layer_id, op)) {
                     // Already present in the layer pages: no recapture/resample.
                 } else if matches!(operation.kind, layer_core::LayerOperationKind::Transform(_)) {
@@ -4432,7 +4446,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
                     self.scene = Some(scene);
                 }
-                let bounds = packet.layers[layer_index].operations[op as usize]
+                let bounds = packet.layers[layer_index].pending_operations[op as usize]
                     .bounds(packet.document_extent);
                 let offset = scene::world_offset(packet.layers, batch.layer_id, false);
                 dirty = dirty.union(pixel_rect(
@@ -5025,6 +5039,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let submission = encoder.submit(&self.queue);
         self.telemetry.submitted();
         self.last_submission = Some(submission);
+        self.commit_rasters(packet.layers)?;
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
         if let Some(started) = started {
@@ -6988,6 +7003,7 @@ mod tests {
                     layers,
                     dabs,
                     dab_batches: batches,
+                    restore_rasters: &[],
                     reset_layers: false,
                     time_seconds: 0.,
                     composite_all: true,
@@ -7091,6 +7107,7 @@ mod tests {
             layers: std::slice::from_ref(&layer),
             dabs: std::slice::from_ref(&dab),
             dab_batches: std::slice::from_ref(&batch),
+            restore_rasters: &[],
             reset_layers: true,
             time_seconds: 0.,
             composite_all: true,
@@ -7117,6 +7134,7 @@ mod tests {
             layers: std::slice::from_ref(&layer),
             dabs: std::slice::from_ref(&dab),
             dab_batches: std::slice::from_ref(&batch),
+            restore_rasters: &[],
             reset_layers: false,
             time_seconds: 0.,
             composite_all: false,
@@ -7134,6 +7152,7 @@ mod tests {
             layers: std::slice::from_ref(&layer),
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: false,
             time_seconds: 0.,
             composite_all: true,
@@ -7239,6 +7258,7 @@ mod tests {
                     layers: std::slice::from_ref(&layer),
                     dabs: std::slice::from_ref(&base_dab),
                     dab_batches: std::slice::from_ref(&base),
+                    restore_rasters: &[],
                     reset_layers: true,
                     time_seconds: 0.,
                     composite_all: true,
@@ -7299,6 +7319,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: &active_dabs,
                 dab_batches: &active_batches,
+                restore_rasters: &[],
                 reset_layers: !existing_wet,
                 time_seconds: 0.,
                 composite_all: !existing_wet,
@@ -7394,6 +7415,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -7410,6 +7432,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -7430,6 +7453,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -7482,6 +7506,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -7504,6 +7529,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: &[],
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -7584,6 +7610,7 @@ mod tests {
                     layers: std::slice::from_ref(&layer),
                     dabs: &dabs,
                     dab_batches: &batches,
+                    restore_rasters: &[],
                     reset_layers: true,
                     time_seconds: 0.,
                     composite_all: true,
@@ -7642,6 +7669,7 @@ mod tests {
                         layers: std::slice::from_ref(&layer),
                         dabs: std::slice::from_ref(&fringe),
                         dab_batches: std::slice::from_ref(&first),
+                        restore_rasters: &[],
                         reset_layers: true,
                         time_seconds: 0.,
                         composite_all: true,
@@ -7671,6 +7699,7 @@ mod tests {
                     layers: std::slice::from_ref(&layer),
                     dabs: std::slice::from_ref(&solid),
                     dab_batches: std::slice::from_ref(&second),
+                    restore_rasters: &[],
                     reset_layers: !include_fringe,
                     time_seconds: 0.,
                     composite_all: !include_fringe,
@@ -7738,6 +7767,7 @@ mod tests {
                         layers: std::slice::from_ref(&layer),
                         dabs: std::slice::from_ref(dab),
                         dab_batches: std::slice::from_ref(&batch),
+                        restore_rasters: &[],
                         reset_layers: index == 0,
                         time_seconds: 0.,
                         composite_all: index == 0,
@@ -7799,6 +7829,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dry_dab),
                 dab_batches: std::slice::from_ref(&dry),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -7837,6 +7868,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&watercolor_dab),
                 dab_batches: std::slice::from_ref(&watercolor),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: true,
@@ -7886,6 +7918,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -7923,6 +7956,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&red),
                 dab_batches: std::slice::from_ref(&dry),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -7961,6 +7995,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: &[first, second],
                 dab_batches: std::slice::from_ref(&smudge),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -8001,6 +8036,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&red),
                 dab_batches: std::slice::from_ref(&dry),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -8024,6 +8060,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&blue),
                 dab_batches: std::slice::from_ref(&wet),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -8072,6 +8109,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -8094,6 +8132,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: &[],
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -8253,6 +8292,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -8328,6 +8368,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&dry_dab),
                 dab_batches: std::slice::from_ref(&dry_batch),
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,
@@ -8384,6 +8425,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&smudge_dab),
                 dab_batches: std::slice::from_ref(&smudge_batch),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -8440,6 +8482,7 @@ mod tests {
                 layers: std::slice::from_ref(&layer),
                 dabs: std::slice::from_ref(&liquify_dab),
                 dab_batches: std::slice::from_ref(&liquify_batch),
+                restore_rasters: &[],
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -8476,6 +8519,7 @@ mod tests {
                 layers: &layers,
                 dabs: &[],
                 dab_batches: &[],
+                restore_rasters: &[],
                 reset_layers: true,
                 time_seconds: 0.,
                 composite_all: true,

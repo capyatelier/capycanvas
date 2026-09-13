@@ -181,18 +181,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(session)
     }
 
+    /// A recovered private checkpoint still needs an explicit user save.
+    pub fn mark_recovered(&mut self) {
+        self.files.recovered = true;
+        self.state.document_file.location = None;
+        self.refresh_document();
+        self.refresh_commands();
+    }
+
     pub(super) fn refresh_file_state(&mut self) {
         self.state.document_file.revision = self.engine.document().revision;
-        self.state.document_file.modified =
-            self.files.recovered || self.engine.checkpoint() != self.files.saved_checkpoint;
+        self.state.document_file.modified = self.files.recovered
+            || self.input_pending
+            || self.engine.has_active_stroke()
+            || self.engine.checkpoint() != self.files.saved_checkpoint;
         self.state.document_file.busy = self.files.pending.is_some();
     }
 
     pub(super) fn request_document(&mut self, request: DocumentRequest) -> Result<(), String> {
-        if matches!(
-            request,
-            DocumentRequest::ConfirmClose { .. } | DocumentRequest::Save { .. }
-        ) {
+        if matches!(request, DocumentRequest::Save { .. }) {
+            self.require_raster_snapshot()?;
+        } else if matches!(request, DocumentRequest::ConfirmClose { .. }) {
             self.require_document_snapshot_idle()?;
         } else {
             self.require_document_idle()?;
@@ -291,10 +300,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         )
     }
 
-    /// Capture only immutable source state. The host prunes, validates and
-    /// compresses this on a worker. No GPU readback or full image copy.
+    /// Capture the last committed raster boundary, including while drawing.
+    /// Pending tile backing is awaited by the file worker. Active contact pixels
+    /// are excluded; recovery never acknowledges a manual save checkpoint.
     pub fn capture_project_recovery(&self) -> Result<Project, String> {
-        self.require_document_snapshot_idle()?;
+        self.require_raster_snapshot()?;
         Ok(Project {
             document: self.engine.document().clone(),
             assets: self.files.assets.clone(),
@@ -308,7 +318,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         id: u32,
         location: DocumentLocation,
     ) -> Result<Project, String> {
-        self.require_document_snapshot_idle()?;
+        self.require_raster_snapshot()?;
         location.validate()?;
         if !matches!(self.document_request(id)?, DocumentRequest::Save { .. })
             || self.files.pending.as_ref().is_some_and(|p| p.1.is_some())
@@ -418,6 +428,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_file_state();
         self.refresh_commands();
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::HOST, false))
+    }
+
+    pub(super) fn require_raster_snapshot(&self) -> Result<(), String> {
+        if self.operation.active()
+            || self.region_tools.busy()
+            || !self.layer_interaction.path.is_empty()
+            || self
+                .pending_filters
+                .as_ref()
+                .is_some_and(|p| !p.library_only())
+        {
+            Err("Finish the current canvas operation first".into())
+        } else {
+            Ok(())
+        }
     }
 
     fn require_document_interaction_idle(&self) -> Result<(), String> {

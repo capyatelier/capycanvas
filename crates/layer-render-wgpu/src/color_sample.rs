@@ -66,7 +66,7 @@ impl WgpuRasterizer {
         };
         let request_id = request.request_id;
         if let Some(source) = source {
-            debug_assert_eq!(source.format(), wgpu::TextureFormat::Rgba8Unorm);
+            debug_assert_eq!(source.format(), COLOR_FORMAT);
             let buffer = self.color_sampler.buffer.get_or_insert_with(|| {
                 self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("single color sample"),
@@ -113,17 +113,9 @@ impl WgpuRasterizer {
                                 .slice(..)
                                 .get_mapped_range()
                                 .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                            let alpha = f32::from(data[3]);
-                            let rgba = if alpha == 0.0 {
-                                [0.0; 4]
-                            } else {
-                                [
-                                    f32::from(data[0]) / alpha,
-                                    f32::from(data[1]) / alpha,
-                                    f32::from(data[2]) / alpha,
-                                    alpha / 255.0,
-                                ]
-                            };
+                            let rgba = layer_core::color::decode_paint_texel([
+                                data[0], data[1], data[2], data[3],
+                            ]);
                             Ok(ColorSample { request_id, rgba })
                         });
                     ready.unmap();

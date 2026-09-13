@@ -308,6 +308,7 @@ fn in_surface_overview_latency() {
         layers: &layers,
         dabs: &[paint],
         dab_batches: &[b],
+        restore_rasters: &[],
         reset_layers: true,
         composite_all: true,
         time_seconds: 0.,

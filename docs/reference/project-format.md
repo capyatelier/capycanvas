@@ -1,124 +1,100 @@
-# Editable projects
+# Editable raster projects
 
 [Technical documentation](../README.md)
 
-The shared `layer-core::Project` codec stores editable `.capy` drawings. Saving
-retains document content; exporting produces a flattened PNG. The container and
-validation rules below are shared. The detailed native workflow in this reference
-describes GTK; see [platform integration](../platforms/README.md) for other hosts.
+`layer-core::Project` stores editable `.capy` drawings. GTK uses the raster
+container described here. Other hosts have not yet been qualified for this
+replacement. Export remains a flattened, straight sRGB RGBA8 PNG.
 
-## Stored content
+## Pixels and revisions
 
-- Document dimensions, layer/group order, properties, clipping and edit target.
-- Source images and custom brush masks as packed immutable pixel assets.
-- Brush snapshots and samples, selection coverage, rulers and references.
-- Live masks and immutable histories retained by Apply mask, fills, gradients,
-  figures and transforms, including their original operation order.
-- Each effect's exact WGSL program, metadata and values. Reopening must not
-  silently substitute a subsequently changed filter catalog definition.
+The document mode is `Srgb8V1`: sRGB primaries, D65, SDR and eight-bit channels.
+Paint tiles store `sRGB_encode(linear_RGB × alpha)` with unencoded coverage in
+alpha. Hardware decodes RGB before sampling and encodes after blending; shader
+math remains Float32. This differs from multiplying already encoded RGB by alpha.
+Source images are straight sRGB RGBA8. Masks and persistent wetness are linear R8.
+Effect processing domains are independent of the storage transfer function.
 
-The codec prunes unreachable strokes and unused image assets. It does not save
-the undo stack, GPU handles, UI preferences, source filenames or host information.
-Known versioned built-in brush assets may be resolved from the app; custom
-textures and imported images must be embedded. Source pixels are retained for
-replay, not rendered on the CPU. Saving needs no canvas readback.
+Each layer or mask owns an immutable sparse raster revision. Tile size is 256².
+Changed physical pages are captured at a completed contact or raster-operation
+boundary. Unchanged tile backing is shared across revisions, history and saves.
+Undo/redo restores changed pages directly. Fills, gradients, figures, Apply mask
+and transforms are transient submission commands; their recipes and historical
+brush contacts are not stored. Embedded live effects retain their exact WGSL,
+parameters and metadata and remain editable after reopening.
 
-`CanvasRenderer::source_asset` exposes shared immutable storage for uploaded
-images and masks. `Project::snapshot_with` requests only reachable dependencies;
-when the renderer supplies a built-in mask, its exact bytes are embedded too.
-The wgpu backend retains packed sRGB imports (four bytes per pixel) and shares
-its existing mask source storage. Row padding is excluded, and releasing an
-asset releases the renderer's source reference. Archive snapshots keep their own
-Arc references. Owned uploads share that same allocation through GTK's worker
-queue and the wgpu source cache, rather than retaining a second pixel copy.
-Borrowed host rows are packed once at import. Import/save memory peaks and storage scheduling still need
-hardware measurement; no full-resolution generated canvas copy is retained.
+The project also retains dimensions, layer/group order and properties, source
+images, masks, selection, rulers, references, allocators and the edit target.
+Per-contact reservoirs, prediction, accumulation coverage, UI preferences, GPU
+handles, source filenames and undo history are excluded. Watercolor wetness and
+live edge settings are committed because they affect composition and later paint.
 
 ## Container and validation
 
-Version one is `CAPYPROJECT` followed by byte `1`, then a gzip stream containing
-an unsigned little-endian 64-bit JSON length, the JSON manifest, and packed asset
-blocks in manifest order. Image bytes are not JSON arrays or base64, and there
-are no archive paths to extract. The gzip checksum/trailer and end of stream
-must validate before loading succeeds.
+The header is the twelve bytes `CAPYRASTER\x01\0`, followed by a little-endian
+u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
+The metadata indexes raster targets, tile coordinates/planes, unique compressed
+blobs and source assets. Payload offsets are relative to the payload start.
+Each tile is an independent lossless zlib stream; its content digest covers its
+explicit pixel descriptor and exact decoded bytes. Sources use indexed packed
+bytes with their own digest. There are no paths to extract.
 
-The manifest serializes the actual document types; there is no parallel document
-schema to maintain. Incompatible model changes require a container-version
-change or an explicit migration. This initial format makes no compatibility
-promise for unreleased development builds.
+Identical tile blobs are deduplicated in a save. Repeated saves reuse immutable
+compressed backing without readback, conversion or recompression. The writer
+streams payload after indexing; it does not build another full archive in RAM.
+Readers reject malformed/unsupported headers, descriptors, references, duplicate
+keys, noncanonical offsets, truncated or trailing data, integrity failures and
+unused blobs before adopting a candidate. The former `CAPYPROJECT` codec is gone;
+old files produce an unsupported-version error. There is no migration reader.
 
-Default decoded limits: 64 MiB metadata, 512 MiB image assets, 32768-pixel image
-dimensions, 4096 layers, 500000 strokes and eight million samples. Hosts can
-choose stricter load limits. GPU device limits and shader compilation are a
-separate pre-publication gate, not a guarantee provided by parsing the file.
+Default decoded limits are 64 MiB metadata, 512 MiB sources, 1 GiB raster data,
+16384 tile instances, 32768 pixels per axis and 4096 layers. Repeated references
+to one compressed blob still count as separate physical tile instances. Device
+limits and shader/resource preparation remain separate checks during opening.
 
-## GTK document workflow
+## Submission, recovery and durability
 
-The File menu supplies New, Open, Save, Save As, Export PNG and Close. New/Open
-create a separate document window, preserving the current drawing even if the
-incoming project is corrupt or its GPU initialization fails. New offers width
-and height in pixels; the initial 2048×1536 canvas can range from 1 to 8192 pixels
-on either axis. File dialogs start in the current drawing's folder when known.
+These are distinct boundaries:
 
-Shared Rust owns request IDs, single-flight operations, filenames, dirty state
-and close authorization. The editor exposes an undo-state checkpoint rather
-than treating its monotonically increasing revision as unsaved work. Undoing to
-the saved state clears the indicator; branching history, references and rulers
-change it. Target/selection navigation, camera, workspace and preferences do not.
+- A frame submission orders drawing and changed-tile copies on the GPU queue.
+- A raster revision becomes host-backed when its readbacks and lossless
+  compression finish. Failed/abandoned backing stays an error for every owner.
+- A manual save becomes durable only after successful atomic publication by the
+  host. Capture or autosave never acknowledges a manual save checkpoint.
 
-Save captures immutable document/source state; pruning, validation, compression
-and disk I/O run on a worker. A sibling temporary file is flushed and synced
-before atomic replacement. Errors leave the existing file intact before that
-replacement; a subsequent directory-sync failure is reported rather than claiming
-durability. Temporary files are cleaned up. Native transport currently accepts
-local filesystem destinations, not arbitrary remote GIO providers.
+GTK transfers immutable roots to its GPU owner. Readback mapping/compression runs
+on a separate worker, with at most two capture frames and 256 MiB staging per
+frame, divided into 16 MiB buffers. Capacity pressure leaves input queued. History
+retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
+excluding current document ownership. No precision is reduced to fit a budget.
 
-Edits may continue while writing. Only the captured checkpoint becomes saved;
-later work remains modified. Closing offers Save, Discard Changes or Cancel, and
-waits for an accepted save. If another stroke starts during the write, the close
-decision waits for pen-up and checks again. Cancellation/failure never marks the
-document clean. Export neither renames the project nor marks it saved.
+Contact reconstruction is limited to the active contact and the most recently
+completed contact's two-second correction window. Starting a new contact,
+editing document metadata, or navigating undo/redo closes the late-correction
+window. Accepted corrections replace the current raster root without adding an
+undo step; earlier save snapshots stay immutable. Live input is limited to
+131072 points and 32 predictions. Exceeding the contact budget cancels the
+uncommitted contact with an error.
 
-GTK uses the asynchronous [FileDialog API](https://docs.gtk.org/gtk4/class.FileDialog.html)
-and follows [GNOME's confirmation-dialog guidance](https://developer.gnome.org/hig/patterns/feedback/dialogs.html).
-No native dialog loop or disk work is added to the input path. Export queues the
-renderer’s existing explicit whole-document readback after pending image edits;
-it is a cold operation, not a live drawing/presentation mechanism.
+## GTK file workflow
 
-Startup catalog refresh validates new definitions without migrating an opened
-document's embedded programs. Explicit runtime replacement retains its existing
-migration behavior. Namespace conflicts still reject a candidate library.
-Validation covers asset formats, references/ownership, history ordering,
-allocators, mask/group identity and depth, numeric constraints, stroke bounds,
-selection coverage and effect definitions. Metadata output is bounded while
-encoding; malformed lengths never trigger an upfront allocation of that size.
+New/Open create another window, preserving the current drawing if loading or GPU
+startup fails. Save/Save As snapshots the last committed boundary even while a
+stroke is active; that active stroke keeps the document modified. Workers await
+pending backing and perform validation and file I/O. Cancelled/failed saves do
+not acknowledge checkpoints. Undoing to a successfully saved checkpoint clears
+modified state unless active input or recovered unsaved work remains.
 
-Host integration must perform validation, compression and file I/O off the input
-thread and retain the existing document until opening has passed GPU resource
-and shader validation. GTK/local filesystem saves use atomic replacement; other
-transports follow the guarantees of their storage API. Cancellation or failure
-must not clear the unsaved state. GTK implements these policies above. Other hosts use their own transports and
-validation; see the [platform guide](../platforms/README.md) for coverage.
+Close waits for interactions to finish and rechecks the saved checkpoint after
+an asynchronous save. Its Save/Discard/Cancel decisions remain shared Rust policy.
+Local saves write a sibling temporary file, sync its contents, rename it over the
+destination and sync the containing directory. Failure before replacement retains
+the previous destination; a publication/sync failure never reports a clean save.
 
-## Stateful brush replay
-
-Watercolor transports pigment after a material update. The old replay combined
-an entire stroke's updates into one, reducing bleed after replay even though the
-pointer samples were unchanged. Stroke history now retains exclusive sample
-ends for those updates. Render batches carry an update identity, so live drawing,
-active recovery and reopened documents preserve the same transport boundaries.
-
-This retains the current live algorithm rather than adding transport passes or
-changing the artist's existing appearance. The extra history is one `u32` per
-update (about 480 bytes per second at 120 updates/s, excluding vector/Arc
-overhead); there is no additional image channel or GPU allocation. Idle and
-prediction-only frames do not add boundaries. Other brush families need no
-watercolor update history. Material-update lookup scans only its contiguous
-batch group, not unrelated strokes in a full document replay.
-
-## Verification
-
-The shared project tests cover validation and replay after saving and reopening.
-The [initial validation record](../history/project-validation.md) preserves the
-GTK and codec checkpoint. Current native workflow coverage is documented in
-[platform integration](../platforms/README.md) and the port acceptance records.
+GTK autosave attempts a private checkpoint every 15 seconds when modified, with
+one file worker per window. It uses the same immutable revision model and atomic
+writer. A failed capture/write retains the previous copy. Startup offers copies
+from terminated processes for recovery; recovery opens a new, modified document
+requiring an explicit Save. Active GPU-only samples are not promised recoverable.
+Native failure and performance qualification is recorded in the
+[GTK validation report](../history/color-management-gtk-m1-validation.md).

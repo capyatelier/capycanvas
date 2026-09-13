@@ -11,7 +11,8 @@ use std::{
     rc::Rc,
 };
 
-pub(crate) type OpenDocument = Rc<dyn Fn(Project, Option<DocumentLocation>)>;
+pub(crate) type OpenDocument =
+    Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
 
 impl Workspace {
     pub(crate) fn install_document_close(self: &Rc<Self>) {
@@ -29,6 +30,7 @@ impl Workspace {
                     return if w.workspaces.request_close(&w) {
                         glib::Propagation::Stop
                     } else {
+                        w.recovery.discard();
                         glib::Propagation::Proceed
                     };
                 }
@@ -198,7 +200,7 @@ async fn document_request(
         w.open_document
             .borrow()
             .as_ref()
-            .ok_or("New drawing window is unavailable")?(project, None);
+            .ok_or("New drawing window is unavailable")?(project, None, None);
         return Ok(true);
     }
     let Some(file) = choose_file(w, request).await? else {
@@ -225,7 +227,9 @@ async fn document_request(
             w.open_document
                 .borrow()
                 .as_ref()
-                .ok_or("New drawing window is unavailable")?(project, Some(location));
+                .ok_or("New drawing window is unavailable")?(
+                project, Some(location), None
+            );
         }
         DocumentRequest::Save { .. } => {
             let project = w

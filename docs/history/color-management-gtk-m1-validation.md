@@ -180,3 +180,27 @@ Release build with debug symbols. Each frame submits eight simulated coalesced p
 The 120 Hz budget is 8.33 ms for both move and pen-up work. These offscreen completed-work results exclude surface acquisition and presentation scheduling; target-device acceptance still requires input-to-present traces. Conservative contact pixels sum rotated contact bounding rectangles.
 
 120 Hz completed-work gate: **PASS**.
+
+## Raster activation checkpoint (qualification in progress)
+
+The production shared/GTK path now owns immutable raster revisions, stores indexed
+lossless tiles, and restores those revisions for undo/reopen. Historical stroke
+storage, replay persistence, the old archive reader and linear8 paint targets are
+removed. Only bounded current-contact and late-correction inputs remain. The GTK
+file worker takes immutable snapshots; recovery publication does not clear dirty.
+
+Local release checks at this intermediate checkpoint: 43 core, 41 engine, 321 UI
+unit tests; 122 physical-GPU renderer tests (18 separately ignored); both project
+GPU integration tests; GTK native New/Open/Save/Export/cancellation workflow on
+isolated Mutter, 1600×1000 at 120 Hz. All passed. The filter fixture was generated
+independently from pre-migration renderer `7719e6b0ffa69e9aca1bf19acfedef9584d2fdad`
+with only storage-boundary corrections; see the fixture README for provenance.
+
+Performance is **not yet qualified**. The first after run exposed 58–286 ms
+outliers in dense drawing scenarios. A targeted trace isolated deferred warm-up
+undo spilling into the first measured frame: 145.7 ms frame creation and 276.8 ms
+including capture-capacity waits. The harness now waits for the actual undo frame
+before starting drawing measurements. Capture damage for terminal brush edges
+has also been narrowed to the contact's coverage pages. Compression/backpressure,
+separate undo costs, native pacing and background save contention remain under
+investigation. These changes require fresh complete measurements before acceptance.

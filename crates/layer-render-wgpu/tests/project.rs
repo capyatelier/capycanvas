@@ -1,6 +1,5 @@
-//! Compare a live, incrementally painted scene with a fresh GPU replay after
-//! saving and reopening. Snapshots use renderer-retained immutable sources.
-//! Readback is test-only, never part of project saving.
+//! Compare live painting with exact raster restoration after saving and reopening.
+//! File workers await queue-ordered tile capture while input remains responsive.
 use layer_core::*;
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
@@ -155,23 +154,26 @@ fn draw(
             })
             .unwrap();
         engine.render_frame_at(timestamp_ns).unwrap();
+        while engine.has_pending_input() {
+            std::thread::yield_now();
+            engine.render_frame_at(timestamp_ns).unwrap();
+        }
     }
 }
 fn operation(engine: &mut Engine, kind: LayerOperationKind, selection: Option<Selection>) {
+    while !engine.backend().raster_ready() {
+        std::thread::yield_now();
+    }
     let mut coverage = LayerMask::reveal_all(LayerId(0), Point::default());
     coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
     coverage.initial = selection;
     engine
-        .append_layer_operation(
-            LayerId(1),
-            LayerOperation {
-                after_stroke: engine.document().layer(LayerId(1)).unwrap().strokes.len(),
-                coverage,
-                kind,
-            },
-        )
+        .append_layer_operation(LayerId(1), LayerOperation { coverage, kind })
         .unwrap();
     engine.render_frame_at(1_000_000_000).unwrap();
+    while !engine.backend().raster_ready() {
+        std::thread::yield_now();
+    }
 }
 fn fixture(masked: bool) -> Project {
     let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1]);
@@ -302,8 +304,7 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             live.apply_edit(Edit::SetMaskTarget(false)).unwrap();
             let mut layer = live.document().layer(LayerId(1)).unwrap().clone();
             let applied = layer.mask.take().unwrap();
-            layer.operations.push(LayerOperation {
-                after_stroke: layer.strokes.len(),
+            layer.pending_operations.push(LayerOperation {
                 coverage: applied,
                 kind: LayerOperationKind::ApplyMask,
             });
@@ -368,7 +369,9 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
         let mut encoded = Vec::new();
         project.write(&mut encoded).unwrap();
         let decoded = Project::read(encoded.as_slice(), ProjectLimits::default()).unwrap();
-        assert_eq!(decoded, project);
+        let mut repeated = Vec::new();
+        decoded.write(&mut repeated).unwrap();
+        assert_eq!(repeated, encoded);
         let (mut restored, mut restored_input) = engine(&decoded);
         for time in [1_000_000_000, 1_750_000_000] {
             let expected = image(&mut live, time);

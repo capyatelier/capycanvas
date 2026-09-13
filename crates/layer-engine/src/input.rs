@@ -169,6 +169,9 @@ impl<T> InputProducer<T> {
 }
 
 impl<T> InputConsumer<T> {
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
     pub fn pop(&mut self) -> Option<T> {
         self.inner.pop().ok()
     }
@@ -205,6 +208,9 @@ impl StrokeBuilder {
         };
         let point = to_stroke_point(event, transform, curve, start_ns);
         if event.flags.contains(SampleFlags::PREDICTED) {
+            if self.predicted.len() == 32 {
+                self.predicted.remove(0);
+            }
             self.predicted.push(point);
         } else {
             self.predicted.clear();

@@ -16,14 +16,13 @@ fn figure(shape: FigureShape, paint: FigurePaint, width: f32) -> Figure {
 }
 fn operation(f: Figure, mask: LayerMask) -> LayerOperation {
     LayerOperation {
-        after_stroke: 0,
         coverage: mask,
         kind: LayerOperationKind::Figure(f),
     }
 }
 fn run(r: &mut WgpuRasterizer, f: Figure) -> Vec<u8> {
     let mut layer = Layer::paint(LayerId(1), "figure");
-    layer.operations.push(operation(
+    layer.pending_operations.push(operation(
         f,
         LayerMask::reveal_all(LayerId(9), Point::default()),
     ));
@@ -199,9 +198,8 @@ fn figure_uses_existing_mask_clipping_and_alpha_lock_and_can_erase() {
             let mut layer = Layer::paint(LayerId(1), "figure");
             layer.properties.clipped = true;
             layer.mask = Some(left_mask(10));
-            let mut op = operation(f, left_mask(9));
-            op.after_stroke = 1;
-            layer.operations.push(op);
+            let op = operation(f, left_mask(9));
+            layer.pending_operations.push(op);
             let command = DabBatch {
                 kind: DabBatchKind::LayerOperation(0),
                 dab_count: 0,
@@ -265,7 +263,7 @@ fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
     f.start = Point { x: 230., y: 220. };
     f.end = Point { x: 290., y: 280. };
     let mask = LayerMask::reveal_all(LayerId(9), Point::default());
-    layer.operations.push(operation(f, mask));
+    layer.pending_operations.push(operation(f, mask));
     let mut f = figure(FigureShape::Rectangle, FigurePaint::Fill, 1.);
     f.start = Point { x: 180., y: 240. };
     f.end = Point { x: 330., y: 300. };
@@ -281,12 +279,12 @@ fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
         ])
         .unwrap(),
     );
-    layer.operations.push(operation(f, mask));
+    layer.pending_operations.push(operation(f, mask));
     let ops: Vec<_> = (0..2)
         .map(|i| DabBatch {
             kind: DabBatchKind::LayerOperation(i),
             dab_count: 0,
-            damage: layer.operations[i as usize].bounds(extent),
+            damage: layer.pending_operations[i as usize].bounds(extent),
             ..batch(1)
         })
         .collect();
@@ -297,6 +295,7 @@ fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
             layers: std::slice::from_ref(layer),
             dabs: &[],
             dab_batches: ops,
+            restore_rasters: &[],
             reset_layers: reset,
             time_seconds: 0.,
             composite_all: false,
@@ -304,7 +303,7 @@ fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
         .unwrap();
     };
     let mut first = layer.clone();
-    first.operations.truncate(1);
+    first.pending_operations.truncate(1);
     render(&mut r, &first, &ops[..1], true);
     assert_eq!(
         r.paint_layers[0].pages.len(),
@@ -333,13 +332,13 @@ fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
         "idle never reapplies pigment"
     );
     let mut small = layer.clone();
-    small.operations.truncate(1);
-    if let LayerOperationKind::Figure(f) = &mut small.operations[0].kind {
+    small.pending_operations.truncate(1);
+    if let LayerOperationKind::Figure(f) = &mut small.pending_operations[0].kind {
         f.start = Point { x: 32., y: 32. };
         f.end = Point { x: 96., y: 96. };
     }
     let op = DabBatch {
-        damage: small.operations[0].bounds(extent),
+        damage: small.pending_operations[0].bounds(extent),
         ..ops[0].clone()
     };
     render(&mut r, &small, &[op], true);
@@ -367,6 +366,7 @@ fn figure_latency() {
         layers: &[Layer::paint(LayerId(1), "benchmark")],
         dabs: &[],
         dab_batches: &[],
+        restore_rasters: &[],
         reset_layers: true,
         time_seconds: 0.,
         composite_all: false,
@@ -417,11 +417,11 @@ fn figure_latency() {
         for i in 0..160 {
             let mut op = op.clone();
             op.coverage.id = LayerId(9 + i as u64);
-            layer.operations.push(op);
+            layer.pending_operations.push(op);
             let batch = DabBatch {
                 kind: DabBatchKind::LayerOperation(i),
                 dab_count: 0,
-                damage: layer.operations.last().unwrap().bounds(extent),
+                damage: layer.pending_operations.last().unwrap().bounds(extent),
                 ..batch(1)
             };
             let start = std::time::Instant::now();
@@ -431,6 +431,7 @@ fn figure_latency() {
                 layers: std::slice::from_ref(&layer),
                 dabs: &[],
                 dab_batches: &[batch],
+                restore_rasters: &[],
                 reset_layers: i == 0,
                 time_seconds: 0.,
                 composite_all: false,

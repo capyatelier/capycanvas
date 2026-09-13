@@ -126,6 +126,9 @@ pub struct DabBatch {
 /// the small records it needs after return; canvas pixels remain GPU-owned.
 #[derive(Clone, Copy, Debug)]
 pub struct FramePacket<'a> {
+    /// Bounded rollback for cancellation or late correction of the latest
+    /// contact. Committed undo/redo uses the revisions on the layer metadata.
+    pub restore_rasters: &'a [(LayerId, layer_core::raster::RasterRevision)],
     /// Monotonic seconds since this editor session started; never wall time.
     pub time_seconds: f32,
     pub view: ViewState,
@@ -330,6 +333,11 @@ impl TransformPreview {
 /// resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Backpressure before consuming input. A false result leaves queued input
+    /// untouched while bounded raster backing work completes.
+    fn can_submit(&self) -> bool {
+        true
+    }
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

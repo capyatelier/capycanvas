@@ -206,7 +206,7 @@ impl PixelTransform {
             } else {
                 !matches!(
                     texture.format(),
-                    wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float
+                    wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Rgba16Float
                 )
             }
             || !texture

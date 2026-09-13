@@ -119,12 +119,12 @@ pub(crate) fn tool_set(transform: bool) -> ToolSetView {
     }
 }
 
-// Conservative history geometry avoids a readback at interaction start. Erased
+// Conservative allocated tile geometry avoids a readback at interaction start. Erased
 // regions may leave extra transparent room; operations and assets remain bounded
 // by the finite raster canvas. Selecting an area uses that area's bounds instead.
 fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
     let layer = doc.target_owner(target).unwrap();
-    let (strokes, history) = layer.target_history(target).unwrap();
+    let operations = layer.target_operations(target).unwrap();
     let canvas = Rect {
         min: Point::default(),
         max: Point {
@@ -132,7 +132,11 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
             y: doc.height as f32,
         },
     };
-    let mut bounds = if target == layer.id && layer.asset.is_some() {
+    let mut bounds = if doc
+        .target_raster(target)
+        .is_some_and(|r| r.try_data().is_none())
+        || (target == layer.id && layer.asset.is_some())
+    {
         canvas
     } else if target != layer.id {
         layer
@@ -143,20 +147,28 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
     } else {
         Rect::EMPTY
     };
-    let mut operations = history.iter().peekable();
-    for i in 0..=strokes.len() {
-        while let Some(op) = operations.next_if(|op| op.after_stroke == i) {
-            bounds = match op.kind {
-                LayerOperationKind::Transform(t) if op.coverage.initial.is_none() => {
-                    t.affine.bounds(bounds)
-                }
-                LayerOperationKind::ApplyMask => bounds,
-                _ => bounds.union(op.bounds([doc.width, doc.height])),
-            };
+    if let Some(Ok(data)) = doc.target_raster(target).and_then(|r| r.try_data()) {
+        for key in data.tiles.keys() {
+            let [x, y] = key
+                .coordinate
+                .map(|v| (v * layer_core::raster::TILE_SIZE) as f32);
+            bounds = bounds.union(Rect {
+                min: Point { x, y },
+                max: Point {
+                    x: x + 256.,
+                    y: y + 256.,
+                },
+            });
         }
-        if let Some(stroke) = strokes.get(i).and_then(|id| doc.stroke(*id)) {
-            bounds = bounds.union(stroke.bounds);
-        }
+    }
+    for op in operations {
+        bounds = match op.kind {
+            LayerOperationKind::Transform(t) if op.coverage.initial.is_none() => {
+                t.affine.bounds(bounds)
+            }
+            LayerOperationKind::ApplyMask => bounds,
+            _ => bounds.union(op.bounds([doc.width, doc.height])),
+        };
     }
     Rect {
         min: Point {
@@ -179,7 +191,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     l.mask.is_some()
                 } else {
                     l.kind == LayerKind::Paint
-                        && (l.asset.is_some() || !l.strokes.is_empty() || !l.operations.is_empty())
+                        && (l.asset.is_some()
+                            || !l.raster.is_empty()
+                            || !l.pending_operations.is_empty())
                 }
             })
     }

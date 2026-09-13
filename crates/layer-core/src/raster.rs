@@ -7,24 +7,31 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
 pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 4) as usize;
+pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
+static NEXT_PUBLICATION: AtomicU64 = AtomicU64::new(1);
 
 /// Awaitable single publication, with errors preserved for every consumer.
 /// Dropping a save never cancels a capture also owned by document history.
 #[derive(Debug)]
 struct Publication<T> {
+    id: u64,
     value: Mutex<Option<Result<Arc<T>, String>>>,
     ready: Condvar,
 }
 impl<T> Default for Publication<T> {
     fn default() -> Self {
         Self {
+            id: NEXT_PUBLICATION.fetch_add(1, Ordering::Relaxed),
             value: Mutex::new(None),
             ready: Condvar::new(),
         }
@@ -78,11 +85,19 @@ pub struct TileKey {
 
 /// Independently compressed, content-addressed exact samples. Immutable backing
 /// can be written repeatedly without readback, conversion or recompression.
-#[derive(Debug)]
 pub struct TileBlob {
     pub digest: [u8; 32],
     pub descriptor: PixelDescriptor,
     compressed: Arc<[u8]>,
+}
+impl std::fmt::Debug for TileBlob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TileBlob")
+            .field("digest", &self.digest)
+            .field("descriptor", &self.descriptor)
+            .field("compressed_bytes", &self.compressed.len())
+            .finish()
+    }
 }
 impl TileBlob {
     pub fn encode(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
@@ -157,6 +172,9 @@ impl TileBlob {
 #[derive(Clone, Debug, Default)]
 pub struct RasterTile(Arc<Publication<TileBlob>>);
 impl RasterTile {
+    pub fn identity(&self) -> u64 {
+        self.0.id
+    }
     pub fn backed(blob: TileBlob) -> Self {
         let tile = Self::default();
         tile.publish(Ok(blob)).expect("new tile");
@@ -255,6 +273,12 @@ impl PartialEq for RasterRevision {
     }
 }
 impl RasterRevision {
+    pub fn identity(&self) -> u64 {
+        self.0.id
+    }
+    pub fn is_empty(&self) -> bool {
+        matches!(self.try_data(), Some(Ok(data)) if data.tiles.is_empty() && data.watercolor.is_none())
+    }
     pub fn pending() -> Self {
         Self(Arc::default())
     }

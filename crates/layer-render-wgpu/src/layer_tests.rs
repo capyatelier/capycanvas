@@ -9,6 +9,8 @@ use layer_render::{DabStyle, ViewState};
 mod figures;
 #[path = "overview_tests.rs"]
 mod overviews;
+#[path = "raster_tests.rs"]
+mod raster;
 #[path = "submission_tests.rs"]
 mod submissions;
 #[path = "paint_transform_tests.rs"]
@@ -77,6 +79,7 @@ fn submit(
         layers,
         dabs,
         dab_batches: batches,
+        restore_rasters: &[],
         reset_layers: reset,
         time_seconds: 0.,
         composite_all: true,
@@ -163,8 +166,7 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
         let mut mask = LayerMask::reveal_all(LayerId(8), Point::default());
         mask.default_coverage = f32::from(inverse);
         mask.initial = Some(selected.clone());
-        fill.operations = vec![LayerOperation {
-            after_stroke: 0,
+        fill.pending_operations = vec![LayerOperation {
             coverage: mask.clone(),
             kind: LayerOperationKind::Fill {
                 color: [0., 0., 1., 1.],
@@ -196,7 +198,7 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
             );
         }
         // The same region clips a large brush and initializes a layer mask.
-        fill.operations.clear();
+        fill.pending_operations.clear();
         let mut brush = batch(2);
         brush.style.selection = Some(std::sync::Arc::new(selected));
         let mut d = dab([0., 0., 1., 1.]);
@@ -321,8 +323,7 @@ fn refined_region_antialias_survives_fill_and_history_replay() {
         let mut coverage = LayerMask::reveal_all(LayerId(3), Point::default());
         coverage.initial = Some(Selection::pixels(selected));
         coverage.default_coverage = 0.;
-        fill.operations.push(LayerOperation {
-            after_stroke: 0,
+        fill.pending_operations.push(LayerOperation {
             coverage,
             kind: LayerOperationKind::Fill {
                 color: [0., 0., 1., 1.],
@@ -493,6 +494,7 @@ fn region_request_latency() {
         dabs: &[],
         dab_batches: &[],
         time_seconds: 0.,
+        restore_rasters: &[],
         reset_layers: true,
         composite_all: true,
     })
@@ -913,8 +915,7 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
             let mut mask = LayerMask::reveal_all(LayerId(2), Point::default());
             mask.default_coverage = f32::from(inverted);
             mask.initial = Some(selection.clone());
-            layer.operations = vec![LayerOperation {
-                after_stroke: 0,
+            layer.pending_operations = vec![LayerOperation {
                 coverage: mask.clone(),
                 kind: LayerOperationKind::Fill {
                     color: [1.; 4],
@@ -963,7 +964,7 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
             }
             let generations = r.selection_clip.generations;
             let storage = r.selection_clip.storage_bytes();
-            layer.operations.clear();
+            layer.pending_operations.clear();
             let selected = DabBatch {
                 style: DabStyle {
                     selection: Some(Arc::new(selection.clone())),
@@ -972,10 +973,16 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
                 ..batch(1)
             };
             submit(&mut r, &[layer.clone()], &[white], &[selected], true);
-            assert_eq!(r.readback_srgb_rgba8().unwrap(), filled);
+            // The two physical paths can choose adjacent UNORM alpha
+            // values at a half-code boundary; RGB and coverage stay within one code.
+            let actual = r.readback_srgb_rgba8().unwrap();
+            assert!(actual.iter().zip(&filled).all(|(a, b)| a.abs_diff(*b) <= 1));
             layer.mask = Some(mask);
             submit(&mut r, &[layer], &[white], &[batch(1)], true);
-            assert_eq!(r.readback_srgb_rgba8().unwrap(), filled);
+            // The two physical paths can choose adjacent UNORM alpha
+            // values at a half-code boundary; RGB and coverage stay within one code.
+            let actual = r.readback_srgb_rgba8().unwrap();
+            assert!(actual.iter().zip(&filled).all(|(a, b)| a.abs_diff(*b) <= 1));
             assert_eq!(
                 r.selection_clip.generations, generations,
                 "changing the consumer does not resample"
@@ -1307,6 +1314,7 @@ fn watercolor_transport_does_not_mix_from_unselected_wet_paint() {
                 layers: &layers,
                 dabs: &[d],
                 dab_batches: &[b],
+                restore_rasters: &[],
                 reset_layers: reset,
                 time_seconds: 0.,
                 composite_all: true,
@@ -1440,6 +1448,7 @@ fn watercolor_outer_edge_never_borrows_unwetted_dry_pigment() {
             layers: &layers,
             dabs: &[d],
             dab_batches: &[b],
+            restore_rasters: &[],
             reset_layers: reset,
             time_seconds: 0.,
             composite_all: reset,
@@ -1551,6 +1560,7 @@ fn watercolor_outer_edge_never_borrows_unwetted_dry_pigment() {
             layers: &layers,
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: false,
             time_seconds: 0.,
             composite_all: true,
@@ -1738,6 +1748,7 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
             layers: std::slice::from_ref(layer),
             dabs: &[d],
             dab_batches: std::slice::from_ref(brush),
+            restore_rasters: &[],
             reset_layers: true,
             time_seconds: 0.,
             composite_all: true,
@@ -1864,6 +1875,7 @@ fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
         layers: &[Layer::paint(LayerId(1), "paint")],
         dabs: &[dot],
         dab_batches: &[stroke],
+        restore_rasters: &[],
         reset_layers: true,
         time_seconds: 0.0,
         composite_all: true,
@@ -1898,8 +1910,7 @@ fn gradients_share_fill_compositing_and_respect_coverage_and_alpha_lock() {
                     } else {
                         LayerMask::reveal_all(LayerId(9), Point::default())
                     };
-                    layer.operations.push(LayerOperation {
-                        after_stroke: 1,
+                    layer.pending_operations.push(LayerOperation {
                         coverage,
                         kind: LayerOperationKind::Gradient {
                             start: Point { x: 16.0, y: 64.0 },
@@ -1971,8 +1982,7 @@ fn gradient_respects_layer_mask_and_clipping_base_alpha() {
     let mut gradient = Layer::paint(LayerId(1), "gradient");
     gradient.properties.clipped = true;
     gradient.mask = Some(left_mask(8));
-    gradient.operations.push(LayerOperation {
-        after_stroke: 0,
+    gradient.pending_operations.push(LayerOperation {
         coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
         kind: LayerOperationKind::Gradient {
             start: Point::default(),
@@ -2030,8 +2040,7 @@ fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
             ])
             .unwrap(),
         );
-        layer.operations.push(LayerOperation {
-            after_stroke: 1,
+        layer.pending_operations.push(LayerOperation {
             coverage,
             kind: LayerOperationKind::Gradient {
                 start: Point { x: 160., y: 64. },
@@ -2041,20 +2050,20 @@ fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
                 alpha_locked: false,
             },
         });
-        let mut second = layer.operations[0].clone();
+        let mut second = layer.pending_operations[0].clone();
         second.coverage.id = LayerId(10);
         second.coverage.offset.x -= 35.;
         second.kind = LayerOperationKind::Fill {
             color: [0., 1., 0., 0.3],
             alpha_locked: false,
         };
-        layer.operations.push(second);
+        layer.pending_operations.push(second);
         let dabs = [dab([0.1, 0.1, 0.1, 0.5])];
         let operations: Vec<_> = (0..2)
             .map(|i| DabBatch {
                 kind: DabBatchKind::LayerOperation(i),
                 dab_count: 0,
-                damage: layer.operations[i as usize].bounds(extent),
+                damage: layer.pending_operations[i as usize].bounds(extent),
                 ..batch(1)
             })
             .collect();
@@ -2065,6 +2074,7 @@ fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
                 layers,
                 dabs: &dabs,
                 dab_batches: batches,
+                restore_rasters: &[],
                 reset_layers: reset,
                 time_seconds: 0.,
                 composite_all: false,
@@ -2095,7 +2105,7 @@ fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
             );
         }
         let mut first_only = layer.clone();
-        first_only.operations.truncate(1);
+        first_only.pending_operations.truncate(1);
         render(
             &mut r,
             &[Layer::paint(LayerId(1), "gradient")],
@@ -2169,6 +2179,7 @@ fn navigator_preview_reuses_composition_and_tracks_paint_mask_and_camera() {
             document_extent: [128, 128],
             dabs: &[],
             dab_batches: &[],
+            restore_rasters: &[],
             reset_layers: false,
             composite_all: false,
             time_seconds: 0.0,
@@ -2258,8 +2269,7 @@ fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
     let before = r.readback_srgb_rgba8().unwrap();
     let mut mask = l.mask.take().unwrap();
     mask.show_area = false;
-    l.operations.push(LayerOperation {
-        after_stroke: 1,
+    l.pending_operations.push(LayerOperation {
         coverage: mask,
         kind: LayerOperationKind::ApplyMask,
     });
@@ -2332,8 +2342,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                     let mut layer = Layer::paint(LayerId(1), "baked paint");
                     layer.asset = Some(asset.clone());
                     layer.opacity = opacity;
-                    layer.operations.push(LayerOperation {
-                        after_stroke: 0,
+                    layer.pending_operations.push(LayerOperation {
                         coverage: left_mask(9),
                         kind: kind.clone(),
                     });
@@ -2351,7 +2360,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                     if !keep_history {
                         // Reference: the same already-baked GPU pages without
                         // history. Discarding history must not change rendering.
-                        layer.operations.clear();
+                        layer.pending_operations.clear();
                     }
                     let mut stroke = batch(1);
                     stroke.stroke_id = StrokeId(2);
@@ -2608,6 +2617,7 @@ fn selected_brush_latency() {
                     layers: &layers,
                     dabs: &dabs,
                     dab_batches: std::slice::from_ref(&b),
+                    restore_rasters: &[],
                     reset_layers: i == 0,
                     time_seconds: 0.,
                     composite_all: false,
@@ -2702,6 +2712,7 @@ fn paint_operation_latency() {
         layers: &[Layer::paint(LayerId(1), "paint operation")],
         dabs: &[],
         dab_batches: &[],
+        restore_rasters: &[],
         reset_layers: true,
         time_seconds: 0.,
         composite_all: false,
@@ -2744,15 +2755,13 @@ fn paint_operation_latency() {
             } else {
                 LayerMask::reveal_all(LayerId(9), Point::default())
             };
-            layer.operations.push(LayerOperation {
-                after_stroke: 0,
-                coverage,
-                kind,
-            });
+            layer
+                .pending_operations
+                .push(LayerOperation { coverage, kind });
             let op = DabBatch {
                 kind: DabBatchKind::LayerOperation(0),
                 dab_count: 0,
-                damage: layer.operations[0].bounds(extent),
+                damage: layer.pending_operations[0].bounds(extent),
                 ..batch(1)
             };
             let mut completed = Vec::new();
@@ -2765,6 +2774,7 @@ fn paint_operation_latency() {
                     layers: std::slice::from_ref(&layer),
                     dabs: &[],
                     dab_batches: std::slice::from_ref(&op),
+                    restore_rasters: &[],
                     reset_layers: i == 0,
                     time_seconds: 0.,
                     composite_all: false,

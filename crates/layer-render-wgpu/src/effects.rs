@@ -521,10 +521,9 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     return mix(effect_data[base+1u+offset+i],effect_data[base+1u+offset+min(i+1u,255u)],fract(x));
 }
 @fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
-    // All effect targets are RGBA8 linear. Vulkan permits either neighboring
-    // integer on implicit UNORM conversion; choose nearest explicitly. Only
-    // physical pass boundaries quantize, never intermediate fused adjustments.
-    return round(clamp(effect_result(v),vec4<f32>(0.),vec4<f32>(1.))*255.)/255.;
+    // sRGB attachments encode RGB at physical pass boundaries. Fused effects
+    // retain Float32 values; linear8 prequantization would destroy shadow detail.
+    return effect_result(v);
 }
 
 "#,

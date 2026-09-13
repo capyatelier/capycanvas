@@ -28,6 +28,7 @@ struct Frame {
     layers: Vec<Layer>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
+    restore_rasters: Vec<(layer_core::LayerId, layer_core::raster::RasterRevision)>,
     reset: bool,
     composite: bool,
     geometry: Geometry,
@@ -46,6 +47,7 @@ impl Frame {
             layers: &self.layers,
             dabs: &self.dabs,
             dab_batches: &self.batches,
+            restore_rasters: &self.restore_rasters,
             reset_layers: self.reset,
             composite_all: self.composite,
         }
@@ -707,32 +709,11 @@ impl CanvasRenderer for RenderWorker {
             time_seconds: packet.time_seconds,
             view: packet.view,
             extent: packet.document_extent,
-            // The renderer needs layer properties, not stroke-history lists.
-            layers: packet
-                .layers
-                .iter()
-                .map(|l| Layer {
-                    raster: l.raster.clone(),
-                    id: l.id,
-                    name: l.name.clone(),
-                    kind: l.kind,
-                    visible: l.visible,
-                    opacity: l.opacity,
-                    strokes: Vec::new(),
-                    asset: l.asset.clone(),
-                    source_revision: l.source_revision,
-                    properties: l.properties.clone(),
-                    operations: l.operations.clone(),
-                    effect: l.effect.clone(),
-                    mask: l.mask.as_ref().map(|m| {
-                        let mut m = m.clone();
-                        m.strokes = Default::default();
-                        m
-                    }),
-                })
-                .collect(),
+            // Immutable raster roots and sources cross threads by shared ownership.
+            layers: packet.layers.to_vec(),
             dabs: packet.dabs.to_vec(),
             batches: packet.dab_batches.to_vec(),
+            restore_rasters: packet.restore_rasters.to_vec(),
             reset: packet.reset_layers,
             composite: packet.composite_all,
             geometry,
@@ -876,6 +857,9 @@ impl Worker {
         paper: bool,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
+        while !self.renderer.raster_ready() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         if self.child.geometry(frame.geometry) {
             // Geometry/stacking become visible on a parent commit. Queue that
             // only AFTER sending our child requests; never race GTK's commit.
@@ -918,6 +902,7 @@ impl Worker {
                     layers: &layers,
                     dabs: &[],
                     dab_batches: &[],
+                    restore_rasters: &[],
                     reset_layers: true,
                     composite_all: true,
                     ..frame.packet()

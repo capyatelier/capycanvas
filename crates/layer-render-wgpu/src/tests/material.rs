@@ -219,6 +219,7 @@ fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
                     layers: std::slice::from_ref(&layer),
                     dabs,
                     dab_batches: &batches,
+                    restore_rasters: &[],
                     reset_layers: phase == 0,
                     time_seconds: 0.,
                     composite_all: phase == 0,
