@@ -516,3 +516,12 @@ this intermittent startup failure is **not claimed fixed**. Backtrace:
 `/tmp/capy-tools-drop-backtrace.log`. A separate initial spacing invocation lacked
 its required `--native-storage` fixture; the correctly configured run passed.
 No physical-stylus, Apple or Windows GUI acceptance is inferred from these runs.
+
+Final refresh: fetched and merged `origin/main` at `688fd76` in `cfa4f91`,
+including the later GTK/shared renderer error-propagation update. Rebuilt GTK
+release and Web/Wasm, reran all 550 Rust tests, and repeated native ownership
+(`1NI6dz`), save/switch/reopen (`V4QIsP`) and transition stability (`Aoh405`). All
+pass; the last transition run records 360 frames with no resize, disabled-editor
+frames or busy notices. This brings completed post-integration GTK runs to 23.
+The final tree is ready for the requested local-main integration; nothing is
+pushed to origin by this task.
