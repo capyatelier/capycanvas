@@ -3,6 +3,31 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testLayerContextMenuAnchors() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["layer-New layer"].waitForExistence(timeout: 20))
+        checkLayerControls(in: app)
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let row = rows.element(boundBy: 1)
+        row.buttons["Edit layer content"].press(forDuration: 0.6)
+        let menu = app.descendants(matching: .any)["layer-context-menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        attachLayerMenu("layer-content-context-anchor")
+        // Dismiss through the app canvas, then check the separate footer origin.
+        app.otherElements["canvas"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+        app.buttons["layer-Layer actions"].tap()
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        attachLayerMenu("layer-footer-context-anchor")
+    }
+
+    @MainActor private func attachLayerMenu(_ name: String) {
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = name; capture.lifetime = .keepAlways; add(capture)
+    }
+
     @MainActor func testWorkspaceSwitcher() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkWorkspaceSwitcher(in: editorTestApplication())

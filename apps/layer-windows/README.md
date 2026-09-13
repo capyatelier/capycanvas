@@ -705,8 +705,8 @@ The WinUI workspace manager follows the current
 [host handoff](../../docs/ui/workspace-manager-host-handoff.md) and
 [task workspace definitions](../../docs/ui/default-workspaces.md). The titlebar
 pill uses shared saved visibility and order, including custom workspaces. Names
-and edits follow each workspace; included workspaces can be renamed but not
-deleted. New workspaces start pinned. An unpinned current workspace temporarily
+and edits follow each workspace; included workspaces have fixed names and cannot
+be renamed or deleted. New workspaces start pinned. An unpinned current workspace temporarily
 appears first, and the pill scrolls when its choices exceed the available width.
 The shared upgrade preserves customized Photographer layouts.
 

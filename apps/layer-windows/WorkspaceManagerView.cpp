@@ -210,12 +210,12 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         options.Items().Append(row.rename);options.Items().Append(row.remove);row.more.Flyout(options);
         row.pinned=icon(L"pin",str(object(snapshot,L"state"),L"theme",L"dark"),14);row.pinned.Opacity(.7);
         row.pinned.Margin({0,0,8,0});row.pinned.VerticalAlignment(VerticalAlignment::Center);
-        Grid::SetColumn(row.pinned,2);content.Children().Append(row.pinned);
+        Grid::SetColumn(row.pinned,3);content.Children().Append(row.pinned);
         AutomationProperties::SetAutomationId(row.pinned,L"workspace-manager-pinned-"+id);
         AutomationProperties::SetName(row.pinned,L"Shown in top bar");
         row.pinned.IsHitTestVisible(true);ToolTipService::SetToolTip(row.pinned,box_value(L"Shown in top bar"));
         row.current.Width(14);row.current.Height(14);row.current.Margin({0,0,8,0});
-        row.current.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.current,3);content.Children().Append(row.current);
+        row.current.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.current,2);content.Children().Append(row.current);
         AutomationProperties::SetAutomationId(row.current,L"workspace-manager-current-"+id);
         AutomationProperties::SetName(row.current,L"Current workspace");ToolTipService::SetToolTip(row.current,box_value(L"Current workspace"));
         row.grip.Width(20);row.grip.Height(32);row.grip.Margin({0,0,8,0});row.grip.Padding({0,0,0,0});
@@ -246,8 +246,11 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             AutomationProperties::SetName(row.grip,L"Reorder "+label);
             row.show.IsChecked(pinned);row.show.IsEnabled(!saving);row.up.IsEnabled(!saving&&position>0&&position<saved.Size());
             row.down.IsEnabled(!saving&&position+1<saved.Size());
-            for(auto item:{row.show.as<UIElement>(),row.up.as<UIElement>(),row.down.as<UIElement>(),row.separator.as<UIElement>()})
+            for(auto item:{row.show.as<UIElement>(),row.up.as<UIElement>(),row.down.as<UIElement>()})
                 item.Visibility(configurable?Visibility::Visible:Visibility::Collapsed);
+            row.rename.Visibility(flag(data,L"rename")?Visibility::Visible:Visibility::Collapsed);
+            row.remove.Visibility(flag(data,L"delete")?Visibility::Visible:Visibility::Collapsed);
+            row.separator.Visibility(configurable&&(flag(data,L"rename")||flag(data,L"delete"))?Visibility::Visible:Visibility::Collapsed);
             row.rename.IsEnabled(!saving&&flag(data,L"rename"));row.remove.IsEnabled(!saving&&flag(data,L"delete"));
             row.more.Visibility(configurable||flag(data,L"rename")||flag(data,L"delete")?Visibility::Visible:Visibility::Collapsed);
             AutomationProperties::SetName(row.item,label+(detail.empty()?L"":L" · "+detail));

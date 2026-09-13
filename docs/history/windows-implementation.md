@@ -1807,6 +1807,14 @@ and titlebar-underlay checks pass. Unmasked zero-tolerance raster comparisons
 still differ in 7.54%/8.38% of dark/light initial pixels and 10.05%/9.42% of
 under-header pixels; these are not accepted whole-editor raster parity results.
 
+Publication also integrates concurrent main 49889a7. Included workspace names
+are now protected by shared policy; Windows omits their Rename/Delete actions
+and the unused separator. Custom workspace renaming still updates its titlebar
+entry, and the active-workspace check precedes the pin. All 481 unit tests,
+strict Windows Clippy, the native build, the manager/restart workflow and pen
+row gestures pass after this integration. The manager handoff now reflects the
+same protected-name policy.
+
 Other workspace drag families, attached column group panels and per-column
 preferences, the shared starting-layout preview, remaining editor raster
 differences and the strict GPU filter-reference failure remain open. Physical

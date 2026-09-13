@@ -32,8 +32,8 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     action("Show in top bar", "pin", () => edit({type:"show", id:item.id, visible:!pinned}), true, pinned);
     action("Move Up", "up", () => edit({type:"move", id:item.id, before:view.order[index-1]}), index > 0);
     action("Move Down", "down", () => edit({type:"move", id:item.id, before:view.order[index+2] ?? null}), index < view.order.length-1);
-    menu.append(element("hr"));
-    action("Rename…", "rename", () => send({type:"form", kind:"rename", id:item.id}), item.options);
+    if (item.options || item.delete) menu.append(element("hr"));
+    if (item.options) action("Rename…", "rename", () => send({type:"form", kind:"rename", id:item.id}));
     if (item.delete) action("Delete…", "delete", () => send({type:"form", kind:"delete", id:item.id}));
     row.querySelector(".workspace-options").setAttribute("aria-expanded", "true");
     menu.showPopover();
@@ -50,8 +50,8 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     handle.title = "Drag to reorder"; handle.setAttribute("aria-label", handle.title);
     row.prepend(handle);
     for (const [visible, glyph, label] of [
-      [view.switcher.some(entry => entry.id === item.id), "pin", "Shown in top bar"],
       [view.id === item.id, "check", "Current workspace"],
+      [view.switcher.some(entry => entry.id === item.id), "pin", "Shown in top bar"],
     ]) if (visible) {
       const mark = element("span", `workspace-row-mark workspace-${glyph}`); mark.append(icon(glyph));
       mark.title = label; mark.setAttribute("aria-label", label); mark.setAttribute("role", "img"); row.append(mark);

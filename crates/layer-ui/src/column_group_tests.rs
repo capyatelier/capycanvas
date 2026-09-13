@@ -51,6 +51,8 @@ fn group_panel_shifts_neighbors_stacks_all_tabs_and_restores_closed_geometry() {
     );
     assert_eq!(p.bounds.y, c.bounds.y);
     assert_eq!(p.bounds.height, c.bounds.height);
+    assert_eq!(p.direction, Edge::Right);
+    assert!((p.bounds.x - c.bounds.x - c.bounds.width).abs() < 0.01);
     let max_width = s
         .state
         .workspace
@@ -75,8 +77,7 @@ fn group_panel_shifts_neighbors_stacks_all_tabs_and_restores_closed_geometry() {
         );
     }
     assert!(
-        (before.work_area.width - resolved.work_area.width - max_width - WORKSPACE_SPACING).abs()
-            < 0.01
+        (before.work_area.width - resolved.work_area.width - max_width).abs() < 0.01
     );
     let settings = s.state.workspace.layout.column_settings(column);
     group_edit(
@@ -217,11 +218,17 @@ fn column_auto_hide_both_modes_and_apply_all_only_copies_preferences() {
         ColumnMode::GroupPanel
     );
     let menu = s.context_menu(ContextTarget::Column { column }).unwrap();
-    assert!(
+    assert_eq!(
         menu.sections
             .iter()
-            .flatten()
-            .any(|i| i.label == "Apply to all columns")
+            .map(|section| section.iter().map(|item| item.label.as_str()).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        vec![
+            vec!["Expand column"],
+            vec!["Drawers", "Group panel"],
+            vec!["Auto-hide"],
+            vec!["Apply to all columns"],
+        ]
     );
     for mode in [ColumnMode::GroupPanel, ColumnMode::Drawers] {
         group_edit(&mut s, CustomizationAction::SetColumnMode { column, mode });

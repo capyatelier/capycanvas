@@ -4106,7 +4106,7 @@ fn resolve_node(
                 if layout.is_collapsed(first.id()) {
                     first_size = (TILE_SIZE
                         + if group_panels && layout.open_column_group(first.id()).is_some() {
-                            WORKSPACE_SPACING + layout.group_panel_width(first.id())
+                            layout.group_panel_width(first.id())
                         } else {
                             0.
                         })
@@ -4115,7 +4115,7 @@ fn resolve_node(
                     first_size = (usable
                         - TILE_SIZE
                         - if group_panels && layout.open_column_group(second.id()).is_some() {
-                            WORKSPACE_SPACING + layout.group_panel_width(second.id())
+                            layout.group_panel_width(second.id())
                         } else {
                             0.
                         })

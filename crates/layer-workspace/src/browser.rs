@@ -479,6 +479,11 @@ impl BrowserDatabase {
                     return Err(StoreError::conflict());
                 }
                 if let Some(m) = &w.metadata {
+                    if s.entity.metadata.builtin && m.name != s.entity.metadata.name {
+                        return Err(StoreError::invalid(
+                            "Included workspaces cannot be renamed.",
+                        ));
+                    }
                     if s.entity.metadata.builtin && m.deleted_at_ms.is_some() {
                         return Err(StoreError::invalid(
                             "Included workspaces cannot be deleted.",

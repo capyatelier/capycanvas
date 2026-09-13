@@ -149,7 +149,9 @@ impl ManagerUi {
                 controls.append(&button);
             }
         }
-        controls.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        if content.first_child().is_some() {
+            controls.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        }
         content.prepend(&controls);
     }
 

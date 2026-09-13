@@ -705,11 +705,12 @@ impl Drawer {
         );
         if let Some(view) = self.view.borrow().as_ref() {
             let mut geometry = result.columns.clone();
-            if self
+            let group_panel = self
                 .state
                 .borrow()
                 .as_ref()
-                .is_some_and(ContentDrawer::is_group_panel)
+                .is_some_and(ContentDrawer::is_group_panel);
+            if group_panel
                 && let Some(p) = w
                     .resolved()
                     .collapsed
@@ -736,7 +737,13 @@ impl Drawer {
                 .into_iter()
                 .enumerate()
             {
-                if connection.is_some_and(|c| c.square_corners[index]) {
+                let attached_corner = group_panel
+                    && match result.direction {
+                        Edge::Right => matches!(index, 0 | 3),
+                        Edge::Left => matches!(index, 1 | 2),
+                        _ => false,
+                    };
+                if attached_corner || connection.is_some_and(|c| c.square_corners[index]) {
                     view.root.add_css_class(class);
                     view.shadow.add_css_class(class);
                 } else {

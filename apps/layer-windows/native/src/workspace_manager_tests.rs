@@ -381,7 +381,7 @@ fn history_selection_is_temporary_and_restore_preserves_current_working_values()
 }
 
 #[test]
-fn included_workspaces_allow_rename_reject_delete_and_preserve_invalid_name_drafts() {
+fn included_workspaces_reject_rename_and_delete_and_preserve_invalid_name_drafts() {
     let mut f = Fixture::new();
     f.ready();
     open(&mut f, Command::Manage);
@@ -392,7 +392,7 @@ fn included_workspaces_allow_rename_reject_delete_and_preserve_invalid_name_draf
         .find(|r| r["id"] == "builtin:workspace:illustrator")
         .unwrap()
         .clone();
-    assert_eq!(builtin["rename"], true);
+    assert_eq!(builtin["rename"], false);
     assert_eq!(builtin["delete"], false);
     let id = "builtin:workspace:illustrator".to_string();
     let dialog = view(&f)["id"].as_u64().unwrap();
@@ -401,25 +401,10 @@ fn included_workspaces_allow_rename_reject_delete_and_preserve_invalid_name_draf
             .manager_input(&mut f.native, dialog, Input::Delete { id: id.clone() })
             .is_err()
     );
-    input(&mut f, Input::Rename { id: id.clone() });
-    settle(&mut f);
-    input(
-        &mut f,
-        Input::Submit {
-            name: Some("My illustration".into()),
-            choice: None,
-        },
-    );
-    settle(&mut f);
-    assert_eq!(
+    assert!(
         f.service
-            .status
-            .defaults
-            .iter()
-            .find(|c| c.id == id)
-            .unwrap()
-            .name,
-        "My illustration"
+            .manager_input(&mut f.native, dialog, Input::Rename { id })
+            .is_err()
     );
     input(&mut f, Input::Create);
     let dialog = view(&f)["id"].as_u64().unwrap();
@@ -547,6 +532,17 @@ fn close_drains_a_confirmed_create_queued_behind_autosave_and_a_submitted_rename
     for rename in [false, true] {
         let mut f = Fixture::new();
         f.ready();
+        if rename {
+            open(&mut f, Command::New);
+            input(
+                &mut f,
+                Input::Submit {
+                    name: Some("Custom Workspace".into()),
+                    choice: None,
+                },
+            );
+            settle(&mut f);
+        }
         f.native
             .dispatch(UiAction::SetBrushSize { value: 73. })
             .unwrap();

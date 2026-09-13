@@ -113,6 +113,11 @@ fn native_column_group_input() {
             find_css(w.surface.upcast_ref(), "panel-context-menu").is_some_and(|p| p.is_visible()),
             "empty column context menu"
         );
+        let menu = find_css(w.surface.upcast_ref(), "panel-context-menu")
+            .unwrap()
+            .downcast::<gtk::PopoverMenu>()
+            .unwrap();
+        assert_eq!(menu.menu_model().unwrap().n_items(), 4);
         let label = text_widget(
             find_css(w.surface.upcast_ref(), "panel-context-menu")
                 .unwrap()
@@ -125,6 +130,12 @@ fn native_column_group_input() {
         assert_eq!(
             state(&w).workspace.layout.column_settings(column).mode,
             ColumnMode::GroupPanel
+        );
+        assert!(find_css(w.surface.upcast_ref(), "group-panel-strip").is_none());
+        capture_reference(
+            &w,
+            output.join(format!("column-closed-{theme:?}.png")).to_str().unwrap(),
+            1.,
         );
         let c = w
             .resolved()
@@ -153,6 +164,26 @@ fn native_column_group_input() {
         );
         assert!(p.panels.len() >= 2);
         assert!(find_css(w.surface.upcast_ref(), "active-column-group").is_some());
+        let strip = find_css(w.surface.upcast_ref(), "group-panel-strip").unwrap();
+        let strip_bounds = strip.compute_bounds(&w.surface).unwrap();
+        let body = find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap();
+        let body_bounds = body.compute_bounds(&w.surface).unwrap();
+        let (gap, source_class, corners) = if edge == Edge::Left {
+            (
+                body_bounds.x() - strip_bounds.x() - strip_bounds.width(),
+                "group-opens-right",
+                ["join-nw", "join-sw"],
+            )
+        } else {
+            (
+                strip_bounds.x() - body_bounds.x() - body_bounds.width(),
+                "group-opens-left",
+                ["join-ne", "join-se"],
+            )
+        };
+        assert!(gap.abs() < 1., "exposed canvas at attached seam: {gap}");
+        assert!(strip.has_css_class(source_class));
+        assert!(corners.iter().all(|class| body.has_css_class(class)));
         capture_reference(
             &w,
             output
@@ -252,6 +283,7 @@ fn native_column_group_input() {
                 .group_panel
                 .is_none()
         );
+        assert!(find_css(w.surface.upcast_ref(), "group-panel-strip").is_none());
         perform(click(center(icon)));
         let restored = state(&w).workspace.layout.column_settings(column);
         assert_eq!(restored.width, Some(saved_width));
@@ -306,6 +338,13 @@ fn native_column_group_input() {
             find_css(w.surface.upcast_ref(), "panel-context-menu").is_some_and(|p| p.is_visible())
         );
         perform(serde_json::json!([{"touch":"up"}]));
+        capture_popover(
+            menu.upcast_ref(),
+            output
+                .join(format!("column-menu-{theme:?}.png"))
+                .to_str()
+                .unwrap(),
+        );
         w.dismiss_context();
         pump(100);
     }

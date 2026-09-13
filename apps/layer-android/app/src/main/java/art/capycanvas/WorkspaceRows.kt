@@ -210,9 +210,9 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                                     onClick = { closeEdit(obj("type" to "move", "id" to id, "before" to order.getOrNull(position - 1))) })
                                 DropdownMenuItem(text = { Text("Move Down") }, enabled = enabled && position >= 0 && position < order.lastIndex, modifier = Modifier.testTag("workspace-down"),
                                     onClick = { closeEdit(obj("type" to "move", "id" to id, "before" to order.getOrNull(position + 2))) })
-                                HorizontalDivider()
+                                if (row.optBoolean("options") || row.optBoolean("delete")) HorizontalDivider()
                                 for ((kind, label) in listOf("rename" to "Rename…", "delete" to "Delete…")) {
-                                    if (kind != "delete" || row.optBoolean("delete")) DropdownMenuItem(text = { Text(label) },
+                                    if (row.optBoolean(if (kind == "rename") "options" else "delete")) DropdownMenuItem(text = { Text(label) },
                                         enabled = enabled && row.optBoolean("options"), modifier = Modifier.testTag("workspace-$kind"), onClick = {
                                             drag.menu = null; host.workspaceInput(obj("type" to "form", "kind" to kind, "id" to id))
                                         })

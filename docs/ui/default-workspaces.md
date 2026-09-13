@@ -53,7 +53,7 @@ the existing default arrangement and tool selection.
   also reuses an available built-in; it never creates a replacement workspace.
   Legacy imports preserve existing settings once, including a previously saved
   "My Workspace". Deleting an imported workspace does not import it again.
-- All three save edits normally and may be renamed. They cannot be deleted.
+- All three save tool and layout edits normally. They cannot be renamed or deleted.
   The header initially shows these three, follows workspace identities, and
   displays their current names. Its entries can be changed in Manage Workspaces.
 - The pill sits to the right of the document title and left of the clock. It uses
@@ -119,10 +119,10 @@ All workspaces and windows share the switcher configuration.
 creates workspaces directly; no reusable layout records are seeded. Older layout
 records and storage APIs remain compatible with existing data, without UI routes.
 
-`metadata.builtin` means included and undeletable. Reusable items with this flag
-are also read-only; workspaces with this flag permit normal metadata, layout, and
-working-state writes. SQLite enforces both rules. The Web adapter must use the same
-distinction instead of rejecting every write to a builtin workspace.
+`metadata.builtin` protects an included item's name and prevents deletion.
+Reusable items with this flag are read-only. Included workspaces still allow
+layout, working-state, and lifecycle metadata updates. SQLite and the browser
+store both enforce the distinction, including direct metadata writes.
 
 The shared manager exposes `workspace_ids` (complete dialog order), `switcher_ids`
 (visible subset), `refresh_switcher`, and `edit_switcher(SwitcherEdit::{Show, Move})`.

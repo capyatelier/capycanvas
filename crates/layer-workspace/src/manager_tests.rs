@@ -292,12 +292,14 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
                 &preset.layout(Platform::Gtk)
             );
             assert!(m.delete_item(id, None, 2_000).await.is_err());
+            assert!(m.rename(id, "Renamed", "", 2_000).await.is_err());
+            assert_eq!(m.load(id).await.unwrap().entity, workspace.entity);
             let details = m.details(&workspace, true, 2_000);
             assert!(
-                details
+                !details
                     .actions
                     .iter()
-                    .any(|a| matches!(a.action, ManagerAction::Rename(_)) && a.enabled)
+                    .any(|a| matches!(a.action, ManagerAction::Rename(_)))
             );
             assert!(
                 !details
@@ -320,7 +322,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
             .set_override(capture.working.preset, "size", 73.)
             .unwrap();
         m.observe(capture.clone(), 4_000);
-        m.rename(painter, "My Painting", "", 5_000).await.unwrap();
+        m.flush().await.unwrap();
         let incoming = m
             .prepare_switch(DEFAULT_WORKSPACES[2].0, 6_000)
             .await
@@ -328,7 +330,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         let outgoing = m.activate(incoming).unwrap();
         m.release(&outgoing).await;
         let restored = m.prepare_switch(painter, 7_000).await.unwrap();
-        assert_eq!(restored.entity.metadata.name, "My Painting");
+        assert_eq!(restored.entity.metadata.name, "Painter");
         assert_eq!(
             restored.entity.capture().unwrap(),
             m.load(painter).await.unwrap().entity.capture().unwrap()
@@ -342,7 +344,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
         let incoming = reopened.initialize(8_000).await.unwrap();
         assert_eq!(incoming.entity.id, painter);
-        assert_eq!(incoming.entity.metadata.name, "My Painting");
+        assert_eq!(incoming.entity.metadata.name, "Painter");
         assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
         assert_eq!(incoming.entity.capture().unwrap().working, capture.working);
         assert_eq!(reopened.items().len(), 3);
@@ -359,7 +361,22 @@ fn photographer_size_upgrade_preserves_brush_edits_and_customized_layouts() {
             let f = Fixture::new();
             let m = &f.manager;
             let id = DEFAULT_WORKSPACES[2].0;
-            let stored = m.claim(id).await.unwrap();
+            let mut stored = m.claim(id).await.unwrap();
+            // Model an existing database renamed before included names were locked.
+            stored.entity.metadata.name = "My Photos".into();
+            let connection =
+                rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+            connection
+                .execute(
+                    "UPDATE items SET metadata=?1,name=?2,name_key=?3 WHERE id=?4",
+                    rusqlite::params![
+                        serde_json::to_string(&stored.entity.metadata).unwrap(),
+                        "My Photos",
+                        name_key("My Photos"),
+                        id
+                    ],
+                )
+                .unwrap();
             let mut previous = WorkspacePreset::Photographer.layout(Platform::Gtk);
             for panel in [Panel::Toolbar, Panel::Commands] {
                 previous
@@ -381,8 +398,7 @@ fn photographer_size_upgrade_preserves_brush_edits_and_customized_layouts() {
                 baseline: previous,
                 origin: None,
             };
-            let mut metadata = stored.entity.metadata.clone();
-            metadata.rename("My Photos", "", 2_000).unwrap();
+            let metadata = stored.entity.metadata.clone();
             let mut working = stored.entity.working.clone().unwrap();
             working
                 .tools

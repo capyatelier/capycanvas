@@ -747,6 +747,11 @@ fn apply_write(
                 "Included workspaces cannot be deleted.",
             ));
         }
+        if row.builtin && metadata.name != serde_json::from_str::<Metadata>(&row.metadata)?.name {
+            return Err(StoreError::invalid(
+                "Included workspaces cannot be renamed.",
+            ));
+        }
         let metadata = resolve_name(connection, metadata.clone(), &write.id, write.name_policy)?;
         generations.metadata = advance(generations.metadata)?;
         connection.execute("UPDATE items SET name=?2,name_key=?3,metadata=?4,metadata_generation=?5,deleted_at=?6 WHERE id=?1", params![write.id, metadata.name, name_key(&metadata.name), serde_json::to_string(&metadata)?, generations.metadata.to_string(), metadata.deleted_at_ms.map(|v| v.to_string())])?;

@@ -114,7 +114,7 @@ try {
     Menu 'Manage Workspaces…'
     if((Manager).rows.Count -ne 3){throw 'Expected exactly three included workspaces'}
     if((Button 'Switch to Workspace').Current.IsEnabled){throw 'Current workspace switch must be disabled'}
-    if((Manager).rows|Where-Object {$_.delete -or !$_.rename}){throw 'Included workspace options violate rename/delete policy'}
+    if((Manager).rows|Where-Object {$_.delete -or $_.rename}){throw 'Included workspace options violate rename/delete policy'}
     $painter='builtin:workspace:painter'
     $item=Select-Row $painter
     if((Layout) -eq $before){throw 'Row selection did not preview Painter'}
@@ -157,20 +157,16 @@ try {
     if((Layout) -ne $saved -or (Model).state.brush.diameter -ne $size){throw 'Restore Starting Layout did not preserve tool settings and restore the baseline'}
     Menu 'Manage Workspaces…'
     Capture 'workspaces'
-    Invoke ('workspace-manager-options-'+$original);Invoke 'workspace-manager-rename'
-    Wait-Until {(Manager).prompt.title -eq 'Rename'} 'Included workspace rename did not open'
-    Edit 'workspace-manager-name' 'My Illustration'
-    Choose 'Rename'
-    Wait-Until {$null -eq (Manager).prompt -and $null -ne (Row 'My Illustration')} 'Included workspace rename did not update list'
+    Invoke ('workspace-manager-options-'+$original)
+    $null=Control 'workspace-manager-show'
+    foreach($id in @('workspace-manager-rename','workspace-manager-delete')){
+        $action=Find $id
+        if($action -and !$action.Current.IsOffscreen){throw 'Included workspace exposes a protected rename/delete action'}
+    }
+    [CapyManagerKeys]::Key([uint32]$review.Id,27)
+    Wait-Until {$null -eq (Find 'workspace-manager-show')} 'Included workspace menu did not close'
     Choose 'Cancel';Closed
-    if((Control 'workspace-switch-illustrator').Current.Name -ne 'My Illustration'){throw 'Header did not follow the renamed workspace identity'}
-    Wait-Until {
-        $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
-        $firstChoice=(Control 'workspace-switch-painter').Current.BoundingRectangle
-        $menu.Right -le $firstChoice.Left
-    } 'Renamed workspace header overlaps the application menus'
-    Capture 'renamed-header'
-    $originalName='My Illustration'
+    if((Control 'workspace-switch-illustrator').Current.Name -ne $originalName){throw 'Included workspace name changed'}
     Menu 'Manage Workspaces…'
     Invoke 'workspace-manager-create'
     Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'New Workspace prompt did not open'
@@ -197,6 +193,13 @@ try {
     Edit 'workspace-manager-name' 'Inking'
     Choose 'Rename'
     Wait-Until {$null -eq (Manager).prompt -and $null -ne (Row 'Inking')} 'Rename did not update retained list'
+    Wait-Until {(Control ('workspace-switch-'+$painting)).Current.Name -eq 'Inking'} 'Header did not follow the renamed custom workspace'
+    Wait-Until {
+        $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
+        $firstChoice=(Control 'workspace-switch-painter').Current.BoundingRectangle
+        $menu.Right -le $firstChoice.Left
+    } 'Renamed workspace header overlaps the application menus'
+    Capture 'renamed-header'
     Invoke ('workspace-manager-options-'+$painting);Invoke 'workspace-manager-delete'
     Wait-Until {(Manager).prompt.title -eq 'Delete'} 'Delete prompt did not open'
     Choose 'Delete'
@@ -216,7 +219,7 @@ try {
     Launch 'restart'
     if((Layout) -ne $beforeReset){throw 'Closing during a preview persisted the temporary arrangement'}
     if((Model).windows_workspace.name -ne $originalName -or (Model).state.brush.diameter -ne $size){throw 'Restart did not restore the active workspace'}
-    if((Control 'workspace-switch-illustrator').Current.Name -ne $originalName){throw 'Renamed header did not survive restart'}
+    if((Control 'workspace-switch-illustrator').Current.Name -ne $originalName){throw 'Included workspace header name changed after restart'}
     Menu 'Manage Workspaces…'
     if((Manager).rows.Count -ne 3){throw 'Restart did not preserve workspace deletion'}
     Choose 'Cancel';Closed

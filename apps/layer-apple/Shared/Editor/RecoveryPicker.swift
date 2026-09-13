@@ -55,7 +55,7 @@ struct RecoveryPresentation: ViewModifier {
                         Text(error)
                         Button("Retry") { recovery.refresh(); recovery.flush { _ in } }
                         Button("Recovered Drawings…") { recovery.refresh(); recovery.presented = true }
-                    }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding()
+                    }.padding(12).modifier(EditorGlassSurface(shape: RoundedRectangle(cornerRadius: 8))).padding()
                 }
             }
     }

@@ -85,6 +85,75 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
+The user also requests native Apple context menus and Liquid Glass for modals
+and popups on both platforms where supported, preserving their approximate
+design, layout and complete actions. Native menu migration must preserve the
+confirmed held-contact transition into dragging. System sheets, alerts and
+popovers keep their platform presentation; custom overlays use a shared glass
+surface with an older-system material fallback and an opaque Reduce Transparency
+appearance. This presentation accommodation does not relax editor geometry or
+performance acceptance.
+The same requested Liquid Glass treatment includes the header's workspace pill
+switcher, retaining its segment layout and selected-workspace highlight. Its
+glass pixels are an intentional platform accommodation from the shared track.
+
+## Glass surfaces and layer origins — 2026-09-12
+
+Both Apple hosts share one availability-aware glass modifier for custom
+workspace context overlays, workspace/recovery notices, document progress and
+the header's workspace pill switcher.
+Existing native sheets, alerts and popovers retain their system presentation.
+The custom surfaces preserve their previous dimensions, padding, corner shapes
+and actions; Reduce Transparency selects an opaque semantic background.
+
+Layer menus previously attached to the entire panel, so iPadOS placed their
+arrow at the panel center. Each visible row now owns its presentation, including
+mask gestures, while the footer action owns a separate button presentation.
+Pending queries are invalidated when the source disappears or the document
+changes. The focused iPad Simulator workflow passes layer selection, mask
+creation/deletion and content/footer menu presentation. Its full-screen captures
+were inspected: mask and content arrows meet their respective rows, and the
+footer arrow meets the invoking button.
+
+Direct AppKit checks pass for mouse/pen row pickup, held-menu release and
+same-contact dragging, immediate grips, scrolling, keyboard menu actions and
+cancellation on both Apple presets with the new glass surface. Shared changes
+through `b0c984b` are integrated; all 41 Apple, 25 host, 295 UI and 64 native
+workspace tests pass (425 total, one existing host test ignored). Both final
+Apple builds pass. The signed isolated iPad app installs and launches in a fresh
+test workspace; that launch adds no physical Pencil or timing evidence.
+
+The final shared prediction-capability change through `907c632` is also
+integrated. The 41 Apple and now 296 UI checks pass again, along with the new
+engine oracle for platform-prediction preference handling. The Apple defaults
+retain native prediction availability.
+
+With the switcher glass included, both Apple builds pass again and the focused
+iPad editor capture passes. All 96 existing header component cases pass across
+the two Apple presets, three task workspaces, narrow/wide widths, themes,
+clock visibility and paper/surround backgrounds. Comparing their 1,044 measured
+rectangles to the preceding switcher fixtures finds no geometry change beyond
+floating-point noise. Invisible AppKit captures establish layout, not compositor
+glass pixels; the separate iPad screen capture shows the presented glass pill.
+Direct captures of an isolated native Mac window also confirm the glass pill in
+light and dark editor themes. Native materials now receive the resolved editor
+color scheme, preventing dark system glass behind light-theme text. The outer
+editor still observes the OS scheme for the shared automatic-theme setting.
+Both builds pass after this correction; the owned Mac capture windows are closed.
+
+Concurrent workspace changes through `46e48c8` are integrated before publication,
+including protected included-workspace names and shared attached-column layout.
+The rebased Mac and signed iPad builds pass, along with all 426 Apple/host/UI/
+native-workspace tests (one existing host test ignored). The earlier menu and
+glass captures cover the unchanged Swift presentation; they do not establish
+new attached-column UI parity.
+
+This completes the popup appearance and layer-anchor refinement. Converting
+custom context-menu contents to native Apple menus while retaining the confirmed
+held-contact drag behavior remains open, as do the broader feature, visual and
+performance gates. Raw captures, device/signing metadata and experimental
+native-menu handoff code remain in ignored local artifacts.
+
 ## Native workspace pickup — implementation in progress, 2026-09-12
 
 Toolbar tiles and collapsed-column icons now share retained contact ownership
@@ -141,6 +210,14 @@ These checks do not establish physical Pencil row/column behavior, the complete
 disabled/divider/drawer input matrix, whole-layer-row pickup, small-window/header
 parity, full pixel parity or sustained hardware performance. Those gates remain
 open; no physical Pencil result is inferred from simulator or injected events.
+
+The user subsequently confirmed the isolated physical iPad workspace-row Pencil
+check: early row motion does not reorder; holding opens the menu; continuing
+that contact closes the menu and reorders; lifting retains the menu; and the
+left grip drags immediately, without stray selections or lag. This confirms
+those row gestures on the installed switcher build, not the later tile/column
+changes. The requested next refinement is native Apple context-menu presentation
+while preserving this same-contact behavior; that migration remains open.
 
 ## Configurable workspace switcher — 2026-09-12
 

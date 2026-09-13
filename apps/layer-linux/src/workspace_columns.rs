@@ -204,11 +204,16 @@ impl Columns {
                 });
             }
             let strip = strips.iter().find(|s| s.id == c.id).unwrap();
-            let settings = layout.column_settings(c.id);
-            if settings.mode == ColumnMode::GroupPanel {
+            for class in ["group-panel-strip", "group-opens-left", "group-opens-right"] {
+                strip.root.remove_css_class(class);
+            }
+            if let Some(p) = &c.group_panel {
                 strip.root.add_css_class("group-panel-strip");
-            } else {
-                strip.root.remove_css_class("group-panel-strip");
+                strip.root.add_css_class(if p.direction == Edge::Left {
+                    "group-opens-left"
+                } else {
+                    "group-opens-right"
+                });
             }
             for (id, mini) in &strip.groups {
                 for class in [

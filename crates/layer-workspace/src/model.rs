@@ -189,6 +189,11 @@ impl Metadata {
         Ok(())
     }
     pub fn rename(&mut self, name: &str, description: &str, now: u64) -> Result<(), StoreError> {
+        if self.builtin && self.kind == ItemKind::Workspace {
+            return Err(StoreError::invalid(
+                "Included workspaces cannot be renamed.",
+            ));
+        }
         validate_name(name.trim())?;
         if description.len() > 16_384 || self.previous.len() >= 100_000 {
             return Err(StoreError::invalid(
