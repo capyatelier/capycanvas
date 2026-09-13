@@ -1793,7 +1793,8 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-category-input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.waitForIdle()
-        val number = compose.onNodeWithTag("setting-number-prediction_horizon").performScrollTo()
+        compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
+        val number = compose.onNodeWithTag("setting-number-prediction_horizon")
         number.performTextReplacement("12")
         instrumentation.runOnMainSync {
             for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
@@ -1850,6 +1851,7 @@ class AndroidHostTest {
             track[trackX, track.height / 4].red - track[trackX, track.height / 2].red > .05f)
         capture("32-inline-numbers")
         val before = state().getJSONObject("settings").number("prediction_ms")
+        compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
         compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("1/0")
         compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         compose.onNodeWithText("Enter a finite number", substring = true).assertExists()
@@ -1864,7 +1866,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
         assertTrue(preferences().isNull("error"))
-        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64 ms")
+        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("64 ms")
         compose.onNodeWithText("About").performClick()
         val collected = CountDownLatch(1)
         host.measurements(true) { collected.countDown() }
@@ -1881,7 +1883,7 @@ class AndroidHostTest {
         assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
-        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64 ms")
+        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("64 ms")
         // Return this shared preference to its original accepted value.
         compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to before)) }
         waitState { it.getJSONObject("settings").number("prediction_ms") == before }
@@ -1913,9 +1915,11 @@ class AndroidHostTest {
         waitState { it.getJSONObject("settings").getString("dark_base") == "#333333" }
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        val number = compose.onNodeWithTag("setting-number-prediction_horizon").performScrollTo()
+        compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
+        val number = compose.onNodeWithTag("setting-number-prediction_horizon")
         number.performTextReplacement("32"); number.performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 32f }
+        compose.onNodeWithTag("number-value-prediction_horizon").performClick()
         number.performTextReplacement("")
         assertEquals(32f, state().getJSONObject("settings").number("prediction_ms"))
         number.performImeAction()
@@ -1966,11 +1970,11 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithTag("preference-feedback").performClick()
         waitState { !it.getJSONObject("settings").getBoolean("feedback") }
-        compose.onNodeWithTag("setting-number-prediction_horizon").assertIsNotEnabled()
-        compose.onNodeWithTag("setting-slider-tip_lock").assertIsNotEnabled()
+        compose.onNodeWithTag("setting-slider-prediction_horizon").assertIsNotEnabled()
+        compose.onNodeWithTag("preference-tip_lock").assertDoesNotExist()
         compose.onNodeWithTag("preference-feedback").performClick()
         waitState { it.getJSONObject("settings").getBoolean("feedback") }
-        compose.onNodeWithTag("setting-number-prediction_horizon").assertIsEnabled()
+        compose.onNodeWithTag("setting-slider-prediction_horizon").assertIsEnabled()
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("37-inline-controls-dark")

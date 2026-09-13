@@ -292,17 +292,17 @@ export async function checkPreferences({ call, evaluate, settle }) {
     const rows=layerApp.app.preferences().pages.find(p=>p.id==='input').groups.flatMap(g=>g.rows);
     return rows[rows.findIndex(r=>r.id==='feedback')+1].id==='platform_prediction';
   })()`));
-  for (const id of ['prediction-horizon', 'tip-lock'])
-    assert.equal(await evaluate(`document.querySelector('#setting-${id}').disabled`), nativeAvailable);
+  assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), nativeAvailable);
   if (nativeAvailable) await click('#setting-platform-prediction');
-  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value"), '8 ms', 'units appear beside numeric values');
-  await click('#setting-prediction-horizon .number-entry');
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-value').textContent"), '8 ms', 'units appear beside numeric values');
+  await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='4*2 ms'");
   await key('Enter');
   assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 8, 'expressions accept displayed units');
-  await click('#setting-prediction-horizon .number-entry');
+  await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='32'"); await key('Enter');
-  await click('#setting-prediction-horizon .number-entry');
+  await click('#setting-prediction-horizon .number-value');
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value=''");
   assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 32);
   await key('Enter');

@@ -93,6 +93,7 @@ pub struct Settings {
     pub feedback: bool,
     pub platform_prediction: bool,
     pub prediction_ms: f32,
+    /// Retained for saved-settings compatibility; preview tracking is automatic.
     pub tip_lock: f32,
     /// Only overrides are stored. Empty keys disable an action's shortcut.
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
@@ -156,9 +157,13 @@ impl Settings {
                 control.validate(value, &row.title)?;
             }
         }
-        self.feedback_config()
-            .validate()
-            .map_err(|e| e.to_string())?;
+        // Continue validating the retained legacy value without applying it.
+        layer_engine::InstantFeedbackConfig {
+            tip_lock: self.tip_lock,
+            ..self.feedback_config()
+        }
+        .validate()
+        .map_err(|e| e.to_string())?;
         self.validate_shortcuts()
     }
     pub(crate) fn feedback_config(&self) -> layer_engine::InstantFeedbackConfig {
@@ -166,7 +171,8 @@ impl Settings {
             enabled: self.feedback,
             use_platform_prediction: self.platform_prediction,
             prediction_horizon_micros: (self.prediction_ms * 1000.0).round() as u32,
-            tip_lock: self.tip_lock,
+            // Always track the predicted endpoint at full strength. Prediction
+            // time alone controls how far ahead the preview should reach.
             ..Default::default()
         }
     }
@@ -178,10 +184,9 @@ impl Settings {
         config.use_platform_prediction &= native_available;
         if config.use_platform_prediction {
             // Native samples carry their own lookahead. The fallback uses
-            // automatic defaults, never the disabled, saved manual controls.
+            // automatic timing, never the disabled, saved prediction time.
             let defaults = layer_engine::InstantFeedbackConfig::default();
             config.prediction_horizon_micros = defaults.prediction_horizon_micros;
-            config.tip_lock = defaults.tip_lock;
         }
         config
     }
@@ -249,6 +254,7 @@ pub enum PreferenceId {
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
+    /// Retired preference ID, retained to decode old serialized actions.
     TipLock,
     Version,
     License,
@@ -558,10 +564,10 @@ fn number(
         PreferenceKind::Number {
             value,
             control: match id {
-                PreferenceId::TipLock => NumericControl::percent(),
-                PreferenceId::PredictionHorizon => {
-                    NumericControl::number(min, max, step, 0).unit("ms")
-                }
+                PreferenceId::PredictionHorizon => NumericControl {
+                    kind: NumericKind::Slider,
+                    ..NumericControl::number(min, max, step, 0).unit("ms")
+                },
                 _ => {
                     NumericControl::number(min, max, step, if step < 1.0 { 2 } else { 0 }).unit("×")
                 }
@@ -663,18 +669,9 @@ impl Settings {
                 64.0,
                 1.0,
             ),
-            number(
-                TipLock,
-                "Pen tip tracking",
-                "Higher values bring the stroke closer to your pen.",
-                self.tip_lock,
-                0.0,
-                1.0,
-                0.05,
-            ),
         ];
         for r in &mut input {
-            if matches!(r.id, PredictionHorizon | TipLock | PlatformPrediction) {
+            if matches!(r.id, PredictionHorizon | PlatformPrediction) {
                 r.enabled = self.feedback;
             }
         }
@@ -996,7 +993,7 @@ impl Settings {
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,
-            TipLock => self.tip_lock = n,
+            TipLock => return Err("Pen tip tracking is automatic.".into()),
             Feedback => self.feedback = matches!(value, PreferenceValue::Bool(true)),
             PlatformPrediction => {
                 self.platform_prediction = matches!(value, PreferenceValue::Bool(true))
@@ -1041,10 +1038,8 @@ impl PreferencesState {
                 row.enabled = false;
                 row.description = "Unavailable for this system or connected pen.".into();
             }
-            if matches!(
-                row.id,
-                PreferenceId::PredictionHorizon | PreferenceId::TipLock
-            ) && platform_prediction_available
+            if row.id == PreferenceId::PredictionHorizon
+                && platform_prediction_available
                 && settings.platform_prediction
             {
                 row.enabled = false;
@@ -1506,7 +1501,6 @@ mod copy_tests {
                     PreferenceId::PredictionHorizon,
                     PreferenceValue::Number(32.0),
                 ),
-                (PreferenceId::TipLock, PreferenceValue::Number(0.5)),
             ] {
                 settings.edit(id, value.clone(), platform).unwrap();
                 assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
@@ -1611,7 +1605,6 @@ mod copy_tests {
                 PreferenceId::Pressure,
                 PreferenceId::Feedback,
                 PreferenceId::PredictionHorizon,
-                PreferenceId::TipLock,
                 PreferenceId::License,
             ] {
                 assert!(!settings.field(id, platform).unwrap().description.is_empty());

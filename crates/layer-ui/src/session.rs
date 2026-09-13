@@ -2703,10 +2703,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && matches!(
                         action,
                         PreferenceAction::Edit {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock,
+                            id: PreferenceId::PredictionHorizon,
                             ..
                         } | PreferenceAction::Reset {
-                            id: PreferenceId::PredictionHorizon | PreferenceId::TipLock
+                            id: PreferenceId::PredictionHorizon
                         }
                     )
                 {
@@ -14099,8 +14099,33 @@ mod tests {
             assert_eq!(rows[index + 1].id, PreferenceId::PlatformPrediction);
             assert_eq!(rows[index + 1].title, title);
             assert_eq!(rows[index + 1].enabled, supported);
-            for id in [PreferenceId::PredictionHorizon, PreferenceId::TipLock] {
-                let row = rows.iter().find(|r| r.id == id).unwrap();
+            assert!(!rows.iter().any(|r| r.id == PreferenceId::TipLock));
+            // Legacy settings still load, but neither old actions nor their
+            // stored value can override automatic endpoint tracking.
+            for action in [
+                PreferenceAction::Edit {
+                    id: PreferenceId::TipLock,
+                    value: PreferenceValue::Number(0.0),
+                },
+                PreferenceAction::Reset {
+                    id: PreferenceId::TipLock,
+                },
+            ] {
+                preference(&mut s, action);
+                assert!(s.preferences().unwrap().error.is_some());
+                assert_eq!(s.state.settings, settings);
+            }
+            {
+                let id = PreferenceId::PredictionHorizon;
+                let row = &rows[index + 2];
+                assert_eq!(row.id, id);
+                let PreferenceKind::Number { control, value } = &row.kind else {
+                    panic!("Prediction time must be numeric");
+                };
+                assert_eq!(control.kind, NumericKind::Slider);
+                assert_eq!(control.unit, "ms");
+                assert_eq!((control.min, control.max, control.step), (0.0, 64.0, 1.0));
+                assert_eq!(*value, 23.0);
                 assert_eq!(row.enabled, !supported);
                 assert_eq!(row.reset.as_ref().unwrap().enabled, !supported);
                 if supported {
@@ -14126,7 +14151,7 @@ mod tests {
                 config.prediction_horizon_micros,
                 if supported { 8_000 } else { 23_000 }
             );
-            assert_eq!(config.tip_lock, if supported { 1.0 } else { 0.3 });
+            assert_eq!(config.tip_lock, 1.0);
             if supported {
                 edit_preference(
                     &mut s,
@@ -14139,7 +14164,7 @@ mod tests {
                     .feedback_config_for(s.platform_prediction_available());
                 assert!(!config.use_platform_prediction);
                 assert_eq!(config.prediction_horizon_micros, 23_000);
-                assert_eq!(config.tip_lock, 0.3);
+                assert_eq!(config.tip_lock, 1.0);
                 edit_preference(
                     &mut s,
                     PreferenceId::PredictionHorizon,
