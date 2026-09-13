@@ -3,7 +3,7 @@
 #include "NativeMenus.h"
 #include <d2d1_3.h>
 #include <d3d11.h>
-#include <dwrite.h>
+#include <dwrite_2.h>
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Input.h>
@@ -37,50 +37,92 @@ D2D1_GRADIENT_MESH_PATCH patch(std::array<Point2,16> const& p,std::array<Paint,4
         D2D1_PATCH_EDGE_MODE_ANTIALIASED,D2D1_PATCH_EDGE_MODE_ANTIALIASED};
 }
 
-// Keep glyphs as vectors until their final rotation and position.
-// This avoids resampling the raster of each tiny rotated TextBlock.
-struct GlyphOutline : winrt::implements<GlyphOutline,ID2D1SimplifiedGeometrySink> {
-    PathGeometry geometry;
-    PathFigure figure{nullptr};
-    HRESULT error=S_OK;
-    template<class F> void append(F action) noexcept {
-        if(FAILED(error))return;
-        try{action();}catch(...){error=to_hresult();}
-    }
-    void __stdcall SetFillMode(D2D1_FILL_MODE mode) noexcept override {
-        append([&]{geometry.FillRule(mode==D2D1_FILL_MODE_WINDING?FillRule::Nonzero:FillRule::EvenOdd);});
-    }
-    void __stdcall SetSegmentFlags(D2D1_PATH_SEGMENT) noexcept override {}
-    void __stdcall BeginFigure(Point2 p,D2D1_FIGURE_BEGIN begin) noexcept override {
-        append([&]{figure=PathFigure();figure.StartPoint({p.x,p.y});figure.IsFilled(begin==D2D1_FIGURE_BEGIN_FILLED);geometry.Figures().Append(figure);});
-    }
-    void __stdcall AddLines(Point2 const* points,UINT count) noexcept override {
-        append([&]{for(UINT i=0;i<count;i++){LineSegment line;line.Point({points[i].x,points[i].y});figure.Segments().Append(line);}});
-    }
-    void __stdcall AddBeziers(D2D1_BEZIER_SEGMENT const* curves,UINT count) noexcept override {
-        append([&]{for(UINT i=0;i<count;i++){auto const& c=curves[i];BezierSegment curve;
-            curve.Point1({c.point1.x,c.point1.y});curve.Point2({c.point2.x,c.point2.y});curve.Point3({c.point3.x,c.point3.y});figure.Segments().Append(curve);}});
-    }
-    void __stdcall EndFigure(D2D1_FIGURE_END end) noexcept override {
-        append([&]{figure.IsClosed(end==D2D1_FIGURE_END_CLOSED);});
-    }
-    HRESULT __stdcall Close() noexcept override {return error;}
-};
-PathGeometry glyphOutline(wchar_t scalar,double size){
-    static thread_local auto face=[]{
-        com_ptr<IDWriteFactory> factory;
-        check_hresult(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<::IUnknown**>(factory.put())));
+// Rasterize at the final glyph transform. The shared browser uses a grayscale
+// reduction of DirectWrite's three-channel mask, with sRGB text correction.
+// Match its font-cache precision and hinting before WinUI composites the image.
+// See the Color panel rendering references in README.md.
+struct GlyphRasterizer {
+    com_ptr<IDWriteFactory2> factory;
+    std::array<com_ptr<IDWriteFontFace>,2> faces;
+    std::map<uint32_t,std::array<uint8_t,256>> tables;
+    GlyphRasterizer(){
+        check_hresult(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory2),reinterpret_cast<::IUnknown**>(factory.put())));
         com_ptr<IDWriteFontCollection> fonts;check_hresult(factory->GetSystemFontCollection(fonts.put()));
         UINT index=0;BOOL found=FALSE;check_hresult(fonts->FindFamilyName(L"Segoe UI",&index,&found));check_bool(found);
         com_ptr<IDWriteFontFamily> family;check_hresult(fonts->GetFontFamily(index,family.put()));
-        com_ptr<IDWriteFont> font;check_hresult(family->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STRETCH_NORMAL,DWRITE_FONT_STYLE_NORMAL,font.put()));
-        com_ptr<IDWriteFontFace> result;check_hresult(font->CreateFontFace(result.put()));return result;
-    }();
-    UINT32 code=scalar;UINT16 glyph=0;check_hresult(face->GetGlyphIndices(&code,1,&glyph));
-    auto sink=winrt::make_self<GlyphOutline>();
-    check_hresult(face->GetGlyphRunOutline(float(size),&glyph,nullptr,nullptr,1,false,false,sink.get()));
-    check_hresult(sink->Close());return sink->geometry;
-}
+        for(size_t i=0;i<faces.size();i++){
+            com_ptr<IDWriteFont> font;check_hresult(family->GetFirstMatchingFont(i?DWRITE_FONT_WEIGHT_BOLD:DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STRETCH_NORMAL,DWRITE_FONT_STYLE_NORMAL,font.put()));
+            check_hresult(font->CreateFontFace(faces[i].put()));
+        }
+    }
+    static float linear(float x){return x<=.04045f?x/12.92f:std::pow((x+.055f)/1.055f,2.4f);}
+    static float srgb(float x){return x<=.0031308f?12.92f*x:1.055f*std::pow(x,1.f/2.4f)-.055f;}
+    static int canonical(int x){x>>=5;return (x<<5)|(x<<2)|(x>>1);}
+    static std::array<uint8_t,256> coverage(winrt::Windows::UI::Color ink){
+        int lum=(54*canonical(ink.R)+183*canonical(ink.G)+19*canonical(ink.B))>>8;
+        float src=canonical(lum)/255.f,dst=1-src,ls=linear(src),ld=linear(dst);
+        std::array<uint8_t,256> result;
+        for(size_t i=0;i<result.size();i++){
+            float a=float(i)/255.f;a+=a*(1-a)*ld;
+            float corrected=(srgb(ls*a+ld*(1-a))-dst)/(src-dst);
+            result[i]=uint8_t(std::clamp(std::lround(corrected*255),0l,255l));
+        }
+        return result;
+    }
+    void draw(Image const& target,std::wstring_view text,double font,bool bold,Matrix const& position,double scale,winrt::Windows::UI::Color ink,float opacity){
+        auto relaxed=[&](double x){return std::floor(float(x*scale)*1024+.5f)/1024;};
+        float a=relaxed(position.M11),b=relaxed(position.M12),c=relaxed(position.M21),d=relaxed(position.M22);
+        float length=std::sqrt(c*c+d*d);bool rotated=b!=0||c!=0;
+        auto quarter=[&](double x){return std::floor(float(x*scale)*4+.5f)/4;};
+        DWRITE_MATRIX transform{a/length,b/length,c/length,d/length,quarter(position.OffsetX),rotated?quarter(position.OffsetY):std::floor(float(position.OffsetY*scale)+.5f)};
+        auto face=faces[bold].get();auto count=uint32_t(text.size());float em=float(font)*length;
+        std::vector<UINT32> codes(text.begin(),text.end());std::vector<UINT16> glyphs(count);
+        check_hresult(face->GetGlyphIndices(codes.data(),count,glyphs.data()));
+        std::vector<DWRITE_GLYPH_METRICS> metrics(count);check_hresult(face->GetDesignGlyphMetrics(glyphs.data(),count,metrics.data()));
+        DWRITE_FONT_METRICS fontMetrics;face->GetMetrics(&fontMetrics);std::vector<float> advances(count);
+        for(size_t i=0;i<count;i++)advances[i]=em*metrics[i].advanceWidth/fontMetrics.designUnitsPerEm;
+        DWRITE_GLYPH_RUN run{face,em,count,glyphs.data(),advances.data(),nullptr,FALSE,0};
+        com_ptr<IDWriteGlyphRunAnalysis> analysis;
+        auto mode=DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
+        if(!rotated){
+            mode=em>20?DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC:DWRITE_RENDERING_MODE_NATURAL;
+            void const* table=nullptr;UINT32 bytes=0;void* context=nullptr;BOOL exists=FALSE;
+            check_hresult(face->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('g','a','s','p'),&table,&bytes,&context,&exists));
+            if(exists){
+                auto data=static_cast<uint8_t const*>(table);
+                auto word=[&](size_t i){return (unsigned(data[i])<<8)|data[i+1];};
+                if(bytes>=4&&word(0)==1){
+                    for(size_t i=4;i+3<bytes&&i<4+size_t(word(2))*4;i+=4){
+                        if(std::lround(em)<=long(word(i))){mode=(word(i+2)&8)?DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC:DWRITE_RENDERING_MODE_NATURAL;break;}
+                    }
+                }
+                face->ReleaseFontTable(context);
+            }
+        }
+        check_hresult(factory->CreateGlyphRunAnalysis(&run,&transform,mode,
+            DWRITE_MEASURING_MODE_NATURAL,rotated?DWRITE_GRID_FIT_MODE_DISABLED:DWRITE_GRID_FIT_MODE_ENABLED,
+            DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE,0,0,analysis.put()));
+        RECT box{};check_hresult(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_CLEARTYPE_3x1,&box));
+        int width=box.right-box.left,height=box.bottom-box.top;
+        if(width<=0||height<=0){target.Source(nullptr);return;}
+        std::vector<uint8_t> samples(size_t(width)*height*3);
+        check_hresult(analysis->CreateAlphaTexture(DWRITE_TEXTURE_CLEARTYPE_3x1,&box,samples.data(),uint32_t(samples.size())));
+        // Transparent padding preserves interpolation at a fractional parent origin.
+        Imaging::WriteableBitmap bitmap(width+2,height+2);uint8_t* pixels=nullptr;
+        check_hresult(bitmap.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&pixels));
+        std::fill_n(pixels,size_t(width+2)*(height+2)*4,uint8_t(0));
+        auto [entry,inserted]=tables.try_emplace(uint32_t(ink.R)*65536+uint32_t(ink.G)*256+ink.B);
+        if(inserted)entry->second=coverage(ink);auto const& table=entry->second;
+        for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+            auto mask=&samples[(size_t(y)*width+x)*3];uint8_t alpha=uint8_t(std::lround(table[(mask[0]+mask[1]+mask[2])/3]*opacity));
+            auto pixel=pixels+((size_t(y)+1)*(width+2)+x+1)*4;
+            pixel[0]=uint8_t((ink.B*alpha+127)/255);pixel[1]=uint8_t((ink.G*alpha+127)/255);
+            pixel[2]=uint8_t((ink.R*alpha+127)/255);pixel[3]=alpha;
+        }
+        bitmap.Invalidate();target.Source(bitmap);target.Width((width+2)/scale);target.Height((height+2)/scale);
+        Canvas::SetLeft(target,(box.left-1)/scale);Canvas::SetTop(target,(box.top-1)/scale);
+    }
+};
 
 struct Device {
     com_ptr<ID3D11Device> d3d;
@@ -253,12 +295,13 @@ struct View:std::enable_shared_from_this<View>{
     std::array<Button,2> shapes;
     std::array<Canvas,2> shapeGlyphs{nullptr,nullptr};
     std::array<bool,2> shapeHovered{};
-    Shapes::Ellipse swapFill;bool swapHovered=false;
+    Shapes::Ellipse swapFill;Image swapGlyph;bool swapHovered=false;
     Button swap,readout;
     Shapes::Path readoutHit;
-    TextBlock readoutLabel;
+    TextBlock labelMetrics;
+    Image labelImage;hstring labelKey;
     Shapes::Path readoutFocus;
-    struct Glyph {Shapes::Path path;MatrixTransform transform;wchar_t scalar=0;double font=0;};
+    struct Glyph {Image image;MatrixTransform transform;wchar_t scalar=0;std::array<double,9> key{};};
     std::vector<Glyph> glyphs;
     std::array<Border,3> chips;
     std::array<MatrixTransform,3> chipTransforms;
@@ -366,14 +409,15 @@ struct View:std::enable_shared_from_this<View>{
         }
         swap=control(L"Swap foreground and background",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"swap")}}));});
         stage.Children().Append(swap);AutomationProperties::SetAutomationId(swap,L"color-swap");
-        Grid swapContent;swapContent.Children().Append(swapFill);swapContent.Children().Append(colorIcon(L"swap",data->brush(L"text")));swap.Content(swapContent);
+        Grid swapContent;swapGlyph=icon(L"color-swap",data->theme());swapGlyph.HorizontalAlignment(HorizontalAlignment::Center);swapGlyph.VerticalAlignment(VerticalAlignment::Center);
+        swapContent.Children().Append(swapFill);swapContent.Children().Append(swapGlyph);swap.Content(swapContent);
         swap.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->swapHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         swap.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swapHovered=false;self->refresh();}});
         readout=control(L"Color readout",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
         readoutHit.Fill(clear());readoutBody.Children().Append(readoutHit);
-        readoutLabel.FontFamily(FontFamily(L"Segoe UI"));readoutLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());readoutLabel.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(readoutLabel,Automation::Peers::AccessibilityView::Raw);
-        readoutBody.Children().Append(readoutLabel);readoutFocus.IsHitTestVisible(false);
+        labelMetrics.UseLayoutRounding(false);labelMetrics.FontFamily(FontFamily(L"Segoe UI"));labelMetrics.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());labelMetrics.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(labelMetrics,Automation::Peers::AccessibilityView::Raw);
+        labelImage.IsHitTestVisible(false);labelImage.Stretch(Stretch::Fill);AutomationProperties::SetAccessibilityView(labelImage,Automation::Peers::AccessibilityView::Raw);readoutBody.Children().Append(labelImage);readoutFocus.IsHitTestVisible(false);
         readoutFocus.Opacity(.9);readoutFocus.StrokeThickness(1.5);readoutBody.Children().Append(readoutFocus);
         for(int i=0;i<3;i++){
             chips[i].IsHitTestVisible(false);chips[i].CornerRadius({2,2,2,2});chips[i].RenderTransform(chipTransforms[i]);
@@ -394,9 +438,12 @@ struct View:std::enable_shared_from_this<View>{
     }
     void updateReadout(J const& view){
         bool focused=readout.FocusState()==FocusState::Keyboard;
-        auto next=view.Stringify()+layout.Stringify()+data->theme()+(focused?L"/focus":L"");
+        auto next=view.Stringify()+layout.Stringify()+to_hstring(layoutScale)+data->theme()+(focused?L"/focus":L"");
         if(next==readoutKey)return;readoutKey=next;
+        static thread_local GlyphRasterizer rasterizer;
         double half=array(layout,L"readout").GetNumberAt(2),radius=num(layout,L"readout_radius");
+        // Match the shared canvas's integral backing size, including fractional DPI extents.
+        double rasterScale=std::ceil(half*layoutScale)/half;
         double clipRadius=side*num(object(view,L"geometry"),L"outer")+2;
         PathFigure figure;figure.StartPoint({0,0});figure.IsClosed(true);figure.IsFilled(true);
         auto line=[&](float x,float y){LineSegment segment;segment.Point({x,y});figure.Segments().Append(segment);};
@@ -406,10 +453,14 @@ struct View:std::enable_shared_from_this<View>{
         PathGeometry geometry;geometry.Figures().Append(figure);readoutHit.Data(geometry);
         auto ink=focused?fill(color(L"#3584e4")):data->brush(L"text");
         double labelFont=std::clamp(panelSize*.044,9.,12.);
-        readoutLabel.Text(str(view,L"readout_label"));readoutLabel.FontSize(labelFont);readoutLabel.Foreground(ink);readoutLabel.Opacity(.9);
-        readoutLabel.Measure({1000,1000});Canvas::SetLeft(readoutLabel,2);Canvas::SetTop(readoutLabel,labelFont+1-readoutLabel.BaselineOffset());
+        labelMetrics.Text(str(view,L"readout_label"));labelMetrics.FontSize(labelFont);
+        labelMetrics.Measure({1000,1000});
+        auto labelNext=labelMetrics.Text()+L"/"+data->theme()+L"/"+to_hstring(labelFont)+L"/"+to_hstring(rasterScale)+(focused?L"/focus":L"");
+        if(labelNext!=labelKey){
+            rasterizer.draw(labelImage,std::wstring_view(labelMetrics.Text()),labelFont,true,Matrix{1,0,0,1,2,labelFont+1},rasterScale,ink.as<SolidColorBrush>().Color(),.9f);labelKey=labelNext;
+        }
         readoutFocus.Stroke(ink);readoutFocus.Visibility(focused?Visibility::Visible:Visibility::Collapsed);
-        float w=readoutLabel.DesiredSize().Width+5,h=float(labelFont+4);
+        float w=labelMetrics.DesiredSize().Width+5,h=float(labelFont+4);
         PathFigure focusFigure;focusFigure.StartPoint({6,1});focusFigure.IsClosed(true);focusFigure.IsFilled(false);
         const std::array<Point,8> corners{{{w-4,1},{w+1,6},{w+1,h-4},{w-4,h+1},{6,h+1},{1,h-4},{1,6},{6,1}}};
         for(size_t i=0;i<corners.size();i+=2){
@@ -440,19 +491,20 @@ struct View:std::enable_shared_from_this<View>{
             if(rgb){chips[i].Width(chip);chips[i].Height(chip);chips[i].Background(fill(rgbColors[i]));at(chipTransforms[i],half,radius,mid+(along+chip*.5)/radius,-chip*.5,-font*.76);along+=chip+2;}
             for(auto c:texts.GetStringAt(i)){
                 if(index==glyphs.size()){
-                    Glyph glyph;glyph.path.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(glyph.path,Automation::Peers::AccessibilityView::Raw);glyph.path.Opacity(.8);
-                    readoutBody.Children().Append(glyph.path);glyphs.push_back(glyph);
+                    Glyph glyph;glyph.image.IsHitTestVisible(false);glyph.image.Stretch(Stretch::Fill);AutomationProperties::SetAccessibilityView(glyph.image,Automation::Peers::AccessibilityView::Raw);
+                    readoutBody.Children().Append(glyph.image);glyphs.push_back(glyph);
                 }
-                auto& glyph=glyphs[index++];glyph.path.Visibility(c==L' '?Visibility::Collapsed:Visibility::Visible);
-                if(glyph.scalar!=c||glyph.font!=font){
-                    glyph.scalar=c;glyph.font=font;glyph.path.Data(glyphOutline(c,font));glyph.path.Data().Transform(glyph.transform);
-                }
-                glyph.path.Fill(ink);
+                auto& glyph=glyphs[index++];glyph.image.Visibility(c==L' '?Visibility::Collapsed:Visibility::Visible);
                 double cell=(c==L' '||(c>=L'0'&&c<=L'9'))?digit:advance(c);
                 at(glyph.transform,half,radius,mid+(along+cell*.5)/radius,-advance(c)*.5,0);along+=cell;
+                auto placement=glyph.transform.Matrix();auto color=ink.as<SolidColorBrush>().Color();
+                std::array<double,9> stamp{font,placement.M11,placement.M12,placement.M21,placement.M22,placement.OffsetX,placement.OffsetY,rasterScale,double(color.R*65536+color.G*256+color.B)};
+                if(c!=L' '&&(glyph.scalar!=c||glyph.key!=stamp)){
+                    rasterizer.draw(glyph.image,std::wstring_view(&c,1),font,false,placement,rasterScale,color,.8f);glyph.scalar=c;glyph.key=stamp;
+                }
             }
         }
-        for(;index<glyphs.size();index++)glyphs[index].path.Visibility(Visibility::Collapsed);
+        for(;index<glyphs.size();index++)glyphs[index].image.Visibility(Visibility::Collapsed);
         AutomationProperties::SetName(readout,str(view,L"readout_description"));
     }
     void refresh(){
@@ -484,7 +536,7 @@ struct View:std::enable_shared_from_this<View>{
         }
         auto icons=data->theme()+array(view,L"other_shapes").Stringify();
         if(icons!=iconKey){
-            iconKey=icons;
+            iconKey=icons;swapGlyph.Source(icon(L"color-swap",data->theme()).Source());
             for(int i=0;i<2;i++){
                 auto shape=array(view,L"other_shapes").GetStringAt(i);Grid content;Shapes::Ellipse hit;hit.Fill(clear());content.Children().Append(hit);
                 auto glyph=colorIcon(shape,shapeHovered[i]?fill(color(L"#3584e4")):data->brush(L"text"));

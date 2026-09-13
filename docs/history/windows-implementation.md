@@ -2092,3 +2092,57 @@ focus/hover comparisons have mean error 0.838–0.986 and maximum 88–89.
 quantization and edge rasterization remain open. The comparator, reference
 rendering and tolerances are unchanged. These results establish neither
 additional native display scales nor physical pen or 120 Hz painting acceptance.
+
+### Compact picker native text rasterization
+
+The picker now rasterizes Segoe UI through DirectWrite at each final glyph
+transform. It matches the reference's three-channel grayscale reduction, sRGB
+text correction, font-cache precision and font-table hinting. Horizontal
+labels use whole-pixel baselines; rotated digits use quarter-pixel positions.
+The backing size is integral, including the fractional extent at size 226.
+Glyph images and correction tables are retained; cache keys include effective
+raster scale. The native readout button still owns input and its full accessible
+description. The unrotated swap control reuses the native SVG loader, preserving
+the shared rounded stroke geometry without the extra XAML subpath workaround.
+The three rotated shape controls retain native vector geometry.
+
+Independent raw-canvas probes narrowed curved digits and the bold label to a
+maximum alpha difference of one at the investigated sizes. Those probes explain
+the implementation; they are not the acceptance images. The complete production
+matrix at actual display scale 1.5 has these zero-tolerance results:
+
+| Theme / size | Exact differing pixels | Mean absolute RGB error (0–255) | Maximum |
+| --- | ---: | ---: | ---: |
+| Dark 128 | 21.790% | 0.9771 | 72 |
+| Dark 160 | 25.345% | 0.7487 | 66 |
+| Dark 226 | 25.622% | 0.5860 | 68 |
+| Dark 360 | 26.019% | 0.4041 | 85 |
+| Light 128 | 22.021% | 0.9370 | 90 |
+| Light 160 | 25.533% | 0.7396 | 64 |
+| Light 226 | 25.655% | 0.5789 | 72 |
+| Light 360 | 26.078% | 0.4113 | 98 |
+
+All eight default surfaces improve in average error over the preceding
+milestone. Four focus and three hover states in both themes at size 160 have
+mean error 0.7353–0.7578 and maximum error 64–78. Fractional label measurement
+also preserves the existing focus rectangle. **All twenty-two complete-image
+comparisons still fail exact equality.** No reference styles, pixels, image
+boundaries, comparator or tolerance were changed.
+
+Geometry reports retain the distinction between the snapped native paint image
+and the logical browser canvas: at size 160 the reported wheel widths differ
+by 0.671875 DIP. Other default sizes have matching reported bounds. Exposing the
+input Canvas directly was investigated and reverted after its zero ActualWidth
+prevented fixture readiness; both owned diagnostic instances were inspected
+before closing normally. This does not establish exact input-bound geometry.
+All temporary browser and readiness instrumentation was removed.
+
+The documented Debug/Release builds and production picker input fixture pass:
+all three shapes with synthetic mouse/pen/touch in field and ring, cancellation,
+keyboard activation, paint slots and swap, native menus, mouse-hold negative
+case, retained drawer input, unchanged document and zero exit. The complete
+Release editor check also passes titlebar hit regions, tools, Zen modes, retained
+resize, workspace restore, theme changes and zero exit. Rust is unchanged
+from the preceding 523-test and strict-Clippy checkpoint. Custom ClearType tuning,
+other physical display scales, physical digitizer behavior and 120 Hz painting
+remain separate acceptance gates.

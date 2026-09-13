@@ -26,11 +26,11 @@ foreach($file in Get-ChildItem -LiteralPath (Join-Path $repo 'assets/filters') -
     }
 }
 
-# These four monochrome controls rotate and change ink on hover. Keep their
+# These three monochrome controls rotate and change ink on hover. Keep their
 # shared SVG geometry as native vectors, so rotation never resamples a bitmap.
 $colorIcons=Join-Path $Destination 'color-icons'
 [IO.Directory]::CreateDirectory($colorIcons)|Out-Null
-foreach($name in @('square','circle','triangle','swap')){
+foreach($name in @('square','circle','triangle')){
     [xml]$source=[IO.File]::ReadAllText((Join-Path $web "icons/layer-color-$name-symbolic.svg"))
     $nodes=@($source.DocumentElement.ChildNodes|Where-Object NodeType -eq Element)
     if($nodes.Count -ne 1){throw "Expected one shared color icon shape: $name"}
