@@ -19,6 +19,18 @@ internal fun CanvasHost.headerQuery(request: JSONObject, reply: (Any?) -> Unit =
 internal fun Offset.headerPoint() = JSONArray(listOf(x, y))
 internal fun Rect.headerBounds() = obj("x" to left, "y" to top, "width" to width, "height" to height)
 
+/** Empty chrome must own its contact as well as dismissing Rust drawers. Child
+ * controls receive the Main pass first; unused space never reaches SurfaceView. */
+internal fun Modifier.headerChrome(): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false).consume()
+        do {
+            val event = awaitPointerEvent()
+            event.changes.forEach { it.consume() }
+        } while (event.changes.any { it.pressed })
+    }
+}
+
 /** The stable workspace owns capture, so compacting/reparenting a child cannot
  * lose a contact. Only Rust resolves destinations, live slides and final edits. */
 internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction) {

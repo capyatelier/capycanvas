@@ -22,6 +22,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
@@ -90,7 +92,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     }
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
         Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
-            .background(colors.surround).headerSource(input, obj("kind" to "background"), "Title Bar", -1))
+            .background(colors.surround).headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
         val width = maxWidth.value
         val geometryKey = "$width:$modelKey:$editing:$metrics"
         SideEffect { input.width = width; input.metrics = metrics }
@@ -206,6 +208,12 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val kind = item.getString("kind")
     val colors = LocalPalette.current
     val label = spec.getString("label")
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(editing, input.selected) {
+        // Selection owns native keyboard focus too. Otherwise Android consumes
+        // the first navigation key leaving touch mode before Activity sees it.
+        if (editing && input.selected == id) focus.requestFocus()
+    }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
     LaunchedEffect(compact, editing) { menu = null }
     DisposableEffect(menu != null) {
@@ -218,7 +226,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     } == true
     Row(modifier.alpha(if (!editing && !spec.optBoolean("enabled")) .4f else 1f).testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1)
         .then(if (editing) Modifier.border(1.dp, if (input.selected == id) colors.accent else colors.divider, RoundedCornerShape(6.dp))
-            .onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
+            .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
         Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.Center) {

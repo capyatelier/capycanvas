@@ -60,7 +60,11 @@ class AndroidTitleBarTest {
         val until = SystemClock.uptimeMillis() + timeout
         do {
             var ready = false
-            instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
+            instrumentation.runOnMainSync {
+                assertNull(host.failure); assertNull(host.actionError)
+                host.snapshot?.objectOrNull("state")?.let { assertTrue(it.optString("host_error"), it.isNull("host_error")) }
+                ready = condition()
+            }
             if (ready) return
             SystemClock.sleep(20)
         } while (SystemClock.uptimeMillis() < until)
@@ -141,7 +145,9 @@ class AndroidTitleBarTest {
     }
     @Before fun ready() {
         legacy = instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all
-        CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "title-bar-tests/${UUID.randomUUID()}").absolutePath
+        val directory = File(instrumentation.targetContext.filesDir, "title-bar-tests/${UUID.randomUUID()}")
+        CanvasHost.workspaceDirectoryForTest = directory.absolutePath
+        RecoveryController.directoryForTest = File(directory, "recovery")
         launch()
         originalSettings = state().getJSONObject("settings").toString()
         fixture = JSONObject(state().getJSONObject("workspace").toString())
@@ -163,6 +169,7 @@ class AndroidTitleBarTest {
         if (::host.isInitialized && originalSettings.isNotEmpty()) action(obj("type" to "restore_settings", "settings" to JSONObject(originalSettings)))
         if (::scenario.isInitialized) scenario.close()
         CanvasHost.workspaceDirectoryForTest = null
+        RecoveryController.directoryForTest = null
         val preferences = instrumentation.targetContext.getSharedPreferences("capy-canvas", 0)
         preferences.edit().apply {
             val settings = legacy["settings"] as? String
@@ -176,6 +183,16 @@ class AndroidTitleBarTest {
         instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
             file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
         }
+    }
+    private fun tilePixel(tag: String): Int {
+        var position = Offset.Zero
+        instrumentation.runOnMainSync {
+            val (root, node) = checkNotNull(node(tag))
+            val screen = IntArray(2); root.view.getLocationOnScreen(screen)
+            position = Offset(screen[0] + node.boundsInRoot.left + 3 * density, screen[1] + node.boundsInRoot.center.y)
+        }
+        val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+        return try { bitmap.getPixel(position.x.toInt(), position.y.toInt()) } finally { bitmap.recycle() }
     }
     private fun center() = bounds("title-bar").let { Offset(it.center.x, it.center.y) }
     private fun outside() = bounds("workspace").let { Offset(it.center.x, it.bottom - 80 * density) }
@@ -295,7 +312,8 @@ class AndroidTitleBarTest {
         }
         pressed = menuRoot
         event(MotionEvent.ACTION_DOWN, target!!.boundsInRoot.center); event(MotionEvent.ACTION_UP)
-        waitFor("menu enters inline editor") { editing() }
+        waitFor("menu enters inline editor") { editing() && node("title-bar")?.first?.view?.hasWindowFocus() == true }
+        SystemClock.sleep(250)
         drag("header-component-tools", center())
         waitFor("picker") { node("tool-picker-search") != null }
         action(obj("type" to "customize", "action" to obj("type" to "picker_search", "query" to "Color")))
@@ -321,9 +339,66 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Restart uses committed header", committed, model().toString())
         shot("restart")
     }
+    @Test fun sketchDefaultsDrawersFeedbackStatusAndWorkspaceSwitch() {
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        waitFor("Sketch") { view().optString("id") == "builtin:workspace:painter" && node("workspace-switcher") != null }
+        val workspace = state().getJSONObject("workspace")
+        assertEquals("Sketch has no painter toolbars", 0, workspace.getJSONObject("layout").array("bands").length())
+        assertFalse(workspace.getJSONObject("layout").getJSONObject("canvas_info").getBoolean("visible"))
+        val tools = entries().filter { it.getJSONObject("item").getString("kind") == "tool" }
+        assertEquals(8, tools.size)
+        // Transform is an action; the other seven default tools have drawers.
+        for (entry in tools.filter { it.getJSONObject("item").getJSONObject("control").optString("command") != "scale_rotate" }) {
+            val id = entry.getInt("id")
+            tap("header-control-$id")
+            // Selecting an inactive tool takes one click; its next click opens
+            // the settings drawer, matching shared toolbar activation.
+            if (state().getJSONObject("customization").objectOrNull("drawer") == null) tap("header-control-$id")
+            waitFor("Sketch drawer $id") { node("tool-drawer") != null && state().getJSONObject("customization").objectOrNull("drawer")
+                ?.getJSONObject("anchor")?.optInt("id") == id }
+            shot("sketch-drawer-$id")
+            // Unused bar space dismisses the drawer without activating a tool.
+            // Center is the switcher, so use the free gap beside the first region.
+            instrumentation.runOnMainSync { pressed = node("title-bar")!!.first }
+            val last = model().array("zones").getJSONArray(0).objects().last().getInt("id")
+            val gap = Offset(bounds("header-item-$last").right + 12 * density, center().y)
+            event(MotionEvent.ACTION_DOWN, gap); event(MotionEvent.ACTION_UP)
+            waitFor("bar gap dismisses drawer") { node("tool-drawer") == null }
+        }
+        val brush = tools.first { it.getJSONObject("item").getJSONObject("control").optString("command") == "brush" }.getInt("id")
+        val filters = tools.first { it.getJSONObject("item").getJSONObject("control").optString("panel") == "adjustments" }.getInt("id")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            tap("header-control-$brush")
+            val before = tilePixel("header-control-$brush")
+            assertTrue("Selected tool is blue", android.graphics.Color.blue(before) > android.graphics.Color.red(before) + 10)
+            down("header-control-$brush")
+            assertEquals("Press retains selected blue", before, tilePixel("header-control-$brush"))
+            event(MotionEvent.ACTION_UP); idle()
+            down("header-control-$filters")
+            val action = tilePixel("header-control-$filters")
+            assertTrue("Action press stays neutral", kotlin.math.abs(android.graphics.Color.blue(action) - android.graphics.Color.red(action)) < 15)
+            shot("$theme-action-feedback")
+            event(MotionEvent.ACTION_UP); idle()
+        }
+        val committed = model().toString()
+        val durable = capture()
+        startEditor()
+        drag("header-component-clock", Offset(bounds("header-item-5").right + 12 * density, center().y))
+        drag("header-component-battery", Offset(bounds("title-bar").right - 12 * density, center().y))
+        waitFor("native tablet status") { node("system-clock") != null && node("system-battery") != null }
+        assertEquals(durable, capture())
+        shot("sketch-status-preview")
+        send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        assertFalse(editing()); assertEquals("Switch discards the temporary header", committed, model().toString())
+        shot("sketch-default")
+    }
     @Test fun keyboardContextHoldAndFocusLossKeepTheirOwnership() {
         restore(); startEditor(); tool = MotionEvent.TOOL_TYPE_MOUSE
         tap("header-item-1")
+        instrumentation.runOnMainSync { assertTrue("Pointer selects Capy", node("header-item-1")!!.second.config.getOrNull(SemanticsProperties.Selected) == true) }
         key(KeyEvent.KEYCODE_DPAD_RIGHT)
         assertEquals(1, model().array("zones").getJSONArray(0).getJSONObject(1).getInt("id"))
         key(KeyEvent.KEYCODE_DPAD_RIGHT)
@@ -345,9 +420,11 @@ class AndroidTitleBarTest {
         shot("secondary-context")
         key(KeyEvent.KEYCODE_BACK)
         waitFor("context closed") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
+        idle()
         button = MotionEvent.BUTTON_PRIMARY
         for (device in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = device
+            android.util.Log.i("TitleBarAcceptance", "Hold context $device")
             down("header-item-1")
             SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
             waitFor("touch or pen hold context") { node("workspace-menu") != null }
