@@ -241,12 +241,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_history.gesture_start().is_some() {
             return Err("Finish arranging the workspace first".into());
         }
+        let mut committed = self
+            .workspace_preview
+            .as_ref()
+            .unwrap_or(&self.state.workspace)
+            .clone();
+        self.state
+            .customization
+            .committed_header(&mut committed.layout);
         Ok(WorkspaceCapture {
-            history: self.workspace_history.capture(
-                self.workspace_preview
-                    .as_ref()
-                    .unwrap_or(&self.state.workspace),
-            ),
+            history: self.workspace_history.capture(&committed),
             working: self.workspace_working_state(),
         })
     }

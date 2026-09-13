@@ -25,6 +25,8 @@ mod header;
 mod manager;
 #[path = "workspace_tab_drag.rs"]
 mod tab_drag;
+#[path = "tool_catalog.rs"]
+mod tool_catalog;
 #[path = "workspace_update.rs"]
 mod workspace_update;
 use tab_drag::NativeTabSlide;
@@ -609,6 +611,7 @@ struct NativeDockItem(DockItem);
 #[derive(Clone, Copy)]
 enum DragTarget {
     Header(u32),
+    HeaderAdd(HeaderItem),
     Dock(DockItem),
     Divider(u32),
     ColumnPanel(u32, Option<Panel>),
@@ -623,7 +626,7 @@ impl DragTarget {
         tabs: Vec<TabHit>,
     ) -> Option<UiAction> {
         Some(match self {
-            Self::Header(_) => return None,
+            Self::Header(_) | Self::HeaderAdd(_) => return None,
             Self::Dock(item) => UiAction::DragWorkspace {
                 item,
                 phase,
@@ -1196,18 +1199,6 @@ impl Workspace {
             ),
         );
     }
-    fn command_button(self: &Rc<Self>, command: CommandId) -> gtk::Button {
-        let button = self.action_button(command.label(), UiAction::Invoke { command });
-        if let Some(icon) = command.icon() {
-            button.set_icon_name(&format!("layer-{icon}-symbolic"));
-        }
-        button.add_css_class("flat");
-        button.set_tooltip_text(Some(command.label()));
-        button.set_widget_name(&format!("command-{command:?}"));
-        self.commands.borrow_mut().push((command, button.clone()));
-        button
-    }
-
     fn install_chrome(self: &Rc<Self>) {
         self.window.connect_fullscreened_notify(glib::clone!(
             #[weak(rename_to = this)]
@@ -1436,7 +1427,9 @@ impl Workspace {
                 }
                 if matches!(
                     drag.target,
-                    DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+                    DragTarget::Dock(DockItem::Tile { .. })
+                        | DragTarget::Header(_)
+                        | DragTarget::HeaderAdd(_)
                 ) {
                     self.dragging.set(false);
                 }
@@ -1903,14 +1896,7 @@ impl Workspace {
         self.header.refresh(self, &state);
         self.view_info
             .set_visible(state.workspace.layout.canvas_info.visible);
-        let anchor = state.workspace.layout.canvas_info.anchor;
-        self.view_info.set_halign(
-            if matches!(anchor, OverlayAnchor::TopLeft | OverlayAnchor::BottomLeft) {
-                gtk::Align::Start
-            } else {
-                gtk::Align::End
-            },
-        );
+        self.view_info.set_halign(gtk::Align::End);
         if regions & (regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS)
             != 0
         {
@@ -2531,7 +2517,10 @@ impl Workspace {
     }
 
     fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
-        if matches!(target, DragTarget::Dock(_) | DragTarget::Header(_)) {
+        if matches!(
+            target,
+            DragTarget::Dock(_) | DragTarget::Header(_) | DragTarget::HeaderAdd(_)
+        ) {
             widget.set_cursor_from_name(Some(if widget.has_css_class("drag-hold") {
                 "default"
             } else {
@@ -2552,6 +2541,9 @@ impl Workspace {
             self.surface
                 .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
         while let Some(widget) = picked {
+            if widget.has_css_class("catalog-add") {
+                return None;
+            }
             if let Some(target) = self
                 .drag_targets
                 .borrow()
@@ -2559,7 +2551,14 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
-                if matches!(target, DragTarget::Header(_)) && !self.header.editing.get() {
+                if matches!(target, DragTarget::Header(_) | DragTarget::HeaderAdd(_))
+                    && !self.header.editing.get()
+                {
+                    return None;
+                }
+                if self.header.editing.get()
+                    && !matches!(target, DragTarget::Header(_) | DragTarget::HeaderAdd(_))
+                {
                     return None;
                 }
                 let target = if let DragTarget::Divider(id) = target
@@ -2737,6 +2736,16 @@ impl Workspace {
         else {
             return false;
         };
+        let phase = if matches!(
+            drag.target,
+            DragTarget::Header(_) | DragTarget::HeaderAdd(_)
+        ) && (!drag.source.is_ancestor(&self.surface)
+            || drag.source.parent() != drag.parent)
+        {
+            ContactPhase::Cancel
+        } else {
+            phase
+        };
         if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
             self.workspace_drag.borrow_mut().take();
             if phase == ContactPhase::Cancel || drag.held {
@@ -2744,12 +2753,20 @@ impl Workspace {
             }
             self.clear_tab_slide(&mut drag);
             if drag.started {
-                if let DragTarget::Header(id) = drag.target {
+                if matches!(
+                    drag.target,
+                    DragTarget::Header(_) | DragTarget::HeaderAdd(_)
+                ) {
                     self.dragging.set(false);
                     if phase == ContactPhase::Up
                         && let Some((zone, before)) = self.header.drop_at(point)
                     {
-                        self.dispatch(HeaderAction::Move { id, zone, before }.action());
+                        let action = match drag.target {
+                            DragTarget::Header(id) => HeaderAction::Move { id, zone, before },
+                            DragTarget::HeaderAdd(item) => HeaderAction::Add { item, zone, before },
+                            _ => unreachable!(),
+                        };
+                        self.dispatch(action.action());
                     }
                     self.header.clear_drop();
                 } else if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
@@ -2786,7 +2803,10 @@ impl Workspace {
                 self.dismiss_context();
                 return false;
             }
-            let recognized = if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
+            let recognized = if matches!(
+                drag.target,
+                DragTarget::Dock(_) | DragTarget::Header(_) | DragTarget::HeaderAdd(_)
+            ) {
                 self.surface.drag_check_threshold(
                     drag.origin[0] as i32,
                     drag.origin[1] as i32,
@@ -2809,18 +2829,25 @@ impl Workspace {
             drag.started = true;
             if matches!(
                 drag.target,
-                DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+                DragTarget::Dock(DockItem::Tile { .. })
+                    | DragTarget::Header(_)
+                    | DragTarget::HeaderAdd(_)
             ) {
                 self.dragging.set(true);
             }
             self.start_tab_slide(&mut drag);
-            if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
+            if matches!(
+                drag.target,
+                DragTarget::Dock(_) | DragTarget::Header(_) | DragTarget::HeaderAdd(_)
+            ) {
                 self.set_drag_cursor(&mut drag, "grabbing");
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
             if !matches!(
                 drag.target,
-                DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+                DragTarget::Dock(DockItem::Tile { .. })
+                    | DragTarget::Header(_)
+                    | DragTarget::HeaderAdd(_)
             ) {
                 self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
             }
@@ -2834,7 +2861,9 @@ impl Workspace {
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
         if !matches!(
             drag.target,
-            DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
+            DragTarget::Dock(DockItem::Tile { .. })
+                | DragTarget::Header(_)
+                | DragTarget::HeaderAdd(_)
         ) {
             self.dispatch_drag(drag.target, ContactPhase::Move, point);
         }
@@ -2845,7 +2874,10 @@ impl Workspace {
             }
             self.set_drag_cursor(&mut drag, "grabbing");
         }
-        if matches!(drag.target, DragTarget::Header(_)) {
+        if matches!(
+            drag.target,
+            DragTarget::Header(_) | DragTarget::HeaderAdd(_)
+        ) {
             self.header.drag_motion(point);
             self.set_drag_cursor(&mut drag, "grabbing");
         }
@@ -2995,6 +3027,16 @@ impl Workspace {
                 if starting && let Some(drag) = w.workspace_drag.borrow_mut().as_mut() {
                     // A tablet has its own GDK device; touch has no cursor.
                     drag.device = if touch { None } else { event.device() };
+                    if drag.source.has_css_class("drag-row") {
+                        drag.wait_for_hold = touch
+                            || event.device_tool().is_some()
+                            || event.device().is_some_and(|d| {
+                                matches!(
+                                    d.source(),
+                                    gdk::InputSource::Touchscreen | gdk::InputSource::Pen
+                                )
+                            });
+                    }
                 }
                 if handled {
                     column_click.set(None);

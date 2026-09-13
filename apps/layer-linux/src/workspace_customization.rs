@@ -290,9 +290,7 @@ pub(super) struct Customization {
     anchor: Cell<[f32; 2]>,
     picker: adw::Dialog,
     name: adw::EntryRow,
-    search: gtk::SearchEntry,
-    choices: gtk::ListBox,
-    choices_key: RefCell<String>,
+    catalog: tool_catalog::ToolCatalog,
     error: gtk::Label,
     count: gtk::Label,
     confirm: gtk::Button,
@@ -334,9 +332,7 @@ impl Customization {
             anchor: Cell::new([320.0, 120.0]),
             picker,
             name: adw::EntryRow::new(),
-            search: gtk::SearchEntry::new(),
-            choices: gtk::ListBox::new(),
-            choices_key: RefCell::new(String::new()),
+            catalog: tool_catalog::ToolCatalog::new(),
             error: gtk::Label::new(None),
             count: gtk::Label::new(None),
             confirm: gtk::Button::new(),
@@ -455,8 +451,8 @@ impl Customization {
                 });
             }
         ));
-        self.search.set_widget_name("tool-search");
-        self.search.connect_search_changed(glib::clone!(
+        self.catalog.search.set_widget_name("tool-search");
+        self.catalog.search.connect_search_changed(glib::clone!(
             #[weak]
             w,
             move |entry| {
@@ -467,15 +463,7 @@ impl Customization {
                 }
             }
         ));
-        body.append(&self.search);
-        self.choices.set_selection_mode(gtk::SelectionMode::None);
-        self.choices.add_css_class("boxed-list");
-        let list = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&self.choices)
-            .build();
-        body.append(&list);
+        body.append(&self.catalog.root);
         self.count.set_xalign(0.0);
         self.count.add_css_class("dim-label");
         body.append(&self.count);
@@ -1018,30 +1006,25 @@ impl Customization {
             {
                 self.name.set_text(name);
             }
-            self.search.set_placeholder_text(Some(view.search_hint));
-            if self.search.text() != view.query {
-                self.search.set_text(&view.query);
+            self.catalog
+                .search
+                .set_placeholder_text(Some(view.search_hint));
+            if self.catalog.search.text() != view.query {
+                self.catalog.search.set_text(&view.query);
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
             self.error.set_visible(view.error.is_some());
             self.count
                 .set_text(&format!("{} selected", view.selected_count));
             let key = serde_json::to_string(&view.choices).expect("serializable tools");
-            if *self.choices_key.borrow() != key {
-                *self.choices_key.borrow_mut() = key;
-                while let Some(child) = self.choices.first_child() {
-                    self.choices.remove(&child);
-                }
+            self.catalog.update(key, |catalog| {
                 for choice in view.choices {
-                    let row = adw::ActionRow::new();
-                    row.set_use_markup(false);
-                    row.set_title(&choice.label);
-                    row.set_subtitle(&choice.description);
-                    row.add_prefix(&gtk::Image::from_icon_name(&format!(
-                        "layer-{}-symbolic",
-                        choice.icon
-                    )));
+                    let row = catalog.row(&choice.label, &choice.description, choice.icon);
                     let check = gtk::CheckButton::new();
+                    check.set_widget_name(&format!(
+                        "tool-choice-{}",
+                        serde_json::to_string(&choice.control).unwrap()
+                    ));
                     check.set_active(choice.selected);
                     check.set_valign(gtk::Align::Center);
                     check.connect_toggled(glib::clone!(
@@ -1056,20 +1039,19 @@ impl Customization {
                     ));
                     row.add_suffix(&check);
                     row.set_activatable_widget(Some(&check));
-                    self.choices.append(&row);
                 }
-            }
+            });
             if !self.picker_shown.replace(true) {
                 self.picker.present(Some(&w.window));
                 if view.name.is_some() {
                     self.name.grab_focus();
                 } else {
-                    self.search.grab_focus();
+                    self.catalog.search.grab_focus();
                 }
             }
         } else if self.picker_shown.replace(false) {
             self.picker.close();
-            self.choices_key.borrow_mut().clear();
+            self.catalog.clear();
         }
         self.manager.refresh(w, manager);
         if let Some(view) = prompt {

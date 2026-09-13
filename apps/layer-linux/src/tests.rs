@@ -7469,8 +7469,12 @@ fn native_panel_customization() {
             Some("layer-size-symbolic")
         );
         send(CustomizationAction::SetTabStyle {
-            group: 8,
+            group,
             style: TabStyle::Name,
+        });
+        w.dispatch(UiAction::SelectPanelTab {
+            group,
+            panel: Panel::Sizes,
         });
         let before_expansion = state(&w).workspace.layout.bands;
 
@@ -7542,7 +7546,7 @@ fn native_panel_customization() {
             .groups
             .borrow()
             .iter()
-            .find(|g| g.id == 8)
+            .find(|g| g.id == group)
             .unwrap()
             .stack
             .parent()
@@ -7551,7 +7555,7 @@ fn native_panel_customization() {
             .unwrap();
         hold(
             &header,
-            ContextTarget::Group { group: 8 },
+            ContextTarget::Group { group },
             (header.width() - 12) as f64,
             12.0,
         );
@@ -7599,13 +7603,20 @@ fn native_panel_customization() {
             .session
             .tool_picker()
             .unwrap()
-            .choices;
+            .choices
+            .into_iter()
+            .filter(|choice| matches!(choice.control, ToolbarControl::Brush { .. }))
+            .collect::<Vec<_>>();
         assert!(!choices.is_empty());
         for choice in choices.iter().take(2) {
-            send(CustomizationAction::PickerSelect {
-                control: choice.control,
-                selected: true,
-            });
+            find_named(
+                w.window.upcast_ref(),
+                &format!("tool-choice-{}", serde_json::to_string(&choice.control).unwrap()),
+            )
+            .unwrap()
+            .downcast::<gtk::CheckButton>()
+            .unwrap()
+            .set_active(true);
         }
         assert!(confirm.is_sensitive());
         capture_reference(&w, &format!("{dir}/tool-picker-{theme:?}.png"), 1.0);

@@ -15,13 +15,19 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar popover image, .window-bar .header-editor image { -gtk-icon-shadow: none; }
 .window-bar popover label, .window-bar .header-editor label { text-shadow: none; }
 .window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control, .window-bar .document-title { background: transparent; box-shadow: none; padding: 0; }
-.window-bar menubutton.chrome-control > button { min-width: 0; min-height: 0; padding: 4px 6px; }
+.window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: 6px; }
 .window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: 6px; }
-.window-bar .header-tool:hover, .window-bar .chrome-control:hover { background: alpha(var(--window-fg-color), .10); }
+.window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
 .window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
+.window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
-.header-editor { background: alpha(var(--window-bg-color), .94); border-radius: 8px; padding: 3px; }
-.window-bar .workspace-switcher { background: transparent; }
+.header-editor { background: var(--window-bg-color); border-radius: 8px; padding: 6px; }
+.header-editor button { min-height: 24px; padding: 6px; border-radius: 6px; }
+.header-editor row { min-height: 44px; }
+.window-bar windowcontrols { margin: 0; padding: 0; }
+.window-bar windowcontrols button { margin: 0; padding: 0; min-width: 36px; min-height: 36px; }
+.window-bar.header-medium windowcontrols button { min-width: 48px; min-height: 48px; }
+.window-bar.header-large windowcontrols button { min-width: 60px; min-height: 60px; }
 .document-title { font-weight: 600; min-height: 24px; padding: 6px; }
 .header-clock { min-height: 36px; padding: 0 6px; }
 .workspace-switcher { background: mix(var(--window-bg-color), black, .2); border: 0; border-radius: 18px; padding: 4px; }

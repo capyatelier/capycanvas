@@ -2958,14 +2958,7 @@ impl DockLayout {
             width: result.work_area.width,
             height: hud_height,
         };
-        if native_header {
-            if matches!(
-                self.canvas_info.anchor,
-                crate::OverlayAnchor::TopLeft | crate::OverlayAnchor::TopRight
-            ) {
-                result.status.y = result.work_area.y;
-            }
-        } else {
+        if !native_header {
             result.work_area.height -= hud_height;
         }
         for group in &mut result.groups {

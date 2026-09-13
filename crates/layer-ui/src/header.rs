@@ -362,43 +362,14 @@ impl HeaderLayout {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OverlayAnchor {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    #[default]
-    BottomRight,
-}
-impl OverlayAnchor {
-    pub const ALL: [Self; 4] = [
-        Self::TopLeft,
-        Self::TopRight,
-        Self::BottomLeft,
-        Self::BottomRight,
-    ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::TopLeft => "Top Left",
-            Self::TopRight => "Top Right",
-            Self::BottomLeft => "Bottom Left",
-            Self::BottomRight => "Bottom Right",
-        }
-    }
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CanvasInfoLayout {
     pub visible: bool,
-    pub anchor: OverlayAnchor,
 }
 impl Default for CanvasInfoLayout {
     fn default() -> Self {
-        Self {
-            visible: true,
-            anchor: OverlayAnchor::BottomRight,
-        }
+        Self { visible: true }
     }
 }
 
@@ -446,6 +417,8 @@ impl HeaderLayout {
         let right = (width - insets[1].max(0.) - 6.).max(left);
         let mid = width / 2.;
         let gap = 12.; // At least 24 logical px of window-drag space around center.
+        let item_gap = 6.;
+        let gaps = |count: usize| count.saturating_sub(1) as f32 * item_gap;
         // Zero-width native metrics denote unavailable informational items
         // (e.g. a desktop without a battery), not overflowed interactive items.
         let visible = |e: &&HeaderEntry| {
@@ -465,6 +438,7 @@ impl HeaderLayout {
                 .filter(visible)
                 .map(|e| metric(e, true))
                 .sum::<f32>()
+                + gaps(self.zones[zone].iter().filter(visible).count())
         };
         let center_limit = ((right - left) / 3.)
             .min(2. * (mid - left).min(right - mid))
@@ -473,7 +447,8 @@ impl HeaderLayout {
             .iter()
             .filter(visible)
             .map(|e| metric(e, false))
-            .sum();
+            .sum::<f32>()
+            + gaps(self.zones[1].iter().filter(visible).count());
         let center_width = center_natural
             .min(center_limit)
             .max(compact(1).min(center_limit));
@@ -515,25 +490,38 @@ impl HeaderLayout {
         for zone in 0..3 {
             let bounds = result.zones[zone];
             let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
-            let total: f32 = entries.iter().map(|e| metric(e, false)).sum();
+            let total: f32 =
+                entries.iter().map(|e| metric(e, false)).sum::<f32>() + gaps(entries.len());
             let compacting = total > bounds.width;
             let widths: Vec<_> = entries.iter().map(|e| metric(e, compacting)).collect();
-            let overflow = widths.iter().sum::<f32>() > bounds.width;
+            let overflow = widths.iter().sum::<f32>() + gaps(widths.len()) > bounds.width;
             let overflow_width = tile.min(bounds.width);
-            let available = (bounds.width - if overflow { overflow_width } else { 0. }).max(0.);
+            let available = (bounds.width
+                - if overflow {
+                    overflow_width + item_gap
+                } else {
+                    0.
+                })
+            .max(0.);
             let mut used = 0.;
             let mut shown = Vec::new();
             let mut full = false;
             for (entry, w) in entries.into_iter().zip(widths) {
-                if full || used + w > available + 0.01 {
+                let spacing = if shown.is_empty() { 0. } else { item_gap };
+                if full || used + spacing + w > available + 0.01 {
                     full = true;
                     result.hidden[zone].push(entry.id);
                 } else {
                     shown.push((entry.id, w));
-                    used += w;
+                    used += spacing + w;
                 }
             }
-            let total = used + if overflow { overflow_width } else { 0. };
+            let total = used
+                + if overflow {
+                    overflow_width + if shown.is_empty() { 0. } else { item_gap }
+                } else {
+                    0.
+                };
             let mut x = bounds.x
                 + match zone {
                     1 => (bounds.width - total) / 2.,
@@ -550,7 +538,7 @@ impl HeaderLayout {
                         height: tile,
                     },
                 });
-                x += w;
+                x += w + item_gap;
             }
             if overflow && overflow_width > 0. {
                 result.overflow[zone] = Some(Bounds {
@@ -571,6 +559,7 @@ pub enum HeaderAction {
     Edit {
         editing: bool,
     },
+    Cancel,
     SetSize {
         size: HeaderSize,
     },
@@ -592,7 +581,6 @@ pub enum HeaderAction {
     },
     CanvasInfo {
         visible: bool,
-        anchor: OverlayAnchor,
     },
     RestoreDefaults,
 }

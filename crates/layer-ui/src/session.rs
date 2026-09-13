@@ -1671,8 +1671,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !document.is_locked(document.active_layer)
                     && (id == CommandId::ClearLayer || document.selection.is_some())
             }
-            CommandId::UndoWorkspace => self.workspace_history.can_undo(),
-            CommandId::RedoWorkspace => self.workspace_history.can_redo(),
+            CommandId::UndoWorkspace => {
+                !self.state.customization.header_editing && self.workspace_history.can_undo()
+            }
+            CommandId::RedoWorkspace => {
+                !self.state.customization.header_editing && self.workspace_history.can_redo()
+            }
             CommandId::AddLayer => idle,
             CommandId::DeleteLayer => idle && editable && paint_layers > 1,
             CommandId::RaiseLayer => idle && editable && index > 0,
@@ -1879,7 +1883,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar
                 }
         )
-        .then(|| self.state.workspace.clone());
+        .then(|| {
+            let mut before = self.state.workspace.clone();
+            self.state
+                .customization
+                .committed_header(&mut before.layout);
+            before
+        });
         let move_item = match &action {
             UiAction::MovePanel { panel, .. } => Some(DockItem::Panel { panel: *panel }),
             UiAction::MoveGroup { group, .. } => Some(DockItem::Group { group: *group }),
@@ -2755,11 +2765,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
+            let mut after = self.state.workspace.clone();
+            self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
                 self.workspace_history
-                    .record_named(before, &self.state.workspace, &description);
+                    .record_named(before, &after, &description);
             } else {
-                self.workspace_history.record(before, &self.state.workspace);
+                self.workspace_history.record(before, &after);
             }
         }
         if explicit_color
@@ -3559,13 +3571,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((CAMERA, true))
             }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
+                let canceled = self
+                    .state
+                    .customization
+                    .cancel_header(&mut self.state.workspace.layout);
                 self.state.customization = CustomizationState::default();
                 self.open_settings(match command {
                     CommandId::KeyboardShortcuts => SettingsPage::Shortcuts,
                     CommandId::About => SettingsPage::About,
                     _ => SettingsPage::Appearance,
                 });
-                Ok((SETTINGS | CUSTOMIZATION, false))
+                Ok((
+                    SETTINGS | CUSTOMIZATION | if canceled { LAYOUT } else { 0 },
+                    false,
+                ))
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
@@ -3623,9 +3642,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
             CommandId::CustomizeWorkspaceUi => {
-                self.state.customization.header_editing = true;
-                self.state.customization.drawer = None;
-                self.state.customization.picker = None;
+                self.state
+                    .customization
+                    .begin_header(&self.state.workspace.layout);
                 self.state.workspace.zen_mode = false;
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
@@ -4184,7 +4203,7 @@ mod tests {
     }
 
     #[test]
-    fn header_edits_are_workspace_history_and_editor_survives_undo() {
+    fn header_preview_cancel_and_done_are_transactional() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         let original = s.capture_workspace().unwrap();
@@ -4210,13 +4229,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             s.capture_workspace().unwrap().history.generation,
-            original.history.generation + 1
+            original.history.generation
         );
-        invoke(&mut s, CommandId::UndoWorkspace);
-        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(!s.command(CommandId::UndoWorkspace).enabled);
         assert!(s.state.customization.header_editing);
         assert_eq!(s.state.workspace.layout.header_presentation.height, 60.);
-        invoke(&mut s, CommandId::RedoWorkspace);
         assert_eq!(
             s.state.workspace.layout.header.location(id).unwrap().0,
             HeaderZone::Right
@@ -4235,24 +4252,45 @@ mod tests {
             .is_err()
         );
         assert_eq!(s.capture_workspace().unwrap(), before);
+        s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+            .unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        invoke(&mut s, CommandId::CustomizeWorkspaceUi);
+        s.dispatch(HeaderAction::Cancel.action()).unwrap();
+        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(s.state.workspace.layout.canvas_info.visible);
+        assert!(!s.state.customization.header_editing);
+        assert_eq!(s.capture_workspace().unwrap().history, original.history);
+        s.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
         s.dispatch(
-            HeaderAction::CanvasInfo {
-                visible: false,
-                anchor: OverlayAnchor::TopLeft,
+            HeaderAction::Move {
+                id,
+                zone: HeaderZone::Right,
+                before: None,
             }
             .action(),
         )
         .unwrap();
+        s.dispatch(HeaderAction::CanvasInfo { visible: false }.action())
+            .unwrap();
+        s.dispatch(HeaderAction::Edit { editing: false }.action())
+            .unwrap();
         let saved = s.capture_workspace().unwrap();
         saved.validate().unwrap();
         assert!(!saved.history.layout().canvas_info.visible);
-        assert_eq!(
-            saved.history.layout().canvas_info.anchor,
-            OverlayAnchor::TopLeft
-        );
+        assert_eq!(saved.history.generation, original.history.generation + 1);
         assert_eq!(
             saved.history.layout().header_presentation,
             HeaderPresentation::default()
+        );
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.header, model);
+        assert!(s.state.workspace.layout.canvas_info.visible);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(
+            s.state.workspace.layout.header,
+            saved.history.layout().header
         );
     }
 

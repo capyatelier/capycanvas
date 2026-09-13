@@ -12,10 +12,12 @@ Choose **Window → Customize Workspace UI…**, press **Ctrl+Shift+U**, or use 
 item's secondary-click/long-press menu. The editor appears immediately below
 the bar, without opening a separate designer.
 
-- **Add Item…** searches the same tool catalog as ordinary toolbars, plus
-  Capy, menus, workspace choices, document title, clock, battery and spaces.
-  Choose Left, Center or Right before adding. Tools and spaces may repeat;
-  singleton application controls cannot be added twice.
+- The customization panel reuses the toolbar Add Tools search/list component,
+  with Capy, menus, workspace choices, document title, clock, battery and spaces
+  added to the catalog. Drag a row's grip directly into the bar. Row bodies drag
+  immediately with a mouse; touch/pen require a hold and otherwise keep scrolling.
+  Alternatively choose Left, Center or Right and click the row's **+** button.
+  Tools and spaces may repeat; singleton application controls cannot be added twice.
 - Drag a grip immediately, or hold then drag an item body. The three regions
   and insertion line show the destination. Release outside the bar or press
   Escape to cancel. A touch/pen hold also opens the item's menu; a mouse hold
@@ -25,11 +27,19 @@ the bar, without opening a separate designer.
   Delete removes a focused item. Tab navigates while editing.
 - **Small / Medium / Large** resizes the bar and its icons together. Native
   window controls remain toolkit-owned and cannot be removed or rearranged.
-- **Options** controls canvas zoom/rotation visibility and corner, and restores
+- **Options** controls canvas zoom/rotation visibility (always bottom right), and restores
   the current workspace's baseline window bar. Window → Show Menu Bar controls
   menu labels independently of the other items.
-- **Undo / Redo** use ordinary workspace history. Done or Escape exits editing;
-  changes are saved continuously with the workspace, not with the drawing.
+- **Done** applies the preview; **Cancel** restores the bar and visibility from
+  when editing started. Escape cancels the active drag/menu first, then the editor.
+  Closing the window without Done does not save the preview. There is no editor
+  undo/redo stack. A completed customization is one ordinary workspace-history
+  change, separate from drawing history.
+
+Tool tiles have 6px gaps; drawer origins have square bottom corners while open.
+Text menus retain their original 36px outer button height and 6px padding,
+centered in larger bars. The workspace selector keeps its pill background.
+Native window-control targets grow equally in both axes, with 6px outer clearance.
 
 At narrow widths, each region overflows whole items into a More menu. Tools
 still open their normal drawers, anchored to the visible overflow control;

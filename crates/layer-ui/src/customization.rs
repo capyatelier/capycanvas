@@ -1467,6 +1467,9 @@ impl ToolbarManager {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CustomizationState {
     pub header_editing: bool,
+    /// A single preview baseline, not an editor undo stack. Never persisted.
+    #[serde(skip)]
+    pub(crate) header_original: Option<(HeaderLayout, CanvasInfoLayout)>,
     pub expanded: Option<Panel>,
     pub drawer: Option<ContentDrawer>,
     pub column_drawers: Vec<ContentDrawer>,
@@ -1480,6 +1483,27 @@ pub struct CustomizationState {
     pub toolbar_manager: Option<ToolbarManager>,
 }
 impl CustomizationState {
+    pub(crate) fn begin_header(&mut self, layout: &DockLayout) {
+        if !self.header_editing {
+            self.header_original = Some((layout.header.clone(), layout.canvas_info.clone()));
+        }
+        self.header_editing = true;
+        self.drawer = None;
+        self.picker = None;
+    }
+    pub(crate) fn committed_header(&self, layout: &mut DockLayout) {
+        if let Some((header, info)) = &self.header_original {
+            layout.header = header.clone();
+            layout.canvas_info = info.clone();
+        }
+    }
+    pub(crate) fn cancel_header(&mut self, layout: &mut DockLayout) -> bool {
+        let editing = self.header_editing;
+        self.committed_header(layout);
+        self.header_original = None;
+        self.header_editing = false;
+        editing
+    }
     pub fn has_drawer(&self) -> bool {
         self.expanded.is_some() || self.drawer.is_some() || !self.column_drawers.is_empty()
     }
@@ -1513,6 +1537,9 @@ impl CustomizationState {
             return Err("This panel is not available on this platform yet".into());
         }
         let mut changed = regions::CUSTOMIZATION;
+        if !matches!(action, Header { .. }) && self.cancel_header(layout) {
+            changed |= regions::LAYOUT;
+        }
         if matches!(
             action,
             NewToolbar { .. }
@@ -1529,9 +1556,18 @@ impl CustomizationState {
                 use HeaderAction as H;
                 match action {
                     H::Edit { editing } => {
-                        self.header_editing = editing;
+                        if editing {
+                            self.begin_header(layout);
+                        } else {
+                            self.header_editing = false;
+                            self.header_original = None;
+                            changed |= regions::LAYOUT;
+                        }
+                    }
+                    H::Cancel => {
+                        self.cancel_header(layout);
                         self.drawer = None;
-                        self.picker = None;
+                        changed |= regions::LAYOUT;
                     }
                     action => {
                         match action {
@@ -1564,8 +1600,8 @@ impl CustomizationState {
                                 }
                                 layout.header.show_menu_labels = visible;
                             }
-                            H::CanvasInfo { visible, anchor } => {
-                                layout.canvas_info = CanvasInfoLayout { visible, anchor }
+                            H::CanvasInfo { visible } => {
+                                layout.canvas_info = CanvasInfoLayout { visible }
                             }
                             H::RestoreDefaults => {
                                 layout.header = HeaderLayout::default();

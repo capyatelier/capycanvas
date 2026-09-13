@@ -24,7 +24,7 @@ checks are complete; ready for user review within the tested scope below.
 - Menu labels are an independent workspace setting under Window. A menu
   button always exposes the complete application menu. Recovery remains
   accessible if every user-configurable navigation item is removed.
-- Canvas-info visibility and anchor are workspace settings, separate from
+- Canvas-info visibility is a workspace setting, fixed at bottom right, separate from
   header settings. Painter hides zoom/rotation. Total Zen has one meaning and
   no partial-Zen preference.
 - GTK is the first native projection. Other hosts retain working existing
@@ -38,7 +38,47 @@ checks are complete; ready for user review within the tested scope below.
 - [x] Total-Zen cleanup and host compatibility.
 - [x] End-to-end GTK acceptance and release build.
 
-## Work log (September 13)
+## Review follow-up (September 13)
+
+Replaced the header-only Add popup with an inline catalog reusing the toolbar
+picker's GTK search/list/row component. Catalog rows and grips can add items by
+dragging into any bar region; + buttons remain a keyboard/click alternative.
+Native device classification preserves touch/pen list scrolling before hold.
+The editor has Done/Cancel with a single shared baseline; previews are excluded
+from saved captures and history. Done records the complete customization once.
+Removed the canvas-info corner setting; visibility remains workspace-owned.
+
+Restored the workspace-selector background and baseline text-menu padding/height.
+Fixed hover radius, centered native icon grips, 6px inter-item gaps, square
+drawer-facing tile corners and equally sized native close hit targets/padding.
+
+Follow-up acceptance:
+
+- Shared UI/host/native storage: 299 / 25 / 65 pass (one host GPU case ignored).
+- Catalog drag/add/cancel/Done with real mouse/touch: 1×
+  `/tmp/capy-workspace-motion.h6TLs9`; real 2× `/tmp/capy-workspace-motion.A1ZHgf`.
+- All sizes/both themes, measured menu heights/padding, close-button centering,
+  selector centering, grips, drawer state and inspected screenshots:
+  `/tmp/capy-workspace-motion.utKlDc` (final panel); earlier pass
+  `/tmp/capy-workspace-motion.X7AsCt`.
+- 640×600 overflow/editor: `/tmp/capy-workspace-motion.JoDVFi`.
+- Save/switch/restart, including closing with an uncommitted preview:
+  `/tmp/capy-workspace-motion.Cq0n3J`.
+- Reorder holds/context menus: `/tmp/capy-workspace-motion.DuV7Is`;
+  editor controls: `/tmp/capy-workspace-motion.hSCOOf`;
+  caption/cancellation/Zen: `/tmp/capy-workspace-motion.tVyMWW`;
+  all header tool drawers: `/tmp/capy-workspace-motion.HEuMRo`.
+- Ordinary toolbar customization and reused picker checkboxes, both themes:
+  `/tmp/capy-workspace-motion.PAIkZj`. Updated stale test assumptions about
+  hard-coded group IDs and the first Pencil search result being a preset.
+- Native fullscreen/clock/battery: `/tmp/capy-workspace-motion.0FBgVC`;
+  restored/maximized/fullscreen window movement: `/tmp/capy-workspace-motion.xDb04g`.
+- Release build, five native non-GUI utility tests, and actual release launch
+  with inspected 1200×900 capture: `/tmp/capy-unified-release.oFksX7`.
+
+No physical-pen or other-host GUI acceptance is inferred from these GTK tests.
+
+## Initial implementation acceptance (September 13)
 
 Implemented the first shared model and GTK projection. Header items now have
 their own identity/zone/size, separate from dock panels. Header tools use the
@@ -121,9 +161,9 @@ defaults automatically, so a fresh profile is useful when reviewing the design.
 - Overflow: narrow/large, center positioning, accessible hidden items, no
   overlap or disappearing tools, resize with a drawer/editor open.
 - Recovery with menu/Capy/switcher removed; native close remains protected.
-- Workspace undo/redo, switching, duplicate/saved layouts, restart persistence;
-  cancel produces no history and each completed move produces one revision.
-- Overlay visibility/anchor, menu-label toggle under Window, true Zen return.
+- Workspace switching, duplicate/saved layouts, restart persistence;
+  preview/cancel produce no saved revisions and Done applies the edit once.
+- Overlay visibility at bottom right, menu-label toggle under Window, true Zen return.
 - Caption drag, double/secondary click, maximized/fullscreen, light/dark, 1x/2x.
 - Shared unit/bridge tests, GTK isolated real-input tests, Web regressions,
   actual release executable and screenshot inspection. Report physical-device

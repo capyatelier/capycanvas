@@ -189,8 +189,6 @@ fn native_header_managed_input() {
     );
     d.click_name("header-options");
     d.click_label("Show Zoom and Rotation");
-    d.click_name("header-options");
-    d.click_label("Top Right");
     d.click_name("header-edit-done");
     let saved = durable_layout(&state(&d.w).workspace.layout);
     for name in ["illustrator", "painter"] {
@@ -199,6 +197,14 @@ fn native_header_managed_input() {
         pump(400);
     }
     assert_eq!(durable_layout(&state(&d.w).workspace.layout), saved);
+    d.edit();
+    d.named("header-size")
+        .downcast::<gtk::DropDown>()
+        .unwrap()
+        .set_selected(0);
+    pump(150);
+    assert_ne!(state(&d.w).workspace.layout.header, saved.header);
+    // Closing without Done must persist the committed workspace, not the preview.
     d.w.window.close();
     let deadline = Instant::now() + Duration::from_secs(20);
     while d.w.window.is_visible() {
@@ -231,6 +237,296 @@ fn native_header_managed_input() {
     });
     pump(100);
     crate::capture(&d.w, d.dir.join("managed-painter.png").to_str().unwrap());
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_catalog_preview_input"]
+fn native_header_catalog_preview_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderCatalog");
+    let original = state(&d.w).workspace.layout.header;
+    let capture =
+        d.w.gpu
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .session
+            .capture_workspace()
+            .unwrap();
+    for (touch, grip, held) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (true, false, true),
+        (true, true, false),
+    ] {
+        d.edit();
+        d.named("header-add-search")
+            .downcast::<gtk::SearchEntry>()
+            .unwrap()
+            .set_text("Brush opacity");
+        pump(250);
+        let name = if grip {
+            "header-add-grip-brush-opacity"
+        } else {
+            "header-add-row-brush-opacity"
+        };
+        let source = d.point(&d.named(name));
+        let destination = [d.w.surface.width() as f32 / 2., 30.];
+        let mut events = if touch {
+            vec![serde_json::json!({"touch":"down","point":source})]
+        } else {
+            vec![
+                serde_json::json!({"point":source}),
+                serde_json::json!({"down":true}),
+            ]
+        };
+        if held {
+            events.extend((0..12).map(|_| serde_json::json!({})));
+        }
+        events.extend(if touch {
+            vec![
+                serde_json::json!({"touch":"move","point":[source[0],source[1]-20.]}),
+                serde_json::json!({"touch":"move","point":destination}),
+                serde_json::json!({"touch":"up"}),
+            ]
+        } else {
+            vec![
+                serde_json::json!({"point":[source[0],source[1]-20.]}),
+                serde_json::json!({"point":destination}),
+                serde_json::json!({"down":false}),
+            ]
+        });
+        d.perform(serde_json::Value::Array(events));
+        let layout = state(&d.w).workspace.layout.header;
+        assert_eq!(
+            layout.entries().count(),
+            original.entries().count() + usize::from(!touch || grip || held),
+            "touch={touch} grip={grip} held={held}"
+        );
+        if !touch || grip || held {
+            let entry = layout
+                .entries()
+                .find(|e| {
+                    e.item
+                        == HeaderItem::Tool {
+                            control: ToolbarControl::Opacity,
+                        }
+                })
+                .unwrap();
+            assert_eq!(layout.location(entry.id).unwrap().0, HeaderZone::Center);
+        }
+        assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
+        assert_eq!(
+            d.w.gpu
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .session
+                .capture_workspace()
+                .unwrap()
+                .history,
+            capture.history,
+            "preview must not be autosaved"
+        );
+        d.click_name("header-edit-cancel");
+        assert_eq!(state(&d.w).workspace.layout.header, original);
+    }
+    d.edit();
+    // Cancel outside, Escape, blur and replacement without ever creating a tile.
+    for cancellation in 0..4 {
+        d.named("header-add-search")
+            .downcast::<gtk::SearchEntry>()
+            .unwrap()
+            .set_text("Brush opacity");
+        pump(250);
+        let source = d.point(&d.named("header-add-grip-brush-opacity"));
+        let destination = [d.w.surface.width() as f32 / 2., 30.];
+        d.perform(serde_json::json!([{"point":source},{"down":true},{"point":destination}]));
+        assert!(d.w.dragging.get());
+        match cancellation {
+            0 => d.perform(serde_json::json!([{"point":[900.,700.]}])),
+            1 => d.key(0xff1b),
+            2 => {
+                d.w.interact(UiInput::Blur);
+            }
+            _ => {
+                d.named("header-add-search")
+                    .downcast::<gtk::SearchEntry>()
+                    .unwrap()
+                    .set_text("Clock");
+                pump(250);
+            }
+        }
+        d.perform(serde_json::json!([{"down":false}]));
+        assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
+        assert_eq!(state(&d.w).workspace.layout.header, original);
+        assert!(state(&d.w).customization.header_editing);
+    }
+    // Keyboard/click alternative uses the same catalog and retains a single Done boundary.
+    d.named("header-add-search")
+        .downcast::<gtk::SearchEntry>()
+        .unwrap()
+        .set_text("Brush opacity");
+    pump(250);
+    d.named("header-add-zone")
+        .downcast::<gtk::DropDown>()
+        .unwrap()
+        .set_selected(2);
+    d.click_name("header-add-brush-opacity");
+    let preview = state(&d.w).workspace.layout.header;
+    d.click_name("header-edit-done");
+    assert_eq!(state(&d.w).workspace.layout.header, preview);
+    let saved =
+        d.w.gpu
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .session
+            .capture_workspace()
+            .unwrap();
+    assert_eq!(saved.history.generation, capture.history.generation + 1);
+    d.edit();
+    d.named("header-size")
+        .downcast::<gtk::DropDown>()
+        .unwrap()
+        .set_selected(2);
+    pump(120);
+    d.key(0xff1b);
+    assert!(!state(&d.w).customization.header_editing);
+    assert_eq!(
+        state(&d.w).workspace.layout.header,
+        preview,
+        "Escape cancels uncommitted edits"
+    );
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_spacing_visual"]
+fn native_header_spacing_visual() {
+    let mut d = Driver::managed("art.capycanvas.HeaderSpacing");
+    d.click_name("workspace-switch-painter");
+    Driver::wait_ready(&d.w);
+    pump(250);
+    for theme in [Theme::Dark, Theme::Light] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for size in HeaderSize::ALL {
+            d.w.dispatch(HeaderAction::SetSize { size }.action());
+            pump(250);
+            let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap();
+            let b = close.compute_bounds(&d.w.surface).unwrap();
+            assert!(
+                (b.width() - b.height()).abs() < 1.,
+                "{size:?}: close not square: {b:?}"
+            );
+            assert!(
+                (b.y() - 6.).abs() < 1.
+                    && (d.w.header.height() - b.y() - b.height() - 6.).abs() < 1.,
+                "close vertical padding: {b:?}"
+            );
+            let image = close.first_child().unwrap().compute_bounds(&close).unwrap();
+            assert!((image.x() - (close.width() as f32 - image.x() - image.width())).abs() < 1.);
+            assert!((image.y() - (close.height() as f32 - image.y() - image.height())).abs() < 1.);
+            let h = state(&d.w).workspace.layout.header;
+            for pair in h.zones[2].windows(2) {
+                let a = d
+                    .named(&format!("header-item-{}", pair[0].id))
+                    .compute_bounds(&d.w.surface)
+                    .unwrap();
+                let b = d
+                    .named(&format!("header-item-{}", pair[1].id))
+                    .compute_bounds(&d.w.surface)
+                    .unwrap();
+                assert!(
+                    (b.x() - a.x() - a.width() - 6.).abs() < 1.,
+                    "tile gap {a:?} {b:?}"
+                );
+            }
+            let switcher =
+                d.w.workspaces
+                    .switcher
+                    .compute_bounds(&d.w.surface)
+                    .unwrap();
+            assert!(
+                (switcher.x() + switcher.width() / 2. - d.w.surface.width() as f32 / 2.).abs() < 1.
+            );
+            assert!(switcher.height() <= 36., "selector stretched vertically");
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("bar-{theme:?}-{size:?}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            let tool = d.named(&d.header_tool(ToolbarControl::Color));
+            d.click(&tool);
+            let button = find_css(&tool, "header-tool").unwrap();
+            assert!(button.has_css_class("drawer-origin-bottom"));
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("drawer-{theme:?}-{size:?}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            d.click(&tool);
+            assert!(!button.has_css_class("drawer-origin-bottom"));
+            d.edit();
+            let capy = h.entries().find(|e| e.item == HeaderItem::Capy).unwrap().id;
+            let item = d.named(&format!("header-item-{capy}"));
+            let grip = d
+                .named(&format!("header-grip-{capy}"))
+                .compute_bounds(&item)
+                .unwrap();
+            assert!(
+                (grip.y() + grip.height() / 2. - item.height() as f32 / 2.).abs() < 1.,
+                "grip alignment"
+            );
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("editor-{theme:?}-{size:?}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            d.click_name("header-edit-cancel");
+        }
+    }
+    d.click_name("workspace-switch-illustrator");
+    Driver::wait_ready(&d.w);
+    for size in HeaderSize::ALL {
+        d.w.dispatch(HeaderAction::SetSize { size }.action());
+        pump(200);
+        let label = d.label("File");
+        let mut button = label.clone();
+        while !button.is::<gtk::Button>() {
+            button = button.parent().unwrap();
+        }
+        let button_bounds = button.compute_bounds(&d.w.surface).unwrap();
+        assert_eq!(
+            button_bounds.height(),
+            36.,
+            "menu text buttons retain baseline height at {size:?}"
+        );
+        let label_bounds = label.compute_bounds(&d.w.surface).unwrap();
+        assert!(
+            label_bounds.x() - button_bounds.x() >= 6.
+                && button_bounds.x() + button_bounds.width()
+                    - label_bounds.x()
+                    - label_bounds.width()
+                    >= 6.
+        );
+        let p = d.point(&label);
+        d.perform(serde_json::json!([{"point":p}]));
+        crate::capture(
+            &d.w,
+            d.dir
+                .join(format!("menu-hover-{size:?}.png"))
+                .to_str()
+                .unwrap(),
+        );
+    }
     d.finish();
 }
 
@@ -278,9 +574,8 @@ fn native_header_cancel_caption_input() {
         "source replacement retires the contact"
     );
     d.perform(serde_json::json!([{ "down": false }]));
-    d.w.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    });
+    d.w.dispatch(HeaderAction::Cancel.action());
+    d.w.dispatch(HeaderAction::Edit { editing: true }.action());
     pump(120);
     assert_eq!(state(&d.w).workspace.layout.header, original);
     d.click_name("header-edit-done");
@@ -538,9 +833,7 @@ fn native_header_hold_context_input() {
                     "touch={touch} grip={grip} held={held}"
                 );
                 if held || grip {
-                    d.w.dispatch(UiAction::Invoke {
-                        command: CommandId::UndoWorkspace,
-                    });
+                    d.w.dispatch(HeaderAction::Cancel.action());
                     pump(160);
                     assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
                 }
@@ -570,11 +863,10 @@ fn native_header_hold_context_input() {
     d.perform(serde_json::json!([{ "key": 0xffe1, "down": true }, { "key": 0xffc7, "down": true }, { "key": 0xffc7, "down": false }, { "key": 0xffe1, "down": false }]));
     d.click_label("Remove from Window Bar");
     assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
-    d.w.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    });
+    d.w.dispatch(HeaderAction::Cancel.action());
     pump(160);
-    assert!(state(&d.w).customization.header_editing);
+    assert!(!state(&d.w).customization.header_editing);
+    assert!(state(&d.w).workspace.layout.header.entry(id).is_ok());
     d.finish();
 }
 
@@ -588,11 +880,10 @@ fn native_header_editor_controls_input() {
         dropdown.set_selected(size as u32);
         pump(220);
         assert_eq!(state(&d.w).workspace.layout.header.size, size);
-        assert_eq!(d.w.header.root.height(), size.height() as i32 + 48);
+        assert_eq!(d.w.header.root.height(), size.height() as i32 + 366);
         assert_eq!(d.w.area.height(), d.w.surface.height());
     }
     for label in ["Brush opacity", "Clock", "Menu Labels"] {
-        d.click_name("header-add-item");
         let search = d
             .named("header-add-search")
             .downcast::<gtk::SearchEntry>()
@@ -612,7 +903,6 @@ fn native_header_editor_controls_input() {
                 .any(|e| e.item.label() == label)
         );
     }
-    d.click_name("header-add-item");
     let search = d
         .named("header-add-search")
         .downcast::<gtk::SearchEntry>()
@@ -623,21 +913,11 @@ fn native_header_editor_controls_input() {
         !d.named("header-add-clock").is_sensitive(),
         "singleton remains unavailable on a reopened picker"
     );
-    d.key(0xff1b);
-    assert!(
-        state(&d.w).customization.header_editing,
-        "Escape closes picker before editor"
-    );
     d.click_name("header-options");
     d.click_label("Show Zoom and Rotation");
     assert!(state(&d.w).workspace.layout.canvas_info.visible && d.w.view_info.is_visible());
-    d.click_name("header-options");
-    d.click_label("Top Left");
-    assert_eq!(
-        state(&d.w).workspace.layout.canvas_info.anchor,
-        OverlayAnchor::TopLeft
-    );
-    assert!(d.w.resolved().status.y < 200.);
+    assert!(d.w.resolved().status.y > d.w.surface.height() as f32 / 2.);
+    assert_eq!(d.w.view_info.halign(), gtk::Align::End);
     d.click_name("header-options");
     d.click_label("Restore Window Bar Defaults");
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::default());
@@ -870,9 +1150,8 @@ fn native_header_builder_input() {
         state(&w).workspace.layout.header.location(id).unwrap().0,
         HeaderZone::Right
     );
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    });
+    w.dispatch(HeaderAction::Cancel.action());
+    w.dispatch(HeaderAction::Edit { editing: true }.action());
     pump(200);
     assert_eq!(state(&w).workspace.layout.header, original);
     let from = point(&format!("header-grip-{id}"));

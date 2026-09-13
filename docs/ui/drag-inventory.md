@@ -40,8 +40,15 @@ only while editing: hold then drag for every device. Its explicit grips use
 immediate pickup with movement slop. Shared Rust validates the final atomic
 move; an outside drop or invalidated source cancels. Context actions offer
 move/order/remove without dragging. Native mouse/touch checks cover hold-release,
-same-contact dragging, cancellation, context menus and undo at 1× and 2×;
+same-contact dragging, cancellation and context menus at 1× and 2×;
 physical stylus acceptance remains a hardware check, not inferred from touch.
+The customization catalog also supports dragging new individual items: explicit
+grips are immediate for every device; list-row bodies are immediate for mouse
+and held for touch/pen, preserving scrolling before the hold. The inline editor
+uses one preview baseline with Done/Cancel, not per-move undo entries. Done is
+one ordinary workspace-history transaction. Native catalog tests cover both
+mouse and touch at 1×/2×, invalidated sources, blur/Escape/outside cancellation,
+click-to-add alternatives and previews excluded from saved captures.
 
 ### Other GTK pointer drags and non-draggable collections
 
