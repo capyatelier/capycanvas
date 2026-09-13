@@ -1915,3 +1915,21 @@ Visual parity, attached column panels/preferences, starting-layout preview,
 physical input and recovery, distribution, sustained 120 Hz painting and physical
 input latency remain open. The unrelated GPU filter-reference investigation is
 excluded from this milestone. No performance benchmark ran here.
+
+## Audited shared icons on Windows
+
+The shared SVG bank and Rust catalog mappings from the published icon audit
+are integrated with Windows. All 157 SVGs are staged in light and dark variants,
+preserving explicit colors and opacity while resolving `currentColor`. Native
+tool groups, subtools, commands and filter layers consume the shared identities.
+Filter category headings, the selected category and preview captions now show
+their specific icons. Native checkable tool actions retain checkbox semantics
+beside command glyphs. New Layer uses the document-plus asset; column expansion
+uses the shared inward-facing double chevrons.
+
+The integrated shared suite passes 428 tests with four explicit hardware ignores,
+along with strict Windows Clippy and the Rust/WinUI build. Native tool editing,
+filter category/search/insertion, preview/Undo, both-theme filter replacement,
+drawer/column history and Navigator drawer checks pass. The staged SVGs match
+their source in both themes. Full raster parity and physical-device/performance
+acceptance remain open.

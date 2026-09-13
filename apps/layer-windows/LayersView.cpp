@@ -83,7 +83,7 @@ void LayersView::init(){
         auto pick=button(data,text,std::move(action));pick.Width(24);pick.Height(24);pick.Content(icon(iconName,data->theme()));
         AutomationProperties::SetAutomationId(pick,id);ToolTipService::SetToolTip(pick,box_value(text));footer.Children().Append(pick);return pick;
     };
-    footerButton(L"plus",L"New layer",L"layer-new",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(false)},{L"clipped",B(false)}}));});
+    footerButton(L"add-layer",L"New layer",L"layer-new",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(false)},{L"clipped",B(false)}}));});
     footerButton(L"folder",L"New group",L"layer-new-group",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(true)},{L"clipped",B(false)}}));});
     auto mask=footerButton(L"mask",L"Add layer mask",L"layer-add-mask",[weak]{if(auto self=weak.lock()){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
