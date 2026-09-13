@@ -91,6 +91,9 @@ The first covers real mouse/touch/pen bank and item dragging, cancellation,
 keyboard/context menus, tool pickers, drawers and action feedback. The second
 covers Save/Done/Cancel, durable workspace transitions, small windows, overflow,
 themes, all sizes, true 2× backing scale, fullscreen/status, footer and full Zen.
+Use `--title-bar-feedback` for both-theme mouse/touch/pen checks of selected-tool,
+open-drawer and action-press colors and the minimal Sketch default. The Android
+device runner also accepts this selector; use a dedicated test origin.
 They can also run through `node apps/layer-web/test.mjs` against a running
 development server. See the [acceptance record](title-bar-web-acceptance.md) for
 captures, shared tests, existing regressions and device limitations.

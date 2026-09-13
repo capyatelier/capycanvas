@@ -18,6 +18,18 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   });
   let view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
+  let buttonContact;
+  function clearButtonPress(e) {
+    if(!buttonContact||(e&&e.pointerId!==buttonContact.id))return;
+    buttonContact.node.removeAttribute('data-header-pressed');buttonContact=null;
+  }
+  function moveButtonPress(e) {
+    if(buttonContact?.id!==e.pointerId)return;
+    const {node,parent}=buttonContact;
+    if(!node.isConnected||node.parentNode!==parent||node.disabled){clearButtonPress();return;}
+    const r=node.getBoundingClientRect();
+    node.toggleAttribute('data-header-pressed',e.clientX>=r.left&&e.clientX<r.right&&e.clientY>=r.top&&e.clientY<r.bottom);
+  }
   const send = action => dispatch({type:'customize', action:{type:'header', action}});
   const entries = () => view.model.zones.flat();
   const bounds = node => {const r=node.getBoundingClientRect(), p=root.getBoundingClientRect(); return {x:r.x-p.x,y:r.y-p.y,width:r.width,height:r.height};};
@@ -127,6 +139,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     view=app.header_view(); size=view.sizes.find(s=>s.id===view.model.size);
     const key=JSON.stringify([view.model,view.editing]);
     if(key!==modelKey) {
+      clearButtonPress();
       end(null,true); const wasEditing=editing; editing=view.editing; modelKey=key;
       const focused=root.contains(document.activeElement);
       for(const m of root.querySelectorAll('details[open]'))m.open=false;
@@ -275,6 +288,19 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     queue();
   }
   root.addEventListener('pointerdown',start);bank.addEventListener('pointerdown',start);
+  // Chromium synthesizes touch mousedown/up together on release, so :active
+  // alone supplies no held feedback. Track only the visual contact here;
+  // native clicks, context holds and the editor's drag capture keep ownership.
+  root.addEventListener('pointerdown',e=>{
+    const node=e.target.closest('.header-tool');
+    if(editing||e.button!==0||!e.isPrimary||!node||node.disabled)return;
+    clearButtonPress();buttonContact={id:e.pointerId,node,parent:node.parentNode};
+    node.setAttribute('data-header-pressed','');
+  });
+  window.addEventListener('pointermove',moveButtonPress,{capture:true});
+  for(const name of ['pointerup','pointercancel','lostpointercapture'])window.addEventListener(name,clearButtonPress,{capture:true});
+  window.addEventListener('blur',()=>clearButtonPress());
+  window.addEventListener('resize',()=>clearButtonPress());
   window.addEventListener('pointerdown',()=>{suppressed=null;},{capture:true});
   window.addEventListener('pointermove',move,{capture:true});
   window.addEventListener('pointerup',e=>end(e),{capture:true});
@@ -288,6 +314,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     }
   },{capture:true});
   window.addEventListener('keydown',e=>{
+    if(e.key==='Escape')clearButtonPress();
     if(e.isComposing||e.target.closest('input,select,textarea,[contenteditable=true],dialog[open],.popover,.panel-context-menu'))return;
     if(e.key==='Escape'&&contact){end(null,true);e.preventDefault();e.stopImmediatePropagation();return;}
     if(!editing||!(root.contains(e.target)||e.target===root)||selected==null)return;
@@ -303,7 +330,10 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   root.addEventListener('contextmenu',e=>{const item=e.target.closest('[data-header-item]');if(editing&&item)select(Number(item.dataset.headerItem));});
   new ResizeObserver(()=>{if(contact&&contact.width!==root.clientWidth)end(null,true);queue();}).observe(root);
   new ResizeObserver(queue).observe(bank);
-  new MutationObserver(()=>{if(contact&&(!contact.node.isConnected||contact.node.parentNode!==contact.parent))end(null,true);})
+  new MutationObserver(()=>{
+    if(contact&&(!contact.node.isConnected||contact.node.parentNode!==contact.parent))end(null,true);
+    if(buttonContact&&(!buttonContact.node.isConnected||buttonContact.node.parentNode!==buttonContact.parent))clearButtonPress();
+  })
     .observe(workspace,{childList:true,subtree:true});
   new MutationObserver(queue).observe(switcher,{childList:true,subtree:true,characterData:true});
   new MutationObserver(()=>{for(const r of records.values())if(r.status)r.placeholder.hidden=!editing||!r.status.hidden;queue();})

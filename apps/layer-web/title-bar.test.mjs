@@ -54,6 +54,7 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
     await shot('startup');
     await selectWorkspace('Sketch');
     const original=await model();
+    assert.deepEqual(await evaluate('layerApp.state().workspace.layout.bands'),[],'Sketch has no duplicate docked toolbars');
     assert.equal(original.size,'medium');
     assert.deepEqual(original.zones[0].map(e=>e.item.kind),['capy','menu','tool','tool','tool']);
     assert.deepEqual(original.zones[1].map(e=>e.item.kind),['workspaces']);

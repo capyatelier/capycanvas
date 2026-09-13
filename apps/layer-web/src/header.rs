@@ -26,6 +26,7 @@ impl WebApp {
                         let (enabled, selected) = layer_ui::tool_state(state, control);
                         (enabled, selected, layer_ui::tool_choice(control).icon)
                     }
+                    HeaderItem::Capy => (true, state.workspace.zen_mode, ""),
                     _ => (true, false, ""),
                 };
                 json!({"id":entry.id, "label":entry.item.label(), "enabled":enabled,

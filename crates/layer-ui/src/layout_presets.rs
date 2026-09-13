@@ -34,6 +34,18 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        self.layout_with_header_tools(
+            platform,
+            matches!(platform, crate::Platform::Gtk | crate::Platform::Web),
+        )
+    }
+
+    /// Exact pre-title-bar arrangement, retained for conservative default upgrades.
+    pub fn legacy_painter_layout(platform: crate::Platform) -> DockLayout {
+        Self::Painter.layout_with_header_tools(platform, false)
+    }
+
+    fn layout_with_header_tools(self, platform: crate::Platform, header_tools: bool) -> DockLayout {
         if self == Self::Illustrator {
             let mut layout = DockLayout::for_platform(platform);
             for column in layout.column_roots() {
@@ -152,7 +164,7 @@ impl WorkspacePreset {
             root: tabs(2, &[Panel::Toolbar]),
         }];
         if self == Self::Painter {
-            if platform == crate::Platform::Gtk {
+            if header_tools {
                 layout.bands.clear();
                 layout.canvas_info.visible = false;
                 return layout;
@@ -292,7 +304,7 @@ mod tests {
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
         // Hosts without the new header projection keep their existing controls.
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Web);
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Android);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -319,19 +331,24 @@ mod tests {
     }
 
     #[test]
-    fn gtk_painter_has_individual_header_tools_and_no_reserved_status() {
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Gtk);
-        assert!(layout.bands.is_empty() && layout.floating.is_empty());
-        assert_eq!(layout.header, crate::HeaderLayout::painter());
-        assert_eq!(layout.header.size, crate::HeaderSize::Medium);
-        assert!(
-            !layout
-                .header
-                .entries()
-                .any(|e| e.item == crate::HeaderItem::MenuLabels)
-        );
-        assert!(!layout.canvas_info.visible);
-        assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
+    fn gtk_and_web_sketch_have_only_individual_header_tools() {
+        for platform in [crate::Platform::Gtk, crate::Platform::Web] {
+            let layout = WorkspacePreset::Painter.layout(platform);
+            assert!(layout.bands.is_empty() && layout.floating.is_empty());
+            assert_eq!(
+                layout.header,
+                crate::HeaderLayout::painter_for_platform(platform)
+            );
+            assert_eq!(layout.header.size, crate::HeaderSize::Medium);
+            assert!(
+                !layout
+                    .header
+                    .entries()
+                    .any(|e| e.item == crate::HeaderItem::MenuLabels)
+            );
+            assert!(!layout.canvas_info.visible);
+            assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
+        }
     }
 
     #[test]
