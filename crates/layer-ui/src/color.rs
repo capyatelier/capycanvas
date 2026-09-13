@@ -1544,7 +1544,7 @@ mod tests {
     #[test]
     fn hls_raster_matches_picker_at_physical_pixel_centers() {
         for side in [1, 31, 160, 320, 452] {
-            for hue in [0., 60., 140.000015, 150., 240., 340., 360.] {
+            for hue in [0., 60., 140.000_02, 150., 240., 340., 360.] {
                 let mut pixels = vec![17; side as usize * side as usize * 4];
                 assert!(render_hls_field(side, hue, &mut pixels));
                 let mut state = ColorState {

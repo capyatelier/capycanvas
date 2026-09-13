@@ -104,6 +104,8 @@ private:
     void Start();
     void Resize();
     void ApplyResize();
+    bool RecoverGpu();
+    void ResetSurface();
     void Run();
     void Stop();
     void Finish();

@@ -771,6 +771,27 @@ impl DocumentService {
                 }
             }
             Ok(Completed::Prepared(candidate)) => {
+                let current_device = host
+                    .session
+                    .engine()
+                    .backend()
+                    .0
+                    .as_ref()
+                    .map(|gpu| gpu.device());
+                let prepared_device = candidate
+                    .engine()
+                    .backend()
+                    .0
+                    .as_ref()
+                    .map(|gpu| gpu.device());
+                if current_device != prepared_device {
+                    self.worker.retire(candidate);
+                    return Self::complete(
+                        host,
+                        active.id,
+                        Err("The GPU changed while opening the document. Try again.".into()),
+                    );
+                }
                 match host.session.adopt_project(
                     candidate,
                     active.epoch,

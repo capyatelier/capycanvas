@@ -13,7 +13,8 @@ pub struct FilterLoadState {
 }
 pub(super) struct Pending {
     catalog: EffectCatalog,
-    validated: bool,
+    pub(super) validation: EffectValidationRequest,
+    pub(super) validated: bool,
     migrate_instances: bool,
 }
 impl Pending {
@@ -99,20 +100,22 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         let request_id = self.state.filter_load.request_id.wrapping_add(1);
+        let validation = EffectValidationRequest {
+            request_id,
+            programs: changed,
+            namespace,
+        };
         let accepted = self
             .engine
             .backend_mut()
-            .request_effect_validation(EffectValidationRequest {
-                request_id,
-                programs: changed,
-                namespace,
-            })
+            .request_effect_validation(validation.clone())
             .map_err(|e| e.to_string())?;
         if !accepted {
             return Err("The GPU is unavailable or busy validating filters".into());
         }
         self.pending_filters = Some(Pending {
             catalog: candidate,
+            validation,
             validated: false,
             migrate_instances,
         });

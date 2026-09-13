@@ -30,6 +30,10 @@ impl Eyedropper {
             position,
         });
     }
+    pub fn renderer_replaced(&mut self) {
+        self.cancel();
+        self.pending = false;
+    }
     pub fn busy(&self) -> bool {
         self.pending || self.queued.is_some()
     }
