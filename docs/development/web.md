@@ -94,6 +94,10 @@ themes, all sizes, true 2× backing scale, fullscreen/status, footer and full Ze
 Use `--title-bar-feedback` for both-theme mouse/touch/pen checks of selected-tool,
 open-drawer and action-press colors and the minimal Sketch default. The Android
 device runner also accepts this selector; use a dedicated test origin.
+Use `--title-bar-overflow` to reproduce the menu-label region collapsing as the
+window narrows, then drag its hidden items with mouse, touch and pen at every
+bar size. It checks real hit targets above the component bank, stable item IDs,
+collapsed drop destinations, cancellation and workspace undo/redo.
 They can also run through `node apps/layer-web/test.mjs` against a running
 development server. See the [acceptance record](title-bar-web-acceptance.md) for
 captures, shared tests, existing regressions and device limitations.
