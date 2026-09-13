@@ -2618,6 +2618,13 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
+                let target = if let DragTarget::Divider(id) = target
+                    && let Some(column) = self.resolved().column_panel_at_divider(id)
+                {
+                    DragTarget::ColumnPanel(column, None)
+                } else {
+                    target
+                };
                 return Some((widget, target));
             }
             picked = widget.parent();

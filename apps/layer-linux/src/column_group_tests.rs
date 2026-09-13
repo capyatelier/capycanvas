@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "column_group_resize_tests.rs"]
+mod resize;
+
 fn text_widget(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
     if root
         .downcast_ref::<gtk::Label>()
@@ -29,6 +32,11 @@ fn native_column_group_input() {
     w.window.maximize();
     w.window.present();
     pump(1600);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        assert!(Instant::now() < deadline, "workspace storage startup");
+        pump(10);
+    }
     std::fs::write(dir.join("ready"), "ready").unwrap();
     let mut step = 0;
     let mut perform = |events: serde_json::Value| {
@@ -192,61 +200,12 @@ fn native_column_group_input() {
                 .unwrap(),
             1.,
         );
-        // Resize through actual compositor motion. Count changing allocations,
-        // not input callbacks, and observe retained-model refreshes separately.
-        let before = w.publication.refreshes.get();
-        let sizes = Rc::new(RefCell::new(Vec::<(i64, i32)>::new()));
-        let samples = sizes.clone();
-        let root = find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap();
-        let measured_root = root.clone();
-        let tick = w.surface.add_tick_callback(move |_, clock| {
-            samples
-                .borrow_mut()
-                .push((clock.frame_time(), measured_root.width()));
-            glib::ControlFlow::Continue
-        });
-        let at = center(p.resize);
-        perform(
-            serde_json::json!([{"point":at},{"down":true},{"point":[at[0] + if edge == Edge::Left { 1. } else { -1. }, at[1]]}]),
-        );
-        let content = w.publication.content_revision.get();
-        let refreshes = w.publication.refreshes.get();
-        sizes.borrow_mut().clear();
-        let sign = if edge == Edge::Left { 1. } else { -1. };
-        let events: Vec<_> = (1..=360)
-            .map(|i| serde_json::json!({"point":[at[0] + sign * i as f32 * 0.9, at[1]]}))
-            .collect();
-        perform(serde_json::Value::Array(events));
-        assert_eq!(
-            w.publication.content_revision.get(),
-            content,
-            "steady resize rebuilt content"
-        );
-        assert_eq!(
-            w.publication.refreshes.get(),
-            refreshes,
-            "steady resize refreshed full models"
-        );
-        perform(serde_json::json!([{"down":false}]));
-        tick.remove();
-        assert_eq!(
-            root,
-            find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap()
-        );
-        let samples = sizes.borrow();
-        let changing: Vec<_> = samples
-            .windows(2)
-            .filter(|p| p[0].1 != p[1].1)
-            .map(|p| p[1].0)
-            .collect();
-        assert!(changing.len() > 40, "panel geometry did not resize live");
-        let seconds = (changing.last().unwrap() - changing.first().unwrap()) as f64 / 1e6;
-        println!(
-            "GROUP_PANEL_RESIZE theme={theme:?} changed_frames={} duration_s={seconds:.3} changing_hz={:.1} full_refreshes_including_start_end={}",
-            changing.len(),
-            (changing.len() - 1) as f64 / seconds,
-            w.publication.refreshes.get() - before
-        );
+        for touch in [false, true] {
+            for after in [None, Some(Panel::Brushes)] {
+                resize::measure(&w, &mut perform, column, after, (touch, false), &output, theme);
+            }
+            resize::measure(&w, &mut perform, column, None, (touch, true), &output, theme);
+        }
         let saved_width = state(&w)
             .workspace
             .layout
@@ -312,6 +271,28 @@ fn native_column_group_input() {
             state(&w).workspace.layout.column_settings(column).heights,
             saved.heights
         );
+        // Periodic cleanup runs against the real private SQLite store. It must
+        // never reload the active workspace or discard an explicitly open panel.
+        for mode in [ColumnMode::Drawers, ColumnMode::GroupPanel] {
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetColumnMode { column, mode },
+            });
+            pump(300);
+            perform(click(center(w.resolved().work_area)));
+            let before = state(&w);
+            let root = find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap();
+            let refreshes = w.publication.refreshes.get();
+            glib::MainContext::default().block_on(w.workspaces.maintain_storage(&w)).unwrap();
+            pump(400);
+            assert_eq!(state(&w).workspace, before.workspace, "maintenance changed open column");
+            assert_eq!(
+                serde_json::to_value(state(&w).customization).unwrap(),
+                serde_json::to_value(before.customization).unwrap(),
+                "maintenance closed projection"
+            );
+            assert_eq!(w.publication.refreshes.get(), refreshes, "maintenance rebuilt UI");
+            assert_eq!(root, find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap());
+        }
         w.dispatch(UiAction::Customize {
             action: CustomizationAction::SetColumnAutoHide {
                 column,

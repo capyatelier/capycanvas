@@ -196,6 +196,7 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .collapsed-column.group-opens-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .collapsed-column.group-opens-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .active-column-group { background: var(--panel-bg); border-radius: 6px; }
+.active-column-group > button.tile-button { background: transparent; box-shadow: none; }
 .active-column-group.group-opens-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .active-column-group.group-opens-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .column-group-panel > scrolledwindow + scrolledwindow { border: none; }

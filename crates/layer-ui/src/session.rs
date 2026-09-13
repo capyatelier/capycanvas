@@ -609,6 +609,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 return None;
                             }
                             let strip = layout.collapsed.iter().find(|c| c.id == column)?;
+                            if layout.dividers.iter().any(|divider| {
+                                divider.bounds.contains(position[0], position[1])
+                                    && layout.column_panel_at_divider(divider.id) == Some(column)
+                            }) {
+                                return None;
+                            }
                             let body = strip.group_panel.as_ref().map(|p| p.bounds).or_else(|| {
                                 self.state.customization.column_drawer_bounds.iter()
                                     .find(|m| m.group == group).map(|m| m.bounds)
@@ -1706,6 +1712,31 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        // One resize contract for both sides of an attached panel's outside
+        // edge. Resolve before revision classification so either hit surface
+        // follows the retained-content path and one-step gesture history.
+        let action = match action {
+            UiAction::DragDivider {
+                id,
+                phase,
+                position,
+                viewport,
+            } => {
+                valid_viewport(viewport)?;
+                if let Some(column) = self.layout(viewport).column_panel_at_divider(id) {
+                    UiAction::ResizeColumnPanel {
+                        column,
+                        after: None,
+                        phase,
+                        position,
+                        viewport,
+                    }
+                } else {
+                    action
+                }
+            }
+            _ => action,
+        };
         if self.workspace_read_only
             && !matches!(
                 &action,
@@ -1733,6 +1764,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                         ..
                     }
                     | UiAction::ResizeFloating {
+                        phase: ContactPhase::Up | ContactPhase::Cancel,
+                        ..
+                    }
+                    | UiAction::ResizeColumnPanel {
                         phase: ContactPhase::Up | ContactPhase::Cancel,
                         ..
                     }

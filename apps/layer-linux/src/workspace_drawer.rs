@@ -729,7 +729,12 @@ impl Drawer {
                         }),
                 );
             }
-            *view.root.imp().geometry.borrow_mut() = geometry;
+            if *view.root.imp().geometry.borrow() != geometry {
+                *view.root.imp().geometry.borrow_mut() = geometry;
+                // GTK can skip size_allocate when the outer rectangle is
+                // unchanged. Internal panel splits still need live allocation.
+                view.root.queue_allocate();
+            }
             let connection = result.connection();
             view.connection_geometry.set(connection);
             view.connection.queue_draw();

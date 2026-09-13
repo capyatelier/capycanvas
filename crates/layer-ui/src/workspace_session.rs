@@ -254,6 +254,26 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_history.generation()
     }
 
+    /// Storage retention only removes unreachable history revisions. It is
+    /// not workspace adoption: keep live panels, tools and UI models.
+    pub fn refresh_workspace_history(&mut self, history: LayoutHistory) -> Result<(), String> {
+        self.require_workspace_idle()?;
+        history.validate()?;
+        let current = self.capture_workspace()?.history;
+        if history.current != current.current
+            || history.undo != current.undo
+            || history.redo != current.redo
+            || std::iter::once(&current.current)
+                .chain(&current.undo)
+                .chain(&current.redo)
+                .any(|id| history.revisions[id].layout != current.revisions[id].layout)
+        {
+            return Err("Storage maintenance changed the active layout or undo history".into());
+        }
+        self.workspace_history = workspace::WorkspaceHistory::restore(history);
+        Ok(())
+    }
+
     /// Layout browsing changes only the presented layout. Every durable
     /// capture still sees the layout from before the preview was opened.
     pub fn begin_workspace_layout_preview(&mut self) -> Result<(), String> {

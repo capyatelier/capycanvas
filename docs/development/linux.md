@@ -121,3 +121,9 @@ frame, editor sensitivity changes, and transient notices; `steady.png` and
 mouse, touch, and keyboard input during a pause. Routine workspace operations
 pause input without disabling/restyling the editor. Notices overlay the canvas
 so they cannot resize its viewport or GPU surface.
+
+For Group panels, run `LAYER_RESIZE_MIN_HZ=115 bash tools/performance/workspace-motion.sh gtk --column-groups`.
+This uses real mouse/touch and private SQLite storage. It measures painted child
+allocations in both axes, including the adjacent dock divider, and checks retained
+widgets, cancellation and maintenance without closing panels. The run directory
+contains per-case JSON and both-theme captures; see [measurements](../history/workspace-motion.md).
