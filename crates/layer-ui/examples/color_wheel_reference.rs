@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let g = ColorWheelGeometry::new(1.).unwrap();
             state.apply(ColorAction::PickWheel {
                 part: ColorWheelPart::Hue,
-                point: g.hue_marker(value),
+                point: state.wheel_hue_marker(&g, value),
                 size: 1.,
             })?;
         } else {
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // The hue ring always displays fully saturated, opaque colors.
                 if part == ColorWheelPart::Hue {
                     let hue = if request.shape.is_some() {
-                        state.wheel_hue_color(geometry.hue_at(point))
+                        state.wheel_hue_color(state.wheel_hue_at(&geometry, point))
                     } else {
                         layer_ui::hue_color(geometry.hue_at(point))
                     };
@@ -85,7 +85,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = state.view();
     if request.shape.is_some() {
         model.field_marker = state.wheel_marker(&geometry);
-        model.hue_marker = geometry.hue_marker(state.wheel_components()[0]);
+        model.hue_marker = state.wheel_hue_marker(&geometry, state.wheel_components()[0]);
+        model.hue_start_degrees = state.wheel_hue_start_degrees();
     }
     let mut model = serde_json::to_value(model)?;
     model["wheel_hue_stops"] = serde_json::to_value(state.wheel_hue_stops())?;

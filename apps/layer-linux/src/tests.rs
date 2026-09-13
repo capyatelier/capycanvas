@@ -4234,7 +4234,7 @@ fn native_tool_and_color_panels() {
     click(
         &find_named(&color, "color-readout").unwrap().downcast().unwrap(),
     );
-    assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Lab);
+    assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Rgb);
     assert_eq!(state(&w).colors.rgba(), before);
     for expected in [
         layer_ui::ColorShape::Square,

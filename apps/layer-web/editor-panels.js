@@ -130,10 +130,10 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       }
       // The ring depends on the color model and size, never the selected hue.
       // Retain its raster so a drag only repaints the changing field and markers.
-      const nextRing=JSON.stringify([view.shape,pixels,side,g,view.hue_start_degrees]);
+      const nextRing=JSON.stringify([view.shape,pixels,side,g,view.wheel_hue_start_degrees]);
       if(nextRing!==ringKey){
         ringKey=nextRing;ring.width=ring.height=pixels;ringContext.scale(pixels/side,pixels/side);
-        const hue=ringContext.createConicGradient(view.hue_start_degrees*Math.PI/180,cx,cy);
+        const hue=ringContext.createConicGradient(view.wheel_hue_start_degrees*Math.PI/180,cx,cy);
         app.color_hue_stops().forEach(stop=>hue.addColorStop(stop.offset,rgba(stop.color)));
         ringContext.strokeStyle=hue;ringContext.lineWidth=outer-inner;ringContext.beginPath();ringContext.arc(cx,cy,(inner+outer)/2,0,Math.PI*2);ringContext.stroke();
       }
@@ -151,12 +151,14 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       let font=Math.min(12,Math.max(9,half*2*.044));
       ctx.font=`bold ${font}px ${family}`;ctx.fillStyle=ink;ctx.globalAlpha=.9;ctx.fillText(view.readout_label,2,font+1);
       if(focus){ctx.strokeStyle=ink;ctx.lineWidth=1.5;ctx.beginPath();ctx.roundRect(1,1,ctx.measureText(view.readout_label).width+5,font+4,5);ctx.stroke();}
-      const labels=view.readout==="lab"?["L","a","b"]:["","",""],rgb=view.readout==="rgb";
-      const texts=view.readout_text.map((text,i)=>labels[i]+text),available=radius*Math.PI/2-4;
-      let widths,total;
+      const rgb=view.readout==="rgb";
+      const texts=view.readout_layout_text,available=radius*Math.PI/2-4;
+      let widths,total,digitAdvance;
+      const advance=c=>/[0-9 ]/.test(c)?digitAdvance:ctx.measureText(c).width;
       for(;;font-=.25) {
         ctx.font=`${font}px ${family}`;
-        widths=texts.map(text=>[...text].reduce((n,c)=>n+ctx.measureText(c).width,0)+(rgb?font*.8+2:0));total=widths.reduce((a,b)=>a+b,0);
+        digitAdvance=Math.max(...[..."0123456789"].map(c=>ctx.measureText(c).width));
+        widths=texts.map(text=>[...text].reduce((n,c)=>n+advance(c),0)+(rgb?font*.8+2:0));total=widths.reduce((a,b)=>a+b,0);
         if(total+6<=available||font<=8)break;
       }
       const chip=font*.8,gap=Math.min(radius*.24,Math.max(3,(available-total)*.5));
@@ -166,7 +168,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
         const width=widths[i],mid=-135*Math.PI/180+(cursor+width*.5)/radius;cursor+=width+gap;
         let along=-width*.5;
         if(rgb){at(mid+(along+chip*.5)/radius,()=>{ctx.globalAlpha=1;ctx.fillStyle=["rgb(93% 31% 36%)","rgb(25% 73% 43%)","rgb(29% 56% 98%)"][i];ctx.beginPath();ctx.roundRect(-chip*.5,-font*.76,chip,chip,2);ctx.fill();});along+=chip+2;}
-        for(const glyph of text){const advance=ctx.measureText(glyph).width;at(mid+(along+advance*.5)/radius,()=>{ctx.globalAlpha=.8;ctx.fillStyle=ink;ctx.fillText(glyph,-advance*.5,0);});along+=advance;}
+        for(const glyph of text){const cell=advance(glyph);at(mid+(along+cell*.5)/radius,()=>{ctx.globalAlpha=.8;ctx.fillStyle=ink;ctx.fillText(glyph,-ctx.measureText(glyph).width*.5,0);});along+=cell;}
       });
     }
     let contact=null;

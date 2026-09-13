@@ -47,6 +47,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
     await send({type:'set_color',rgba:[.2,.72,.58,1]});
     for(const shape of ['circle','square','triangle']) {
       await setShape(shape);
+      assert.equal((await read()).readout,shape==='circle'?'oklch':'hsb');
       const frames=await evaluate(`(()=>{
         const root=document.querySelector(${JSON.stringify(root)}),rect=n=>n.getBoundingClientRect().toJSON(),wheel=root.querySelector('.color-wheel'),g=layerApp.app.color_panel().geometry,w=rect(wheel);
         return {root:rect(root),stage:rect(root.querySelector('.color-wheel-square')),wheel:w,
@@ -65,9 +66,9 @@ export async function checkColorPanel({call,evaluate,settle}) {
       const fg=frames.controls.find(c=>c.slot==='foreground'),bg=frames.controls.find(c=>c.slot==='background'),transparent=frames.controls.find(c=>c.slot==='transparent');
       assert.ok(fg.width>bg.width&&fg.x<bg.x&&fg.y<bg.y&&fg.right>bg.x&&fg.bottom>bg.y,'Overlapping foreground sits above and left of background');
       assert.equal(bg.width,transparent.width);
-      for(const model of ['hsb','lab','rgb']) {
+      for(const model of ['hsb','oklch','rgb']) {
         while((await read()).readout!==model)await send({type:'color',action:{op:'toggle_readout'}});
-        assert.equal(await evaluate('layerApp.app.color_panel().readout_label'),model==='hsb'?(shape==='triangle'?'HLS':shape==='circle'?'Okhsv':'HSB'):model==='lab'?'Lab':'RGB');
+        assert.equal(await evaluate('layerApp.app.color_panel().readout_label'),model==='hsb'?(shape==='triangle'?'HLS':'HSB'):model==='oklch'?'OKLCH':'RGB');
         const name=`${theme}-${width}-${shape}-${model}`;reports.push({name,shape,model,...frames});
         const clip={x:frames.root.x-8,y:frames.root.y-44,width:frames.root.width+16,height:frames.root.height+52};
         for(const [suffix,scale] of [['',1],['-1x',.5]]) {
@@ -78,6 +79,26 @@ export async function checkColorPanel({call,evaluate,settle}) {
     }
   }
   await writeFile(`${output}/geometry.json`,JSON.stringify(reports,null,2));
+  // Observe actual Canvas text transforms: blank cells, digits and unit suffixes
+  // must keep the same font and arc position across 1/2/3-digit HSB and OKLCH values.
+  await setShape('circle');
+  for(const model of ['hsb','oklch'])for(const width of [144,280,360]){
+    while((await read()).readout!==model)await send({type:'color',action:{op:'toggle_readout'}});
+    await resizePanel(width);
+    const placements=await evaluate(`(()=>{
+      const canvas=document.querySelector(${JSON.stringify(root+' .color-readout canvas')}),prototype=CanvasRenderingContext2D.prototype,original=prototype.fillText;
+      let glyphs=[];const frames=[];
+      prototype.fillText=function(text,...args){
+        if(this.canvas===canvas){if(text===${JSON.stringify(model==='hsb'?'HSB':'OKLCH')})glyphs=[];else{const m=this.getTransform();glyphs.push({cell:/^[0-9 ]$/.test(text)?'#':text,font:this.font,transform:[m.a,m.b,m.c,m.d,m.e,m.f]});}}
+        return original.call(this,text,...args);
+      };
+      try{for(const value of [9,10,100]){for(const index of [0,1,2])layerApp.dispatch({type:'color',action:{op:'component',index,value}});frames.push(glyphs);}}
+      finally{prototype.fillText=original;}return frames;
+    })()`);
+    assert.equal(placements[0].length,model==='hsb'?12:13);
+    assert.deepEqual(placements[1],placements[0],`${width}px: 9 to 10 retains ${model} glyph slots`);
+    assert.deepEqual(placements[2],placements[0],`${width}px: 10 to 100 retains ${model} glyph slots`);
+  }
   await call('Emulation.clearDeviceMetricsOverride');await settle();
   await resizePanel(280,230);
   assert.ok(await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(root)}),panel=root.closest('.panel').getBoundingClientRect(),stage=root.querySelector('.color-wheel-square').getBoundingClientRect();return stage.bottom<=panel.bottom&&stage.width>=128&&Math.abs(stage.width-stage.height)<1;})()`),'Short dock retains the entire square');
@@ -90,7 +111,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
   const sampling=await evaluate(`(()=>{
     const a=layerApp.app,results=[];
     for(const low of [108,236,312])for(const h of [0,60,120,180,240,264.05,264.1,300]){
-      const angle=(h-150)*Math.PI/180;
+      const angle=(h+a.color_panel().wheel_hue_start_degrees)*Math.PI/180;
       layerApp.dispatch({type:'color',action:{op:'pick_wheel',part:'hue',size:1,point:[.5+.43*Math.cos(angle),.5+.43*Math.sin(angle)]}});
       const high=low*2,reference=a.color_field_pixels(high),bytes=a.color_field_pixels(low);
       const src=document.createElement('canvas'),dst=document.createElement('canvas');src.width=src.height=low;dst.width=dst.height=high;
@@ -131,7 +152,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
     const swatches=await read();await gesture(device,await point(`${root} .color-swap`));
     assert.deepEqual((await read()).foreground,swatches.background);assert.deepEqual((await read()).background,swatches.foreground);
     for(let i=0;i<3;i++) {
-      const before=await read(),expected={hsb:'lab',lab:'rgb',rgb:'hsb'}[before.readout];
+      const before=await read(),expected={hsb:'oklch',oklch:'rgb',rgb:'hsb'}[before.readout];
       await gesture(device,await point(`${root} .color-readout`,.12,.07));
       assert.equal((await read()).readout,expected);assert.deepEqual((await read()).background,before.background);
     }
@@ -156,7 +177,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
     const before=await read();
     if(native)await performNative([{key:key===' '?32:65293,down:true},{key:key===' '?32:65293,down:false}]);
     else for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode,...(key==='Enter'&&type==='keyDown'?{text:'\r'}:{})});
-    await settle();assert.equal((await read()).readout,{hsb:'lab',lab:'rgb',rgb:'hsb'}[before.readout]);
+    await settle();assert.equal((await read()).readout,{hsb:'oklch',oklch:'rgb',rgb:'hsb'}[before.readout]);
   }
   await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
   await gesture('touch',await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,.55,.45),true);

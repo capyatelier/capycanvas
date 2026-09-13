@@ -147,9 +147,12 @@ fn native_color_panel_input() {
                         "{width}px hue {hue} unobscured"
                     );
                 }
+                assert_eq!(state(&w).colors.readout, if shape == layer_ui::ColorShape::Circle {
+                    layer_ui::ColorReadout::Oklch
+                } else { layer_ui::ColorReadout::Hsb });
                 for model in [
                     layer_ui::ColorReadout::Hsb,
-                    layer_ui::ColorReadout::Lab,
+                    layer_ui::ColorReadout::Oklch,
                     layer_ui::ColorReadout::Rgb,
                 ] {
                     while state(&w).colors.readout != model {

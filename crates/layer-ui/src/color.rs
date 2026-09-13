@@ -23,23 +23,24 @@ pub enum ColorShape {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorReadout {
-    #[default]
     Hsb,
-    Lab,
+    #[default]
+    #[serde(alias = "lab")]
+    Oklch,
     Rgb,
 }
 impl ColorReadout {
     pub fn label(self) -> &'static str {
         match self {
             Self::Hsb => "HSB",
-            Self::Lab => "Lab",
+            Self::Oklch => "OKLCH",
             Self::Rgb => "RGB",
         }
     }
     pub fn next(self) -> Self {
         match self {
-            Self::Hsb => Self::Lab,
-            Self::Lab => Self::Rgb,
+            Self::Hsb => Self::Oklch,
+            Self::Oklch => Self::Rgb,
             Self::Rgb => Self::Hsb,
         }
     }
@@ -134,11 +135,14 @@ pub struct ColorPanelView {
     pub readout: ColorReadout,
     pub readout_label: &'static str,
     pub readout_text: [String; 3],
+    /// Leading spaces reserve fixed digit cells; hosts use tabular advances.
+    pub readout_layout_text: [String; 3],
     pub readout_description: String,
     pub wheel_marker: [f32; 2],
     pub wheel_components: [f32; 3],
     pub wheel_hue_color: [f32; 3],
     pub wheel_hue_marker: [f32; 2],
+    pub wheel_hue_start_degrees: f32,
     pub geometry: ColorWheelGeometry,
     pub hue_color: [f32; 3],
     pub hue_stops: [[f32; 3]; 7],
@@ -177,7 +181,7 @@ impl Default for ColorState {
             slot: ColorSlot::Foreground,
             space: ColorSpace::Hsv,
             shape: ColorShape::Circle,
-            readout: ColorReadout::Hsb,
+            readout: ColorReadout::Oklch,
             paint_slot: ColorSlot::Foreground,
             hues: [60., 0.],
             coordinates: [None; 2],
@@ -243,11 +247,13 @@ impl ColorState {
             readout: self.readout,
             readout_label: self.readout_label(),
             readout_text: self.readout_text(),
+            readout_layout_text: self.readout_layout_text(),
             readout_description: self.readout_description(),
             wheel_marker: self.wheel_marker(&geometry),
             wheel_components: self.wheel_components(),
             wheel_hue_color: self.wheel_hue_color(self.wheel_components()[0]),
-            wheel_hue_marker: geometry.hue_marker(self.wheel_components()[0]),
+            wheel_hue_marker: self.wheel_hue_marker(&geometry, self.wheel_components()[0]),
+            wheel_hue_start_degrees: self.wheel_hue_start_degrees(),
             geometry,
             hue_color: hue_color(components[0]),
             hue_stops: std::array::from_fn(|i| hue_color(i as f32 * 60.)),
@@ -324,10 +330,22 @@ impl ColorState {
     }
     pub fn wheel_hue_color(&self, hue: f32) -> [f32; 3] {
         if self.wheel_shape() == ColorShape::Circle {
-            okhsv::to_rgb([hue, 100., 100.])
+            okhsv::hue_preview(hue)
         } else {
             hue_color(hue)
         }
+    }
+    /// Only the Okhsv circle rotates: its RGB blue hue is about 264 degrees,
+    /// compared with HSV's 240. Keep legacy host geometry and HSV/HLS unchanged.
+    pub fn wheel_hue_start_degrees(&self) -> f32 {
+        ColorWheelGeometry::HUE_START_DEGREES
+            - if self.wheel_shape() == ColorShape::Circle { 24. } else { 0. }
+    }
+    pub fn wheel_hue_marker(&self, geometry: &ColorWheelGeometry, hue: f32) -> [f32; 2] {
+        geometry.hue_marker(hue + self.wheel_hue_start_degrees() - ColorWheelGeometry::HUE_START_DEGREES)
+    }
+    pub fn wheel_hue_at(&self, geometry: &ColorWheelGeometry, point: [f32; 2]) -> f32 {
+        (geometry.hue_at(point) - self.wheel_hue_start_degrees() + ColorWheelGeometry::HUE_START_DEGREES).rem_euclid(360.)
     }
     pub fn wheel_hue_stops(&self) -> &'static [ColorHueStop] {
         static OKHSV: std::sync::LazyLock<Vec<ColorHueStop>> =
@@ -428,7 +446,18 @@ impl ColorState {
         values[0] = values[0].rem_euclid(360.);
         let [r, g, b] = okhsv::to_rgb(values);
         self.set_rgba([r, g, b, self.rgba()[3]])?;
-        self.coordinates[self.index()].as_mut().unwrap().okhsv = Some(values);
+        let index = self.index();
+        let coordinates = self.coordinates[index].as_mut().unwrap();
+        coordinates.okhsv = Some(values);
+        if values[1] == 0. || values[2] == 0. {
+            // Gray/black cannot carry hue in RGB. Keep the ordinary HSB/HLS
+            // readout in step with explicit hue changes made on the Okhsv ring.
+            let [r, g, b] = okhsv::to_rgb([values[0], 100., 100.]);
+            let hue = components([r, g, b, 1.], ColorSpace::Hsv, self.hues[index])[0];
+            coordinates.hsv[0] = hue;
+            coordinates.hls[0] = hue;
+            self.hues[index] = hue;
+        }
         Ok(())
     }
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
@@ -442,6 +471,11 @@ impl ColorState {
                 },
             })?,
             ColorAction::Shape { shape } => {
+                self.readout = if shape == ColorShape::Circle {
+                    ColorReadout::Oklch
+                } else {
+                    ColorReadout::Hsb
+                };
                 self.shape = shape;
                 self.space = if shape == ColorShape::Triangle {
                     ColorSpace::Hls
@@ -457,7 +491,7 @@ impl ColorState {
                 if self.wheel_shape() == ColorShape::Circle {
                     let mut values = self.okhsv_components();
                     match part {
-                        ColorWheelPart::Hue => values[0] = g.hue_at(point),
+                        ColorWheelPart::Hue => values[0] = self.wheel_hue_at(&g, point),
                         ColorWheelPart::Field => {
                             let [s, v] = g.disc_components(point);
                             values[1] = s * 100.;
@@ -562,8 +596,7 @@ impl ColorState {
     pub fn readout_label(&self) -> &'static str {
         if self.readout == ColorReadout::Hsb {
             match self.wheel_shape() {
-                ColorShape::Circle => "Okhsv",
-                ColorShape::Square => "HSB",
+                ColorShape::Circle | ColorShape::Square => "HSB",
                 ColorShape::Triangle => "HLS",
             }
         } else {
@@ -580,26 +613,29 @@ impl ColorState {
     }
     pub fn readout_values(&self) -> [f32; 3] {
         match self.readout {
-            ColorReadout::Hsb => self.wheel_components(),
+            // HSB remains ordinary HSV/HLS, independent of the Okhsv projection.
+            ColorReadout::Hsb => self.components(),
             ColorReadout::Rgb => self.rgba()[..3]
                 .try_into()
                 .map(|c: [f32; 3]| c.map(|v| v * 255.))
                 .unwrap(),
-            ColorReadout::Lab => srgb_to_lab(self.rgba()),
+            ColorReadout::Oklch => okhsv::to_oklch(
+                self.rgba()[..3].try_into().unwrap(), self.okhsv_components()[0]),
         }
     }
     pub fn readout_text(&self) -> [String; 3] {
-        let v = self.readout_values().map(|v| v.round() as i32);
+        let values = self.readout_values();
+        let v = values.map(|v| v.round() as i32);
         match self.readout {
             ColorReadout::Hsb => [
                 format!("{}°", v[0] % 360),
                 format!("{}%", v[1]),
                 format!("{}%", v[2]),
             ],
-            ColorReadout::Lab => [
-                v[0].to_string(),
-                format!("{:+}", v[1]),
-                format!("{:+}", v[2]),
+            ColorReadout::Oklch => [
+                format!("{}%", v[0]),
+                format!("{:.3}", values[1]),
+                format!("{}°", v[2] % 360),
             ],
             ColorReadout::Rgb => v.map(|v| v.to_string()),
         }
@@ -611,7 +647,7 @@ impl ColorState {
                 ["Hue", "Lightness", "Saturation"]
             }
             ColorReadout::Hsb => ["Hue", "Saturation", "Brightness"],
-            ColorReadout::Lab => ["Lightness", "a", "b"],
+            ColorReadout::Oklch => ["Lightness", "Chroma", "Hue"],
             ColorReadout::Rgb => ["Red", "Green", "Blue"],
         };
         format!(
@@ -625,14 +661,22 @@ impl ColorState {
             v[2],
             if self.readout.next() == ColorReadout::Hsb {
                 match self.wheel_shape() {
-                    ColorShape::Circle => "Okhsv",
-                    ColorShape::Square => "HSB",
+                    ColorShape::Circle | ColorShape::Square => "HSB",
                     ColorShape::Triangle => "HLS",
                 }
             } else {
                 self.readout.next().label()
             }
         )
+    }
+    pub fn readout_layout_text(&self) -> [String; 3] {
+        let widths = match self.readout {
+            ColorReadout::Hsb => [4; 3],
+            ColorReadout::Rgb => [3; 3],
+            ColorReadout::Oklch => [4, 5, 4],
+        };
+        let texts = self.readout_text();
+        std::array::from_fn(|i| format!("{:>width$}", texts[i], width = widths[i]))
     }
     pub fn marker(&self, geometry: &ColorWheelGeometry) -> [f32; 2] {
         let [_, a, b] = self.components();
@@ -654,37 +698,6 @@ impl ColorState {
             }
         }
     }
-}
-
-/// CIE Lab, D50 reference white, Bradford-adapted from display-encoded sRGB.
-/// https://www.w3.org/TR/css-color-4/#color-conversion-code
-fn srgb_to_lab(rgba: [f32; 4]) -> [f32; 3] {
-    let linear = rgba.map(|v| {
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    });
-    let matrix = [
-        [0.4360657, 0.3851515, 0.1430784],
-        [0.2224932, 0.7168871, 0.0606198],
-        [0.0139239, 0.097081, 0.7140994],
-    ];
-    let white = [0.9642957, 1., 0.8251046];
-    let f: [f32; 3] = std::array::from_fn(|i| {
-        let t = (0..3).map(|j| matrix[i][j] * linear[j]).sum::<f32>() / white[i];
-        if t > 216. / 24389. {
-            t.cbrt()
-        } else {
-            (24389. / 27. * t + 16.) / 116.
-        }
-    });
-    [
-        116. * f[1] - 16.,
-        500. * (f[0] - f[1]),
-        200. * (f[1] - f[2]),
-    ]
 }
 
 /// Hue in degrees, remaining components in percent; alpha is independent.
@@ -1040,6 +1053,71 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 mod tests {
     use super::*;
     #[test]
+    fn circle_rotates_its_guide_and_hits_together_and_reports_ordinary_hsb() {
+        let g = ColorWheelGeometry::new(236.).unwrap();
+        let mut state = ColorState::default();
+        state.readout = ColorReadout::Hsb;
+        for rgb in [[1.,0.,0.], [0.,1.,0.], [0.,0.,1.]] {
+            state.set_rgba([rgb[0],rgb[1],rgb[2],1.]).unwrap();
+            assert_eq!(state.readout_label(), "HSB");
+            assert_eq!(state.readout_values(), state.components());
+            let model = state.view();
+            assert_eq!(model.hue_start_degrees, -150.);
+            assert_eq!(model.wheel_hue_start_degrees, -174.);
+            let ok_angle = state.wheel_components()[0] + state.wheel_hue_start_degrees();
+            let hsv_angle = state.components()[0] + ColorWheelGeometry::HUE_START_DEGREES;
+            assert!((ok_angle-hsv_angle).abs() < 7.);
+        }
+        let blue = state.wheel_hue_marker(&g, state.wheel_components()[0]);
+        assert!((blue[0]-g.center[0]).abs() < 0.2 && blue[1] > g.center[1]);
+        for hue in (0..360).step_by(3) {
+            state.apply(ColorAction::PickWheel { part: ColorWheelPart::Hue,
+                point: state.wheel_hue_marker(&g, hue as f32), size: 236. }).unwrap();
+            let delta = (state.wheel_components()[0]-hue as f32+180.).rem_euclid(360.)-180.;
+            assert!(delta.abs() < 0.001);
+        }
+        state.set_okhsv([137., 0., 70.]).unwrap();
+        let gray = state.rgba();
+        let readout = state.readout_values();
+        state.set_okhsv([29.23, 0., 70.]).unwrap();
+        assert_eq!(state.rgba(), gray);
+        assert_ne!(state.readout_values()[0], readout[0]);
+        state.validate().unwrap();
+    }
+    #[test]
+    fn readout_reserves_fixed_digit_cells_and_keeps_accessible_text_unpadded() {
+        let mut state = ColorState::default();
+        state.readout = ColorReadout::Hsb;
+        for values in [[9.,9.,9.], [10.,10.,10.], [100.,100.,100.]] {
+            state.set_rgba(from_components(values, ColorSpace::Hsv, 1.)).unwrap();
+            let display = state.readout_layout_text();
+            let cells = display.map(|s| s.chars().map(|c| if c.is_ascii_digit() || c == ' ' {'#'} else {c}).collect::<String>());
+            assert_eq!(cells, ["###°", "###%", "###%"]);
+            assert!(state.readout_text().iter().all(|s| !s.starts_with(' ')));
+        }
+    }
+    #[test]
+    fn oklch_readout_keeps_fixed_cells_and_chroma_precision() {
+        let mut state = ColorState::default();
+        for rgb in [[0.; 3], [1.; 3], [1., 0., 0.], [0., 0., 1.], [0.2, 0.72, 0.58]] {
+            state.set_rgba([rgb[0], rgb[1], rgb[2], 1.]).unwrap();
+            let cells = state.readout_layout_text().map(|s| s.chars().map(|c| {
+                if c.is_ascii_digit() || c == ' ' { '#' } else { c }
+            }).collect::<String>());
+            assert_eq!(cells, ["###%", "#.###", "###°"]);
+            assert!(state.readout_text().iter().all(|s| !s.starts_with(' ')));
+        }
+        state.set_rgba([1., 0., 0., 1.]).unwrap();
+        assert_eq!(state.readout_text(), ["63%", "0.258", "29°"]);
+        assert!(state.readout_description().contains("Chroma 0.258"));
+        for value in [0., 70., 100.] {
+            state.set_okhsv([9., 0., value]).unwrap();
+            state.set_okhsv([100., 0., value]).unwrap();
+            assert_eq!(state.readout_text()[2], "100°");
+            assert_eq!(state.readout_text()[1], "0.000");
+        }
+    }
+    #[test]
     fn powerless_coordinates_survive_picking_hue_alpha_slots_and_persistence() {
         for shape in [ColorShape::Circle, ColorShape::Square] {
             let mut state = ColorState::default();
@@ -1068,7 +1146,7 @@ mod tests {
                 state
                     .apply(ColorAction::PickWheel {
                         part: ColorWheelPart::Hue,
-                        point: g.hue_marker(237.),
+                        point: state.wheel_hue_marker(&g, 237.),
                         size: 236.,
                     })
                     .unwrap();
@@ -1154,7 +1232,7 @@ mod tests {
                 shape: ColorShape::Circle,
             })
             .unwrap();
-        assert_eq!(state.readout_label(), "Okhsv");
+        assert_eq!(state.readout_label(), "OKLCH");
         // Public color replacements must never expose stale coordinates.
         state.foreground = [1., 0., 0., 1.];
         assert_eq!(state.components(), [0., 100., 100.]);
@@ -1275,7 +1353,7 @@ mod tests {
                 let mut base = ColorState::default();
                 base.apply(ColorAction::PickWheel {
                     part: ColorWheelPart::Hue,
-                    point: g.hue_marker(hue),
+                    point: base.wheel_hue_marker(&g, hue),
                     size: side as f32,
                 })
                 .unwrap();
@@ -1317,7 +1395,9 @@ mod tests {
         for shape in [ColorShape::Square, ColorShape::Triangle, ColorShape::Circle] {
             state.apply(ColorAction::ToggleShape).unwrap();
             assert_eq!(state.wheel_shape(), shape);
-            for model in [ColorReadout::Lab, ColorReadout::Rgb, ColorReadout::Hsb] {
+            let initial = if shape == ColorShape::Circle { ColorReadout::Oklch } else { ColorReadout::Hsb };
+            assert_eq!(state.readout, initial);
+            for model in [initial.next(), initial.next().next(), initial] {
                 state.apply(ColorAction::ToggleReadout).unwrap();
                 assert_eq!(state.readout, model);
                 assert_eq!(state.rgba(), paint);
@@ -1330,6 +1410,10 @@ mod tests {
         old.as_object_mut().unwrap().remove("readout");
         let loaded: ColorState = serde_json::from_value(old.clone()).unwrap();
         assert_eq!(loaded.wheel_shape(), ColorShape::Circle);
+        old["readout"] = "lab".into();
+        let migrated: ColorState = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(migrated.readout, ColorReadout::Oklch);
+        assert_eq!(serde_json::to_value(&migrated).unwrap()["readout"], "oklch");
         old["space"] = "hls".into();
         let loaded: ColorState = serde_json::from_value(old).unwrap();
         assert_eq!(loaded.wheel_shape(), ColorShape::Triangle);
@@ -1395,7 +1479,7 @@ mod tests {
         assert!((red.view().wheel_components[0] - 29.23).abs() < 0.01);
         assert_eq!(red.view().hue_stops.len(), 7);
         assert!(red.wheel_hue_stops().len() >= 361);
-        assert_eq!(red.readout_label(), "Okhsv");
+        assert_eq!(red.readout_label(), "OKLCH");
     }
     #[test]
     fn okhsv_memory_is_validated_and_keeps_gray_hue_and_black_saturation() {
@@ -1443,20 +1527,22 @@ mod tests {
         }
     }
     #[test]
-    fn lab_d50_readout_matches_reference_primaries_and_neutrals() {
-        // CIE Lab D50 reference values for sRGB, independently tabulated.
+    fn oklch_readout_matches_reference_primaries_and_retains_neutral_hue() {
+        // Oklab reference primaries, in cylindrical coordinates.
+        // https://bottosson.github.io/posts/oklab/#table-of-example-colors
         for (rgb, expected) in [
-            ([0., 0., 0.], [0., 0., 0.]),
-            ([1., 1., 1.], [100., 0., 0.]),
-            ([1., 0., 0.], [54.29, 80.80, 69.89]),
-            ([0., 1., 0.], [87.82, -79.29, 80.99]),
-            ([0., 0., 1.], [29.57, 68.30, -112.03]),
+            ([0., 0., 0.], [0., 0., 137.]),
+            ([1., 1., 1.], [100., 0., 137.]),
+            ([1., 0., 0.], [62.795536, 0.2576833, 29.233885]),
+            ([0., 1., 0.], [86.64396, 0.2948272, 142.49534]),
+            ([0., 0., 1.], [45.20137, 0.3132144, 264.05203]),
         ] {
             let mut state = ColorState::default();
+            state.set_okhsv([137., 50., 70.]).unwrap();
             state.set_rgba([rgb[0], rgb[1], rgb[2], 1.]).unwrap();
-            state.readout = ColorReadout::Lab;
+            state.readout = ColorReadout::Oklch;
             for (a, b) in state.readout_values().into_iter().zip(expected) {
-                assert!((a - b).abs() < 0.03, "{rgb:?}: {a} != {b}");
+                assert!((a - b).abs() < 0.0001, "{rgb:?}: {a} != {b}");
             }
             state
                 .apply(ColorAction::Select {
@@ -1464,7 +1550,7 @@ mod tests {
                 })
                 .unwrap();
             for (a, b) in state.readout_values().into_iter().zip(expected) {
-                assert!((a - b).abs() < 0.03);
+                assert!((a - b).abs() < 0.0001);
             }
         }
     }

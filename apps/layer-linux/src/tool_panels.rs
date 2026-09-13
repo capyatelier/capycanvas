@@ -515,7 +515,7 @@ mod wheel {
                     let [r, g, b] = stop.color;
                     gtk::gsk::ColorStop::new(stop.offset, gtk::gdk::RGBA::new(r, g, b, 1.))
                 }).collect();
-                snapshot.append_conic_gradient(&bounds, &center, -60., &stops);
+                snapshot.append_conic_gradient(&bounds, &center, state.wheel_hue_start_degrees() + 90., &stops);
                 snapshot.pop();
                 let hue = state.wheel_components()[0];
                 // Smooth field colors need logical-pixel sampling; Cairo scales
@@ -993,30 +993,28 @@ fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: 
         cairo::FontSlant::Normal,
         cairo::FontWeight::Normal,
     );
-    let labels = match state.readout {
-        ColorReadout::Hsb => ["", "", ""],
-        ColorReadout::Lab => ["L", "a", "b"],
-        ColorReadout::Rgb => ["", "", ""],
-    };
     let rgb = state.readout == ColorReadout::Rgb;
-    let values = state.readout_text();
-    let texts: [String; 3] = std::array::from_fn(|i| format!("{}{}", labels[i], values[i]));
+    let texts = state.readout_layout_text();
     let mut options = cr.font_options().unwrap();
     options.set_hint_metrics(cairo::HintMetrics::Off);
     cr.set_font_options(&options);
     let available = radius * std::f64::consts::FRAC_PI_2 - 4.;
-    let (widths, total) = loop {
+    let (widths, total, digit_advance) = loop {
         cr.set_font_size(font);
+        let digit_advance = ('0'..='9')
+            .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
+            .fold(0., f64::max);
         // Measure the individual glyph advances used for drawing on the arc.
         let widths = texts.each_ref().map(|text| {
             text.chars()
-                .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
+                .map(|c| if c.is_ascii_digit() || c == ' ' { digit_advance }
+                    else { cr.text_extents(&c.to_string()).unwrap().x_advance() })
                 .sum::<f64>()
                 + if rgb { font * 0.8 + 2. } else { 0. }
         });
         let total: f64 = widths.iter().sum();
         if total + 6. <= available || font <= 8. {
-            break (widths, total);
+            break (widths, total, digit_advance);
         }
         font -= 0.25;
     };
@@ -1042,13 +1040,14 @@ fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: 
         }
         for c in text.chars() {
             let glyph = c.to_string();
-            let advance = cr.text_extents(&glyph).unwrap().x_advance();
+            let glyph_advance = cr.text_extents(&glyph).unwrap().x_advance();
+            let advance = if c.is_ascii_digit() || c == ' ' { digit_advance } else { glyph_advance };
             let angle = mid + (along + advance * 0.5) / radius;
             let _ = cr.save();
             cr.translate(half + radius * angle.cos(), half + radius * angle.sin());
             cr.rotate(angle + std::f64::consts::FRAC_PI_2);
             ink(0.8);
-            cr.move_to(-advance * 0.5, 0.);
+            cr.move_to(-glyph_advance * 0.5, 0.);
             let _ = cr.show_text(&glyph);
             let _ = cr.restore();
             along += advance;
@@ -1133,7 +1132,7 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     }
     let radius = (g.center[0] * 2. * 0.04).clamp(6., 10.) as f64;
     for (point, fill) in [
-        (g.hue_marker(state.wheel_components()[0]), [r, green, b]),
+        (state.wheel_hue_marker(g, state.wheel_components()[0]), [r, green, b]),
         (
             state.wheel_marker(g),
             [
