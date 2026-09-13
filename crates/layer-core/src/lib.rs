@@ -6,6 +6,7 @@
 //! already captured document snapshots.
 
 mod effect_catalog;
+pub mod color;
 mod effects;
 pub use effect_catalog::*;
 mod layers;
