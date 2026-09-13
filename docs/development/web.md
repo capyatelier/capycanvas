@@ -77,6 +77,24 @@ The editor check includes actual Navigator pointer hits and a rendered-pixel
 check that zoomed paper appears through empty header space. These checks do not
 establish complete editor parity or hardware performance.
 
+For the shared title bar and its inline customization editor, run the two
+focused browser suites on Linux with hardware WebGPU:
+
+```bash
+LAYER_TEST_ARTIFACTS="$PWD/artifacts/title-bar/input" \
+  bash tools/performance/workspace-motion.sh web --title-bar
+LAYER_TEST_ARTIFACTS="$PWD/artifacts/title-bar/state" \
+  bash tools/performance/workspace-motion.sh web --title-bar-state
+```
+
+The first covers real mouse/touch/pen bank and item dragging, cancellation,
+keyboard/context menus, tool pickers, drawers and action feedback. The second
+covers Save/Done/Cancel, durable workspace transitions, small windows, overflow,
+themes, all sizes, true 2× backing scale, fullscreen/status, footer and full Zen.
+They can also run through `node apps/layer-web/test.mjs` against a running
+development server. See the [acceptance record](title-bar-web-acceptance.md) for
+captures, shared tests, existing regressions and device limitations.
+
 For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
 for mouse/pen input, readout and shape buttons, swap, keyboard activation,
 cancellation, and both-theme captures at 144/160/200/280/360 px panel widths.

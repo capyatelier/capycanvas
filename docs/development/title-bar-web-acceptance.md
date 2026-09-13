@@ -69,3 +69,35 @@ results) and `artifacts/title-bar/state/` (size/theme/scale matrix, small window
 fullscreen, Zen, downloaded test project and results). Input is CDP-generated
 inside the real browser; physical stylus/tablet and mobile-browser coverage is
 still a device limitation, not an inferred pass.
+
+## Milestone 3: existing Web regressions
+
+The following existing scenarios passed in headed Chrome with hardware WebGPU
+and no browser errors: `--header-controls`, `--fullscreen`, `--zen`,
+`--workspace-manager`, `--workspace-switcher`, `--drag-pickup`, `--editor`,
+`--tool-picker`, `--workspace-windows` and `--workspace-store`.
+
+These retain coverage of all eight menus and overflow focus, API/browser-owned
+fullscreen and maximize, absent/denied battery APIs, ordinary toolbar holds,
+canvas pixels behind empty header space, drawing controls, actual save/open/new
+and PNG export, workspace rows and cross-tab refresh, independent autosaves,
+stale-owner protection, interrupted transactions and recovery. The menu/status
+and switcher assertions now reflect the shared title-bar projection: fullscreen
+owns status visibility, and a compact Window menu replaces a pill that cannot fit.
+
+Final shared checks: 354 UI tests, 86 workspace tests with `native`, and 19 Web
+launcher/packaging tests passed. The release Wasm build passed. Before running
+`--workspace-store`, regenerate its SQLite/browser contract fixture from current
+Rust so the fixture uses the current saved-layout and Color-state schema:
+
+```bash
+CAPY_STORE_CONTRACT_FIXTURE=/tmp/capy-workspace-store-contract.json \
+  cargo test --locked -p layer-workspace --features native \
+  browser_transactions_match_sqlite_contract
+```
+
+Run each browser scenario with the isolated compositor command documented in
+[Web development](web.md). Regression captures/results are under
+`artifacts/title-bar/<scenario>/`; `artifacts/title-bar/regression-results.json`
+records the completed suite output. The pointer/device limitations above also
+apply to this final validation.
