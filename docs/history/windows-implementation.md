@@ -2642,3 +2642,34 @@ This milestone does not refresh packages or establish physical pen delivery,
 real driver reset, sleep/resume, mixed-display behavior or 120 Hz input latency.
 The new workspace-owned title-bar editor and whole-editor visual acceptance
 remain Windows work. No filter reference was regenerated or tolerance relaxed.
+
+
+### Shared column-stack integration after raster recovery
+
+The subsequent integration through upstream `45a1786` retains the validated
+Windows recovery path and brings shared column stacks, default-layout migration,
+Web event-loop raster capture and Apple document completion updates. Conflict
+resolution preserves the new stack defaults and adapts incoming Rust callers to
+the boxed workspace API. Three incoming test-loop lints were simplified while
+retaining their assertions.
+
+The combined tree passes 670 ordinary library tests (45 core, 48 engine, 25 host,
+364 UI, 103 Windows and 85 workspace), strict all-target Clippy for Windows/UI/
+workspace, a normal Release build, C++ input/queue/publication checks and the
+native host build of the Web Rust crate. The final Release editor, workspace
+manager and two-window device-removal fixtures pass with clean shutdown. These
+cover titlebar hit regions, geometry, native tools and numeric editing, both
+themes, full Zen, retained resizing, workspace history/preview/starting-layout
+Undo/Redo, creation/switching/rename/delete, restart and shared-device recovery.
+
+The editor fixture reacquires its shared snapshot as well as native controls
+while waiting for tool projection. A transform transition can supersede an older
+snapshot during raster completion. The original assertion passed against the
+current model in the same failed window; the complete rerun then passed with all
+label, selection, settings and action comparisons retained.
+
+Windows now uses ordinary tabbed drawers while retaining shared stack membership
+and preferences. GTK's replacement full-column opening remains a Windows port
+item, alongside the workspace-owned customizable title bar. This integration
+adds no claim of complete visual parity, physical input or 120 Hz acceptance,
+and does not refresh the previously validated portable/MSIX payloads.

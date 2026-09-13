@@ -1097,6 +1097,8 @@ name = "layer-render-wgpu"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "futures-channel",
+ "js-sys",
  "layer-core",
  "layer-engine",
  "layer-render",
@@ -1104,6 +1106,8 @@ dependencies = [
  "naga",
  "png",
  "pollster",
+ "wasm-bindgen-futures",
+ "web-sys",
  "web-time",
  "wgpu",
 ]

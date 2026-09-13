@@ -10,6 +10,7 @@ import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkTitleBarState} from "./title-bar-state.test.mjs";
 import {checkTitleBar} from "./title-bar.test.mjs";
+import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -202,7 +203,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--title-bar-state")) {
+  if (process.argv.includes("--title-bar-feedback")) {
+    await checkTitleBarFeedback({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar-state")) {
     await checkTitleBarState({call,evaluate,settle,reload});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar")) {

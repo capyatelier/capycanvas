@@ -9,12 +9,14 @@ use std::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 4) as usize;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_PUBLICATION: AtomicU64 = AtomicU64::new(1);
 
@@ -48,6 +50,12 @@ impl<T> Publication<T> {
     fn get(&self) -> Option<Result<Arc<T>, String>> {
         self.value.lock().ok()?.clone()
     }
+    #[cfg(target_arch = "wasm32")]
+    fn wait(&self) -> Result<Arc<T>, String> {
+        // Blocking would prevent WebGPU's map callbacks from publishing.
+        self.get().ok_or("Raster capture is still pending")?
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait(&self) -> Result<Arc<T>, String> {
         let state = self.value.lock().map_err(|_| "Raster publication failed")?;
         let (state, _) = self

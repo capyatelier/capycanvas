@@ -196,8 +196,11 @@ mouse, touch, and keyboard input during a pause. Routine workspace operations
 pause input without disabling/restyling the editor. Notices overlay the canvas
 so they cannot resize its viewport or GPU surface.
 
-For Group panels, run `LAYER_RESIZE_MIN_HZ=115 bash tools/performance/workspace-motion.sh gtk --column-groups`.
-This uses real mouse/touch and private SQLite storage. It measures painted child
-allocations in both axes, including the adjacent dock divider, and checks retained
-widgets, cancellation and maintenance without closing panels. The run directory
-contains per-case JSON and both-theme captures; see [measurements](../history/workspace-motion.md).
+For [stacked columns](../ui/stacked-columns.md), run
+`bash tools/performance/workspace-motion.sh gtk --column-stacks`.
+This uses real mouse/touch and private SQLite storage. It checks handle stacking
+and unstacking, one-step history, full-column opening, active sidebar tiles,
+ordinary width/split resizing with retained widgets, mode switching and auto-hide.
+The run directory contains both-theme captures and `resize-*.json` reports of
+painted group allocations against shared geometry. The previous `--column-groups`
+fixture and custom Group panel renderer are retired.

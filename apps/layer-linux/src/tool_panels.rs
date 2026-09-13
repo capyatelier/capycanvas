@@ -125,16 +125,20 @@ impl ToolSet {
     }
 }
 fn tool_label(item: &ToolSetItem) -> gtk::Box {
-    icon_label(item.label, item.icon)
+    aligned_icon_label(item.label, item.icon, 1.0)
 }
 
 pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
+    aligned_icon_label(text, icon, 0.0)
+}
+
+fn aligned_icon_label(text: &str, icon: &str, xalign: f32) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.set_valign(gtk::Align::Center);
     row.append(&crate::icons::image(&format!("layer-{}-symbolic", icon)));
     let label = gtk::Label::new(Some(text));
     label.set_hexpand(true);
-    label.set_xalign(0.0);
+    label.set_xalign(xalign);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_max_width_chars(1);
     label.set_tooltip_text(Some(text));

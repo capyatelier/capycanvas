@@ -101,3 +101,54 @@ Run each browser scenario with the isolated compositor command documented in
 `artifacts/title-bar/<scenario>/`; `artifacts/title-bar/regression-results.json`
 records the completed suite output. The pointer/device limitations above also
 apply to this final validation.
+
+## Tablet review corrections
+
+The user's tablet review identified three omissions in the first port:
+
+- Web Sketch now uses the same minimal shared arrangement as GTK, without the
+  two legacy docked toolbars. The shared upgrade recognizes untouched shipped
+  layouts on GTK/Web, preserves working values and stable IDs, and leaves edited
+  histories, custom baselines and independent copies alone.
+- Selected tools retain GTK's 22% blue through hover and press. Open drawers
+  use a neutral 10% highlight; action presses use neutral 16% feedback. Earlier
+  tests checked `aria-pressed` without establishing the actual selected colour.
+  The new `--title-bar-feedback` scenario checks the computed colours and captures
+  real contact states in both themes.
+- The workspace pill retains its rounded 34 px track and 26 px choices, centered
+  vertically for Small/Medium/Large instead of stretching with the icon tiles.
+
+Real-device checks also exposed Chrome's double-tap page zoom on repeated header
+taps and its lack of held `:active` feedback for touch. Header controls now use
+`touch-action: manipulation`; the editor keeps its immediate-drag `none` rule.
+The host tracks the button contact only for visual feedback, clearing it on
+release, cancellation, capture loss, blur, resize or source invalidation. Native
+clicks, existing context holds and shared Rust tool actions retain ownership.
+
+Validation on 2026-09-13: release Wasm build, 354 UI tests, 86 workspace tests,
+headed Chrome `--title-bar`, `--title-bar-state`, `--title-bar-feedback`,
+`--header-controls` and `--zen` passed. `--title-bar-feedback` also passed on the
+USB-connected Wacom MovinkPad 14 (DTHA140), Chrome 152 in desktop-site mode,
+Qualcomm Adreno 7xx WebGPU, at its actual fractional display scale. It exercises
+mouse/touch/pen contacts, repeated taps, all sizes, both themes and release
+cleanup on the tablet. These contacts are CDP-generated; the user still owns
+manual stylus/touch review.
+
+Evidence: `artifacts/title-bar/review/`, including `tablet/` for device captures.
+The tablet review uses a separate local origin, leaving the earlier workspace
+and document intact.
+
+## Shared raster integration
+
+Concurrent main changes introduced immutable raster capture on native workers.
+The Web integration awaits GPU mapping on the browser event loop and publishes
+the same shared Rust tile backing in bounded groups. It applies capture
+backpressure and reserves the immutable save checkpoint before asynchronously
+waiting for its backing. Shared publication reads never block the Web event loop.
+
+Validation after integration: release Wasm build, native renderer check, 45 core
+tests and 356 UI tests passed. Headed hardware-WebGPU Chrome `--editor` passed
+real drawing, project save/open/new, PNG export, unsaved cancellation and
+workspace restoration. Headed Chrome `--title-bar-feedback` also passed against
+the integrated renderer. Evidence remains under
+`artifacts/title-bar/review/`.

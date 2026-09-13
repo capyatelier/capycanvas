@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers','group_panel')][string]$ColumnMode='drawers')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers')][string]$ColumnMode='drawers')
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -375,9 +375,6 @@ try {
     [CapyRowPointer]::RightClick($at.x,$at.y)
     Invoke 'Collapse column' -Name
     Wait-Until {$null -ne (Find 'column-icon-toolbar')} 'Toolbar context did not collapse its column'
-    $at=Point 'column-icon-toolbar';[CapyRowPointer]::RightClick($at.x,$at.y)
-    $mode=if($ColumnMode -eq 'drawers'){'Drawers'}else{'Group panel'}
-    (Control $mode -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Start-Sleep -Milliseconds 300
     Tap 'column-icon-toolbar'
     Wait-Until {$null -ne (Find 'drawer-panel-toolbar')} 'Collapsed toolbar did not open its contents'

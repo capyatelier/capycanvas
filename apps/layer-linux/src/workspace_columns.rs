@@ -5,10 +5,9 @@ use super::*;
 struct Strip {
     id: u32,
     root: gtk::Box,
-    expand_glyph: gtk::Image,
     key: Vec<(u32, Vec<Panel>)>,
     buttons: Vec<(Panel, gtk::Button)>,
-    groups: Vec<(u32, gtk::Box)>,
+    open_tiles: RefCell<Vec<(Panel, Edge)>>,
     scroll: gtk::Adjustment,
     updating_scroll: Rc<Cell<bool>>,
 }
@@ -55,7 +54,13 @@ impl Columns {
             for (panel, button) in &strip.buttons {
                 customization::drawer_origin(
                     button,
-                    origin.filter(|(p, _)| p == panel).map(|(_, edge)| edge),
+                    strip
+                        .open_tiles
+                        .borrow()
+                        .iter()
+                        .find(|(p, _)| p == panel)
+                        .map(|(_, edge)| *edge)
+                        .or_else(|| origin.filter(|(p, _)| p == panel).map(|(_, edge)| edge)),
                 );
             }
         }
@@ -82,22 +87,13 @@ impl Columns {
                 root.set_widget_name(&format!("collapsed-column-{}", c.id));
                 root.set_overflow(gtk::Overflow::Hidden);
                 w.install_context(&root, ContextTarget::Column { column: c.id });
-                let expand = w.action_button(c.expand_label(), c.expand_action());
-                expand.set_widget_name(&format!("expand-column-{}", c.id));
-                expand.add_css_class("flat");
-                expand.add_css_class("column-expand");
-                let expand_glyph = crate::icons::image("layer-chevron-double-right-symbolic");
-                expand_glyph.set_halign(gtk::Align::Center);
-                expand_glyph.set_valign(gtk::Align::Center);
-                expand.set_child(Some(&expand_glyph));
-                expand.update_property(&[gtk::accessible::Property::Label(c.expand_label())]);
-                expand.set_height_request(c.expand.height as i32);
-                root.append(&expand);
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                content.set_margin_top(WORKSPACE_SPACING as i32);
                 let mut buttons = Vec::new();
-                let mut groups = Vec::new();
                 for (index, group) in c.groups.iter().enumerate() {
-                    content.append(&column_separator(index == 0));
+                    if index > 0 {
+                        content.append(&column_separator());
+                    }
                     let mini = gtk::Box::new(gtk::Orientation::Vertical, 2);
                     mini.set_valign(gtk::Align::Start);
                     mini.add_css_class("collapsed-group");
@@ -129,7 +125,6 @@ impl Columns {
                     }
                     w.install_context(&mini, ContextTarget::Group { group: group.group });
                     content.append(&mini);
-                    groups.push((group.group, mini));
                 }
                 let scroll = gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
@@ -192,51 +187,30 @@ impl Columns {
                 strips.push(Strip {
                     id: c.id,
                     root,
-                    expand_glyph,
                     key,
                     buttons,
-                    groups,
+                    open_tiles: RefCell::default(),
                     scroll: scroll.vadjustment(),
                     updating_scroll,
                 });
             }
             let strip = strips.iter().find(|s| s.id == c.id).unwrap();
-            for class in ["group-panel-strip", "group-opens-left", "group-opens-right"] {
-                strip.root.remove_css_class(class);
+            *strip.open_tiles.borrow_mut() = c
+                .open
+                .as_ref()
+                .map(|o| c.groups.iter().map(|g| (g.active, o.direction)).collect())
+                .unwrap_or_default();
+            for (panel, button) in &strip.buttons {
+                let active = c
+                    .open
+                    .as_ref()
+                    .is_some_and(|_| c.groups.iter().any(|g| g.active == *panel));
+                selected(button, active);
+                customization::drawer_origin(
+                    button,
+                    active.then(|| c.open.as_ref().unwrap().direction),
+                );
             }
-            if let Some(p) = &c.group_panel {
-                strip.root.add_css_class("group-panel-strip");
-                strip.root.add_css_class(if p.direction == Edge::Left {
-                    "group-opens-left"
-                } else {
-                    "group-opens-right"
-                });
-            }
-            for (id, mini) in &strip.groups {
-                for class in [
-                    "active-column-group",
-                    "group-opens-left",
-                    "group-opens-right",
-                ] {
-                    mini.remove_css_class(class);
-                }
-                if let Some(p) = c.group_panel.as_ref().filter(|p| p.group == *id) {
-                    mini.add_css_class("active-column-group");
-                    mini.add_css_class(if p.direction == Edge::Left {
-                        "group-opens-left"
-                    } else {
-                        "group-opens-right"
-                    });
-                }
-            }
-            let expand_glyph = if c.bounds.x + c.bounds.width * 0.5
-                < resolved.work_area.x + resolved.work_area.width * 0.5
-            {
-                "layer-chevron-double-right-symbolic"
-            } else {
-                "layer-chevron-double-left-symbolic"
-            };
-            crate::icons::set(&strip.expand_glyph, Some(expand_glyph));
             let offset = layout
                 .column_scroll
                 .iter()
@@ -249,19 +223,96 @@ impl Columns {
                 button.set_tooltip_text(Some(layout.panel(*panel).unwrap().title()));
             }
         }
+        drop(strips);
+        w.surface.remove_slots(|slot| {
+            matches!(slot, Slot::ColumnConnection(id, panel)
+            if !resolved.collapsed.iter().any(|c| c.id == id && c.open.as_ref()
+                .is_some_and(|o| o.connections.iter().any(|(p, _)| *p == panel))))
+        });
+        for c in &resolved.collapsed {
+            let Some(open) = &c.open else {
+                continue;
+            };
+            for (panel, _) in &open.connections {
+                let slot = Slot::ColumnConnection(c.id, *panel);
+                if w.surface
+                    .imp()
+                    .children
+                    .borrow()
+                    .iter()
+                    .any(|(s, _)| *s == slot)
+                {
+                    continue;
+                }
+                let area = gtk::DrawingArea::new();
+                area.add_css_class("drawer-connection");
+                area.set_widget_name(&format!("column-connection-{}-{panel:?}", c.id));
+                area.set_can_target(false);
+                let (column, panel) = (c.id, *panel);
+                area.set_draw_func(glib::clone!(
+                    #[weak]
+                    w,
+                    move |area, cr, _, _| {
+                        let resolved = w.resolved();
+                        let Some(connection) = resolved
+                            .collapsed
+                            .iter()
+                            .find(|c| c.id == column)
+                            .and_then(|c| c.open.as_ref())
+                            .and_then(|o| o.connections.iter().find(|(p, _)| *p == panel))
+                            .map(|(_, c)| c)
+                        else {
+                            return;
+                        };
+                        let color = area.color();
+                        cr.set_source_rgba(
+                            color.red().into(),
+                            color.green().into(),
+                            color.blue().into(),
+                            color.alpha().into(),
+                        );
+                        let [xx, yx, xy, yy, x, y] = connection.transform.map(f64::from);
+                        cr.transform(gtk::cairo::Matrix::new(xx, yx, xy, yy, x, y));
+                        cr.rectangle(0., 0., connection.length.into(), connection.depth.into());
+                        concave_foot(
+                            cr,
+                            0.,
+                            connection.depth.into(),
+                            connection.radii[0].into(),
+                            -1.,
+                        );
+                        concave_foot(
+                            cr,
+                            connection.length.into(),
+                            connection.depth.into(),
+                            connection.radii[1].into(),
+                            1.,
+                        );
+                        let _ = cr.fill();
+                    }
+                ));
+                w.surface.add(slot, &area);
+            }
+        }
     }
     pub fn refresh_drawers(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) {
         // The remembered active tab is not an open drawer. Only its current
         // opener is selected; idle collapsed strips keep the neutral theme.
+        let resolved = w.resolved();
         for strip in self.strips.borrow().iter() {
             for (panel, button) in &strip.buttons {
                 selected(
                     button,
-                    state.customization.column_drawers.iter().any(|d| {
-                        !d.is_group_panel()
-                            && matches!(d.anchor, DrawerAnchor::Column { column, origin, .. }
+                    state.workspace.layout.column_stack(strip.id).open_column == Some(strip.id)
+                        && resolved
+                            .collapsed
+                            .iter()
+                            .find(|c| c.id == strip.id)
+                            .is_some_and(|c| c.groups.iter().any(|g| g.active == *panel))
+                        || state.customization.column_drawers.iter().any(|d| {
+                            matches!(d.anchor, DrawerAnchor::Column { column, origin, .. }
                         if column == strip.id && origin == *panel)
-                    }),
+                        }),
                 );
             }
         }
@@ -288,20 +339,16 @@ impl Columns {
     }
 }
 
-fn column_separator(leading: bool) -> gtk::Box {
-    // The leading line touches Expand; later dividers keep toolbar spacing.
+fn column_separator() -> gtk::Box {
+    // Only tab groups within a member have a separator.
     let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
     slot.add_css_class("toolbar-divider");
     slot.add_css_class("column-divider");
-    slot.set_height_request(if leading { 4 } else { 8 });
+    slot.set_height_request(8);
     slot.set_vexpand(false);
     let line = gtk::Separator::new(gtk::Orientation::Horizontal);
     line.set_halign(gtk::Align::Center);
-    line.set_valign(if leading {
-        gtk::Align::Start
-    } else {
-        gtk::Align::Center
-    });
+    line.set_valign(gtk::Align::Center);
     line.set_vexpand(true);
     slot.append(&line);
     slot

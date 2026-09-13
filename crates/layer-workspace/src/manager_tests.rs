@@ -1672,45 +1672,49 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
 #[test]
 fn illustrator_column_upgrade_only_changes_untouched_builtin_layouts() {
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk);
-    let mut previous = layout.clone();
-    previous.column_settings.clear();
-    for customized in [false, true] {
-        let mut history = layer_ui::LayoutHistory::new(&previous);
-        if customized {
-            let mut edited = previous.clone();
-            edited.bands[0].extent += 25.;
-            history.append(&edited, "Resize toolbar");
+    for stacks in [false, true] {
+        let mut previous = layer_ui::DockLayout::for_platform(Platform::Gtk);
+        if stacks {
+            previous.column_stacks = layout.column_stacks.clone();
         }
-        let mut entity = Entity::workspace(
-            "My Illustration",
-            WorkspaceCapture {
-                history,
-                working: layer_ui::WorkspacePreset::Illustrator.working_state(),
-            },
-            previous.clone(),
-            None,
-            1000,
-        );
-        entity.id = DEFAULT_WORKSPACES[1].0.into();
-        entity.metadata.builtin = true;
-        let updated = migration::updated_illustrator_default(&entity, Platform::Gtk);
-        if customized {
-            assert!(updated.is_none());
-        } else {
-            let ItemContent::Workspace {
-                history, baseline, ..
-            } = updated.unwrap()
-            else {
-                panic!("workspace")
-            };
-            assert_eq!(*baseline, layout);
-            assert_eq!(history.layout(), &layout);
-            entity.content = ItemContent::Workspace {
-                history,
-                baseline,
-                origin: None,
-            };
-            assert!(migration::updated_illustrator_default(&entity, Platform::Gtk).is_none());
+        for customized in [false, true] {
+            let mut history = layer_ui::LayoutHistory::new(&previous);
+            if customized {
+                let mut edited = previous.clone();
+                edited.bands[0].extent += 25.;
+                history.append(&edited, "Resize toolbar");
+            }
+            let mut entity = Entity::workspace(
+                "My Illustration",
+                WorkspaceCapture {
+                    history,
+                    working: layer_ui::WorkspacePreset::Illustrator.working_state(),
+                },
+                previous.clone(),
+                None,
+                1000,
+            );
+            entity.id = DEFAULT_WORKSPACES[1].0.into();
+            entity.metadata.builtin = true;
+            let updated = migration::updated_illustrator_default(&entity, Platform::Gtk);
+            if customized {
+                assert!(updated.is_none());
+            } else {
+                let ItemContent::Workspace {
+                    history, baseline, ..
+                } = updated.unwrap()
+                else {
+                    panic!("workspace")
+                };
+                assert_eq!(baseline.as_ref(), &layout);
+                assert_eq!(history.layout(), &layout);
+                entity.content = ItemContent::Workspace {
+                    history,
+                    baseline,
+                    origin: None,
+                };
+                assert!(migration::updated_illustrator_default(&entity, Platform::Gtk).is_none());
+            }
         }
     }
 }

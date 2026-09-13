@@ -34,10 +34,35 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        self.layout_with_header_tools(
+            platform,
+            matches!(platform, crate::Platform::Gtk | crate::Platform::Web),
+        )
+    }
+
+    /// Exact pre-title-bar arrangement, retained for conservative default upgrades.
+    pub fn legacy_painter_layout(platform: crate::Platform) -> DockLayout {
+        Self::Painter.layout_with_header_tools(platform, false)
+    }
+
+    fn layout_with_header_tools(self, platform: crate::Platform, header_tools: bool) -> DockLayout {
         if self == Self::Illustrator {
             let mut layout = DockLayout::for_platform(platform);
             for column in layout.column_roots() {
-                layout.column_settings_mut(column).mode = ColumnMode::GroupPanel;
+                let stack = layout.column_stack_mut(column);
+                stack.drawers = false;
+                stack.auto_hide = false;
+                if platform == crate::Platform::Gtk {
+                    let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
+                    if band.edge != Edge::Right {
+                        continue;
+                    }
+                    layout.collapsed.push(CollapsedColumn {
+                        root: column,
+                        expanded_width: band.extent - WORKSPACE_SPACING,
+                    });
+                    band.extent = TILE_SIZE + WORKSPACE_SPACING;
+                }
             }
             return layout;
         }
@@ -152,7 +177,7 @@ impl WorkspacePreset {
             root: tabs(2, &[Panel::Toolbar]),
         }];
         if self == Self::Painter {
-            if platform == crate::Platform::Gtk {
+            if header_tools {
                 layout.bands.clear();
                 layout.canvas_info.visible = false;
                 return layout;
@@ -202,6 +227,23 @@ impl WorkspacePreset {
     }
 }
 
+impl DockLayout {
+    /// The shipped Paint arrangement opens its right column on adoption or
+    /// reset. This is initial presentation; ordinary open/close stays transient.
+    pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
+        if platform == crate::Platform::Gtk
+            && self.collapsed.len() == 1
+            && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
+        {
+            for stack in &mut self.column_stacks {
+                if self.collapsed.iter().any(|c| c.root == stack.column) {
+                    stack.open_column = Some(stack.column);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,14 +270,22 @@ mod tests {
                     items.contains(&HeaderItem::Fullscreen),
                     platform == Platform::Web
                 );
-                assert_eq!(
-                    layout.header.zones[2].last().unwrap().item,
-                    HeaderItem::Settings
-                );
                 assert!(
                     items.contains(&HeaderItem::Capy) && items.contains(&HeaderItem::Workspaces)
                 );
                 let minimal = preset == WorkspacePreset::Painter;
+                assert_eq!(items.contains(&HeaderItem::Settings), !minimal);
+                let last = layout.header.zones[2].last().unwrap().item;
+                assert_eq!(
+                    last,
+                    if !minimal {
+                        HeaderItem::Settings
+                    } else if platform == Platform::Web {
+                        HeaderItem::Fullscreen
+                    } else {
+                        HeaderItem::Tool { control: ToolbarControl::Color }
+                    }
+                );
                 assert_eq!(items.contains(&HeaderItem::Clock), !minimal);
                 assert_eq!(items.contains(&HeaderItem::Battery), !minimal);
                 assert_eq!(items.contains(&HeaderItem::MenuLabels), !minimal);
@@ -281,18 +331,31 @@ mod tests {
             let layout = WorkspacePreset::Illustrator.layout(platform);
             assert!(
                 layout
-                    .column_settings
+                    .column_stacks
                     .iter()
-                    .all(|s| s.mode == ColumnMode::GroupPanel)
+                    .all(|s| !s.drawers)
             );
-            assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
+            if platform == crate::Platform::Gtk {
+                assert_eq!(layout.collapsed.len(), 1);
+                assert!(layout.is_collapsed(12) && !layout.is_collapsed(4));
+                assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
+                for (band, original) in layout.bands.iter().zip(DockLayout::for_platform(platform).bands) {
+                    assert_eq!(band.root, original.root);
+                    assert_eq!(band.edge, original.edge);
+                    if band.edge == Edge::Left {
+                        assert_eq!(band.extent, original.extent);
+                    }
+                }
+            } else {
+                assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
+            }
         }
     }
 
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
         // Hosts without the new header projection keep their existing controls.
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Web);
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Android);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -319,19 +382,24 @@ mod tests {
     }
 
     #[test]
-    fn gtk_painter_has_individual_header_tools_and_no_reserved_status() {
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Gtk);
-        assert!(layout.bands.is_empty() && layout.floating.is_empty());
-        assert_eq!(layout.header, crate::HeaderLayout::painter());
-        assert_eq!(layout.header.size, crate::HeaderSize::Medium);
-        assert!(
-            !layout
-                .header
-                .entries()
-                .any(|e| e.item == crate::HeaderItem::MenuLabels)
-        );
-        assert!(!layout.canvas_info.visible);
-        assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
+    fn gtk_and_web_sketch_have_only_individual_header_tools() {
+        for platform in [crate::Platform::Gtk, crate::Platform::Web] {
+            let layout = WorkspacePreset::Painter.layout(platform);
+            assert!(layout.bands.is_empty() && layout.floating.is_empty());
+            assert_eq!(
+                layout.header,
+                crate::HeaderLayout::painter_for_platform(platform)
+            );
+            assert_eq!(layout.header.size, crate::HeaderSize::Medium);
+            assert!(
+                !layout
+                    .header
+                    .entries()
+                    .any(|e| e.item == crate::HeaderItem::MenuLabels)
+            );
+            assert!(!layout.canvas_info.visible);
+            assert!(layout.panels.iter().any(|p| p.id == Panel::ToolSettings));
+        }
     }
 
     #[test]

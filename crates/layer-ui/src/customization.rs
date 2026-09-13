@@ -435,15 +435,15 @@ pub enum CustomizationAction {
         group: u32,
         panel: Panel,
     },
-    SetColumnMode {
+    SetColumnDrawers {
         column: u32,
-        mode: crate::ColumnMode,
+        drawers: bool,
     },
     SetColumnAutoHide {
         column: u32,
         auto_hide: bool,
     },
-    ApplyColumnSettings {
+    ApplyColumnStack {
         column: u32,
     },
     CloseColumn {
@@ -690,21 +690,12 @@ impl DockLayout {
                 collapsed: column.is_none(),
             },
         )]];
-        if let Some(column) = column.filter(|_| platform.column_group_panels()) {
-            let settings = self.column_settings(column);
-            let mut modes = Vec::new();
-            for (label, mode) in [
-                ("Drawers", crate::ColumnMode::Drawers),
-                ("Group panel", crate::ColumnMode::GroupPanel),
-            ] {
-                let mut item = ContextMenuItem::edit(
-                    label,
-                    CustomizationAction::SetColumnMode { column, mode },
-                );
-                item.selected = Some(settings.mode == mode);
-                modes.push(item);
-            }
-            sections.push(modes);
+        if let Some(column) = column.filter(|_| platform.stacked_columns()) {
+            let settings = self.column_stack(column);
+            let mut item = ContextMenuItem::edit("Open individual panels",
+                CustomizationAction::SetColumnDrawers { column, drawers: !settings.drawers });
+            item.selected = Some(settings.drawers);
+            sections.push(vec![item]);
             let mut item = ContextMenuItem::edit(
                 "Auto-hide",
                 CustomizationAction::SetColumnAutoHide {
@@ -716,7 +707,7 @@ impl DockLayout {
             sections.push(vec![item]);
             sections.push(vec![ContextMenuItem::edit(
                 "Apply to all columns",
-                CustomizationAction::ApplyColumnSettings { column },
+                CustomizationAction::ApplyColumnStack { column },
             )]);
         }
         sections
@@ -1847,20 +1838,19 @@ impl CustomizationState {
                 let column = layout
                     .collapsed_column_for_group(group)
                     .ok_or("The column is not collapsed")?;
-                let settings = layout.column_settings(column);
-                if settings.mode == crate::ColumnMode::GroupPanel && platform.column_group_panels()
-                {
-                    let close = settings.open_group == Some(group);
-                    layout.column_settings_mut(column).open_group = (!close).then_some(group);
-                    self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column));
-                    if !close {
-                        self.column_drawers
-                            .push(ContentDrawer::for_column(layout, group, panel)?);
-                    }
+                let settings = layout.column_stack(column);
+                if !settings.drawers && platform.stacked_columns() {
+                    let close = settings.open_column == Some(column) && layout.active_panel(panel) == Some(panel);
+                    layout.select_tab(group, panel)?;
+                    layout.column_stack_mut(column).open_column = (!close).then_some(column);
+                    self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. }
+                        if layout.column_stack(id).column == settings.column));
                     self.expanded = None;
                     self.drawer = None;
                     return Ok(changed | regions::LAYOUT);
                 }
+                self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. }
+                    if id != column && layout.column_stack(id).column == settings.column));
                 let mut next = ContentDrawer::for_column(layout, group, panel)?;
                 let DrawerAnchor::Column { column, .. } = next.anchor else {
                     unreachable!()
@@ -1885,65 +1875,40 @@ impl CustomizationState {
                 self.drawer = None;
                 changed |= regions::LAYOUT;
             }
-            SetColumnMode { column, mode } => {
-                if !layout.column_roots().contains(&column) {
-                    return Err("Unknown column".into());
-                }
-                let open = self.column_drawers.iter().find_map(|d| match d.anchor {
-                    DrawerAnchor::Column {
-                        column: id, group, ..
-                    } if id == column => Some(group),
-                    _ => None,
-                });
-                let s = layout.column_settings_mut(column);
-                s.mode = mode;
-                s.open_group = if mode == crate::ColumnMode::GroupPanel
-                    && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
-                {
-                    open
-                } else {
-                    None
-                };
+            SetColumnDrawers { column, drawers } => {
+                if layout.node(column).is_none() { return Err("Unknown column".into()); }
+                let root = layout.column_stack(column).column;
+                let s = layout.column_stack_mut(column);
+                s.drawers = drawers;
+                s.open_column = None;
+                self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. }
+                    if layout.column_stack(id).column == root));
                 changed |= regions::LAYOUT;
             }
             SetColumnAutoHide { column, auto_hide } => {
-                if !layout.column_roots().contains(&column) {
+                if layout.node(column).is_none() {
                     return Err("Unknown column".into());
                 }
-                layout.column_settings_mut(column).auto_hide = auto_hide;
+                layout.column_stack_mut(column).auto_hide = auto_hide;
                 changed |= regions::LAYOUT;
             }
-            ApplyColumnSettings { column } => {
-                if !layout.column_roots().contains(&column) {
-                    return Err("Unknown column".into());
-                }
-                let source = layout.column_settings(column);
+            ApplyColumnStack { column } => {
+                if layout.node(column).is_none() { return Err("Unknown column".into()); }
+                let source = layout.column_stack(column);
                 for root in layout.column_roots() {
-                    let open = self.column_drawers.iter().find_map(|d| match d.anchor {
-                        DrawerAnchor::Column { column, group, .. } if column == root => Some(group),
-                        _ => None,
-                    });
-                    let s = layout.column_settings_mut(root);
-                    s.mode = source.mode;
+                    let s = layout.column_stack_mut(root);
+                    s.drawers = source.drawers;
                     s.auto_hide = source.auto_hide;
-                    s.open_group = if s.mode == crate::ColumnMode::GroupPanel
-                        && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Windows)
-                    {
-                        open
-                    } else {
-                        None
-                    };
+                    if s.drawers { s.open_column = None; }
                 }
                 changed |= regions::LAYOUT;
             }
             CloseColumn { column } => {
-                self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column));
-                if let Some(s) = layout
-                    .column_settings
-                    .iter_mut()
-                    .find(|s| s.column == column)
-                {
-                    s.open_group = None;
+                let root = layout.column_stack(column).column;
+                self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. }
+                    if layout.column_stack(id).column == root));
+                if let Some(s) = layout.column_stacks.iter_mut().find(|s| s.column == root) {
+                    s.open_column = None;
                 }
                 changed |= regions::LAYOUT;
             }

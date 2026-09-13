@@ -76,7 +76,7 @@ import Foundation
             layout["work_area"].raw is NSDictionary, layout["status"].raw is NSDictionary,
             layout["tab_bar_height"].raw is NSNumber else { return nil }
         var dimensions = current["layout"].object
-        for key in ["bands", "floating", "collapsed", "fit_tab_groups", "column_settings"] {
+        for key in ["bands", "floating", "collapsed", "fit_tab_groups", "column_stacks"] {
             guard next["workspace_layout"][key].raw is NSArray else { return nil }
             dimensions[key] = next["workspace_layout"][key].raw
         }

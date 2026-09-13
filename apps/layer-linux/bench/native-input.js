@@ -21,7 +21,7 @@ const workspaceDrag = ARGV.includes('--workspace-drag');
 const workspaceClicks = ARGV.includes('--workspace-clicks');
 const workspaceCursor = ARGV.includes('--workspace-cursor');
 const workspaceDrawer = ARGV.includes('--workspace-drawer');
-const columnGroups = ARGV.includes('--column-groups');
+const columnStacks = ARGV.includes('--column-stacks');
 const drawerStyle = ARGV.includes('--drawer-style');
 const tooltips = ARGV.includes('--tooltips');
 const workspaceWindow = ARGV.includes('--workspace-window');
@@ -41,14 +41,14 @@ const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('-
 const colorPanel = ARGV.includes('--color-panel') || ARGV.includes('--web-color-panel');
 const workspaceDropSizes = ARGV.includes('--workspace-drop-sizes');
 const workspaceEdges = ARGV.includes('--workspace-edges');
-const workspaceMotion = workspaceDropSizes || workspaceEdges || colorPanel || columnGroups || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
+const workspaceMotion = workspaceDropSizes || workspaceEdges || colorPanel || columnStacks || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
-// Group panels include the real storage lifecycle: maintenance must preserve
+// Column stacks include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
-if ((nativeTest && !ARGV.includes('--native-storage')) || drawerStyle || tooltips || (workspaceMotion && !columnGroups) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
+if ((nativeTest && !ARGV.includes('--native-storage')) || drawerStyle || tooltips || (workspaceMotion && !columnStacks) || workspaceHold) launcher.unsetenv('CAPY_WORKSPACE_DIR');
 const launch = [
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', colorPanel ? '--color-panel' : workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
-        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceDropSizes ? 'native_workspace_drop_sizes' : workspaceEdges ? 'native_workspace_drag_edges' : iconAudit ? 'native_icon_audit' : colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnGroups ? 'native_column_group_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceDropSizes ? 'native_workspace_drop_sizes' : workspaceEdges ? 'native_workspace_drag_edges' : iconAudit ? 'native_icon_audit' : colorPanel ? 'native_color_panel_input' : workspaceTransitions ? 'native_workspace_transition_stability' : columnStacks ? 'native_column_stack_input' : tooltips ? 'native_tooltip_input' : columnDrops ? 'native_collapsed_divider_drop_input' : dragPickup ? 'native_drag_pickup_input' : workspaceManagerVisual ? 'native_workspace_manager_visual' : workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
 ];
@@ -103,7 +103,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (nativeTest || workspaceSwitcher || columnDrops || workspaceTransitions || colorPanel) {
+    if (nativeTest || columnStacks || workspaceSwitcher || columnDrops || workspaceTransitions || colorPanel) {
         // Announce the virtual keyboard before testing activation. Otherwise
         // the first key can arrive before GTK binds the new wl_keyboard.
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, true]);

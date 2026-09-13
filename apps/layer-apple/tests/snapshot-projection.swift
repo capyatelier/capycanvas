@@ -218,7 +218,7 @@ private final class Changes: @unchecked Sendable {
                 "layout": ["viewport": [1200, 900], "tab_bar_height": 36, "reveal_edges": ["left"],
                     "work_area": bounds, "status": bounds, "groups": [["id": 7, "bounds": bounds]], "collapsed": [], "dividers": []],
                 "workspace_layout": ["bands": [["id": 1, "extent": width]], "floating": [], "collapsed": [], "fit_tab_groups": [7],
-                    "column_settings": [["column": 7, "mode": "group_panel", "width": width, "auto_hide": false, "heights": []]]],
+                    "column_stacks": [["column": 7, "members": [7], "drawers": false, "auto_hide": false]]],
                 "camera": ["zoom": 2, "revision": 1], "panel_measurements": [["panel": "brushes", "tab_width": 90, "content_height": 300]]])
         }
         func full(_ revision: Int, width: Int) -> JSON {
@@ -243,7 +243,7 @@ private final class Changes: @unchecked Sendable {
                 if editor.workspace.modelRevision == 11 && editor.workspace.contentRevision == 10
                     && editor.state["revision"].uint == 10 && editor.state["camera"]["zoom"].uint == 2
                     && editor.state["workspace"]["layout"]["bands"][0]["extent"].uint == 350
-                    && editor.state["workspace"]["layout"]["column_settings"][0]["width"].uint == 350
+                    && editor.state["workspace"]["layout"]["column_stacks"][0]["members"][0].uint == 7
                     && editor.snapshot["panel_measurements"][0]["content_height"].uint == 300 { coherent.record() }
             }
         })
@@ -264,7 +264,7 @@ private final class Changes: @unchecked Sendable {
         precondition(editor.receive(full(13, width: 200)) == .full)
         precondition(editor.state["revision"].uint == 13 && editor.workspace.contentRevision == 13 && content.value == 1)
         precondition(editor.state["workspace"]["layout"]["bands"][0]["extent"].uint == 200)
-        precondition(editor.state["workspace"]["layout"]["column_settings"][0]["width"].uint == 200)
+        precondition(editor.state["workspace"]["layout"]["column_stacks"][0]["column"].uint == 7)
         print("Workspace reflow checks passed: retained content, atomic geometry/camera, incomplete/stale packet rejection and full completion")
     }
 }
