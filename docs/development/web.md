@@ -77,6 +77,14 @@ The editor check includes actual Navigator pointer hits and a rendered-pixel
 check that zoomed paper appears through empty header space. These checks do not
 establish complete editor parity or hardware performance.
 
+For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
+for mouse/pen input, expressions, cancellation and both-theme captures at three
+panel widths. On Linux, use
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/web" bash tools/performance/workspace-motion.sh web --color-panel`
+to verify mouse and touch through the private Mutter compositor, plus pen through
+CDP. Some Chrome builds deliver CDP touch contacts without compatibility clicks;
+the compositor run verifies actual touch activation of the corner buttons.
+
 ## Debug headless Chrome
 
 Run from the repository root with the development server in another terminal,

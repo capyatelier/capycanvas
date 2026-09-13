@@ -371,6 +371,7 @@ mod wheel {
     #[derive(Default)]
     pub struct Wheel {
         pub color: RefCell<ColorState>,
+        pub corners: RefCell<Vec<gtk::Button>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Wheel {
@@ -378,7 +379,13 @@ mod wheel {
         type Type = super::ColorWheel;
         type ParentType = gtk::Widget;
     }
-    impl ObjectImpl for Wheel {}
+    impl ObjectImpl for Wheel {
+        fn dispose(&self) {
+            for button in self.corners.borrow_mut().drain(..) {
+                button.unparent();
+            }
+        }
+    }
     impl WidgetImpl for Wheel {
         fn request_mode(&self) -> gtk::SizeRequestMode {
             gtk::SizeRequestMode::HeightForWidth
@@ -386,11 +393,27 @@ mod wheel {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             if orientation == gtk::Orientation::Vertical {
                 let size = if for_size < 0 { 196 } else { for_size };
-                // Compress the wheel before scrolling the swatches/component
-                // editors out of a short dock. Drawers retain its natural size.
-                (64, size.max(64), -1, -1)
+                (128, size.max(128), -1, -1)
             } else {
-                (64, 196, -1, -1)
+                (176, 196, -1, -1)
+            }
+        }
+        fn size_allocate(&self, _width: i32, _height: i32, baseline: i32) {
+            let (size, [x, y]) = self.obj().drawing_bounds();
+            let side = (size * 0.14).round().clamp(24., 36.) as i32;
+            for (index, button) in self.corners.borrow().iter().enumerate() {
+                let px = x + if index == 1 || index == 3 {
+                    size - side as f32
+                } else {
+                    0.
+                };
+                let py = y + if index >= 2 { size - side as f32 } else { 0. };
+                button.allocate(
+                    side,
+                    side,
+                    baseline,
+                    Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(px, py))),
+                );
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -417,6 +440,9 @@ mod wheel {
                 let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(0.0, 0.0, size, size));
                 draw_wheel(&cr, &self.color.borrow(), &geometry);
                 snapshot.restore();
+            }
+            for button in self.corners.borrow().iter() {
+                self.obj().snapshot_child(button, snapshot);
             }
         }
     }
@@ -445,20 +471,19 @@ pub struct ColorPanel {
     swatches: Vec<(ColorSlot, gtk::Button, gtk::DrawingArea)>,
     components: [NumberControl; 3],
     labels: [gtk::Label; 3],
-    mode: gtk::DrawingArea,
     mode_button: gtk::Button,
     swap: gtk::Button,
 }
 impl ColorPanel {
     pub fn new() -> Self {
         let root = body();
+        root.add_css_class("color-panel");
         let wheel: ColorWheel = glib::Object::new();
         wheel.set_hexpand(true);
-        wheel.set_vexpand(true);
+        wheel.set_vexpand(false);
+        wheel.set_valign(gtk::Align::Fill);
         wheel.set_widget_name("color-wheel");
         root.append(&wheel);
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        actions.set_homogeneous(true);
         let mut swatches = Vec::new();
         for (slot, label) in [
             (ColorSlot::Foreground, "Foreground color"),
@@ -469,10 +494,11 @@ impl ColorPanel {
             button.add_css_class("flat");
             button.add_css_class("color-swatch");
             button.set_tooltip_text(Some(label));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
             button.set_widget_name(&format!("color-{slot:?}"));
             let sample = gtk::DrawingArea::builder()
-                .width_request(14)
-                .height_request(20)
+                .width_request(16)
+                .height_request(16)
                 .build();
             sample.set_draw_func(glib::clone!(
                 #[weak]
@@ -484,6 +510,14 @@ impl ColorPanel {
                         ColorSlot::Background => state.background,
                         ColorSlot::Transparent => [0.0; 4],
                     };
+                    cr.arc(
+                        width as f64 * 0.5,
+                        height as f64 * 0.5,
+                        width.min(height) as f64 * 0.5,
+                        0.,
+                        std::f64::consts::TAU,
+                    );
+                    cr.clip();
                     for row in 0..(height + 4) / 5 {
                         for col in 0..(width + 4) / 5 {
                             let c = if (row + col) % 2 == 0 { 0.8 } else { 0.55 };
@@ -502,67 +536,49 @@ impl ColorPanel {
                 }
             ));
             button.set_child(Some(&sample));
-            actions.append(&button);
+            button.set_parent(&wheel);
+            wheel.imp().corners.borrow_mut().push(button.clone());
             swatches.push((slot, button, sample));
         }
-        let swap = gtk::Button::from_icon_name("layer-swap-symbolic");
+        let swap = gtk::Button::from_icon_name("layer-color-swap-symbolic");
         swap.add_css_class("flat");
-        swap.add_css_class("color-swatch");
+        swap.add_css_class("color-utility");
         swap.set_tooltip_text(Some("Swap foreground and background"));
+        swap.update_property(&[gtk::accessible::Property::Label(
+            "Swap foreground and background",
+        )]);
         swap.set_widget_name("color-swap");
-        actions.append(&swap);
-        let mode_button = gtk::Button::new();
+        let mode_button = gtk::Button::from_icon_name("layer-color-triangle-symbolic");
         mode_button.add_css_class("flat");
-        mode_button.add_css_class("color-swatch");
-        mode_button.set_tooltip_text(Some("Switch HSV square / HLS triangle"));
+        mode_button.add_css_class("color-utility");
+        mode_button.set_tooltip_text(Some("HSV square · Switch to HLS triangle"));
         mode_button.set_widget_name("color-space");
-        let mode = gtk::DrawingArea::builder()
-            .width_request(14)
-            .height_request(20)
-            .build();
-        mode.set_draw_func(glib::clone!(
-            #[weak]
-            wheel,
-            move |area, cr, w, h| {
-                let c = area.color();
-                cr.set_source_rgba(
-                    c.red() as f64,
-                    c.green() as f64,
-                    c.blue() as f64,
-                    c.alpha() as f64,
-                );
-                cr.set_line_width(1.2);
-                if wheel.imp().color.borrow().space == ColorSpace::Hsv {
-                    cr.move_to(2., h as f64 - 4.);
-                    cr.line_to(w as f64 * 0.5, 4.);
-                    cr.line_to(w as f64 - 2., h as f64 - 4.);
-                    cr.close_path();
-                } else {
-                    cr.rectangle(2., 4., (w - 4) as f64, (h - 8) as f64);
-                }
-                let _ = cr.stroke();
-            }
-        ));
-        mode_button.set_child(Some(&mode));
-        actions.append(&mode_button);
-        root.append(&actions);
+        mode_button.set_parent(&wheel);
+        wheel.imp().corners.borrow_mut().push(mode_button.clone());
+        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        footer.add_css_class("color-footer");
         let values = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         values.set_homogeneous(true);
+        values.set_hexpand(true);
         let labels = std::array::from_fn(|_| gtk::Label::new(None));
         let components = std::array::from_fn(|index| {
             let input = NumberControl::value_only(
                 ColorState::component_control(index).unwrap(),
-                "Color component",
+                ["Hue", "Saturation", "Value"][index],
             );
             input.set_widget_name(&format!("color-component-{index}"));
-            let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let column = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+            column.add_css_class("color-component");
+            input.set_halign(gtk::Align::Fill);
             labels[index].add_css_class("dim-label");
             column.append(&labels[index]);
             column.append(&input);
             values.append(&column);
             input
         });
-        root.append(&values);
+        footer.append(&values);
+        footer.append(&swap);
+        root.append(&footer);
         Self {
             root,
             wheel,
@@ -570,7 +586,6 @@ impl ColorPanel {
             swatches,
             components,
             labels,
-            mode,
             mode_button,
             swap,
         }
@@ -668,7 +683,26 @@ impl ColorPanel {
         }
         *self.wheel.imp().color.borrow_mut() = state.clone();
         self.wheel.queue_draw();
-        self.mode.queue_draw();
+        self.mode_button
+            .set_icon_name(if state.space == ColorSpace::Hsv {
+                "layer-color-triangle-symbolic"
+            } else {
+                "layer-color-square-symbolic"
+            });
+        self.mode_button
+            .set_tooltip_text(Some(if state.space == ColorSpace::Hsv {
+                "HSV square · Switch to HLS triangle"
+            } else {
+                "HLS triangle · Switch to HSV square"
+            }));
+        self.mode_button
+            .update_property(&[gtk::accessible::Property::Label(
+                if state.space == ColorSpace::Hsv {
+                    "HSV square · Switch to HLS triangle"
+                } else {
+                    "HLS triangle · Switch to HSV square"
+                },
+            )]);
         for (slot, button, sample) in &self.swatches {
             if *slot == state.slot {
                 button.add_css_class("selected-tool");
@@ -677,8 +711,12 @@ impl ColorPanel {
             }
             sample.queue_draw();
         }
+        let view = state.view();
         for (index, input) in self.components.iter().enumerate() {
             self.labels[index].set_text(state.labels()[index]);
+            let name = view.components[index].name;
+            input.set_tooltip_text(Some(name));
+            input.update_property(&[gtk::accessible::Property::Label(name)]);
             input.set_value(state.components()[index] as f64);
         }
     }
@@ -691,6 +729,25 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     if state.space == ColorSpace::Hsv {
         let [x, y, w] = g.square.map(f64::from);
         let h = w;
+        let radius = (g.center[0] as f64 * 0.04).min(6.);
+        let _ = cr.save();
+        cr.new_sub_path();
+        for (cx, cy, start) in [
+            (x + w - radius, y + radius, -90.),
+            (x + w - radius, y + h - radius, 0.),
+            (x + radius, y + h - radius, 90.),
+            (x + radius, y + radius, 180.),
+        ] {
+            cr.arc(
+                cx,
+                cy,
+                radius,
+                start * std::f64::consts::PI / 180.,
+                (start + 90.) * std::f64::consts::PI / 180.,
+            );
+        }
+        cr.close_path();
+        cr.clip();
         let horizontal = cairo::LinearGradient::new(x, y, x + w, y);
         horizontal.add_color_stop_rgb(0., 1., 1., 1.);
         horizontal.add_color_stop_rgb(1., r, green, b);
@@ -703,6 +760,7 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
         cr.rectangle(x, y, w, h);
         let _ = cr.set_source(&vertical);
         let _ = cr.fill();
+        let _ = cr.restore();
     } else {
         let mesh = cairo::Mesh::new();
         mesh.begin_patch();
@@ -721,20 +779,33 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
         let _ = cr.set_source(&mesh);
         let _ = cr.paint();
     }
-    for point in [g.hue_marker(state.components()[0]), state.marker(g)] {
+    let radius = (g.center[0] * 2. * 0.04).clamp(6., 10.) as f64;
+    for (point, fill) in [
+        (g.hue_marker(state.components()[0]), [r, green, b]),
+        (
+            state.marker(g),
+            [
+                state.rgba()[0] as f64,
+                state.rgba()[1] as f64,
+                state.rgba()[2] as f64,
+            ],
+        ),
+    ] {
         cr.new_path();
         cr.arc(
             point[0] as f64,
             point[1] as f64,
-            3.5,
+            radius,
             0.,
             std::f64::consts::TAU,
         );
-        cr.set_source_rgb(0., 0., 0.);
-        cr.set_line_width(3.);
+        cr.set_source_rgb(fill[0], fill[1], fill[2]);
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(0., 0., 0., 0.5);
+        cr.set_line_width(4.);
         let _ = cr.stroke_preserve();
         cr.set_source_rgb(1., 1., 1.);
-        cr.set_line_width(1.5);
+        cr.set_line_width(2.);
         let _ = cr.stroke();
     }
 }

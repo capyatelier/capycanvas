@@ -67,8 +67,9 @@ for index, (x, y) in enumerate(positions):
     if part is None or any(n["part"] != part for n in neighbors):
         continue
     point = points[index*5]
-    # Markers have a 5-point outer radius; exclude their outline and AA fringe.
-    if any(math.hypot(point[0]-m[0], point[1]-m[1])*wheel_width < 7 for m in markers):
+    # Hosts may use larger preview markers; exclude their outline and AA fringe.
+    marker_exclusion = fixture.get("marker_radius", 3.5) + 3.5
+    if any(math.hypot(point[0]-m[0], point[1]-m[1])*wheel_width < marker_exclusion for m in markers):
         continue
     expected = [round(channel*255) for channel in sample["rgba"][:3]] + [255]
     actual = list(image.getpixel((x,y))) + [alpha.getpixel((x,y))]

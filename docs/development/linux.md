@@ -103,6 +103,14 @@ Reuse `native_test_app`, widget lookup helpers and `pump` to exercise actual GTK
 dialogs; wait for workspace readiness and operation completion before assertions.
 Persistence cases should verify reopening as well as the visible rows.
 
+For the compact Color panel, run
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/gtk" bash tools/performance/workspace-motion.sh gtk --color-panel`.
+This exercises native mouse/touch picking, corner controls and numeric
+expressions. It checks 200/280/360 px panels in both themes and color
+spaces, retaining screenshots and geometry. The wheel also compresses in short
+docks so the numeric row stays visible; `native_default_workspace` covers that
+shipped layout.
+
 For real pointer/hold/drag delivery, use
 `bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.
 That [runner](../../tools/performance/workspace-motion.sh) provides an isolated

@@ -72,6 +72,8 @@ pub struct ColorPanelView {
     pub hue_start_degrees: f32,
     pub hue_marker: [f32; 2],
     pub field_marker: [f32; 2],
+    /// Opaque marker preview of the remembered paint, including transparent mode.
+    pub marker_color: [f32; 3],
     pub components: [ColorComponentView; 3],
     pub swatches: [ColorSwatchView; 3],
 }
@@ -133,6 +135,7 @@ impl ColorState {
             hue_start_degrees: ColorWheelGeometry::HUE_START_DEGREES,
             hue_marker: geometry.hue_marker(components[0]),
             field_marker: self.marker(&geometry),
+            marker_color: self.rgba()[..3].try_into().unwrap(),
             components: std::array::from_fn(|i| ColorComponentView {
                 label: self.labels()[i],
                 name: names[i],

@@ -66,15 +66,19 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     };
   }
   function colorWheel(root) {
-    const wheel=element("canvas","color-wheel"); wheel.setAttribute("aria-label","Color wheel"); root.append(wheel);
-    const swatches=element("div","color-swatches"), choices=[]; root.append(swatches);
+    const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage"); frame.append(stage);root.append(frame);
+    const wheel=element("canvas","color-wheel"); wheel.setAttribute("aria-label","Color wheel"); stage.append(wheel);
+    const swatches=element("div","color-swatches"), choices=[]; stage.append(swatches);
     for(const slot of ["foreground","background","transparent"]) {
       const node=button("",()=>color({op:"select",slot}),"color-swatch"); node.dataset.colorSlot=slot;
       const paint=element("span"); node.append(paint);swatches.append(node);choices.push([node,paint]);
     }
-    swatches.append(button("Swap",()=>color({op:"swap"})));
-    const space=button("",()=>color({op:"toggle_space"}),"color-space"); root.append(space);
-    const components=element("div","color-components");root.append(components);
+    const space=button("",()=>color({op:"toggle_space"}),"color-space color-utility"); stage.append(space);
+    const footer=element("div","color-footer"); root.append(footer);
+    const components=element("div","color-components");footer.append(components);
+    const swap=button("",()=>color({op:"swap"}),"color-swap color-utility");
+    swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);
+    swap.append(icon("color-swap"));footer.append(swap);
     let view, fields=[], fieldsKey="", paintKey="";
     function draw() {
       if(!view)return;
@@ -87,8 +91,9 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       view.hue_stops.forEach((c,i)=>hue.addColorStop(i/(view.hue_stops.length-1),rgba(c)));
       if(view.space==="hsv") {
         const [x,y,w]=g.square.map(v=>v*side);
+        ctx.save();ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();
         const saturation=ctx.createLinearGradient(x,y,x+w,y);saturation.addColorStop(0,"white");saturation.addColorStop(1,rgba(view.hue_color));ctx.fillStyle=saturation;ctx.fillRect(x,y,w,w);
-        const value=ctx.createLinearGradient(x,y,x,y+w);value.addColorStop(0,"transparent");value.addColorStop(1,"black");ctx.fillStyle=value;ctx.fillRect(x,y,w,w);
+        const value=ctx.createLinearGradient(x,y,x,y+w);value.addColorStop(0,"transparent");value.addColorStop(1,"black");ctx.fillStyle=value;ctx.fillRect(x,y,w,w);ctx.restore();
       } else {
         // Rasterize the shared white/black/hue triangle as a vertex gradient.
         const [a,b,c]=g.triangle.map(p=>p.map(v=>v*pixels));
@@ -104,8 +109,9 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
         ctx.putImageData(image,minX,minY);
       }
       ctx.strokeStyle=hue;ctx.lineWidth=outer-inner;ctx.beginPath();ctx.arc(cx,cy,(inner+outer)/2,0,Math.PI*2);ctx.stroke();
-      for(const p of [view.hue_marker,view.field_marker]) {
-        ctx.beginPath();ctx.arc(p[0]*side,p[1]*side,3.5,0,2*Math.PI);ctx.strokeStyle="black";ctx.lineWidth=3;ctx.stroke();ctx.strokeStyle="white";ctx.lineWidth=1.5;ctx.stroke();
+      const radius=Math.min(10,Math.max(6,side*.04));
+      for(const [p,fill] of [[view.hue_marker,rgba(view.hue_color)],[view.field_marker,rgba(view.marker_color)]]) {
+        ctx.beginPath();ctx.arc(p[0]*side,p[1]*side,radius,0,2*Math.PI);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle="rgba(0,0,0,.5)";ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle="white";ctx.lineWidth=2;ctx.stroke();
       }
     }
     let contact=null;
@@ -117,10 +123,21 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     root.navigatorDispose=()=>resize.disconnect();
     return ()=>{
       view=app.color_panel();
-      choices.forEach(([node,paint],i)=>{const swatch=view.swatches[i];node.setAttribute("aria-label",swatch.label);node.setAttribute("aria-pressed",String(swatch.selected));paint.style.background=rgba(swatch.rgba);});
-      space.textContent=view.space==="hsv"?"HSV square":"HLS triangle";
+      choices.forEach(([node,paint],i)=>{const swatch=view.swatches[i];node.setAttribute("aria-label",swatch.label);node.title=swatch.label;node.setAttribute("aria-pressed",String(swatch.selected));paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#8c8c8c 0 25%,#ccc 0 50%) center / 10px 10px`;});
+      const mode=view.space==="hsv"?"triangle":"square";
+      if(space.dataset.mode!==mode){space.dataset.mode=mode;space.replaceChildren(icon(`color-${mode}`));}
+      space.title=view.space==="hsv"?"HSV square · Switch to HLS triangle":"HLS triangle · Switch to HSV square";
+      space.setAttribute("aria-label",space.title);
       const key=JSON.stringify(view.components.map(({value,...c})=>c));
-      if(key!==fieldsKey){fieldsKey=key;fields=view.components.map((c,index)=>{const node=numberField(c.numeric,c.name,value=>color({op:"component",index,value}));node.dataset.colorComponent=index;return node;});components.replaceChildren(...fields);}
+      if(key!==fieldsKey){
+        fieldsKey=key;components.replaceChildren();
+        fields=view.components.map((c,index)=>{
+          const group=element("div","color-component"),label=element("span","color-component-label",c.label);
+          label.setAttribute("aria-hidden","true");
+          const node=numberField(c.numeric,c.name,value=>color({op:"component",index,value}),true);
+          node.dataset.colorComponent=index;group.append(label,node);components.append(group);return node;
+        });
+      }
       fields.forEach((node,i)=>node.update(view.components[i].value));draw();
     };
   }
