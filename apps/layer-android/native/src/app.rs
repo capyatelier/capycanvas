@@ -11,6 +11,8 @@ pub(crate) struct App {
     pub cache_directory: String,
     pub overviews: Vec<crate::android::OverviewSlot>,
     pub instance: Option<wgpu::Instance>,
+    pub gpu_generation: u64,
+    pub gpu_failure: std::sync::Arc<std::sync::OnceLock<String>>,
 }
 impl App {
     pub fn new() -> Result<Self, String> {
@@ -32,6 +34,8 @@ impl App {
             cursor: layer_ui::CanvasCursor::default(),
             surface: None,
             instance: None,
+            gpu_generation: 0,
+            gpu_failure: Default::default(),
             cache_directory: String::new(),
             overviews: Vec::new(),
         })

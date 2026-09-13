@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
         host.workspaceInput(obj("type" to "resume"))
     }
     override fun onStop() {
+        host.recovery.capture()
         host.workspaceInput(obj("type" to "suspend"))
         super.onStop()
     }

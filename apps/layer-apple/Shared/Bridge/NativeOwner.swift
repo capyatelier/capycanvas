@@ -320,6 +320,10 @@ final class NativeOwner: @unchecked Sendable {
     /// A barrier across both queues includes accepted edits, their writes and
     /// acknowledgments. Lifecycle adapters can hold a background/termination
     /// allowance without synchronously blocking the UI or render owner.
+    // DEPRECATED artwork barrier: capy_apple_recovery_flush_input is not a
+    // host-backed checkpoint. Follow the GTK/Web/Android committed-raster
+    // capture_project_recovery -> file-worker -> durable publication flow;
+    // continue to distinguish settings/workspace writes from artwork recovery.
     func flushPersistence(_ completion: @escaping @Sendable (Bool) -> Void) {
         let deadline = DispatchTime.now() + .seconds(10)
         @Sendable func poll() {

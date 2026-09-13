@@ -3755,6 +3755,9 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
+        self.raster_restore_ready(packet)
+    }
     fn can_capture_raster(&self) -> bool {
         self.raster_ready()
     }

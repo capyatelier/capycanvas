@@ -27,6 +27,8 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
+import { benchRaster } from "./raster-bench.test.mjs";
+import { checkRaster } from "./raster.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -115,6 +117,15 @@ chrome.stdio[4].on("data", (data) => {
     }
   }
 });
+function checkRasterErrors() {
+  if(!process.argv.includes("--offscreen-raster")){assert.deepEqual(errors,[]);return;}
+  // Chrome 150 / NVIDIA 610 headless presentation also fails on pre-M1 main.
+  // This explicit mode qualifies exported GPU pixels and frame creation only;
+  // keep the normal editor/screenshot suite strict and reject every other error.
+  const remaining=errors.filter(error=>!error.startsWith("A valid external Instance reference no longer exists."));
+  assert.deepEqual(remaining,[]);
+  if(remaining.length!==errors.length)console.log("Presentation NOT qualified: pre-existing Chrome headless Dawn instance failure (also reproduced on pre-M1 main).");
+}
 function call(method, params = {}, sessionId = session) {
   const id = ++sequence;
   return new Promise((resolve, reject) => {
@@ -208,7 +219,13 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--menu-labels")) {
+  if (process.argv.includes("--raster-bench")) {
+    await benchRaster({evaluate,settle});
+    checkRasterErrors();
+  } else if (process.argv.includes("--raster")) {
+    await checkRaster({call,evaluate,settle,canvasPixels});
+    checkRasterErrors();
+  } else if (process.argv.includes("--menu-labels")) {
     await checkMenuLabels({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-overflow")) {

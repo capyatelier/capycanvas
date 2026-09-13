@@ -205,6 +205,10 @@ pub unsafe extern "C" fn capy_apple_project_ready(app: *mut CapyApple) -> i32 {
 }
 
 /// # Safety
+/// DEPRECATED recovery barrier: input retirement alone does not establish host
+/// backing or durability. Migrate the Swift lifecycle caller to a committed
+/// capture_project_recovery snapshot, worker completion and atomic publication;
+/// use suspend_renderer/replace_renderer to preserve the session across loss.
 /// Owner only. Drain accepted input without acquiring/presenting a drawable so
 /// a backgrounded or detached surface cannot strand the last pen-up batch.
 /// Returns 1 while preparation or a live interaction still prevents capture.

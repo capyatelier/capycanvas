@@ -236,6 +236,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Could not initialize canvas", style = MaterialTheme.typography.titleLarge)
                     Text(message)
+                    TextButton({ host.restartCanvas() }) { Text("Restart Canvas") }
                 }
             }
         }
