@@ -1070,6 +1070,7 @@ mod tests {
                     panel: layer_ui::Panel::Brushes,
                     tab_width: 100.,
                     content_height: 900.,
+                    scroll: None,
                 }],
             })
             .unwrap();
@@ -1193,6 +1194,7 @@ mod tests {
                 panel: layer_ui::Panel::Brushes,
                 tab_width: 76.0,
                 content_height: 480.0,
+                scroll: None,
             }],
         })
         .unwrap();

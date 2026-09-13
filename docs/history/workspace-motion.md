@@ -8,19 +8,45 @@ the saved floating layout remains fitted to the usable workspace. GTK clips the
 retained widgets at its application surface, including in decorated windows.
 The pointer selects the existing shared drop target and the insertion indicator
 paints above the moving panel. Release into a dock uses that dock's dimensions;
-release elsewhere exposes the fitted floating placement. Cancellation and the
+release elsewhere chooses the fitted floating placement. Cancellation and the
 complete drop remain one workspace history transaction.
 
 The size audit found that ordinary tear-off inherited the source width but
 recomputed height from natural content plus chrome, capped at 75% of the window.
 A scrolled list could grow abruptly, and later native measurements could change
 its size again. GTK now preserves a visible content panel's source width and
-height, including its drawer projection, and freezes the drag presentation.
+height for pickup, including its drawer projection, and freezes the drag presentation.
 Existing floating panels start at their displayed size. Standalone toolbars
 still convert to their compact grid; collapsed icons still use measured content
 or the 320px fallback plus chrome and the existing cap, since they have no
 visible panel body to preserve. Explicit default-size actions keep their natural
 content sizing. Other hosts retain their existing behavior pending this review.
+
+Floating release now settles height once at the destination width. Compact
+content (notably the square Color control) uses its full natural height, without
+carrying blank sidebar space into the new float. Short lists use their actual
+content height. Long lists use a 400 logical-pixel budget, capped at half the
+usable window, including controls and workspace chrome. A sidebar height is
+preserved only for long content when it is between the useful minimum and this
+budget; a squashed source expands and an oversized source contracts. Existing
+floating windows preserve their established height when space allows.
+
+At an edge, a scrolling panel can shrink to fixed controls plus four complete
+rows (or all rows when fewer exist) before its grab edge moves inward. Continuous
+scrolling content uses four tile heights as its useful scrolling area. The
+budget never forces a panel below this useful minimum; the entire usable window
+is the final bound on small displays. Compact controls stay whole when possible.
+Tab grabs anchor the top and footer grabs anchor the bottom. The settled height
+is explicit, so later edits and measurement updates do not resize the window.
+Dock insertion still uses the destination dock allocator.
+
+GTK reports scroll measurements; sizing and history remain in shared Rust and
+the new release policy is enabled only for GTK. Layers measures its fixed
+controls and sampled realized row height times the visible model count, avoiding
+instantiation of large lists. Its old 72px scroll minimum no longer reserves
+blank rows in short lists. Filters measure through their nested scroll window.
+GTK refreshes measurements synchronously at release to avoid using an earlier
+sidebar width or layer count. The retained drag size remains independent.
 
 Validation uses `--workspace-edges` (six sources × mouse/touch × dark/light),
 `--workspace-window` (windowed/maximized/fullscreen/restored), and
@@ -30,15 +56,28 @@ undo and redo. The native runner waits for Mutter's DisplayConfig service before
 applying scale; touch events convert logical fixture coordinates to stream
 pixels, matching [Mutter's monitor-stream coordinate transform](https://github.com/GNOME/mutter/blob/gnome-50/src/backends/meta-screen-cast-monitor-stream.c).
 
-The shared suites pass 337 UI and 25 host tests (one unrelated host test remains
-ignored); the normal GTK release build passes. All eight 120 Hz native motion
-cases pass the 115 Hz floor, with 117.17–120.03 Hz presentation and zero full model
-refreshes. Maximum per-case p95 dispatch/placement is 0.0642/0.0628ms. This uses
-the private Mutter 50.4 display, GTK 4.22.4 and NVIDIA Blackwell/Vulkan setup
-described below; it is not physical input-latency evidence. Mouse/touch edge
-validation also passes at monitor scale 2. Physical pen and human interaction
-review remain pending. Clippy completes with existing warnings in main; strict
-all-target Clippy is not clean because of those pre-existing warnings.
+The content-aware release validation passes 48 native cases at each of monitor
+scales 1 and 2 (96 total), covering two-layer and sixty-layer documents, the
+filter catalog, tall/squashed/useful sidebar sources, established floats,
+partial room, bottom-edge release, square sizing and footer anchoring. In the
+native fixture, two layers settle at 206px; sixty layers settle at 400px from a
+squashed source, retain a useful 320px source, use 290px of available room, or
+keep four complete rows in 286px at the bottom edge. Captured geometry confirms
+no blank rows or clipped picker content in those cases. Both themes and native
+mouse/touch pass, including stable height after later measurements and single
+undo/redo. Shared cases additionally cover massive content and tiny viewports
+with native bottom clearance.
+
+The shared suites pass 339 UI and 25 host tests (one unrelated host test remains
+ignored); the normal GTK release build passes. The 24 existing edge cases and
+four native window modes also pass with the revised sizing. All eight sustained
+motion cases pass the 115Hz floor at 117.76–120.01Hz, with zero full model
+refreshes and maximum per-case p95 dispatch/placement of 0.0614/0.0468ms.
+Validation uses the
+private Mutter 50.4 display, GTK 4.22.4 and NVIDIA Blackwell/Vulkan setup described
+below; it is not physical input-latency evidence. Physical pen and human
+interaction review remain pending. Clippy completes with existing warnings in
+main; strict all-target Clippy is not clean because of those pre-existing warnings.
 
 ## Retained workspace publication
 

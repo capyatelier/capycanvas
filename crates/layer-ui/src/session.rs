@@ -47,6 +47,7 @@ struct WorkspaceDrag {
     panel: Panel,
     source: Bounds,
     source_is_icon: bool,
+    torn_off: bool,
     floating: Option<u32>,
     /// GTK's retained drag presentation can overflow the workspace. Keep this
     /// size independent of content measurements and the fitted saved layout.
@@ -1238,6 +1239,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     panel: source.groups[0].active,
                     source: source.bounds,
                     source_is_icon: false,
+                    torn_off: false,
                     floating: None,
                     preview: None,
                     offset: [0.; 2],
@@ -1315,6 +1317,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 source: source_bounds,
                 source_is_icon: icon_source.is_some(),
+                torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
                 preview: (self.state.platform == Platform::Gtk && whole && source_floating)
                     .then_some(source_bounds),
@@ -1376,9 +1379,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 DockTarget::Float { position },
             )?;
             let group = self.state.workspace.layout.panel_group(drag.panel).unwrap();
-            // A visible content panel already has a useful user-chosen size.
-            // Natural list height can be much larger than its scrolled viewport,
-            // and a drawer's visible width differs from its collapsed source.
+            // Preserve the visible size for pickup; release selects a separate
+            // content-aware height. A list's natural height can be much larger
+            // than its viewport, and a drawer is wider than its collapsed source.
             // Standalone toolbars still convert to their compact grid; an icon
             // has no visible panel size, so it keeps the measured/default size.
             let preserve_size = self.state.platform == Platform::Gtk
@@ -1405,6 +1408,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .find(|g| g.id == group)
                 .unwrap();
             drag.floating = Some(group);
+            drag.torn_off = true;
             drag.preview = (self.state.platform == Platform::Gtk).then_some(floated.bounds);
             drag.item = DockItem::Group { group };
             // A ribbon becomes a compact vertical grid, with its grip at the
@@ -1450,6 +1454,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .workspace
                     .layout
                     .move_item(viewport, drag.item, hint.target)?;
+            } else if drag.moved
+                && let (Some(group), Some(preview)) = (drag.floating, drag.preview)
+            {
+                self.state.workspace.layout.settle_floating_drop(
+                    group,
+                    viewport,
+                    preview,
+                    (!drag.source_is_icon).then_some(drag.source.height),
+                    drag.torn_off,
+                )?;
             }
             self.workspace_drag = None;
             self.workspace_tab_drag = None;
@@ -2091,6 +2105,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
                     {
                         return Err("Invalid panel measurement".into());
+                    }
+                    if measurement.scroll.is_some_and(|m| {
+                        ![m.fixed_height, m.unit_height]
+                            .into_iter()
+                            .all(|v| v.is_finite() && (0.0..1_000_000.0).contains(&v))
+                            || m.fixed_height > measurement.content_height
+                    }) {
+                        return Err("Invalid panel scroll measurement".into());
                     }
                     if accepted
                         .iter()
@@ -9120,6 +9142,7 @@ mod tests {
                 panel: Panel::Brushes,
                 tab_width: 120.,
                 content_height: 1800.,
+                scroll: None,
             }],
         })
         .unwrap();
@@ -9170,6 +9193,7 @@ mod tests {
                     panel,
                     tab_width: 120.,
                     content_height: 1800.,
+                    scroll: None,
                 }],
             })
             .unwrap();
@@ -11046,6 +11070,7 @@ mod tests {
                                 panel: Panel::Brushes,
                                 tab_width: 120.,
                                 content_height: 200.,
+                                scroll: None,
                             });
                             before.layout.column_scroll.push((t.root, 12.));
                             t.session

@@ -2136,55 +2136,78 @@ impl Workspace {
             self,
             move || {
                 w.measuring_panels.set(false);
-                let Some(layout) = w
-                    .gpu
-                    .borrow()
-                    .as_ref()
-                    .map(|g| g.session.state().workspace.layout.clone())
-                else {
-                    return;
-                };
-                let groups = w.groups.borrow();
-                let resolved = w.resolved();
-                let measurements = layout
-                    .panels
-                    .iter()
-                    .map(|config| {
-                        let tab_width = groups
-                            .iter()
-                            .flat_map(|g| &g.tabs)
-                            .find(|(id, _)| *id == config.id)
-                            .map_or(0.0, |(_, tab)| {
-                                tab.measure(gtk::Orientation::Horizontal, -1).1 as f32
-                            });
-                        let width = resolved
-                            .groups
-                            .iter()
-                            .find(|g| g.panels.contains(&config.id))
-                            .map_or(232.0, |g| g.bounds.width);
-                        let widget = w.panel_widget(config.id);
-                        let content = widget
-                            .downcast_ref::<gtk::ScrolledWindow>()
-                            .and_then(|s| s.child())
-                            .unwrap_or(widget);
-                        // Manual shrink can clip a panel below its natural
-                        // minimum. GTK still requires a valid measure request.
-                        let width =
-                            (width as i32).max(content.measure(gtk::Orientation::Horizontal, -1).0);
-                        PanelMeasurement {
-                            panel: config.id,
-                            tab_width,
-                            content_height: content.measure(gtk::Orientation::Vertical, width).1
-                                as f32,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                drop(groups);
-                if measurements != layout.measurements {
-                    w.dispatch(UiAction::MeasurePanels { measurements });
-                }
+                w.measure_panels();
             }
         ));
+    }
+    // Also run synchronously at release: an idle measurement from before a
+    // tear-off may describe a different width or an older layer count.
+    fn measure_panels(self: &Rc<Self>) {
+        let Some(layout) = self
+            .gpu
+            .borrow()
+            .as_ref()
+            .map(|g| g.session.state().workspace.layout.clone())
+        else {
+            return;
+        };
+        let groups = self.groups.borrow();
+        let resolved = self.resolved();
+        let measurements = layout
+            .panels
+            .iter()
+            .map(|config| {
+                let tab_width = groups
+                    .iter()
+                    .flat_map(|g| &g.tabs)
+                    .find(|(id, _)| *id == config.id)
+                    .map_or(0.0, |(_, tab)| {
+                        tab.measure(gtk::Orientation::Horizontal, -1).1 as f32
+                    });
+                let width = resolved
+                    .groups
+                    .iter()
+                    .find(|g| g.panels.contains(&config.id))
+                    .map_or(232.0, |g| g.bounds.width);
+                let widget = self.panel_widget(config.id);
+                let content = widget
+                    .downcast_ref::<gtk::ScrolledWindow>()
+                    .and_then(|s| s.child())
+                    .unwrap_or(widget);
+                // Manual shrink can clip a panel below its natural
+                // minimum. GTK still requires a valid measure request.
+                let width = (width as i32).max(content.measure(gtk::Orientation::Horizontal, -1).0);
+                let (content_height, scroll) = match config.id {
+                    Panel::Layers => {
+                        let (height, scroll) = self.layer_panel.content_measurement(width);
+                        (height, Some(scroll))
+                    }
+                    Panel::Adjustments => {
+                        let (height, scroll) = self.effects.picker_content_measurement(width);
+                        (height, Some(scroll))
+                    }
+                    _ => (
+                        content.measure(gtk::Orientation::Vertical, width).1 as f32,
+                        (config.id != Panel::Color
+                            && self.panel_widget(config.id).is::<gtk::ScrolledWindow>())
+                        .then_some(layer_ui::PanelScrollMeasurement {
+                            fixed_height: 0.0,
+                            unit_height: 0.0,
+                        }),
+                    ),
+                };
+                PanelMeasurement {
+                    panel: config.id,
+                    tab_width,
+                    content_height,
+                    scroll,
+                }
+            })
+            .collect::<Vec<_>>();
+        drop(groups);
+        if measurements != layout.measurements {
+            self.dispatch(UiAction::MeasurePanels { measurements });
+        }
     }
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
         self.customization.reconcile_toolbars(self, layout);
@@ -2658,6 +2681,9 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        if phase == ContactPhase::Up && matches!(target, DragTarget::Dock(_)) {
+            self.measure_panels();
+        }
         self.dispatch(target.action(
             phase,
             position,

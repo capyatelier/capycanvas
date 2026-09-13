@@ -178,6 +178,15 @@ also checks bottom overflow and release in windowed, maximized, fullscreen and
 restored windows. Use `--workspace-motion` separately for sustained presentation
 timing. Physical pen validation remains part of human review.
 
+Run `--workspace-drop-sizes` with the same runner for content-aware floating
+release: square Color panels at different widths, two layers, sixty layers,
+and the filter catalog. It exercises tall, squashed and usable sidebar sizes,
+existing floating sizes, footer anchoring, partial room and bottom-edge release
+with mouse/touch in both themes. Assertions check native row viewport sizes,
+square geometry, bounded scrolling, stable height after later measurements and
+one-step undo/redo. It writes captures and `drop-sizes.json`; repeat with the
+scale-2 environment above for high-DPI input/allocation coverage.
+
 For workspace-switching flashes or jumps, run
 `bash tools/performance/workspace-motion.sh gtk --workspace-transitions`.
 The run directory's `input/transitions.json` records canvas bounds after each GTK

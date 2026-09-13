@@ -19,6 +19,8 @@ mod tooltip;
 mod workspace_drawer_style;
 #[path = "workspace_drag_edge_tests.rs"]
 mod workspace_drag_edge;
+#[path = "workspace_drop_size_tests.rs"]
+mod workspace_drop_size;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
