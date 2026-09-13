@@ -105,6 +105,106 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Native Files, full Zen and raster integration — 2026-09-13
+
+A physical-iPad diagnostic proves that the SwiftUI picker sheet can dismiss
+before `UIDocumentPickerDelegate` delivers its selected URL. Treating that
+sheet event as cancellation consumed the pending callback. The generated project
+was present in Files, but native Open ignored it and Save did not acknowledge
+the location. Both document and workspace-package services now complete only
+through the native selection/cancellation delegate and share one picker adapter.
+No timer, retry or presentation override is added. Temporary diagnostic code
+and its failing inspection test are removed; raw evidence stays ignored under
+`artifacts/apple-native-files-v1/`.
+
+The iteration-41 physical-iPad batch passes four workflows with no failures or
+skips: reopen the saved three-layer project, create/export/cancel and close,
+full Zen with Tab restoring controls, and the Zen icon context menu. The fresh
+native Save/restart/Open/PNG roundtrip passes in iteration 43 without failures or
+skips, retaining all three layers and the editable project title. Its iteration-42
+folder-title assertion failed before creating a folder or writing a file;
+iteration 43 corrects that read-only query.
+
+Shared main removed partial Zen. Apple's unused edge-toolbar projection and
+partial-mode guards are removed. Obsolete tests now cover full Zen; its remaining
+Change icon action is preserved. The iteration-42 Mac batch passes all three
+checks without failures or skips: full Zen/Tab, collapsed and nested drawers,
+and workspace order/pin persistence across restart. Its first run had two stale
+test assumptions (Mac canvas element type and selected default workspace), both
+corrected without changing product defaults.
+
+The integration through `33eead2` passed 67 Apple/native-host checks, both signed
+iteration-49 builds and three native workflows on each host. The three generated
+Files folders were removed in iteration 48; temporary diagnostic and cleanup
+source was removed. The next pull, `c6a6587`, replaces stroke archives with
+immutable raster projects and encoded-sRGB8 paint tiles. Apple now delegates
+save/recovery validation to the shared raster snapshot policy while retaining
+the document-idle requirement for opening. An active-contact ABI regression
+checks that saves and recovery contain only committed tiles, leave live ink
+dirty, permit completion, and preserve exact Undo/Redo on both Apple presets.
+
+Regression oracles now compare exact decoded tiles and mask coverage alongside
+metadata and composited pixels. Loaded raster publication identities are not
+content equality. Workspace publication tests validate each session's revisions
+before normalizing independently allocated identities for schema comparison.
+Completed-input fixtures wait for deferred raster capture instead of assuming
+one frame always commits pen-up. No old stroke-history or archive reader remains.
+
+The raster integration passes 469 Apple/host/core/UI tests, with one existing
+hardware benchmark ignored, and the Swift file-service fixture on both Apple
+presets. Both signed iteration-50 builds pass. Native iteration 50 passes five
+Mac and six iPad workflows without failures or skips: Metal launch/drawing as
+supported, artwork recovery, New/export cancellation, workspace order/pin
+persistence and full Zen/Tab, plus a fresh iPad Save/restart/Open/PNG roundtrip.
+The restored project retains its three layers and artwork. The review namespace
+is restored and the artist app descriptor is unchanged. An opt-in native cleanup
+check is added to the iteration-51 runner; its production executable is unchanged.
+Files authentication is no longer a blocker.
+
+Local main now includes `39a772c`, a Web event-loop capture follow-up with
+unchanged native capture policy. All working files and seven stashes survived
+the integration. The final 113 Apple/host/core checks pass with one existing
+benchmark ignored; the unchanged UI suite's 356 passes remain applicable.
+Both signed iteration-52 builds pass, and each host passes its native Metal
+launch/layer workflow without failures or skips, including Mac mouse drawing
+and Undo/Redo. The generated Files folder is removed by iteration 51. The current
+iPad app and runner are installed, its review namespace is restored and the
+artist descriptor is unchanged.
+Evidence remains ignored under `artifacts/apple-main-integration-c6a6587/`,
+`artifacts/apple-main-integration-39a772c/` and `artifacts/apple-native-files-v1/`.
+Group these changes and acceptance into one milestone.
+
+The shared title-bar editor, remaining provider/lifecycle cases, physical-input
+coverage, visual inventory and sustained Mac 90 Hz/iPad 120 Hz performance
+remain required. The new encoded-sRGB8 raster format needs current visual and
+performance baselines; older linear8 filter comparisons remain historical.
+
+## Native file-dialog cancellation — 2026-09-13
+
+Both native hosts pass the original New/Export cancellation workflow with zero
+failures or skips: invalid dimensions are rejected, a 63×47 drawing is created,
+the system export picker is cancelled, and the drawing remains intact. The iPad
+then closes its editor through File, verifying that cancellation releases the
+document operation. A separate authenticated diagnostic also verifies that
+Export becomes enabled again after cancellation.
+
+The test's generic Cancel query selected a non-button accessibility element
+ahead of Files' visible close buttons. The corrected query selects the native
+button. No production picker change, coordinate workaround or authentication
+bypass is added. Both signed iteration-32 builds pass; their production
+executables match iteration 29. Temporary diagnostic source is removed, the
+current iPad runner is installed, the review namespace is restored and the
+artist app descriptor is unchanged. The earlier disconnected run, protected
+picker capture and original invalid-target failure remain recorded under
+`artifacts/apple-export-cancel-v1/` and the preceding docking evidence folder.
+
+Routine file regressions use the existing isolated dialog fixtures. Real Files
+checks are batched when native acceptance or picker changes require them, to
+honor the user's request to avoid repeated authentication interruptions. No
+authentication prerequisite remains pending. This closes the focused native cancellation gap;
+provider delivery/interruption, the full feature/visual/input inventory and
+sustained drawing performance remain incomplete.
+
 ## Native docking and contact identity — 2026-09-13
 
 Both hosts pass drawer-tab reorder, tear-off, redock and whole-group tear-off,

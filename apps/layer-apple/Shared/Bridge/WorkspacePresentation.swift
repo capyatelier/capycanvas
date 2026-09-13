@@ -121,7 +121,7 @@ import SwiftUI
         }
     }
     func hitSource(at point: CGPoint) -> (String, WorkspaceSource)? {
-        guard let store, !store.snapshot["partial_zen"].bool else { return nil }
+        guard let store else { return nil }
         // Blank drawer regions still occlude dock grips underneath them.
         let drawerLayer = store.contentDrawers.items.values.filter {
             $0.interactive && ($0.geometry["placement"]["bounds"].rect.contains(point) || $0.geometry["connection"]["bounds"].rect.contains(point))
@@ -155,7 +155,7 @@ import SwiftUI
     func refreshChrome() {
         guard let store, !store.snapshot["layout"]["viewport"].isNull else { return }
         let next = JSON([facts.raw, store.snapshot["layout"]["viewport"].raw,
-            store.state["workspace"]["zen_mode"].raw, store.state["settings"]["total_zen"].raw]).stableKey
+            store.state["workspace"]["zen_mode"].raw]).stableKey
         guard next != chromeKey else { return }; chromeKey = next
         chrome(["kind": "refresh"])
     }

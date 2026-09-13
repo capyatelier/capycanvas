@@ -38,7 +38,7 @@ import SwiftUI
             for panel in store.snapshot["panels"].array { bodies[panel["id"].string] = panel }
         }
         let measured = model["columns"].array.indices.map { heights[$0] ?? 0 }
-        let nextKey = JSON([next.raw, store.snapshot["layout"].raw, store.snapshot["partial_zen"].raw,
+        let nextKey = JSON([next.raw, store.snapshot["layout"].raw,
             measured, id == "tool" ? store.contentDrawers.tileRevision : 0]).stableKey
         guard key != nextKey else { return }; key = nextKey
         // Attached panels resize the workspace itself. Their content and dock

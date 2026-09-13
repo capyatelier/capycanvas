@@ -351,8 +351,10 @@ struct ProjectFilesModifier: ViewModifier {
                 NewDrawingForm(spec: files.newDocumentSpec) { files.created($0) }.modifier(EditorPopupPresentation())
             }
             #if os(iOS)
-            .sheet(item: $files.picker, onDismiss: { files.picked(nil) }) { picker in
-                ProjectPicker(picker: picker) { files.picked($0) }.ignoresSafeArea()
+            // Files may deliver its URL after SwiftUI dismisses this sheet.
+            // Only the document-picker delegate completes selection or cancellation.
+            .sheet(item: $files.picker) { picker in
+                NativeDocumentPicker(export: picker.export, contentType: .capyProject) { files.picked($0) }.ignoresSafeArea()
             }
             #endif
     }
@@ -362,13 +364,14 @@ private extension ProjectFiles {
 }
 
 #if os(iOS)
-private struct ProjectPicker: UIViewControllerRepresentable {
-    let picker: ProjectFiles.Picker
+struct NativeDocumentPicker: UIViewControllerRepresentable {
+    let export: URL?
+    let contentType: UTType
     let completion: (URL?) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(completion) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let controller = picker.export.map { UIDocumentPickerViewController(forExporting: [$0], asCopy: false) }
-            ?? UIDocumentPickerViewController(forOpeningContentTypes: [.capyProject], asCopy: false)
+        let controller = export.map { UIDocumentPickerViewController(forExporting: [$0], asCopy: false) }
+            ?? UIDocumentPickerViewController(forOpeningContentTypes: [contentType], asCopy: false)
         controller.allowsMultipleSelection = false; controller.delegate = context.coordinator
         return controller
     }

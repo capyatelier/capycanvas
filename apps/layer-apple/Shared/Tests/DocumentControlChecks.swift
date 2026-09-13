@@ -44,9 +44,9 @@ extension XCTestCase {
         activate(app.descendants(matching: .any)["menu-File"].firstMatch)
         activate(app.buttons["command-export_document"])
         #endif
-        // UIKit can expose the picker's close control as an accessibility
-        // element rather than a button. Both hosts keep its Cancel label.
-        let cancel = app.descendants(matching: .any)["Cancel"].firstMatch
+        // Files also exposes a non-button Cancel element with stale bounds.
+        // Target the native close button shown by the unlocked picker.
+        let cancel = app.buttons["Cancel"].firstMatch
         #if os(macOS)
         XCTAssertTrue(cancel.waitForExistence(timeout: 15))
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
