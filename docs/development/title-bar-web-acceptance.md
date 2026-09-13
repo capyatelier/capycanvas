@@ -175,3 +175,10 @@ outside removal, bank drops and all three sizes in headed hardware-WebGPU
 Chrome. It checks Cancel and workspace undo/redo through visible controls and
 shared commands; CDP contacts do not establish physical-stylus coverage.
 Captures are under `artifacts/title-bar/review/title-bar-overflow/`.
+
+Validation on 2026-09-13 after integrating current main: release Wasm build,
+363 shared UI tests, and headed Chrome `--title-bar-overflow`, `--header-controls`,
+`--title-bar` and `--title-bar-state` passed. The focused scenario also checks
+short row taps, capture loss, resize and source removal during overflow drags.
+The corrected build was loaded on the connected tablet after confirming no
+unsaved drawing or active customization; its selected workspace was retained.
