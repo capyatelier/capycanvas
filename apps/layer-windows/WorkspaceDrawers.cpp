@@ -235,7 +235,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         auto placements=array(object(geometry,L"placement"),L"columns");
         for(uint32_t i=0;i<std::min(uint32_t(columns.size()),placements.Size());++i){
             auto placement=placements.GetObjectAt(i);auto& column=columns[i];place(column.frame,placement);
-            double width=num(placement,L"width"),height=num(placement,L"height");
+            double width=num(placement,L"width");
             for(auto const& panelId:column.panels){
                 auto& body=bodies.at(panelId);auto panel=panels.at(panelId);body.view->Root().Width(width);
                 auto toolbar=toolbarLayouts.find(std::wstring(toolbarKey(panel,width)));

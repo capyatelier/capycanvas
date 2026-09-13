@@ -1488,7 +1488,15 @@ mod gpu_tests {
         service.poll(host).unwrap();
     }
     pub(super) fn image(host: &mut NativeHost) -> layer_render::ReadbackImage {
-        host.session.frame(0, 0).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            host.session.frame(0, 0).unwrap();
+            if !host.session.engine().has_pending_document_edits() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "Raster frame did not complete");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         // Explicit functional-test readback; project saving never reads the GPU.
         let renderer = host.session.renderer_mut();
         renderer.request_readback(1).unwrap();
