@@ -76,7 +76,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
     }
-    if (workspaceSwitcher || columnDrops || workspaceTransitions) {
+    if (workspaceSwitcher || columnDrops || workspaceTransitions || colorPanel) {
         // Announce the virtual keyboard before testing activation. Otherwise
         // the first key can arrive before GTK binds the new wl_keyboard.
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, true]);

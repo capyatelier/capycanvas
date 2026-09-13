@@ -49,6 +49,8 @@ for y in range(math.ceil(top * scale), math.floor((top + wheel_height) * scale),
         for dx, dy in [(0,0),(-2,0),(2,0),(0,-2),(0,2)]:
             points.append([((x+0.5+dx)/scale-left)/wheel_width, ((y+0.5+dy)/scale-top)/wheel_height])
 request = {"space": fixture["space"], "rgba": fixture["rgba"], "points": points}
+if "shape" in fixture:
+    request["shape"] = fixture["shape"]
 if "hue" in fixture:
     request["hue"] = fixture["hue"]
 command = [str(args.oracle.resolve())]

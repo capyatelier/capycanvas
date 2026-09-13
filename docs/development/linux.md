@@ -105,11 +105,17 @@ Persistence cases should verify reopening as well as the visible rows.
 
 For the compact Color panel, run
 `LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/gtk" bash tools/performance/workspace-motion.sh gtk --color-panel`.
-This exercises native mouse/touch picking, corner controls and numeric
-expressions. It checks 200/280/360 px panels in both themes and color
-spaces, retaining screenshots and geometry. The wheel also compresses in short
-docks so the numeric row stays visible; `native_default_workspace` covers that
-shipped layout.
+This exercises native mouse/touch picking, overlapping paint swatches, the swap
+context menu, shape/readout cycles and keyboard activation. It checks
+144/160/200/280/360 px panels in both themes, all three shapes and HSB/Lab/RGB
+readouts, retaining screenshots and geometry. The entire control occupies one
+square and compresses in short docks; `native_default_workspace` covers that
+shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
+is the design minimum. Values are read-only; tap the HSB/Lab/RGB label to cycle
+the readout independently of the circle/square/triangle field. Right-click or
+hold either paint swatch (or use Shift+F10 while focused) to swap the paints.
+The circle is a concentric projection of the full HSV square; Lab readouts use
+CIE Lab with a D50 reference white ([conversion reference](https://www.w3.org/TR/css-color-4/#color-conversion-code)).
 
 For real pointer/hold/drag delivery, use
 `bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.

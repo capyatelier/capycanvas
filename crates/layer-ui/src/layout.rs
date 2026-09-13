@@ -2151,6 +2151,7 @@ impl DockLayout {
                     Panel::Layers => LAYERS_MIN_WIDTH,
                     Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
                     Panel::Navigator => 192.0,
+                    Panel::Color => 4.0 * TILE_SIZE,
                     _ => 0.0,
                 })
                 .fold(0.0, f32::max)

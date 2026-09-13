@@ -5,8 +5,8 @@ use crate::{
 };
 use gtk::{cairo, glib, prelude::*, subclass::prelude::*};
 use layer_ui::{
-    ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, Theme, ToolSetItem,
-    ToolSetView, ToolSetting, ToolSettingAction, UiAction, UiState,
+    ColorAction, ColorReadout, ColorShape, ColorSlot, ColorState, ColorWheelGeometry, Theme,
+    ToolSetItem, ToolSetView, ToolSetting, ToolSettingAction, UiAction, UiState,
 };
 
 /// A body can be projected in a dock or a tool drawer without reparenting the
@@ -366,12 +366,51 @@ fn body() -> gtk::Box {
     root
 }
 
+// All controls share one square; the 14px inset reserves a curved readout band.
+// Four 36px tiles (144px panel, 128px content) is the smallest supported width.
+mod wheel_button {
+    use super::*;
+    #[derive(Default)]
+    pub struct WheelButton {
+        pub readout: Cell<bool>,
+    }
+    #[glib::object_subclass]
+    impl ObjectSubclass for WheelButton {
+        const NAME: &'static str = "CapyColorWheelButton";
+        type Type = super::WheelButton;
+        type ParentType = gtk::Button;
+    }
+    impl ObjectImpl for WheelButton {}
+    impl WidgetImpl for WheelButton {
+        fn contains(&self, x: f64, y: f64) -> bool {
+            let o = self.obj();
+            let (w, h) = (o.width() as f64, o.height() as f64);
+            if x < 0. || y < 0. || x > w || y > h {
+                return false;
+            }
+            if self.readout.get() {
+                let r = ((w * 2. - 28.) * 0.49 + 2.).max(1.);
+                (x - w).hypot(y - h) >= r
+            } else {
+                (x - w * 0.5).hypot(y - h * 0.5) <= w.min(h) * 0.5
+            }
+        }
+    }
+    impl ButtonImpl for WheelButton {}
+}
+glib::wrapper! {
+    pub struct WheelButton(ObjectSubclass<wheel_button::WheelButton>) @extends gtk::Button, gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Actionable;
+}
 mod wheel {
     use super::*;
     #[derive(Default)]
     pub struct Wheel {
         pub color: RefCell<ColorState>,
-        pub corners: RefCell<Vec<gtk::Button>>,
+        // Background precedes foreground so their deliberate overlap also picks correctly.
+        pub corners: RefCell<Vec<WheelButton>>,
+        pub menu: RefCell<Option<gtk::Popover>>,
+        pub disc: RefCell<Option<(u32, f32, cairo::ImageSurface)>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Wheel {
@@ -381,6 +420,9 @@ mod wheel {
     }
     impl ObjectImpl for Wheel {
         fn dispose(&self) {
+            if let Some(menu) = self.menu.take() {
+                menu.unparent();
+            }
             for button in self.corners.borrow_mut().drain(..) {
                 button.unparent();
             }
@@ -392,28 +434,41 @@ mod wheel {
         }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             if orientation == gtk::Orientation::Vertical {
-                let size = if for_size < 0 { 196 } else { for_size };
-                (128, size.max(128), -1, -1)
+                (
+                    128,
+                    if for_size < 0 { 226 } else { for_size.max(128) },
+                    -1,
+                    -1,
+                )
             } else {
-                (176, 196, -1, -1)
+                (128, 226, -1, -1)
             }
         }
         fn size_allocate(&self, _width: i32, _height: i32, baseline: i32) {
-            let (size, [x, y]) = self.obj().drawing_bounds();
-            let side = (size * 0.14).round().clamp(24., 36.) as i32;
-            for (index, button) in self.corners.borrow().iter().enumerate() {
-                let px = x + if index == 1 || index == 3 {
-                    size - side as f32
-                } else {
-                    0.
-                };
-                let py = y + if index >= 2 { size - side as f32 } else { 0. };
+            let (size, [x, y]) = self.obj().stage_bounds();
+            let fg = (size * 0.17).round().clamp(30., 44.);
+            let bg = (fg * 0.8).round();
+            let mode = (size * 0.13).round().clamp(26., 34.);
+            let boxes = [
+                [fg * 0.54, size - bg, bg, bg],
+                [0., size - fg - bg * 0.26, fg, fg],
+                [size - bg, size - bg, bg, bg],
+                [size - mode, 0., mode, mode],
+                [0., 0., size * 0.5, size * 0.5],
+            ];
+            for (button, [bx, by, w, h]) in self.corners.borrow().iter().zip(boxes) {
                 button.allocate(
-                    side,
-                    side,
+                    w.round() as i32,
+                    h.round() as i32,
                     baseline,
-                    Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(px, py))),
+                    Some(
+                        gtk::gsk::Transform::new()
+                            .translate(&gtk::graphene::Point::new(x + bx.round(), y + by.round())),
+                    ),
                 );
+            }
+            if let Some(menu) = self.menu.borrow().as_ref() {
+                menu.present();
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -421,7 +476,7 @@ mod wheel {
             if let Some(geometry) = ColorWheelGeometry::new(size) {
                 snapshot.save();
                 snapshot.translate(&gtk::graphene::Point::new(x, y));
-                let bounds = gtk::graphene::Rect::new(0.0, 0.0, size, size);
+                let bounds = gtk::graphene::Rect::new(0., 0., size, size);
                 let center = gtk::graphene::Point::new(geometry.center[0], geometry.center[1]);
                 let ring = gtk::gsk::PathBuilder::new();
                 ring.add_circle(&center, (geometry.outer + geometry.inner) * 0.5);
@@ -431,18 +486,60 @@ mod wheel {
                 );
                 let stops: Vec<_> = (0..=6)
                     .map(|i| {
-                        let [r, g, b] = layer_ui::hue_color(i as f32 * 60.0);
-                        gtk::gsk::ColorStop::new(i as f32 / 6.0, gtk::gdk::RGBA::new(r, g, b, 1.0))
+                        let [r, g, b] = layer_ui::hue_color(i as f32 * 60.);
+                        gtk::gsk::ColorStop::new(i as f32 / 6., gtk::gdk::RGBA::new(r, g, b, 1.))
                     })
                     .collect();
-                snapshot.append_conic_gradient(&bounds, &center, -60.0, &stops);
+                snapshot.append_conic_gradient(&bounds, &center, -60., &stops);
                 snapshot.pop();
-                let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(0.0, 0.0, size, size));
-                draw_wheel(&cr, &self.color.borrow(), &geometry);
+                let state = self.color.borrow();
+                let hue = state.components()[0];
+                let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
+                if state.wheel_shape() == ColorShape::Circle {
+                    let mut cache = self.disc.borrow_mut();
+                    if cache
+                        .as_ref()
+                        .is_none_or(|(s, h, _)| *s != side || *h != hue)
+                    {
+                        let mut pixels = vec![0; side as usize * side as usize * 4];
+                        layer_ui::render_hsv_disc(side, hue, &mut pixels);
+                        for p in pixels.chunks_exact_mut(4) {
+                            let native = u32::from_be_bytes([255, p[0], p[1], p[2]]).to_ne_bytes();
+                            p.copy_from_slice(&native);
+                        }
+                        let surface = cairo::ImageSurface::create_for_data(
+                            pixels,
+                            cairo::Format::Rgb24,
+                            side as i32,
+                            side as i32,
+                            side as i32 * 4,
+                        )
+                        .unwrap();
+                        *cache = Some((side, hue, surface));
+                    }
+                    let cr = snapshot.append_cairo(&bounds);
+                    let _ = cr.save();
+                    cr.arc(
+                        geometry.center[0] as f64,
+                        geometry.center[1] as f64,
+                        geometry.disc_radius() as f64,
+                        0.,
+                        std::f64::consts::TAU,
+                    );
+                    cr.clip();
+                    cr.scale(size as f64 / side as f64, size as f64 / side as f64);
+                    let _ = cr.set_source_surface(&cache.as_ref().unwrap().2, 0., 0.);
+                    let _ = cr.paint();
+                    let _ = cr.restore();
+                }
+                draw_wheel(&snapshot.append_cairo(&bounds), &state, &geometry);
                 snapshot.restore();
             }
             for button in self.corners.borrow().iter() {
                 self.obj().snapshot_child(button, snapshot);
+            }
+            if let Some(menu) = self.menu.borrow().as_ref() {
+                self.obj().snapshot_child(menu, snapshot);
             }
         }
     }
@@ -452,7 +549,7 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl ColorWheel {
-    fn drawing_bounds(&self) -> (f32, [f32; 2]) {
+    fn stage_bounds(&self) -> (f32, [f32; 2]) {
         let size = self.width().min(self.height()) as f32;
         (
             size,
@@ -462,16 +559,19 @@ impl ColorWheel {
             ],
         )
     }
+    pub(crate) fn drawing_bounds(&self) -> (f32, [f32; 2]) {
+        let (size, [x, y]) = self.stage_bounds();
+        (size - 28., [x + 14., y + 14.])
+    }
 }
-
 pub struct ColorPanel {
     pub root: gtk::Box,
     initialized: Cell<bool>,
     wheel: ColorWheel,
-    swatches: Vec<(ColorSlot, gtk::Button, gtk::DrawingArea)>,
-    components: [NumberControl; 3],
-    labels: [gtk::Label; 3],
-    mode_button: gtk::Button,
+    swatches: Vec<(ColorSlot, WheelButton, gtk::DrawingArea)>,
+    mode_button: WheelButton,
+    readout: WheelButton,
+    readout_drawing: gtk::DrawingArea,
     swap: gtk::Button,
 }
 impl ColorPanel {
@@ -480,20 +580,25 @@ impl ColorPanel {
         root.add_css_class("color-panel");
         let wheel: ColorWheel = glib::Object::new();
         wheel.set_hexpand(true);
-        wheel.set_vexpand(false);
         wheel.set_valign(gtk::Align::Fill);
         wheel.set_widget_name("color-wheel");
         root.append(&wheel);
         let mut swatches = Vec::new();
         for (slot, label) in [
-            (ColorSlot::Foreground, "Foreground color"),
             (ColorSlot::Background, "Background color"),
+            (ColorSlot::Foreground, "Foreground color"),
             (ColorSlot::Transparent, "Transparent paint"),
         ] {
-            let button = gtk::Button::new();
+            let button: WheelButton = glib::Object::new();
             button.add_css_class("flat");
             button.add_css_class("color-swatch");
-            button.set_tooltip_text(Some(label));
+            button.set_tooltip_text(Some(if slot == ColorSlot::Transparent {
+                label
+            } else if slot == ColorSlot::Foreground {
+                "Foreground color · Right-click or hold to swap"
+            } else {
+                "Background color · Right-click or hold to swap"
+            }));
             button.update_property(&[gtk::accessible::Property::Label(label)]);
             button.set_widget_name(&format!("color-{slot:?}"));
             let sample = gtk::DrawingArea::builder()
@@ -540,57 +645,63 @@ impl ColorPanel {
             wheel.imp().corners.borrow_mut().push(button.clone());
             swatches.push((slot, button, sample));
         }
-        let swap = gtk::Button::from_icon_name("layer-color-swap-symbolic");
-        swap.add_css_class("flat");
-        swap.add_css_class("color-utility");
-        swap.set_tooltip_text(Some("Swap foreground and background"));
-        swap.update_property(&[gtk::accessible::Property::Label(
-            "Swap foreground and background",
-        )]);
-        swap.set_widget_name("color-swap");
-        let mode_button = gtk::Button::from_icon_name("layer-color-triangle-symbolic");
+        let mode_button: WheelButton = glib::Object::new();
+        mode_button.set_icon_name("layer-color-circle-symbolic");
         mode_button.add_css_class("flat");
         mode_button.add_css_class("color-utility");
-        mode_button.set_tooltip_text(Some("HSV square · Switch to HLS triangle"));
         mode_button.set_widget_name("color-space");
         mode_button.set_parent(&wheel);
         wheel.imp().corners.borrow_mut().push(mode_button.clone());
-        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        footer.add_css_class("color-footer");
-        let values = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        values.set_homogeneous(true);
-        values.set_hexpand(true);
-        let labels = std::array::from_fn(|_| gtk::Label::new(None));
-        let components = std::array::from_fn(|index| {
-            let input = NumberControl::value_only(
-                ColorState::component_control(index).unwrap(),
-                ["Hue", "Saturation", "Value"][index],
-            );
-            input.set_widget_name(&format!("color-component-{index}"));
-            let column = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-            column.add_css_class("color-component");
-            input.set_halign(gtk::Align::Fill);
-            labels[index].add_css_class("dim-label");
-            column.append(&labels[index]);
-            column.append(&input);
-            values.append(&column);
-            input
-        });
-        footer.append(&values);
-        footer.append(&swap);
-        root.append(&footer);
+        let readout: WheelButton = glib::Object::new();
+        readout.imp().readout.set(true);
+        readout.add_css_class("flat");
+        readout.add_css_class("color-readout");
+        readout.set_widget_name("color-readout");
+        let readout_drawing = gtk::DrawingArea::new();
+        readout_drawing.set_can_target(false);
+        readout_drawing.set_draw_func(glib::clone!(
+            #[weak]
+            wheel,
+            move |area, cr, width, _| {
+                draw_readout(area, cr, width as f64, &wheel.imp().color.borrow());
+            }
+        ));
+        readout.connect_state_flags_changed(glib::clone!(
+            #[weak]
+            readout_drawing,
+            move |_, _| readout_drawing.queue_draw()
+        ));
+        readout.set_child(Some(&readout_drawing));
+        readout.set_parent(&wheel);
+        wheel.imp().corners.borrow_mut().push(readout.clone());
+        let menu = gtk::Popover::new();
+        menu.set_parent(&wheel);
+
+        let swap = gtk::Button::new();
+        swap.add_css_class("flat");
+        swap.set_widget_name("color-swap");
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.append(&gtk::Image::from_icon_name("layer-color-swap-symbolic"));
+        row.append(&gtk::Label::new(Some("Swap foreground and background")));
+        swap.set_child(Some(&row));
+        swap.update_property(&[gtk::accessible::Property::Label(
+            "Swap foreground and background",
+        )]);
+        menu.set_child(Some(&swap));
+        *wheel.imp().menu.borrow_mut() = Some(menu);
         Self {
             root,
             wheel,
             initialized: Cell::new(false),
             swatches,
-            components,
-            labels,
             mode_button,
+            readout,
+            readout_drawing,
             swap,
         }
     }
     pub fn bind(&self, workspace: &Rc<Workspace>) {
+        workspace.watch_popover(self.wheel.imp().menu.borrow().as_ref().unwrap());
         for (slot, button, _) in &self.swatches {
             let slot = *slot;
             button.connect_clicked(glib::clone!(
@@ -600,35 +711,95 @@ impl ColorPanel {
                     action: ColorAction::Select { slot }
                 })
             ));
+            if slot == ColorSlot::Transparent {
+                continue;
+            }
+            // This target owns its menu; the enclosing panel's customization
+            // capture controller must leave its secondary clicks and holds alone.
+            button.add_css_class("customizable-target");
+            let popup = glib::clone!(
+                #[weak(rename_to = wheel)]
+                self.wheel,
+                #[weak]
+                button,
+                move || {
+                    let b = button.compute_bounds(&wheel).unwrap();
+                    let menu = wheel.imp().menu.borrow();
+                    let menu = menu.as_ref().unwrap();
+                    menu.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+                        b.x() as i32,
+                        b.y() as i32,
+                        b.width() as i32,
+                        b.height() as i32,
+                    )));
+                    menu.popup();
+                }
+            );
+            let right = gtk::GestureClick::new();
+            right.set_button(3);
+            right.set_propagation_phase(gtk::PropagationPhase::Capture);
+            right.connect_pressed({
+                let popup = popup.clone();
+                move |g, _, _, _| {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    popup();
+                }
+            });
+            button.add_controller(right);
+            let hold = gtk::GestureLongPress::new();
+            hold.set_touch_only(false);
+            hold.set_propagation_phase(gtk::PropagationPhase::Capture);
+            hold.connect_pressed({
+                let popup = popup.clone();
+                move |g, _, _| {
+                    if !crate::input::touch_or_pen(g) {
+                        return;
+                    }
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    popup();
+                }
+            });
+            button.add_controller(hold);
+            let key = gtk::EventControllerKey::new();
+            key.connect_key_pressed(move |_, key, _, modifiers| {
+                if key == gtk::gdk::Key::Menu
+                    || (key == gtk::gdk::Key::F10
+                        && modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK))
+                {
+                    popup();
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            });
+            button.add_controller(key);
         }
-        // These are direct core actions; swatch selection and color-space state
-        // never live in this native view.
         self.mode_button.connect_clicked(glib::clone!(
             #[weak]
             workspace,
             move |_| workspace.dispatch(UiAction::Color {
-                action: ColorAction::ToggleSpace
+                action: ColorAction::ToggleShape
+            })
+        ));
+        self.readout.connect_clicked(glib::clone!(
+            #[weak]
+            workspace,
+            move |_| workspace.dispatch(UiAction::Color {
+                action: ColorAction::ToggleReadout
             })
         ));
         self.swap.connect_clicked(glib::clone!(
             #[weak]
             workspace,
-            move |_| workspace.dispatch(UiAction::Color {
-                action: ColorAction::Swap
-            })
+            #[weak(rename_to = wheel)]
+            self.wheel,
+            move |_| {
+                wheel.imp().menu.borrow().as_ref().unwrap().popdown();
+                workspace.dispatch(UiAction::Color {
+                    action: ColorAction::Swap,
+                });
+            }
         ));
-        for (index, input) in self.components.iter().enumerate() {
-            input.connect_value_changed(glib::clone!(
-                #[weak]
-                workspace,
-                move |input| workspace.dispatch(UiAction::Color {
-                    action: ColorAction::Component {
-                        index,
-                        value: input.value() as f32
-                    }
-                })
-            ));
-        }
         let part = Rc::new(Cell::new(None));
         let drag = gtk::GestureDrag::new();
         drag.set_button(1);
@@ -640,15 +811,29 @@ impl ColorPanel {
             #[strong]
             part,
             move |gesture, x, y| {
+                part.set(None);
+                // Popovers are separate native surfaces but still descendants
+                // in GTK's widget tree. Never pick through their buttons.
+                let native_surface = wheel.native().and_then(|n| n.surface());
+                if gesture
+                    .current_event()
+                    .and_then(|e| e.surface())
+                    .is_some_and(|s| Some(s) != native_surface)
+                    || wheel
+                        .pick(x, y, gtk::PickFlags::DEFAULT)
+                        .is_some_and(|w| w != wheel.clone().upcast::<gtk::Widget>())
+                {
+                    return;
+                }
                 let (size, [ox, oy]) = wheel.drawing_bounds();
                 let point = [x as f32 - ox, y as f32 - oy];
                 let hit = ColorWheelGeometry::new(size)
-                    .and_then(|g| g.hit(point, wheel.imp().color.borrow().space));
+                    .and_then(|g| g.hit_shape(point, wheel.imp().color.borrow().wheel_shape()));
                 part.set(hit);
                 if let Some(part) = hit {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     workspace.dispatch(UiAction::Color {
-                        action: ColorAction::Pick { part, point, size },
+                        action: ColorAction::PickWheel { part, point, size },
                     });
                 }
             }
@@ -666,7 +851,7 @@ impl ColorPanel {
                 {
                     let (size, [ox, oy]) = wheel.drawing_bounds();
                     workspace.dispatch(UiAction::Color {
-                        action: ColorAction::Pick {
+                        action: ColorAction::PickWheel {
                             part,
                             point: [(x + dx) as f32 - ox, (y + dy) as f32 - oy],
                             size,
@@ -675,6 +860,11 @@ impl ColorPanel {
                 }
             }
         ));
+        drag.connect_drag_end({
+            let part = part.clone();
+            move |_, _, _| part.set(None)
+        });
+        drag.connect_cancel(move |_, _| part.set(None));
         self.wheel.add_controller(drag);
     }
     pub fn refresh(&self, state: &ColorState) {
@@ -683,26 +873,29 @@ impl ColorPanel {
         }
         *self.wheel.imp().color.borrow_mut() = state.clone();
         self.wheel.queue_draw();
+        let (icon, description) = match state.wheel_shape() {
+            ColorShape::Circle => (
+                "layer-color-circle-symbolic",
+                "HSV circle · Switch to square",
+            ),
+            ColorShape::Square => (
+                "layer-color-square-symbolic",
+                "HSV square · Switch to triangle",
+            ),
+            ColorShape::Triangle => (
+                "layer-color-triangle-symbolic",
+                "HLS triangle · Switch to circle",
+            ),
+        };
+        self.mode_button.set_icon_name(icon);
+        self.mode_button.set_tooltip_text(Some(description));
         self.mode_button
-            .set_icon_name(if state.space == ColorSpace::Hsv {
-                "layer-color-triangle-symbolic"
-            } else {
-                "layer-color-square-symbolic"
-            });
-        self.mode_button
-            .set_tooltip_text(Some(if state.space == ColorSpace::Hsv {
-                "HSV square · Switch to HLS triangle"
-            } else {
-                "HLS triangle · Switch to HSV square"
-            }));
-        self.mode_button
-            .update_property(&[gtk::accessible::Property::Label(
-                if state.space == ColorSpace::Hsv {
-                    "HSV square · Switch to HLS triangle"
-                } else {
-                    "HLS triangle · Switch to HSV square"
-                },
-            )]);
+            .update_property(&[gtk::accessible::Property::Label(description)]);
+        let description = state.readout_description();
+        self.readout.set_tooltip_text(Some(&description));
+        self.readout
+            .update_property(&[gtk::accessible::Property::Label(&description)]);
+        self.readout_drawing.queue_draw();
         for (slot, button, sample) in &self.swatches {
             if *slot == state.slot {
                 button.add_css_class("selected-tool");
@@ -711,22 +904,137 @@ impl ColorPanel {
             }
             sample.queue_draw();
         }
-        let view = state.view();
-        for (index, input) in self.components.iter().enumerate() {
-            self.labels[index].set_text(state.labels()[index]);
-            let name = view.components[index].name;
-            input.set_tooltip_text(Some(name));
-            input.update_property(&[gtk::accessible::Property::Label(name)]);
-            input.set_value(state.components()[index] as f64);
+    }
+}
+
+fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: &ColorState) {
+    let mut font = (half * 2. * 0.044).clamp(9., 12.);
+    let radius = (half * 2. - 28.) * 0.49 + 6.;
+    let color = area.color();
+    let ink = |alpha| {
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            alpha,
+        )
+    };
+    cr.select_font_face(
+        "Adwaita Sans",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(font);
+    ink(0.9);
+    cr.move_to(2., font + 1.);
+    let _ = cr.show_text(state.readout.label());
+    let label_width = cr.text_extents(state.readout.label()).unwrap().x_advance();
+    cr.set_line_width(1.2);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.move_to(label_width + 7., font * 0.52);
+    cr.line_to(label_width + 9., font * 0.72);
+    cr.line_to(label_width + 11., font * 0.52);
+    let _ = cr.stroke();
+    if area
+        .parent()
+        .is_some_and(|button| button.has_visible_focus())
+    {
+        // Keep the focus outline in the corner, clear of the picking field.
+        rounded_rect(cr, 1., 1., label_width + 14., font + 4., 5.);
+        cr.set_line_width(1.5);
+        let _ = cr.stroke();
+    }
+    cr.select_font_face(
+        "Adwaita Sans",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Normal,
+    );
+    let labels = match state.readout {
+        ColorReadout::Hsb => ["", "", ""],
+        ColorReadout::Lab => ["L", "a", "b"],
+        ColorReadout::Rgb => ["", "", ""],
+    };
+    let rgb = state.readout == ColorReadout::Rgb;
+    let values = state.readout_text();
+    let texts: [String; 3] = std::array::from_fn(|i| format!("{}{}", labels[i], values[i]));
+    let mut options = cr.font_options().unwrap();
+    options.set_hint_metrics(cairo::HintMetrics::Off);
+    cr.set_font_options(&options);
+    let available = radius * std::f64::consts::FRAC_PI_2 - 4.;
+    let (widths, total) = loop {
+        cr.set_font_size(font);
+        // Measure the individual glyph advances used for drawing on the arc.
+        let widths = texts.each_ref().map(|text| {
+            text.chars()
+                .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
+                .sum::<f64>()
+                + if rgb { font * 0.8 + 2. } else { 0. }
+        });
+        let total: f64 = widths.iter().sum();
+        if total + 6. <= available || font <= 8. {
+            break (widths, total);
+        }
+        font -= 0.25;
+    };
+    let chip = font * 0.8;
+    let gap = ((available - total) * 0.5).clamp(3., radius * 0.24);
+    let mut cursor = -(total + gap * 2.) * 0.5;
+    for (index, text) in texts.iter().enumerate() {
+        let width = widths[index];
+        let mid = (-135_f64).to_radians() + (cursor + width * 0.5) / radius;
+        cursor += width + gap;
+        let mut along = -width * 0.5;
+        if rgb {
+            let angle = mid + (along + chip * 0.5) / radius;
+            let _ = cr.save();
+            cr.translate(half + radius * angle.cos(), half + radius * angle.sin());
+            cr.rotate(angle + std::f64::consts::FRAC_PI_2);
+            let [r, g, b] = [[0.93, 0.31, 0.36], [0.25, 0.73, 0.43], [0.29, 0.56, 0.98]][index];
+            cr.set_source_rgb(r, g, b);
+            rounded_rect(cr, -chip * 0.5, -font * 0.76, chip, chip, 2.);
+            let _ = cr.fill();
+            let _ = cr.restore();
+            along += chip + 2.;
+        }
+        for c in text.chars() {
+            let glyph = c.to_string();
+            let advance = cr.text_extents(&glyph).unwrap().x_advance();
+            let angle = mid + (along + advance * 0.5) / radius;
+            let _ = cr.save();
+            cr.translate(half + radius * angle.cos(), half + radius * angle.sin());
+            cr.rotate(angle + std::f64::consts::FRAC_PI_2);
+            ink(0.8);
+            cr.move_to(-advance * 0.5, 0.);
+            let _ = cr.show_text(&glyph);
+            let _ = cr.restore();
+            along += advance;
         }
     }
+}
+fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    cr.new_sub_path();
+    for (cx, cy, a) in [
+        (x + w - r, y + r, -90.),
+        (x + w - r, y + h - r, 0.),
+        (x + r, y + h - r, 90.),
+        (x + r, y + r, 180.),
+    ] {
+        cr.arc(
+            cx,
+            cy,
+            r,
+            a * std::f64::consts::PI / 180.,
+            (a + 90.) * std::f64::consts::PI / 180.,
+        );
+    }
+    cr.close_path();
 }
 
 fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     // This is a tiny UI vector drawing, never a canvas or brush raster path.
     // GTK caches the resulting node until the color or allocation changes.
     let [r, green, b] = layer_ui::hue_color(state.components()[0]).map(f64::from);
-    if state.space == ColorSpace::Hsv {
+    if state.wheel_shape() == ColorShape::Square {
         let [x, y, w] = g.square.map(f64::from);
         let h = w;
         let radius = (g.center[0] as f64 * 0.04).min(6.);
@@ -761,7 +1069,7 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
         let _ = cr.set_source(&vertical);
         let _ = cr.fill();
         let _ = cr.restore();
-    } else {
+    } else if state.wheel_shape() == ColorShape::Triangle {
         let mesh = cairo::Mesh::new();
         mesh.begin_patch();
         for (index, p) in g.triangle.iter().chain([&g.triangle[2]]).enumerate() {
@@ -783,7 +1091,7 @@ fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     for (point, fill) in [
         (g.hue_marker(state.components()[0]), [r, green, b]),
         (
-            state.marker(g),
+            state.wheel_marker(g),
             [
                 state.rgba()[0] as f64,
                 state.rgba()[1] as f64,

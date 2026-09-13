@@ -1,6 +1,8 @@
 //! Color-wheel display oracle: pick each normalized sample through shared Rust
 //! policy. Used by native screenshot checks, not by the production raster path.
-use layer_ui::{ColorAction, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart};
+use layer_ui::{
+    ColorAction, ColorShape, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::io::Read;
@@ -8,6 +10,8 @@ use std::io::Read;
 #[derive(Deserialize)]
 struct Request {
     space: ColorSpace,
+    #[serde(default)]
+    shape: Option<ColorShape>,
     rgba: [f32; 4],
     /// Achromatic paint retains a hue that cannot be recovered from RGBA alone.
     #[serde(default)]
@@ -23,6 +27,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.apply(ColorAction::Space {
         space: request.space,
     })?;
+    if let Some(shape) = request.shape {
+        state.apply(ColorAction::Shape { shape })?;
+    }
     if let Some(value) = request.hue {
         state.apply(ColorAction::Component { index: 0, value })?;
     }
@@ -31,7 +38,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .points
         .into_iter()
         .map(|point| {
-            let part = geometry.hit(point, request.space);
+            let part = if let Some(shape) = request.shape {
+                geometry.hit_shape(point, shape)
+            } else {
+                geometry.hit(point, request.space)
+            };
             let mut sample = state.clone();
             if let Some(part) = part {
                 // The hue ring always displays fully saturated, opaque colors.
@@ -39,16 +50,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sample.set_rgba([1., 0., 0., 1.]).unwrap();
                 }
                 sample
-                    .apply(ColorAction::Pick {
-                        part,
-                        point,
-                        size: 1.,
+                    .apply(if request.shape.is_some() {
+                        ColorAction::PickWheel {
+                            part,
+                            point,
+                            size: 1.,
+                        }
+                    } else {
+                        ColorAction::Pick {
+                            part,
+                            point,
+                            size: 1.,
+                        }
                     })
                     .unwrap();
             }
             json!({"part":part,"rgba":sample.rgba()})
         })
         .collect();
-    println!("{}", json!({"model":state.view(),"samples":samples}));
+    let mut model = state.view();
+    if request.shape.is_some() {
+        model.field_marker = state.wheel_marker(&geometry);
+    }
+    println!("{}", json!({"model":model,"samples":samples}));
     Ok(())
 }

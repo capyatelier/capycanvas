@@ -37,12 +37,12 @@ fn native_color_panel_input() {
         .unwrap();
     let mut reports = Vec::new();
     for theme in [Theme::Dark, Theme::Light] {
-        for width in [200., 280., 360.] {
+        for width in [144., 160., 200., 280., 360.] {
             for float in &mut fixture.layout.floating {
                 if let DockNode::Tabs { panels, .. } = &float.root {
                     if panels.contains(&Panel::Color) {
                         float.width = width;
-                        float.height = Some(width + 70.);
+                        float.height = Some(width + 36.);
                     }
                 }
             }
@@ -53,29 +53,27 @@ fn native_color_panel_input() {
             w.dispatch(UiAction::SetColor {
                 rgba: [0.2, 0.72, 0.58, 1.],
             });
-            for space in [layer_ui::ColorSpace::Hsv, layer_ui::ColorSpace::Hls] {
+            for shape in [
+                layer_ui::ColorShape::Circle,
+                layer_ui::ColorShape::Square,
+                layer_ui::ColorShape::Triangle,
+            ] {
                 w.dispatch(UiAction::Color {
-                    action: layer_ui::ColorAction::Space { space },
+                    action: layer_ui::ColorAction::Shape { shape },
                 });
                 pump(150);
                 let root = &w.color_panel.root;
                 let wheel = find_named(root.upcast_ref(), "color-wheel").unwrap();
-                let field = find_named(root.upcast_ref(), "color-component-2").unwrap();
                 let wb = wheel.compute_bounds(root).unwrap();
-                let fb = field.compute_bounds(root).unwrap();
                 let panel = w.panel_widget(Panel::Color);
                 let visible = root.compute_bounds(&panel).unwrap();
                 assert!(
                     visible.x() >= 0. && visible.x() + visible.width() <= panel.width() as f32,
-                    "Color controls fit panel width"
+                    "Color controls fit {width}px panel width"
                 );
                 assert!(
-                    visible.y() + fb.y() + fb.height() <= panel.height() as f32,
-                    "Values remain visible without scrolling"
-                );
-                assert!(
-                    fb.y() + fb.height() <= wb.height() + 36.,
-                    "one compact numeric row"
+                    visible.y() + wb.y() + wb.height() <= panel.height() as f32,
+                    "Entire square remains visible"
                 );
                 assert!(
                     (wheel.width() - wheel.height()).abs() <= 1,
@@ -88,7 +86,6 @@ fn native_color_panel_input() {
                     "color-Background",
                     "color-Transparent",
                     "color-space",
-                    "color-swap",
                 ] {
                     let button = find_named(root.upcast_ref(), name).unwrap();
                     let b = button.compute_bounds(root).unwrap();
@@ -112,25 +109,120 @@ fn native_color_panel_input() {
                         "{name} unobscured"
                     );
                 }
-                let name = format!("{theme:?}-{width}-{space:?}");
-                let b = root.compute_bounds(&w.window).unwrap();
-                reports.push(serde_json::json!({"name":name,"panel":[b.x(),b.y(),b.width(),fb.y()+fb.height()],"wheel":[wb.x(),wb.y(),wb.width(),wb.height()]}));
-                capture_reference(&w, output.join(format!("{name}.png")).to_str().unwrap(), 1.);
-                if width == 280. {
-                    capture_reference(
-                        &w,
-                        output.join(format!("{name}-2x.png")).to_str().unwrap(),
-                        2.,
+                let fg = find_named(root.upcast_ref(), "color-Foreground")
+                    .unwrap()
+                    .compute_bounds(root)
+                    .unwrap();
+                let bg = find_named(root.upcast_ref(), "color-Background")
+                    .unwrap()
+                    .compute_bounds(root)
+                    .unwrap();
+                let transparent = find_named(root.upcast_ref(), "color-Transparent")
+                    .unwrap()
+                    .compute_bounds(root)
+                    .unwrap();
+                assert!(fg.width() > bg.width() && fg.x() < bg.x() && fg.y() < bg.y());
+                assert!(
+                    fg.x() + fg.width() > bg.x() && fg.y() + fg.height() > bg.y(),
+                    "intentional paint overlap"
+                );
+                assert_eq!(bg.width(), transparent.width());
+                let wheel = wheel.downcast::<crate::tool_panels::ColorWheel>().unwrap();
+                let (size, origin) = wheel.drawing_bounds();
+                let g = layer_ui::ColorWheelGeometry::new(size).unwrap();
+                for hue in (0..360).step_by(5) {
+                    let [x, y] = g.hue_marker(hue as f32);
+                    let hit = wheel
+                        .pick(
+                            (x + origin[0]) as f64,
+                            (y + origin[1]) as f64,
+                            gtk::PickFlags::DEFAULT,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        hit,
+                        wheel.clone().upcast::<gtk::Widget>(),
+                        "{width}px hue {hue} unobscured"
                     );
+                }
+                for model in [
+                    layer_ui::ColorReadout::Hsb,
+                    layer_ui::ColorReadout::Lab,
+                    layer_ui::ColorReadout::Rgb,
+                ] {
+                    while state(&w).colors.readout != model {
+                        w.dispatch(UiAction::Color {
+                            action: layer_ui::ColorAction::ToggleReadout,
+                        });
+                    }
+                    pump(50);
+                    let name = format!("{theme:?}-{width}-{shape:?}-{model:?}");
+                    let b = root.compute_bounds(&w.window).unwrap();
+                    reports.push(serde_json::json!({"name":name,"panel":[b.x(),b.y(),b.width(),wb.y()+wb.height()],"wheel":[wb.x()+origin[0],wb.y()+origin[1],size,size],"shape":shape,"readout":model}));
+                    capture_reference(&w, output.join(format!("{name}.png")).to_str().unwrap(), 1.);
+                    if width == 280. || width == 144. {
+                        capture_reference(
+                            &w,
+                            output.join(format!("{name}-2x.png")).to_str().unwrap(),
+                            2.,
+                        );
+                    }
                 }
             }
         }
     }
+    std::fs::write(
+        output.join("geometry.json"),
+        serde_json::to_vec_pretty(&reports).unwrap(),
+    )
+    .unwrap();
+    for float in &mut fixture.layout.floating {
+        if let DockNode::Tabs { panels, .. } = &float.root {
+            if panels.contains(&Panel::Color) {
+                float.width = 100.;
+                float.height = Some(180.);
+            }
+        }
+    }
+    w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+    pump(150);
     let root = &w.color_panel.root;
+    assert_eq!(
+        root.width(),
+        128,
+        "Resizing below four tiles preserves the 144px panel minimum"
+    );
     let locate = |name: &str, x: f32, y: f32| {
         let widget = find_named(root.upcast_ref(), name).unwrap();
-        let b = widget.compute_bounds(&w.window).unwrap();
-        [b.x() + b.width() * x, b.y() + b.height() * y]
+        if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
+            assert!(popup.is_visible(), "{name} menu is open");
+            let b = widget.compute_bounds(&popup).unwrap();
+            let surface = popup
+                .surface()
+                .unwrap()
+                .downcast::<gtk::gdk::Popup>()
+                .unwrap();
+            let (dx, dy) = popup.surface_transform();
+            [
+                surface.position_x() as f32 - dx as f32 + b.x() + b.width() * x,
+                surface.position_y() as f32 - dy as f32 + b.y() + b.height() * y,
+            ]
+        } else {
+            let b = widget.compute_bounds(&w.window).unwrap();
+            [b.x() + b.width() * x, b.y() + b.height() * y]
+        }
+    };
+    let on_ring = |hue: f32| {
+        let wheel = find_named(root.upcast_ref(), "color-wheel")
+            .unwrap()
+            .downcast::<crate::tool_panels::ColorWheel>()
+            .unwrap();
+        let (size, origin) = wheel.drawing_bounds();
+        let b = wheel.compute_bounds(&w.window).unwrap();
+        let p = layer_ui::ColorWheelGeometry::new(size)
+            .unwrap()
+            .hue_marker(hue);
+        [b.x() + origin[0] + p[0], b.y() + origin[1] + p[1]]
     };
     let mut step = 0;
     std::fs::write(dir.join("ready"), "ready").unwrap();
@@ -175,19 +267,24 @@ fn native_color_panel_input() {
         });
         pump(100);
         let before = state(&w).colors.foreground;
-        gesture(
-            locate("color-wheel", 0.94, 0.5),
-            locate("color-wheel", 0.5, 0.94),
-        );
+        gesture(on_ring(150.), on_ring(240.));
         assert_ne!(
             state(&w).colors.foreground,
             before,
             "touch={touch}: hue drag"
         );
-        for space in [layer_ui::ColorSpace::Hsv, layer_ui::ColorSpace::Hls] {
+        for shape in [
+            layer_ui::ColorShape::Circle,
+            layer_ui::ColorShape::Square,
+            layer_ui::ColorShape::Triangle,
+        ] {
             w.dispatch(UiAction::Color {
-                action: layer_ui::ColorAction::Space { space },
+                action: layer_ui::ColorAction::Shape { shape },
             });
+            w.dispatch(UiAction::SetColor {
+                rgba: [0.2, 0.72, 0.58, 1.],
+            });
+            pump(40);
             let before = state(&w).colors.foreground;
             gesture(
                 locate("color-wheel", 0.5, 0.5),
@@ -196,7 +293,7 @@ fn native_color_panel_input() {
             assert_ne!(
                 state(&w).colors.foreground,
                 before,
-                "touch={touch}: {space:?} drag"
+                "touch={touch}: {shape:?} drag"
             );
         }
         for (name, slot) in [
@@ -207,22 +304,111 @@ fn native_color_panel_input() {
             gesture(p, p);
             assert_eq!(state(&w).colors.slot, slot, "touch={touch}: {name}");
         }
+        // Picking while transparent resumes the remembered background paint.
+        gesture(
+            locate("color-wheel", 0.5, 0.5),
+            locate("color-wheel", 0.55, 0.45),
+        );
+        assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
         let p = locate("color-space", 0.5, 0.5);
         gesture(p, p);
-        assert_eq!(state(&w).colors.space, layer_ui::ColorSpace::Hsv);
+        assert_eq!(state(&w).colors.wheel_shape(), layer_ui::ColorShape::Circle);
+        for expected in [
+            layer_ui::ColorShape::Square,
+            layer_ui::ColorShape::Triangle,
+            layer_ui::ColorShape::Circle,
+        ] {
+            gesture(p, p);
+            assert_eq!(state(&w).colors.wheel_shape(), expected);
+        }
+        let before = state(&w).colors.rgba();
+        for _ in 0..3 {
+            let expected = state(&w).colors.readout.next();
+            let p = locate("color-readout", 0.12, 0.07);
+            gesture(p, p);
+            assert_eq!(
+                state(&w).colors.readout,
+                expected,
+                "touch={touch}: readout cycle"
+            );
+            assert_eq!(state(&w).colors.rgba(), before);
+        }
+        drop(gesture);
+        let p = locate("color-Foreground", 0.5, 0.5);
+        if touch {
+            perform(serde_json::json!([{ "touch":"down", "point":p }]));
+            pump(900);
+            let menu = find_named(root.upcast_ref(), "color-swap")
+                .unwrap()
+                .native()
+                .and_downcast::<gtk::Popover>()
+                .unwrap();
+            assert!(
+                menu.is_visible(),
+                "touch hold opens swap menu before release"
+            );
+            perform(serde_json::json!([{ "touch":"up" }]));
+        } else {
+            perform(
+                serde_json::json!([{ "point":p, "button":273, "down":true }, { "button":273, "down":false }]),
+            );
+        }
+        pump(200);
         let before = state(&w).colors;
+        capture_reference(
+            &w,
+            output
+                .join(format!("swap-menu-{touch}.png"))
+                .to_str()
+                .unwrap(),
+            1.,
+        );
         let p = locate("color-swap", 0.5, 0.5);
-        gesture(p, p);
-        assert_eq!(state(&w).colors.foreground, before.background);
+        if touch {
+            perform(serde_json::json!([{ "touch":"down", "point":p }]));
+            assert_eq!(
+                state(&w).colors,
+                before,
+                "Menu press must not pick through to the wheel"
+            );
+            perform(serde_json::json!([{ "touch":"up" }]));
+        } else {
+            perform(serde_json::json!([{ "point":p, "down":true }, { "down":false }]));
+        }
+        assert_eq!(
+            state(&w).colors.foreground,
+            before.background,
+            "touch={touch}: swap foreground"
+        );
         assert_eq!(state(&w).colors.background, before.foreground);
     }
-    let hue = find_named(root.upcast_ref(), "color-component-0")
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap();
-    edit_number(&hue, "180/2");
-    assert!((state(&w).colors.components()[0] - 90.).abs() < 0.01);
-    assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
+    // A mouse hold remains an ordinary swatch click; it never opens a menu.
+    let p = locate("color-Foreground", 0.5, 0.5);
+    perform(serde_json::json!([{ "point":p, "down":true }]));
+    pump(900);
+    let swap = find_named(root.upcast_ref(), "color-swap").unwrap();
+    let menu = swap.native().and_downcast::<gtk::Popover>().unwrap();
+    assert!(!menu.is_visible());
+    perform(serde_json::json!([{ "down":false }]));
+    // Native keyboard activation uses the same focused, accessible buttons.
+    let readout = find_named(root.upcast_ref(), "color-readout").unwrap();
+    assert!(readout.grab_focus());
+    let before = state(&w).colors.readout;
+    perform(serde_json::json!([{ "key":32, "down":true }, { "key":32, "down":false }]));
+    assert_eq!(state(&w).colors.readout, before.next());
+    let before = state(&w).colors.readout;
+    perform(serde_json::json!([{ "key":65293, "down":true }, { "key":65293, "down":false }]));
+    assert_eq!(state(&w).colors.readout, before.next());
+    capture_reference(&w, output.join("keyboard-focus.png").to_str().unwrap(), 2.);
+    // Three-digit RGB readouts are the widest values at the minimum size.
+    w.dispatch(UiAction::SetColor { rgba: [1.; 4] });
+    while state(&w).colors.readout != layer_ui::ColorReadout::Rgb {
+        w.dispatch(UiAction::Color {
+            action: layer_ui::ColorAction::ToggleReadout,
+        });
+    }
+    pump(80);
+    capture_reference(&w, output.join("minimum-rgb-255.png").to_str().unwrap(), 2.);
     std::fs::write(
         output.join("geometry.json"),
         serde_json::to_vec_pretty(&reports).unwrap(),
