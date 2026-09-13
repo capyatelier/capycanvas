@@ -90,6 +90,8 @@ pub struct DrawerPlacement {
 /// A tab-like bridge between the tile and drawer. The affine transform maps
 /// normalized (along-tile, toward-drawer) coordinates into connection-local
 /// coordinates; hosts can draw the same rectangle and two concave quarter arcs.
+/// Flush attachments place the shoulders inside the source strip, leaving no
+/// canvas gap between the tab and body.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawerConnection {
     pub bounds: Bounds,
@@ -145,22 +147,31 @@ impl DrawerPlacement {
                 b.y + b.height,
             )
         };
-        let (near, far, corners) = match self.direction {
+        let (mut near, far, corners) = match self.direction {
             Edge::Bottom => (a.y + a.height, b.y, [0, 1]),
             Edge::Top => (b.y + b.height, a.y, [3, 2]),
             Edge::Right => (a.x + a.width, b.x, [0, 3]),
             Edge::Left => (b.x + b.width, a.x, [1, 2]),
         };
-        let depth = far - near;
+        let mut depth = far - near;
+        let attached = depth.abs() < 0.01;
+        if attached {
+            depth = WORKSPACE_SPACING.min(if vertical { a.height } else { a.width });
+            if matches!(self.direction, Edge::Bottom | Edge::Right) {
+                near -= depth;
+            }
+        }
         let length = end - start;
         if depth <= 0.0 || depth > WORKSPACE_SPACING + 0.5 || length <= 0.0 {
             return None;
         }
         let distances = [start - body_start, body_end - end];
-        let radii = distances.map(|d| (d - 8.0).clamp(0.0, WORKSPACE_SPACING.min(depth)));
+        let radii = distances.map(|d| {
+            (d - if attached { 0.0 } else { 8.0 }).clamp(0.0, WORKSPACE_SPACING.min(depth))
+        });
         let mut square_corners = [false; 4];
         for (corner, distance) in corners.into_iter().zip(distances) {
-            square_corners[corner] = distance < 8.0;
+            square_corners[corner] = attached || distance < 8.0;
         }
         Some(DrawerConnection {
             bounds: if vertical {
@@ -959,6 +970,30 @@ mod tests {
                 }
                 let opposite = mirrored.connection().unwrap();
                 assert_eq!(opposite.radii, [6.0, c.radii[0]]);
+                // An attached panel has no gap. Its concave shoulders occupy
+                // the source strip, and both body corners at the seam are square.
+                let mut attached = p.clone();
+                let shift = if matches!(direction, Edge::Bottom | Edge::Right) {
+                    -WORKSPACE_SPACING
+                } else {
+                    WORKSPACE_SPACING
+                };
+                if vertical {
+                    attached.bounds.y += shift;
+                } else {
+                    attached.bounds.x += shift;
+                }
+                let join = attached.connection().unwrap();
+                assert_eq!(join.radii, [inset.min(6.0), 6.0]);
+                assert_eq!(join.square_corners.iter().filter(|v| **v).count(), 2);
+                assert!(join.bounds.intersection(attached.bounds).is_none());
+                let [xx, yx, xy, yy, tx, ty] = join.transform;
+                let far = [
+                    join.bounds.x + xx * 18.0 + xy * join.depth + tx,
+                    join.bounds.y + yx * 18.0 + yy * join.depth + ty,
+                ];
+                assert_eq!(far[axis], expected_near);
+                assert_eq!(far[1 - axis], 118.0);
             }
         }
     }

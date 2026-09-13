@@ -163,3 +163,8 @@ model refreshes**; start and completion caused two in total, retaining panel wid
 These are short, automated desktop runs with compositor-delivered mouse/touch;
 physical pen and slower hardware were not measured. Shared tests also cover resize
 and panel-drag cancellation, workspace persistence and incremental host publication.
+
+The flush-join refinement also checks left/right attachments, square touching
+edges, grey closed strips and divided menus, with captures in both themes. On the
+same setup it measured **118.6 Hz dark / 118.7 Hz light** changing allocations over
+1.450–1.458 seconds, still with zero steady full refreshes and two boundary refreshes.

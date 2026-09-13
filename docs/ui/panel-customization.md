@@ -393,15 +393,18 @@ remain ignored and no third-party code or assets are added.
 
 GTK's empty strip area opens a column menu on secondary click or touch/pen hold
 (mouse holds never open menus). It offers Expand column, Drawers / Group panel,
-Auto-hide, and Apply to all columns. Apply copies mode and auto-hide, retaining
-independent sizes. Illustrator starts in Group panel mode; Photographer uses drawers.
+Auto-hide, and Apply to all columns, separated into logical menu sections. Apply
+copies mode and auto-hide, retaining independent sizes. Illustrator starts in
+Group panel mode; Photographer uses drawers.
 
 A Group panel attaches a full-height stack of every panel in the selected group.
 Opening shifts neighboring columns without changing the full-window canvas or
 saved dock tree. Another group's tile replaces the stack; the current group toggles
-closed. The whole selected tile group is one vertical tab, using panel colors and
-concave shoulders; the rest of the strip uses tab-bar colors. Panel splits and width
-resize immediately with every device, with live reflow and native-resolution text.
+closed. The closed strip uses normal toolbar grey. While open, the whole selected
+tile group is one light vertical tab with concave shoulders; the rest of the strip
+uses darker tab-bar colors. The panel joins flush on the canvas-facing side, with
+square corners along both touching edges. Panel splits and width resize immediately
+with every device, with live reflow and native-resolution text.
 
 Widths are remembered per column; height proportions per group and panel. The first
 width is the largest drawer width anywhere in that column. Dimensions survive closing,

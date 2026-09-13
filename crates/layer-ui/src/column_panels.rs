@@ -110,7 +110,7 @@ impl DockLayout {
             if layout.is_collapsed(node.id()) {
                 return TILE_SIZE
                     + if layout.open_column_group(node.id()).is_some() {
-                        WORKSPACE_SPACING + layout.group_panel_width(node.id())
+                        layout.group_panel_width(node.id())
                     } else {
                         0.
                     };
@@ -168,14 +168,13 @@ impl DockLayout {
         if direction == Edge::Left {
             strip.x = bounds.x + bounds.width - strip.width;
         }
-        let gap = WORKSPACE_SPACING.min((bounds.width - strip.width).max(0.));
         let body = Bounds {
             x: if direction == Edge::Right {
-                strip.x + strip.width + gap
+                strip.x + strip.width
             } else {
                 bounds.x
             },
-            width: (bounds.width - strip.width - gap).max(0.),
+            width: (bounds.width - strip.width).max(0.),
             ..bounds
         };
         let settings = self.column_settings(column);

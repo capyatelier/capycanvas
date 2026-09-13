@@ -564,27 +564,24 @@ impl DockLayout {
                 }
                 (
                     "Column".into(),
-                    vec![self.column_items(Some(column), platform)],
+                    self.column_sections(Some(column), platform),
                 )
             }
             ContextTarget::ZenMode => return Err("Not a panel context".into()),
             ContextTarget::Panel { panel } => {
                 let p = self.panel(panel)?;
-                (
-                    p.menu_name(),
-                    vec![
-                        self.hide_tab_items(target)?,
-                        self.column_items(self.panel_group(panel), platform),
-                        self.panel_actions(p),
-                    ],
-                )
+                let mut sections = vec![self.hide_tab_items(target)?];
+                sections.extend(self.column_sections(self.panel_group(panel), platform));
+                sections.push(self.panel_actions(p));
+                (p.menu_name(), sections)
             }
-            ContextTarget::Group { group } => (
-                "Panel Group".into(),
-                vec![
+            ContextTarget::Group { group } => {
+                let mut sections = vec![
                     self.tab_style_items(group)?,
                     self.hide_tab_items(target)?,
-                    self.column_items(Some(group), platform),
+                ];
+                sections.extend(self.column_sections(Some(group), platform));
+                sections.extend([
                     if let [panel] = self.group_panels(group)?
                         && let p = self.panel(*panel)?
                         && panel.kind() == PanelKind::Content
@@ -608,8 +605,9 @@ impl DockLayout {
                         "New Toolbar…",
                         CustomizationAction::NewToolbar { group: Some(group) },
                     )],
-                ],
-            ),
+                ]);
+                ("Panel Group".into(), sections)
+            }
             ContextTarget::Tile { panel, tile } => {
                 let p = self.panel(panel)?;
                 let t = p
@@ -653,7 +651,7 @@ impl DockLayout {
             self.hide_item(panel.id),
         ]
     }
-    fn column_items(&self, group: Option<u32>, platform: Platform) -> Vec<ContextMenuItem> {
+    fn column_sections(&self, group: Option<u32>, platform: Platform) -> Vec<Vec<ContextMenuItem>> {
         let Some(group) = group.filter(|_| {
             matches!(
                 platform,
@@ -674,7 +672,7 @@ impl DockLayout {
             return Vec::new();
         }
         let column = self.collapsed_column_for_group(group);
-        let mut items = vec![ContextMenuItem::edit(
+        let mut sections = vec![vec![ContextMenuItem::edit(
             if column.is_some() {
                 "Expand column"
             } else {
@@ -684,11 +682,12 @@ impl DockLayout {
                 group: column.unwrap_or(group),
                 collapsed: column.is_none(),
             },
-        )];
+        )]];
         if let Some(column) =
             column.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic))
         {
             let settings = self.column_settings(column);
+            let mut modes = Vec::new();
             for (label, mode) in [
                 ("Drawers", crate::ColumnMode::Drawers),
                 ("Group panel", crate::ColumnMode::GroupPanel),
@@ -698,8 +697,9 @@ impl DockLayout {
                     CustomizationAction::SetColumnMode { column, mode },
                 );
                 item.selected = Some(settings.mode == mode);
-                items.push(item);
+                modes.push(item);
             }
+            sections.push(modes);
             let mut item = ContextMenuItem::edit(
                 "Auto-hide",
                 CustomizationAction::SetColumnAutoHide {
@@ -708,13 +708,13 @@ impl DockLayout {
                 },
             );
             item.selected = Some(settings.auto_hide);
-            items.push(item);
-            items.push(ContextMenuItem::edit(
+            sections.push(vec![item]);
+            sections.push(vec![ContextMenuItem::edit(
                 "Apply to all columns",
                 CustomizationAction::ApplyColumnSettings { column },
-            ));
+            )]);
         }
-        items
+        sections
     }
     fn hide_item(&self, panel: Panel) -> ContextMenuItem {
         ContextMenuItem::edit(
