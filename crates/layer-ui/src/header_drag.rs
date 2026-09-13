@@ -13,6 +13,18 @@ pub enum HeaderDragSource {
     Tools,
 }
 
+/// Native geometry, measurements and contact captured together at pickup.
+/// Geometry stays frozen while preview neighbors animate.
+pub struct HeaderDragStart {
+    pub source: HeaderDragSource,
+    pub geometry: HeaderGeometry,
+    pub metrics: Vec<HeaderMetric>,
+    pub width: f32,
+    pub insets: [f32; 2],
+    pub press: [f32; 2],
+    pub grab: Bounds,
+}
+
 pub struct HeaderDrag {
     layout: HeaderLayout,
     source: HeaderDragSource,
@@ -92,16 +104,16 @@ impl HeaderLayout {
 }
 
 impl HeaderDrag {
-    pub fn new(
-        layout: &HeaderLayout,
-        source: HeaderDragSource,
-        geometry: HeaderGeometry,
-        metrics: Vec<HeaderMetric>,
-        width: f32,
-        insets: [f32; 2],
-        press: [f32; 2],
-        grab: Bounds,
-    ) -> Option<Self> {
+    pub fn new(layout: &HeaderLayout, start: HeaderDragStart) -> Option<Self> {
+        let HeaderDragStart {
+            source,
+            geometry,
+            metrics,
+            width,
+            insets,
+            press,
+            grab,
+        } = start;
         if ![
             width,
             press[0],
@@ -304,13 +316,15 @@ mod tests {
         let press = [grab.x + offset, grab.y + 12.];
         let drag = HeaderDrag::new(
             &layout,
-            source,
-            geometry,
-            metrics,
-            1800.,
-            [0., 72.],
-            press,
-            grab,
+            HeaderDragStart {
+                source,
+                geometry,
+                metrics,
+                width: 1800.,
+                insets: [0., 72.],
+                press,
+                grab,
+            },
         )
         .unwrap();
         (layout, drag)

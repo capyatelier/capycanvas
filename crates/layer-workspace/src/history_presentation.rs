@@ -210,7 +210,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 view.description = revision.description.clone();
                 can_restore &= selected != current.id;
                 if let ReusableContent::Layout { layout } = &revision.content {
-                    view.preview = Some(layout.clone());
+                    view.preview = Some(layout.as_ref().clone());
                     idle
                 } else {
                     false

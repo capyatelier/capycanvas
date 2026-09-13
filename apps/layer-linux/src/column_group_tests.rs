@@ -101,7 +101,9 @@ fn native_column_group_input() {
             .set_column_collapsed(group, true, viewport)
             .unwrap();
         let column = initial.layout.collapsed_column_for_group(group).unwrap();
-        w.dispatch(UiAction::RestoreWorkspace { workspace: initial });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(initial),
+        });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(250);
         let c = w

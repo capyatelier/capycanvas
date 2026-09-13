@@ -480,25 +480,6 @@ pub unsafe extern "C" fn capy_pointer(
     records: *const CapyPointer,
     count: usize,
 ) -> i32 {
-    unsafe { pointer_records(host, records, count, false) }
-}
-/// # Safety
-/// Same ownership and buffer rules as capy_pointer. The host has stopped new
-/// canvas input; these samples were admitted before reconstruction failed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_retire_pointer(
-    host: *mut CapyHost,
-    records: *const CapyPointer,
-    count: usize,
-) -> i32 {
-    unsafe { pointer_records(host, records, count, true) }
-}
-unsafe fn pointer_records(
-    host: *mut CapyHost,
-    records: *const CapyPointer,
-    count: usize,
-    retiring: bool,
-) -> i32 {
     guard(host, |host| {
         if count > 32768 || (count > 0 && records.is_null()) {
             return Err("Invalid pointer batch".into());
@@ -506,9 +487,7 @@ unsafe fn pointer_records(
         if count > 0 {
             let batch = unsafe { std::slice::from_raw_parts(records, count) };
             validate_batch(batch).map_err(err)?;
-            if !retiring {
-                host.poll_services()?;
-            }
+            host.poll_services()?;
             let blocked = !host.accepts_workspace_input();
             for sample in batch {
                 if blocked && sample.phase != 0 {
@@ -525,11 +504,7 @@ unsafe fn pointer_records(
                     1 => PointerButton::Pan,
                     _ => PointerButton::Other,
                 };
-                if retiring {
-                    host.native.retire_pointer_event(sample.event(), button)?;
-                } else {
-                    host.native.pointer_event(sample.event(), button)?;
-                }
+                host.native.pointer_event(sample.event(), button)?;
             }
         }
         Ok(0)
@@ -1004,8 +979,8 @@ pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
 }
 
 /// # Safety
-/// Exclusive render-owner access after canvas input has stopped and every
-/// admitted sample has been delivered. Keep services alive until approved close.
+/// Exclusive render-owner access after canvas input has stopped. Unsubmitted
+/// contacts are canceled; keep services alive until approved close.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_suspend_renderer(host: *mut CapyHost) -> i32 {
     guard(host, |host| {

@@ -47,7 +47,7 @@ fn native_color_panel_input() {
                 }
             }
             w.dispatch(UiAction::RestoreWorkspace {
-                workspace: fixture.clone(),
+                workspace: Box::new(fixture.clone()),
             });
             w.dispatch(UiAction::SetTheme { theme: Some(theme) });
             w.dispatch(UiAction::SetColor {
@@ -193,7 +193,9 @@ fn native_color_panel_input() {
             }
         }
     }
-    w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(fixture),
+    });
     pump(150);
     let root = &w.color_panel.root;
     assert_eq!(

@@ -456,7 +456,6 @@ impl NativeHost {
                     _ => PointerButton::Other,
                 },
                 update[0] != 0,
-                false,
             )?;
         }
         Ok(())
@@ -468,19 +467,7 @@ impl NativeHost {
         if !self.accepts_pointer_input(event.view_revision) {
             return Ok(());
         }
-        self.pointer_event_inner(event, button, false, false)
-    }
-    /// Deliver a sample admitted before the host stopped canvas input. This
-    /// bypasses GPU startup gating, not shared pointer ownership or document epochs.
-    pub fn retire_pointer_event(
-        &mut self,
-        event: PenEvent,
-        button: PointerButton,
-    ) -> Result<(), String> {
-        if !self.accepts_pointer_input(event.view_revision) {
-            return Ok(());
-        }
-        self.pointer_event_inner(event, button, false, true)
+        self.pointer_event_inner(event, button, false)
     }
     pub fn suspend_renderer(&mut self) -> Result<(), String> {
         self.last_pen = None;
@@ -496,7 +483,6 @@ impl NativeHost {
         mut event: PenEvent,
         button: PointerButton,
         preserve_token: bool,
-        retiring: bool,
     ) -> Result<(), String> {
         let id = event.device_id;
         let phase = event.phase;
@@ -541,7 +527,7 @@ impl NativeHost {
             self.dirty = true;
         }
         if !predicted && phase == PenPhase::Down {
-            if retiring || self.paint_ready() {
+            if self.paint_ready() {
                 self.deferred_contacts.remove(&id);
             } else {
                 self.deferred_contacts.insert(id);
@@ -551,7 +537,7 @@ impl NativeHost {
         if !predicted && matches!(phase, PenPhase::Up | PenPhase::Cancel) {
             self.deferred_contacts.remove(&id);
         }
-        if paint && !preparing && (retiring || self.session.engine().backend().0.is_some()) {
+        if paint && !preparing && self.session.engine().backend().0.is_some() {
             self.sequence += 1;
             self.enqueue(event)?;
             if !predicted {

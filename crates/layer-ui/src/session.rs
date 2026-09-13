@@ -2350,7 +2350,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace.layout.bottom_inset = self.state.workspace.layout.bottom_inset;
                 workspace.layout.header_presentation =
                     self.state.workspace.layout.header_presentation.clone();
-                self.state.workspace = workspace;
+                self.state.workspace = *workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.column_panel_drag = None;
                 self.divider_drag = None;
@@ -4780,7 +4780,7 @@ mod tests {
             .unwrap();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
         app.dispatch(UiAction::RestoreWorkspace {
-            workspace: WorkspaceState::default(),
+            workspace: Box::new(WorkspaceState::default()),
         })
         .unwrap();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
@@ -5487,28 +5487,38 @@ mod tests {
     }
 
     #[test]
-    fn renderer_replacement_retains_saved_checkpoint_and_history_but_discards_live_contact() {
+    fn renderer_replacement_retains_saved_checkpoint_history_and_live_contact() {
         let mut s = session();
         invoke(&mut s, CommandId::AddLayer);
         let checkpoint = s.engine.checkpoint();
         let layer = s.engine.document().active_layer;
-        let root = s.engine.document().layers.last().unwrap().raster.clone();
+        let root = s.engine.document().layer(layer).unwrap().raster.clone();
         s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
         assert!(s.engine.has_active_stroke());
         s.replace_renderer(Recorder::default()).unwrap();
-        assert!(!s.engine.has_active_stroke());
+        assert!(s.engine.has_active_stroke());
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_eq!(s.engine.document().active_layer, layer);
-        assert_eq!(s.engine.document().layers.last().unwrap().raster, root);
+        assert_eq!(s.engine.document().layer(layer).unwrap().raster, root);
         assert!(s.state.document_file.modified);
         s.frame(20_000_000, 28_000_000).unwrap();
-        assert_eq!(s.renderer_mut().dabs, 0);
+        assert!(s.renderer_mut().dabs > 0);
+        s.pen(event(&s, 2, PenPhase::Up, 0.7)).unwrap();
+        s.frame(30_000_000, 38_000_000).unwrap();
+        assert!(!s.engine.has_active_stroke());
+        let committed = s.engine.document().layer(layer).unwrap().raster.clone();
+        assert_ne!(committed.identity(), root.identity());
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().layer(layer).unwrap().raster, root);
         invoke(&mut s, CommandId::Undo);
         assert!(!s.state.document_file.modified);
         invoke(&mut s, CommandId::Redo);
         assert!(s.state.document_file.modified);
         assert_eq!(s.engine.checkpoint(), checkpoint);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layer(layer).unwrap().raster, committed);
     }
 
     #[test]
@@ -8598,8 +8608,10 @@ mod tests {
                 .is_err()
             );
             s.state.workspace.validate().unwrap();
-            s.dispatch(UiAction::RestoreWorkspace { workspace: saved })
-                .unwrap();
+            s.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(saved),
+            })
+            .unwrap();
             assert!(!s.command(CommandId::UndoWorkspace).enabled);
         }
     }
@@ -9000,7 +9012,7 @@ mod tests {
         saved["layout"]["panels"][0]["content"]["tiles"][0]["control"]["command"] =
             "toggle_panels".into();
         s.dispatch(UiAction::RestoreWorkspace {
-            workspace: serde_json::from_value(saved).unwrap(),
+            workspace: Box::new(serde_json::from_value(saved).unwrap()),
         })
         .unwrap();
         assert!(!s.layout([1200.0, 900.0]).groups.is_empty());
@@ -9457,7 +9469,7 @@ mod tests {
             let revision = restored.engine.document().revision;
             let change = restored
                 .dispatch(UiAction::RestoreWorkspace {
-                    workspace: serde_json::from_str(&saved).unwrap(),
+                    workspace: Box::new(serde_json::from_str(&saved).unwrap()),
                 })
                 .unwrap();
             assert_ne!(change.regions & regions::LAYOUT, 0);
@@ -9737,7 +9749,7 @@ mod tests {
             .unwrap();
             let baseline = app.state.workspace.clone();
             app.dispatch(UiAction::RestoreWorkspace {
-                workspace: baseline.clone(),
+                workspace: Box::new(baseline.clone()),
             })
             .unwrap();
             let group = baseline.layout.panel_group(Panel::Brushes).unwrap();
@@ -12885,7 +12897,7 @@ mod tests {
             let before = serde_json::to_value(&app.state).unwrap();
             assert!(
                 app.dispatch(UiAction::RestoreWorkspace {
-                    workspace: serde_json::from_value(value).unwrap()
+                    workspace: Box::new(serde_json::from_value(value).unwrap())
                 })
                 .is_err()
             );
@@ -12894,8 +12906,10 @@ mod tests {
         let mut nan = app.state.workspace.clone();
         nan.layout.bands[0].extent = f32::NAN;
         assert!(
-            app.dispatch(UiAction::RestoreWorkspace { workspace: nan })
-                .is_err()
+            app.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(nan)
+            })
+            .is_err()
         );
         assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), valid);
     }
@@ -13551,8 +13565,10 @@ mod tests {
             action: CustomizationAction::NewToolbar { group: Some(8) },
         })
         .unwrap();
-        app.dispatch(UiAction::RestoreWorkspace { workspace: before })
-            .unwrap();
+        app.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(before),
+        })
+        .unwrap();
         assert!(!app.state.customization.is_open());
     }
 
@@ -14194,7 +14210,7 @@ mod tests {
         let capture = WorkspaceCapture::from_legacy(workspace.clone()).unwrap();
         let mut app = session();
         app.dispatch(UiAction::RestoreWorkspace {
-            workspace: workspace.clone(),
+            workspace: Box::new(workspace.clone()),
         })
         .unwrap();
         let cleaned = app.state.workspace.clone();

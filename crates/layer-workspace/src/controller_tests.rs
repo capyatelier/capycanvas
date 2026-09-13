@@ -926,7 +926,7 @@ fn unpinned_current_workspace_is_temporary_and_previews_do_not_replace_it() {
     for id in [&p, &h] {
         f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":id,"visible":false}}));
     }
-    assert_eq!(shown(&f), [i.clone()]);
+    assert_eq!(shown(&f).as_slice(), std::slice::from_ref(&i));
     assert!(f.controller.view.switcher.is_empty());
     f.input(serde_json::json!({"type":"switch","id":"missing-workspace"}));
     assert!(f.controller.view.error.is_some());

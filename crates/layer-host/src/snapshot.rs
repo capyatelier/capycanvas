@@ -277,7 +277,7 @@ mod tests {
     fn host(platform: Platform) -> NativeHost {
         let mut host = NativeHost::new(platform).unwrap();
         host.dispatch(UiAction::RestoreWorkspace {
-            workspace: WorkspaceState::for_platform(platform),
+            workspace: Box::new(WorkspaceState::for_platform(platform)),
         })
         .unwrap();
         host.resize(2410, 1810, 2.).unwrap();
@@ -302,7 +302,7 @@ mod tests {
         layout["next_id"] = json!(100);
         workspace["zen_mode"] = json!(false);
         host.dispatch(UiAction::RestoreWorkspace {
-            workspace: serde_json::from_value(workspace).unwrap(),
+            workspace: Box::new(serde_json::from_value(workspace).unwrap()),
         })
         .unwrap();
     }
@@ -749,7 +749,7 @@ mod tests {
             stream.session.set_platform(platform);
             stream
                 .dispatch(UiAction::RestoreWorkspace {
-                    workspace: WorkspaceState::for_platform(platform),
+                    workspace: Box::new(WorkspaceState::for_platform(platform)),
                 })
                 .unwrap();
             stream.resize(2410, 1810, 2.).unwrap();

@@ -229,17 +229,16 @@ impl RasterData {
     /// Validate topology without awaiting unrelated tile captures. Restoration
     /// checks each replacement's representation when it decodes that tile.
     pub fn validate_index(&self, extent: [u32; 2], mask: bool) -> Result<(), String> {
-        if let Some(w) = self.watercolor {
-            if mask
+        if let Some(w) = self.watercolor
+            && (mask
                 || ![w.wet_edge, w.burnt_edge, w.edge_width]
                     .into_iter()
                     .all(f32::is_finite)
                 || !(0.0..=1.0).contains(&w.wet_edge)
                 || !(0.0..=1.0).contains(&w.burnt_edge)
-                || !(1.0..=16.0).contains(&w.edge_width)
-            {
-                return Err("Invalid raster watercolor state".into());
-            }
+                || !(1.0..=16.0).contains(&w.edge_width))
+        {
+            return Err("Invalid raster watercolor state".into());
         }
         for key in self.tiles.keys() {
             if key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)

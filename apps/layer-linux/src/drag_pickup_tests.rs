@@ -53,7 +53,7 @@ fn native_drag_pickup_input() {
                 }
                 for cancel in [false, true] {
                     w.dispatch(UiAction::RestoreWorkspace {
-                        workspace: original.clone(),
+                        workspace: Box::new(original.clone()),
                     });
                     pump(220);
                     let group = original.layout.panel_group(Panel::Adjustments).unwrap();
@@ -235,7 +235,9 @@ fn native_drag_pickup_input() {
     }
     // An armed cursor also retires without ever becoming a drag.
     for reason in ["escape", "blur", "removed"] {
-        w.dispatch(UiAction::RestoreWorkspace { workspace: original.clone() });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(original.clone()),
+        });
         pump(250);
         let widget = w.toolbar.first_child().unwrap();
         let bounds = widget.compute_bounds(&w.surface).unwrap();

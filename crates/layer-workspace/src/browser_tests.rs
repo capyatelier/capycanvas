@@ -471,7 +471,6 @@ fn browser_transactions_match_sqlite_contract() {
     let mut invalid = CommitBatch::prepare(other, vec![]).unwrap();
     invalid.pin_workspaces.push(first.id.clone());
     execute(StoreRequest::Commit { batch: invalid }, 32007);
-    drop(execute);
     if let Ok(path) = std::env::var("CAPY_STORE_CONTRACT_FIXTURE") {
         std::fs::write(path, serde_json::to_string(&fixture).unwrap()).unwrap();
     }

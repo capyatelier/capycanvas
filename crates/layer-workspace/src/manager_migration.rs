@@ -15,7 +15,10 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         return None;
     };
     let previous = layer_ui::WorkspacePreset::Painter.layout(Platform::Web);
-    if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
+    if history.revisions.len() != 1
+        || baseline.as_ref() != &previous
+        || history.layout() != &previous
+    {
         return None;
     }
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
@@ -25,7 +28,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
     } = &mut content
     {
         history.revisions.values_mut().next()?.layout = layout.clone();
-        *baseline = layout;
+        **baseline = layout;
     }
     Some(content)
 }
@@ -85,7 +88,10 @@ pub(super) fn updated_illustrator_default(
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
     let mut previous = layout.clone();
     previous.column_settings.clear();
-    if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
+    if history.revisions.len() != 1
+        || baseline.as_ref() != &previous
+        || history.layout() != &previous
+    {
         return None;
     }
     let mut content = entity.content.clone();
@@ -94,7 +100,7 @@ pub(super) fn updated_illustrator_default(
     } = &mut content
     {
         history.revisions.values_mut().next()?.layout = layout.clone();
-        *baseline = layout;
+        **baseline = layout;
     }
     Some(content)
 }
@@ -128,7 +134,7 @@ pub(super) fn updated_photographer_default(
             .tile_style = TileStyle::Medium;
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
-    if baseline != &previous || history.layout() != &previous {
+    if baseline.as_ref() != &previous || history.layout() != &previous {
         return None;
     }
     let mut content = entity.content.clone();
@@ -137,7 +143,7 @@ pub(super) fn updated_photographer_default(
     } = &mut content
     {
         history.revisions.values_mut().next()?.layout = layout.clone();
-        *baseline = layout;
+        **baseline = layout;
     }
     Some(content)
 }

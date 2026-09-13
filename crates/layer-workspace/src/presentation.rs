@@ -310,7 +310,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let preview = match &entity.content {
             ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
             ItemContent::Reusable { current, .. } => match &current.content {
-                ReusableContent::Layout { layout } => Some(layout.clone()),
+                ReusableContent::Layout { layout } => Some(layout.as_ref().clone()),
                 _ => None,
             },
         };

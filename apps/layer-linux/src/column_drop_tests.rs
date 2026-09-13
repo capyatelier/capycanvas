@@ -58,7 +58,7 @@ fn native_collapsed_divider_drop_input() {
                     "Checking {edge:?}, touch={touch}, offset={offset}, merge={merge}, cancel={cancel}"
                 );
                 w.dispatch(UiAction::RestoreWorkspace {
-                    workspace: fixture.clone(),
+                    workspace: Box::new(fixture.clone()),
                 });
                 pump(300);
                 let before = saved();
@@ -239,7 +239,7 @@ fn native_collapsed_divider_drop_input() {
                     "Checking toolbar {edge:?}, touch={touch}, offset={offset}, cancel={cancel}"
                 );
                 w.dispatch(UiAction::RestoreWorkspace {
-                    workspace: fixture.clone(),
+                    workspace: Box::new(fixture.clone()),
                 });
                 pump(300);
                 let before = saved();

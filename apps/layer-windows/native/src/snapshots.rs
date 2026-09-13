@@ -91,6 +91,14 @@ mod tests {
         for cancel in [false, true] {
             let mut old = NativeHost::new(Platform::Windows).unwrap();
             let mut new = NativeHost::new(Platform::Windows).unwrap();
+            // Compare both encodings of the same immutable raster identities.
+            new.session = layer_ui::UiSession::new(
+                layer_host::Renderer::default(),
+                old.session.engine().document().clone(),
+                [1, 1],
+            )
+            .unwrap();
+            new.session.set_platform(Platform::Windows);
             for host in [&mut old, &mut new] {
                 crate::workspace::initialize(host).unwrap();
                 host.resize(986, 658, 1.).unwrap();

@@ -2589,3 +2589,56 @@ This verifies reproducible archive assembly for the recorded inputs and portable
 runtime behavior on the development host. Installed MSIX launch/update/uninstall,
 distribution signing and clean-machine acceptance remain open. No elevation or
 installation was attempted. Artifacts and local reports remain outside Git.
+
+
+### Immutable raster recovery and shared UI cleanup
+
+The Windows port integrates the immutable raster/project work through upstream
+`c1ec69e`. Successful renderer replacement now retains the existing active
+stroke builder and queued samples. Completed strokes restore from immutable
+raster roots; recovery does not replay historical strokes or add another queue.
+The engine regression covers G Pen, Natural Blender and Watercolor, queued pen-up,
+Undo/Redo and a second replacement that restores history without replaying dabs.
+
+If reconstruction is exhausted, queued and unfinished contacts are canceled.
+Completed host-backed raster edits remain saveable through the existing document
+service. The obsolete path that tried to process raw pen samples without a GPU
+has been removed. Commands admitted before failure are processed after renderer
+suspension, so Save/Close remain available and GPU-dependent commands are disabled.
+
+The integrated tree passes 664 ordinary core/engine/host/UI/Windows/workspace
+library tests, a normal Release build and the C++ input/publication/queue tests.
+Strict Clippy passes with warnings denied for Windows, UI and workspace, including
+all targets and their library dependencies. Four document and three filter
+recovery tests pass with actual process-owned D3D12 device removal, run serially.
+Release document fixtures pass queued-stroke and active-stroke reconstruction,
+exact PNG comparisons, history and thumbnails. Exhausted recovery passes Save,
+Save As, cancel/discard and exact persisted-raster reopen. Two native windows
+recover from two shared device removals while retaining independent documents
+and Undo/Redo, then exit cleanly.
+
+The pre-removal active-ink fixture now checks that the probe area is clear after
+Undo and visibly contains ink after pen-down. Same-process inspection found one
+channel value of difference in one pixel between live and committed sRGB8 output;
+the final exported PNG was identical. Final image comparisons remain exact.
+Project save checks compare complete persisted bytes rather than process-local
+raster publication identities. Snapshot fixtures start with shared document
+identities while preserving their complete model comparisons.
+
+The shared title-bar cleanup retains NaN-safe native measurement bounds, replaces
+eight positional drag arguments with one pickup-data struct, and boxes large
+workspace payloads in shared enums. Native geometry is still captured at pickup;
+drag behavior and serialized host/workspace formats are unchanged. Existing
+storage/migration/history tests and an explicit restore-action JSON check pass.
+Incoming simple Clippy issues were fixed without lint suppressions.
+
+The native host build of the Web Rust crate also passes. The Wasm-target check
+stopped at the new zstd native dependency because this Windows toolchain lacks
+Clang; it is not a passing Web build. GTK, Apple and Android runtime validation
+is outside this Windows check. The native color wheel remains the accepted
+Direct2D implementation; imperceptible differences do not justify extra machinery.
+
+This milestone does not refresh packages or establish physical pen delivery,
+real driver reset, sleep/resume, mixed-display behavior or 120 Hz input latency.
+The new workspace-owned title-bar editor and whole-editor visual acceptance
+remain Windows work. No filter reference was regenerated or tolerance relaxed.
