@@ -178,11 +178,11 @@ On the same 120 Hz setup:
 
 | Geometry | Before | After |
 | --- | --- | --- |
-| Horizontal contents | 119.1 Hz | 118.6–119.5 Hz |
-| Vertical contents | 0 Hz; up to 85.3 px behind Rust | 118.6–119.1 Hz; at most 0.5 px rounding |
+| Horizontal contents | 119.1 Hz | 118.2–120.0 Hz |
+| Vertical contents | 0 Hz; up to 85.3 px behind Rust | 118.6–119.5 Hz; at most 0.5 px rounding |
 
 Steady resizing retains widgets with zero full model refreshes; dispatch p95 is
-at most 0.045 ms. Flat frames at direction reversals are excluded. This measures
+at most 0.046 ms. Flat frames at direction reversals are excluded. This measures
 compositor presentation, not physical pen latency or performance on slower GPUs.
 
 GTK now requests child allocation when internal geometry changes. The adjacent
@@ -191,3 +191,6 @@ inner grip, avoiding accidental expansion or dismissal. Periodic SQLite cleanup
 refreshes history without adopting/reloading the workspace. The native test now
 includes real storage, cleanup with both drawer modes, cancellation, undo/redo,
 group switching and saved sizes; it no longer excludes storage from this case.
+After integrating main, all 12 cases passed with a 115 Hz floor. Ordinary dock
+and Navigator resizing retained 118.6–119.1 Hz with zero full refreshes; explicit
+workspace transitions also passed their native mouse/touch/keyboard regression.
