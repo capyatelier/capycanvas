@@ -13,6 +13,7 @@ mod allocation {
     pub struct Columns {
         pub children: RefCell<Vec<gtk::Widget>>,
         pub geometry: RefCell<Vec<Bounds>>,
+        pub stacked: Cell<bool>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Columns {
@@ -41,7 +42,11 @@ mod allocation {
                 allocate_at(
                     child,
                     Bounds {
-                        height: height as f32,
+                        height: if self.stacked.get() {
+                            bounds.height
+                        } else {
+                            height as f32
+                        },
                         ..*bounds
                     },
                 );
@@ -224,6 +229,10 @@ impl View {
         });
         root.add_css_class("dock-panel");
         root.add_css_class("content-drawer");
+        root.imp().stacked.set(drawer.is_group_panel());
+        if drawer.is_group_panel() {
+            root.add_css_class("column-group-panel");
+        }
         root.set_overflow(gtk::Overflow::Hidden);
         let shadow = gtk::Box::new(gtk::Orientation::Vertical, 0);
         shadow.add_css_class("drawer-shadow");
@@ -368,6 +377,40 @@ impl View {
             root.imp().children.borrow_mut().push(child);
             columns.push(column);
         }
+        if drawer.is_group_panel() {
+            let DrawerAnchor::Column { column, .. } = drawer.anchor else {
+                unreachable!()
+            };
+            let panels: Vec<_> = drawer.columns.iter().flatten().copied().collect();
+            for after in panels
+                .iter()
+                .take(panels.len().saturating_sub(1))
+                .copied()
+                .map(Some)
+                .chain(std::iter::once(None))
+            {
+                let handle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                handle.set_widget_name(&format!("group-panel-resize-{column}-{after:?}"));
+                handle.add_css_class(if after.is_some() {
+                    "group-panel-divider"
+                } else {
+                    "group-panel-width"
+                });
+                handle.set_cursor_from_name(Some(if after.is_some() {
+                    "row-resize"
+                } else {
+                    "col-resize"
+                }));
+                handle.set_tooltip_text(Some(if after.is_some() {
+                    "Resize panels"
+                } else {
+                    "Resize group panel"
+                }));
+                w.register_drag(&handle, DragTarget::ColumnPanel(column, after));
+                handle.set_parent(&root);
+                root.imp().children.borrow_mut().push(handle.upcast());
+            }
+        }
         Self {
             root,
             shadow,
@@ -433,7 +476,9 @@ impl Drawer {
             return None;
         }
         let state = self.state.borrow();
-        let group = state.as_ref()?.tabs.as_ref()?.group;
+        let DrawerAnchor::Column { group, .. } = state.as_ref()?.anchor else {
+            return None;
+        };
         let bounds = self.placement()?.bounds;
         (bounds.width > 0. && bounds.height > 0.)
             .then_some(layer_ui::ColumnDrawerMeasurement { group, bounds })
@@ -619,6 +664,9 @@ impl Drawer {
                 .drawer_placement(state, &layout, viewport, heights, ui.partial_zen())
         };
         let sizing = place(&vec![0.0; view.columns.len()])?;
+        if state.is_group_panel() {
+            return Some(sizing);
+        }
         let heights: Vec<_> = view
             .columns
             .iter()
@@ -656,7 +704,31 @@ impl Drawer {
             |from| end.interpolate_from(from, self.progress.get()),
         );
         if let Some(view) = self.view.borrow().as_ref() {
-            *view.root.imp().geometry.borrow_mut() = result.columns.clone();
+            let mut geometry = result.columns.clone();
+            if self
+                .state
+                .borrow()
+                .as_ref()
+                .is_some_and(ContentDrawer::is_group_panel)
+                && let Some(p) = w
+                    .resolved()
+                    .collapsed
+                    .iter()
+                    .find(|c| c.id == self.id)
+                    .and_then(|c| c.group_panel.as_ref())
+            {
+                geometry.extend(
+                    p.dividers
+                        .iter()
+                        .chain(std::iter::once(&p.resize))
+                        .map(|b| Bounds {
+                            x: b.x - result.bounds.x,
+                            y: b.y - result.bounds.y,
+                            ..*b
+                        }),
+                );
+            }
+            *view.root.imp().geometry.borrow_mut() = geometry;
             let connection = result.connection();
             view.connection_geometry.set(connection);
             view.connection.queue_draw();
@@ -681,6 +753,15 @@ impl Drawer {
         let placement = placement.filter(|p| !self.closing.get() && p.connection().is_some());
         self.mark_source_corners(w, placement);
         if self.id != 0 {
+            if self
+                .state
+                .borrow()
+                .as_ref()
+                .is_some_and(ContentDrawer::is_group_panel)
+            {
+                w.columns.mark_drawer_origin(self.id, None);
+                return;
+            }
             let origin = self
                 .state
                 .borrow()
@@ -806,6 +887,24 @@ impl Drawer {
         next: Option<&ContentDrawer>,
     ) {
         let Some(next) = next else {
+            if self
+                .state
+                .borrow()
+                .as_ref()
+                .is_some_and(ContentDrawer::is_group_panel)
+            {
+                if let Some(animation) = self.animation.take() {
+                    animation.pause();
+                }
+                w.surface.remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) | Slot::DrawerShadow(id) if id == self.id));
+                self.mark_origin(w, None);
+                self.view.borrow_mut().take();
+                self.state.borrow_mut().take();
+                self.presented.borrow_mut().take();
+                self.from.borrow_mut().take();
+                w.surface.queue_allocate();
+                return;
+            }
             if self.state.borrow().is_some() && !self.closing.get() {
                 self.animate(w, true);
             }
@@ -864,7 +963,13 @@ impl Drawer {
                 .target(w)
                 .zip(self.placement())
                 .is_some_and(|(to, from)| to.bounds != from.bounds);
-        if !switching && (changed || resized) {
+        if next.is_group_panel() {
+            if let Some(animation) = self.animation.take() {
+                animation.pause();
+            }
+            self.from.borrow_mut().take();
+            self.progress.set(1.);
+        } else if !switching && (changed || resized) {
             self.animate(w, false);
         }
         w.surface.raise_drawer(self.id);

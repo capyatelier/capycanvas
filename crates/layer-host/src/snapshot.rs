@@ -408,6 +408,43 @@ mod tests {
     }
 
     #[test]
+    fn group_panel_resize_publishes_layout_without_rebuilding_content() {
+        use layer_ui::{ColumnMode, ContactPhase::*, CustomizationAction, Panel};
+        let mut host = host(Platform::Generic);
+        workspace_fixture(&mut host);
+        for action in [
+            CustomizationAction::SetColumnCollapsed { group: 41, collapsed: true },
+            CustomizationAction::SetColumnMode { column: 41, mode: ColumnMode::GroupPanel },
+            CustomizationAction::ToggleColumnDrawer { group: 41, panel: Panel::Brushes },
+        ] {
+            host.dispatch(UiAction::Customize { action }).unwrap();
+        }
+        let initial = layout_update(&mut host);
+        let panel = host.session.layout(host.logical).collapsed[0].group_panel.clone().unwrap();
+        let start = [panel.resize.x + panel.resize.width * 0.5, panel.resize.y + 100.];
+        let resize = |host: &mut NativeHost, phase, position| {
+            host.dispatch(UiAction::ResizeColumnPanel {
+                column: 41, after: None, phase, position, viewport: host.logical,
+            }).unwrap();
+        };
+        resize(&mut host, Down, start);
+        let begun = layout_update(&mut host);
+        for delta in [35., 60., 90.] {
+            resize(&mut host, Move, [start[0] + delta, start[1]]);
+            let packet = layout_update(&mut host);
+            let full = host.snapshot();
+            assert!(packet.get("state").is_none());
+            assert_eq!(packet["workspace_update"]["content_revision"], begun["workspace_update"]["content_revision"]);
+            assert_eq!(packet["layout"], full["layout"]);
+            assert_eq!(packet["workspace_layout"]["column_settings"], full["state"]["workspace"]["layout"]["column_settings"]);
+        }
+        resize(&mut host, Cancel, start);
+        let cancelled = layout_update(&mut host);
+        assert_eq!(cancelled["state"]["workspace"], initial["state"]["workspace"]);
+        assert_eq!(cancelled["layout"], initial["layout"]);
+    }
+
+    #[test]
     fn resize_content_changes_collapse_and_legacy_consumers_require_full_models() {
         use layer_ui::ContactPhase::*;
         let mut host = host(Platform::Android);

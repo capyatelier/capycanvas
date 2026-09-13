@@ -18,7 +18,7 @@
 //! `workspace_layout`, `camera`, and `panel_measurements` when only dimensions or
 //! reflow measurements changed. Replace those absolute fields against matching
 //! content_revision before advancing model_revision. `workspace_layout` replaces
-//! bands, floating groups, collapsed columns and fit_tab_groups in the retained
+//! bands, floating groups, collapsed columns, column_settings and fit_tab_groups in the retained
 //! workspace; it is live gesture state, not a persistence request. Collapse/expand,
 //! content edits, completion and cancellation still publish full models. Existing
 //! consumers of take_update_bytes keep their original model_revision behavior.
@@ -61,6 +61,7 @@ pub struct WorkspaceLayoutState<'a> {
     pub bands: &'a [crate::DockBand],
     pub floating: &'a [crate::FloatingGroup],
     pub collapsed: &'a [crate::CollapsedColumn],
+    pub column_settings: &'a [crate::ColumnSettings],
     pub fit_tab_groups: &'a [u32],
 }
 

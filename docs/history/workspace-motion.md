@@ -151,3 +151,15 @@ display. These results do not promise 120 Hz on all GPUs, browsers or displays.
 The samples exclude initial tear-off/model rebuilding and final drop work;
 those boundaries deliberately refresh models. Concurrent content changes may
 also legitimately refresh models and render new pixels.
+
+## GTK Group panels (2026-09-12)
+
+`tools/performance/workspace-motion.sh gtk --column-groups` checks empty-strip
+menus, mouse/touch resizing, group switching, saved sizes, auto-hide and undo/redo.
+On the private 1600×1000@120 Mutter display with the NVIDIA RTX PRO 6000 Blackwell
+Max-Q / Vulkan backend, 360 mouse moves produced **120.1 Hz dark / 120.0 Hz light**
+changing panel allocations over 1.458 seconds. Steady resizing caused **zero full
+model refreshes**; start and completion caused two in total, retaining panel widgets.
+These are short, automated desktop runs with compositor-delivered mouse/touch;
+physical pen and slower hardware were not measured. Shared tests also cover resize
+and panel-drag cancellation, workspace persistence and incremental host publication.

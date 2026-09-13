@@ -487,7 +487,9 @@ impl DockSurface {
         // Paint each shadow beneath its source container. A translucent active
         // tile then composites once on clean chrome, including nested drawers.
         if let Some(source) = source
-            && let Some(index) = children.iter().position(|(s, _)| *s == Slot::DrawerShadow(id))
+            && let Some(index) = children
+                .iter()
+                .position(|(s, _)| *s == Slot::DrawerShadow(id))
             && children.get(index + 1).is_none_or(|(_, w)| *w != source)
         {
             let shadow = children.remove(index);
@@ -618,6 +620,7 @@ struct NativeDockItem(DockItem);
 enum DragTarget {
     Dock(DockItem),
     Divider(u32),
+    ColumnPanel(u32, Option<Panel>),
     Resize(u32, ResizeEdge),
 }
 impl DragTarget {
@@ -635,6 +638,13 @@ impl DragTarget {
                 position,
                 viewport,
                 tabs,
+            },
+            Self::ColumnPanel(column, after) => UiAction::ResizeColumnPanel {
+                column,
+                after,
+                phase,
+                position,
+                viewport,
             },
             Self::Divider(id) => UiAction::DragDivider {
                 id,
@@ -1171,28 +1181,31 @@ impl Workspace {
         action: impl Fn(&layer_ui::UiState) -> Option<UiAction> + 'static,
     ) {
         let button = button.as_ref();
-        self.tooltips.bind(button, glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            #[upgrade_or]
-            None,
-            move |widget| {
-                let button = widget.downcast_ref::<gtk::Button>()?;
-                let label = button
-                    .tooltip_text()
-                    .or_else(|| button.label())
-                    .unwrap_or_default();
-                let gpu = this.gpu.borrow();
-                let g = gpu.as_ref()?;
-                let state = g.session.state();
-                let action = action(state)?;
-                Some(state.settings.action_tooltip(
-                    &label,
-                    &action,
-                    state.platform,
-                ))
-            }
-        ));
+        self.tooltips.bind(
+            button,
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[upgrade_or]
+                None,
+                move |widget| {
+                    let button = widget.downcast_ref::<gtk::Button>()?;
+                    let label = button
+                        .tooltip_text()
+                        .or_else(|| button.label())
+                        .unwrap_or_default();
+                    let gpu = this.gpu.borrow();
+                    let g = gpu.as_ref()?;
+                    let state = g.session.state();
+                    let action = action(state)?;
+                    Some(
+                        state
+                            .settings
+                            .action_tooltip(&label, &action, state.platform),
+                    )
+                }
+            ),
+        );
     }
     fn command_button(self: &Rc<Self>, command: CommandId) -> gtk::Button {
         let button = self.action_button(command.label(), UiAction::Invoke { command });
@@ -1573,7 +1586,8 @@ impl Workspace {
                     hidden && (hide_floating_panels || !widget.has_css_class("floating-panel"))
                 };
                 let can_target = !hidden && !matches!(slot, Slot::DrawerShadow(_));
-                if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target {
+                if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target
+                {
                     continue;
                 }
                 if hidden {
@@ -1625,6 +1639,10 @@ impl Workspace {
                     ..
                 }
                 | UiAction::DragDivider {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+                | UiAction::ResizeColumnPanel {
                     phase: ContactPhase::Up | ContactPhase::Cancel,
                     ..
                 }
@@ -2653,7 +2671,8 @@ impl Workspace {
             && surface
                 .device_cursor(device)
                 .and_then(|cursor| cursor.name())
-                .as_deref() != Some(name)
+                .as_deref()
+                != Some(name)
             && let Some(cursor) = gdk::Cursor::from_name(name, None)
         {
             // The pressed widget may be unparented by a tab tear-off. Keep
@@ -2736,7 +2755,11 @@ impl Workspace {
                     parent: source.parent(),
                     source,
                     sequence,
-                    device: self.surface.display().default_seat().and_then(|seat| seat.pointer()),
+                    device: self
+                        .surface
+                        .display()
+                        .default_seat()
+                        .and_then(|seat| seat.pointer()),
                     cursor: None,
                     tab: None,
                     tab_grab: None,
@@ -2986,10 +3009,9 @@ impl Workspace {
                     .event_point(controller)
                     .or_else(|| w.workspace_drag.borrow().as_ref().map(|d| d.point));
                 let starting = phase == ContactPhase::Down && w.workspace_drag.borrow().is_none();
-                let handled = point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence));
-                if starting
-                    && let Some(drag) = w.workspace_drag.borrow_mut().as_mut()
-                {
+                let handled =
+                    point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence));
+                if starting && let Some(drag) = w.workspace_drag.borrow_mut().as_mut() {
                     // A tablet has its own GDK device; touch has no cursor.
                     drag.device = if touch { None } else { event.device() };
                 }

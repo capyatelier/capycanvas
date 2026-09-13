@@ -8,6 +8,7 @@ struct Strip {
     expand_glyph: gtk::Label,
     key: Vec<(u32, Vec<Panel>)>,
     buttons: Vec<(Panel, gtk::Button)>,
+    groups: Vec<(u32, gtk::Box)>,
     scroll: gtk::Adjustment,
     updating_scroll: Rc<Cell<bool>>,
 }
@@ -80,6 +81,7 @@ impl Columns {
                 root.add_css_class("collapsed-column");
                 root.set_widget_name(&format!("collapsed-column-{}", c.id));
                 root.set_overflow(gtk::Overflow::Hidden);
+                w.install_context(&root, ContextTarget::Column { column: c.id });
                 let expand = w.action_button(c.expand_label(), c.expand_action());
                 expand.set_widget_name(&format!("expand-column-{}", c.id));
                 expand.add_css_class("flat");
@@ -94,6 +96,7 @@ impl Columns {
                 root.append(&expand);
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
                 let mut buttons = Vec::new();
+                let mut groups = Vec::new();
                 for (index, group) in c.groups.iter().enumerate() {
                     content.append(&column_separator(index == 0));
                     let mini = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -129,6 +132,7 @@ impl Columns {
                     }
                     w.install_context(&mini, ContextTarget::Group { group: group.group });
                     content.append(&mini);
+                    groups.push((group.group, mini));
                 }
                 let scroll = gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
@@ -194,11 +198,35 @@ impl Columns {
                     expand_glyph,
                     key,
                     buttons,
+                    groups,
                     scroll: scroll.vadjustment(),
                     updating_scroll,
                 });
             }
             let strip = strips.iter().find(|s| s.id == c.id).unwrap();
+            let settings = layout.column_settings(c.id);
+            if settings.mode == ColumnMode::GroupPanel {
+                strip.root.add_css_class("group-panel-strip");
+            } else {
+                strip.root.remove_css_class("group-panel-strip");
+            }
+            for (id, mini) in &strip.groups {
+                for class in [
+                    "active-column-group",
+                    "group-opens-left",
+                    "group-opens-right",
+                ] {
+                    mini.remove_css_class(class);
+                }
+                if let Some(p) = c.group_panel.as_ref().filter(|p| p.group == *id) {
+                    mini.add_css_class("active-column-group");
+                    mini.add_css_class(if p.direction == Edge::Left {
+                        "group-opens-left"
+                    } else {
+                        "group-opens-right"
+                    });
+                }
+            }
             let expand_glyph = if c.bounds.x + c.bounds.width * 0.5
                 < resolved.work_area.x + resolved.work_area.width * 0.5
             {
@@ -230,7 +258,8 @@ impl Columns {
                 selected(
                     button,
                     state.customization.column_drawers.iter().any(|d| {
-                        matches!(d.anchor, DrawerAnchor::Column { column, origin, .. }
+                        !d.is_group_panel()
+                            && matches!(d.anchor, DrawerAnchor::Column { column, origin, .. }
                         if column == strip.id && origin == *panel)
                     }),
                 );

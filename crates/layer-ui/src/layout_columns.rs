@@ -33,6 +33,8 @@ pub struct CollapsedColumnPlacement {
     /// Clip/scroll the groups in this area, leaving expand and grip fixed.
     pub content: Bounds,
     pub groups: Vec<CollapsedGroup>,
+    #[serde(default)]
+    pub group_panel: Option<ColumnGroupPanel>,
 }
 impl CollapsedColumnPlacement {
     fn divider_y(&self, group: &CollapsedGroup) -> f32 {
@@ -177,6 +179,16 @@ impl CollapsedColumnPlacement {
         shift(&mut self.grip);
         shift(&mut self.empty);
         shift(&mut self.content);
+        if let Some(p) = &mut self.group_panel {
+            shift(&mut p.bounds);
+            shift(&mut p.resize);
+            for panel in &mut p.panels {
+                shift(&mut panel.bounds);
+            }
+            for divider in &mut p.dividers {
+                shift(divider);
+            }
+        }
         for group in &mut self.groups {
             shift(&mut group.bounds);
             for icon in &mut group.icons {
@@ -298,7 +310,8 @@ impl DockLayout {
                 // Column targets can be split subtrees containing a whole
                 // stack, so membership cannot use the tab-only group lookup.
                 matches!(b.edge, Edge::Left | Edge::Right) && b.root.find(group).is_some()
-            }) => {
+            }) =>
+            {
                 if moving.find(group).is_some() {
                     return Ok(());
                 }
@@ -314,6 +327,12 @@ impl DockLayout {
             .collapsed
             .iter()
             .filter(|c| moving.find(c.root).is_some())
+            .cloned()
+            .collect();
+        let preferences: Vec<_> = self
+            .column_settings
+            .iter()
+            .filter(|s| moving.find(s.column).is_some())
             .cloned()
             .collect();
         let mut next = self.clone();
@@ -391,6 +410,7 @@ impl DockLayout {
             _ => unreachable!(),
         }
         next.collapsed.extend(collapsed);
+        next.column_settings.extend(preferences);
         if self.same_placement(&next) {
             return Ok(());
         }
@@ -469,7 +489,15 @@ impl DockLayout {
         collapsed: bool,
         viewport: [f32; 2],
     ) -> Result<(), String> {
-        self.set_column_collapsed_with_minimum(group, collapsed, viewport, false)
+        self.set_column_collapsed_with_minimum(group, collapsed, viewport, false)?;
+        if !collapsed {
+            for s in &mut self.column_settings {
+                if !self.collapsed.iter().any(|c| c.root == s.column) {
+                    s.open_group = None;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Reset the entire side band through its canvas-facing divider. Tabs and
@@ -697,12 +725,47 @@ impl DockLayout {
                 return Err("Invalid collapsed column".into());
             }
         }
+        for (i, s) in self.column_settings.iter().enumerate() {
+            if self.column_settings[..i]
+                .iter()
+                .any(|p| p.column == s.column)
+                || s.width
+                    .is_some_and(|v| !v.is_finite() || !(128. ..=800.).contains(&v))
+                || s.heights.iter().enumerate().any(|(i, h)| {
+                    !h.weight.is_finite()
+                        || h.weight <= 0.
+                        || s.heights[..i]
+                            .iter()
+                            .any(|p| p.group == h.group && p.panel == h.panel)
+                })
+            {
+                return Err("Invalid column settings".into());
+            }
+        }
         Ok(())
     }
 
     // Removing the final member of one branch can replace a split root with
     // its surviving child. Transfer collapse state to that child, not a stale ID.
     pub(super) fn detach_column_members(&mut self, panels: &[Panel]) {
+        let mut preferences = Vec::new();
+        for setting in &self.column_settings {
+            let mut retained = self.node(setting.column).cloned();
+            for panel in panels {
+                retained = retained.and_then(|n| n.remove(*panel));
+            }
+            if let Some(node) = retained {
+                let mut setting = setting.clone();
+                setting.column = node.id();
+                if !preferences
+                    .iter()
+                    .any(|s: &ColumnSettings| s.column == setting.column)
+                {
+                    preferences.push(setting);
+                }
+            }
+        }
+        self.column_settings = preferences;
         let mut columns: Vec<CollapsedColumn> = Vec::new();
         for column in &self.collapsed {
             let mut retained = self.node(column.root).cloned();
@@ -911,6 +974,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         ..bounds
     };
     CollapsedColumnPlacement {
+        group_panel: None,
         id: node.id(),
         bounds,
         expand,

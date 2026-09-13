@@ -48,6 +48,9 @@ pub fn durable_layout(layout: &DockLayout) -> DockLayout {
     let mut layout = layout.clone();
     layout.measurements.clear();
     layout.column_scroll.clear();
+    for s in &mut layout.column_settings {
+        s.open_group = None;
+    }
     layout.titlebar_insets = [0.0; 3];
     layout
 }
@@ -212,6 +215,9 @@ impl WorkspaceHistory {
         layout.measurements.clone_from(&state.layout.measurements);
         layout.column_scroll.clone_from(&state.layout.column_scroll);
         layout.titlebar_insets = state.layout.titlebar_insets;
+        for s in &mut layout.column_settings {
+            s.open_group = s.open_group.or_else(|| state.layout.column_settings(s.column).open_group);
+        }
         state.layout = layout;
     }
     pub fn capture(&mut self, state: &WorkspaceState) -> LayoutHistory {

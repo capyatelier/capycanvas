@@ -189,3 +189,12 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 /* Keep the editor legible while previewing layouts behind the workspace dialogs. */
 #workspace-layout-history dimming,
 #workspace-manager dimming { background-color: rgb(0 0 0 / 12%); }
+
+/* A collapsed group is one vertical tab, including all of its tiles. */
+.collapsed-column.group-panel-strip { background: var(--tabbar-bg); }
+.active-column-group { background: var(--panel-bg); border-radius: 6px; }
+.active-column-group.group-opens-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.active-column-group.group-opens-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.column-group-panel > scrolledwindow + scrolledwindow { border: none; }
+.group-panel-divider { background: var(--tabbar-bg); }
+.group-panel-width { background: transparent; }

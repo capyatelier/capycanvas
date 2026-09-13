@@ -88,6 +88,7 @@ impl Workspace {
             layout.bands.clone_from(&source.bands);
             layout.floating.clone_from(&source.floating);
             layout.collapsed.clone_from(&source.collapsed);
+            layout.column_settings.clone_from(&source.column_settings);
             layout.fit_tab_groups.clone_from(&source.fit_tab_groups);
             layout.measurements.clone_from(&source.measurements);
             drop(layout);

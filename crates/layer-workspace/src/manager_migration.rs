@@ -1,6 +1,32 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// Existing, untouched Illustrator workspaces receive the new column default.
+/// Customized arrangements and working brush values remain the user's own.
+pub(super) fn updated_illustrator_default(
+    entity: &Entity,
+    platform: Platform,
+) -> Option<ItemContent> {
+    if entity.id != DEFAULT_WORKSPACES[1].0 || !entity.metadata.builtin {
+        return None;
+    }
+    let ItemContent::Workspace { history, baseline, .. } = &entity.content else {
+        return None;
+    };
+    let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
+    let mut previous = layout.clone();
+    previous.column_settings.clear();
+    if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
+        return None;
+    }
+    let mut content = entity.content.clone();
+    if let ItemContent::Workspace { history, baseline, .. } = &mut content {
+        history.revisions.values_mut().next()?.layout = layout.clone();
+        *baseline = layout;
+    }
+    Some(content)
+}
+
 /// Update only the untouched first Photographer arrangement, after its owner
 /// has been claimed. Brush edits and renamed workspaces remain intact.
 pub(super) fn updated_photographer_default(

@@ -570,7 +570,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 ));
             }
             PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::invalid)?;
-            let content = migration::updated_photographer_default(&incoming.entity, self.platform);
+            let content = migration::updated_illustrator_default(&incoming.entity, self.platform)
+                .or_else(|| migration::updated_photographer_default(&incoming.entity, self.platform));
             let mut metadata = incoming.entity.metadata.clone();
             metadata.last_used_ms = now;
             let mut batch = CommitBatch::prepare(

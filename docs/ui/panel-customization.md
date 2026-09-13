@@ -388,3 +388,29 @@ customization leaves the GPU brush/raster path unchanged. Static packaging
 includes and fingerprints the new module and its importing app, so service
 worker versions follow the changed runtime content. Generated bundles/captures
 remain ignored and no third-party code or assets are added.
+
+## Collapsed-column presentation
+
+GTK's empty strip area opens a column menu on secondary click or touch/pen hold
+(mouse holds never open menus). It offers Expand column, Drawers / Group panel,
+Auto-hide, and Apply to all columns. Apply copies mode and auto-hide, retaining
+independent sizes. Illustrator starts in Group panel mode; Photographer uses drawers.
+
+A Group panel attaches a full-height stack of every panel in the selected group.
+Opening shifts neighboring columns without changing the full-window canvas or
+saved dock tree. Another group's tile replaces the stack; the current group toggles
+closed. The whole selected tile group is one vertical tab, using panel colors and
+concave shoulders; the rest of the strip uses tab-bar colors. Panel splits and width
+resize immediately with every device, with live reflow and native-resolution text.
+
+Widths are remembered per column; height proportions per group and panel. The first
+width is the largest drawer width anywhere in that column. Dimensions survive closing,
+reopening and workspace saves. Window constraints do not overwrite saved sizes.
+Auto-hide applies to both modes, consumes an outside canvas contact, and respects
+popups and nested tool drawers. Escape closes the presentation. Resize cancellation
+and workspace undo/redo restore sizing; open/close itself is not a saved layout edit.
+
+Shared implementation: `column_panels.rs`, `drawers.rs`, and `workspace_update.rs`.
+GTK consumes the layout/content revision distinction while resizing. Other hosts
+retain these settings but continue showing drawers until they adopt Group panel
+rendering; they must publish each stacked panel and use the same shared geometry.

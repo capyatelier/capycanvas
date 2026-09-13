@@ -360,6 +360,7 @@ impl ToolbarControl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextTarget {
+    Column { column: u32 },
     ZenMode,
     Panel { panel: Panel },
     Group { group: u32 },
@@ -426,6 +427,20 @@ pub enum CustomizationAction {
     ToggleColumnDrawer {
         group: u32,
         panel: Panel,
+    },
+    SetColumnMode {
+        column: u32,
+        mode: crate::ColumnMode,
+    },
+    SetColumnAutoHide {
+        column: u32,
+        auto_hide: bool,
+    },
+    ApplyColumnSettings {
+        column: u32,
+    },
+    CloseColumn {
+        column: u32,
     },
     CloseExpanded,
     SetControlVisible {
@@ -543,6 +558,15 @@ impl DockLayout {
     ) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
+            ContextTarget::Column { column } => {
+                if !self.is_collapsed(column) {
+                    return Err("The column is not collapsed".into());
+                }
+                (
+                    "Column".into(),
+                    vec![self.column_items(Some(column), platform)],
+                )
+            }
             ContextTarget::ZenMode => return Err("Not a panel context".into()),
             ContextTarget::Panel { panel } => {
                 let p = self.panel(panel)?;
@@ -650,7 +674,7 @@ impl DockLayout {
             return Vec::new();
         }
         let column = self.collapsed_column_for_group(group);
-        vec![ContextMenuItem::edit(
+        let mut items = vec![ContextMenuItem::edit(
             if column.is_some() {
                 "Expand column"
             } else {
@@ -660,7 +684,37 @@ impl DockLayout {
                 group: column.unwrap_or(group),
                 collapsed: column.is_none(),
             },
-        )]
+        )];
+        if let Some(column) =
+            column.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic))
+        {
+            let settings = self.column_settings(column);
+            for (label, mode) in [
+                ("Drawers", crate::ColumnMode::Drawers),
+                ("Group panel", crate::ColumnMode::GroupPanel),
+            ] {
+                let mut item = ContextMenuItem::edit(
+                    label,
+                    CustomizationAction::SetColumnMode { column, mode },
+                );
+                item.selected = Some(settings.mode == mode);
+                items.push(item);
+            }
+            let mut item = ContextMenuItem::edit(
+                "Auto-hide",
+                CustomizationAction::SetColumnAutoHide {
+                    column,
+                    auto_hide: !settings.auto_hide,
+                },
+            );
+            item.selected = Some(settings.auto_hide);
+            items.push(item);
+            items.push(ContextMenuItem::edit(
+                "Apply to all columns",
+                CustomizationAction::ApplyColumnSettings { column },
+            ));
+        }
+        items
     }
     fn hide_item(&self, panel: Panel) -> ContextMenuItem {
         ContextMenuItem::edit(
@@ -1666,6 +1720,24 @@ impl CustomizationState {
                 ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
+                let column = layout
+                    .collapsed_column_for_group(group)
+                    .ok_or("The column is not collapsed")?;
+                let settings = layout.column_settings(column);
+                if settings.mode == crate::ColumnMode::GroupPanel
+                    && matches!(platform, Platform::Gtk | Platform::Generic)
+                {
+                    let close = settings.open_group == Some(group);
+                    layout.column_settings_mut(column).open_group = (!close).then_some(group);
+                    self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column));
+                    if !close {
+                        self.column_drawers
+                            .push(ContentDrawer::for_column(layout, group, panel)?);
+                    }
+                    self.expanded = None;
+                    self.drawer = None;
+                    return Ok(changed | regions::LAYOUT);
+                }
                 let mut next = ContentDrawer::for_column(layout, group, panel)?;
                 let DrawerAnchor::Column { column, .. } = next.anchor else {
                     unreachable!()
@@ -1688,6 +1760,68 @@ impl CustomizationState {
                 }
                 self.expanded = None;
                 self.drawer = None;
+                changed |= regions::LAYOUT;
+            }
+            SetColumnMode { column, mode } => {
+                if !layout.column_roots().contains(&column) {
+                    return Err("Unknown column".into());
+                }
+                let open = self.column_drawers.iter().find_map(|d| match d.anchor {
+                    DrawerAnchor::Column {
+                        column: id, group, ..
+                    } if id == column => Some(group),
+                    _ => None,
+                });
+                let s = layout.column_settings_mut(column);
+                s.mode = mode;
+                s.open_group = if mode == crate::ColumnMode::GroupPanel
+                    && matches!(platform, Platform::Gtk | Platform::Generic)
+                {
+                    open
+                } else {
+                    None
+                };
+                changed |= regions::LAYOUT;
+            }
+            SetColumnAutoHide { column, auto_hide } => {
+                if !layout.column_roots().contains(&column) {
+                    return Err("Unknown column".into());
+                }
+                layout.column_settings_mut(column).auto_hide = auto_hide;
+                changed |= regions::LAYOUT;
+            }
+            ApplyColumnSettings { column } => {
+                if !layout.column_roots().contains(&column) {
+                    return Err("Unknown column".into());
+                }
+                let source = layout.column_settings(column);
+                for root in layout.column_roots() {
+                    let open = self.column_drawers.iter().find_map(|d| match d.anchor {
+                        DrawerAnchor::Column { column, group, .. } if column == root => Some(group),
+                        _ => None,
+                    });
+                    let s = layout.column_settings_mut(root);
+                    s.mode = source.mode;
+                    s.auto_hide = source.auto_hide;
+                    s.open_group = if s.mode == crate::ColumnMode::GroupPanel
+                        && matches!(platform, Platform::Gtk | Platform::Generic)
+                    {
+                        open
+                    } else {
+                        None
+                    };
+                }
+                changed |= regions::LAYOUT;
+            }
+            CloseColumn { column } => {
+                self.column_drawers.retain(|d| !matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column));
+                if let Some(s) = layout
+                    .column_settings
+                    .iter_mut()
+                    .find(|s| s.column == column)
+                {
+                    s.open_group = None;
+                }
                 changed |= regions::LAYOUT;
             }
             CloseExpanded => {

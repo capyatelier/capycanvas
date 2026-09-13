@@ -1,16 +1,18 @@
 //! Native control/lifecycle integration on a hardware desktop. Control signals
 //! exercise GTK bindings; pen records exercise scheduling and GPU presentation.
 //! Physical tablet/touch delivery remains a human test (not faked here).
-#[path = "drag_pickup_tests.rs"]
-mod drag_pickup;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
+#[path = "column_group_tests.rs"]
+mod column_group_tests;
+#[path = "drag_pickup_tests.rs"]
+mod drag_pickup;
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
-#[path = "workspace_drawer_style_tests.rs"]
-mod workspace_drawer_style;
 #[path = "tooltip_tests.rs"]
 mod tooltip;
+#[path = "workspace_drawer_style_tests.rs"]
+mod workspace_drawer_style;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
@@ -7679,7 +7681,14 @@ fn native_panel_customization() {
             .unwrap()
             .1
             .clone();
-        hold(tab.upcast_ref(), ContextTarget::Panel { panel: Panel::Sizes }, 12.0, 12.0);
+        hold(
+            tab.upcast_ref(),
+            ContextTarget::Panel {
+                panel: Panel::Sizes,
+            },
+            12.0,
+            12.0,
+        );
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("panel-menu-{theme:?}"));
         assert!(menu_action(&menu.menu_model().unwrap(), "Icons only").is_none());
@@ -7698,7 +7707,12 @@ fn native_panel_customization() {
             .root
             .clone();
         let header = find_css(root.upcast_ref(), "dock-tabs").unwrap();
-        hold(&header, ContextTarget::Group { group }, header.width() as f64 - 10.0, 12.0);
+        hold(
+            &header,
+            ContextTarget::Group { group },
+            header.width() as f64 - 10.0,
+            12.0,
+        );
         let menu = context();
         menu.activate_action(
             &menu_action(&menu.menu_model().unwrap(), "Icons only").unwrap(),
@@ -7801,7 +7815,12 @@ fn native_panel_customization() {
             .unwrap()
             .first_child()
             .unwrap();
-        hold(&header, ContextTarget::Group { group: 8 }, (header.width() - 12) as f64, 12.0);
+        hold(
+            &header,
+            ContextTarget::Group { group: 8 },
+            (header.width() - 12) as f64,
+            12.0,
+        );
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("group-menu-{theme:?}"));
         menu.activate_action(
@@ -8003,7 +8022,12 @@ fn native_panel_customization() {
         w.dispatch(UiAction::SelectPanelTab { group, panel });
         pump(150);
         capture_reference(&w, &format!("{dir}/empty-toolbar-{theme:?}.png"), 1.0);
-        hold(&w.panel_widget(panel), ContextTarget::Ribbon { panel }, 12.0, 12.0);
+        hold(
+            &w.panel_widget(panel),
+            ContextTarget::Ribbon { panel },
+            12.0,
+            12.0,
+        );
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("ribbon-menu-{theme:?}"));
         menu.activate_action(
@@ -8930,7 +8954,12 @@ fn native_hidden_tabs() {
         capture_reference(&w, &format!("{dir}/tab-hidden-docked-{theme:?}.png"), 1.0);
         // The footer menu exposes name/icon selection and Show tab bar.
         // Compositor tests cover the touch/pen-only hold binding.
-        w.show_context(&handle, ContextTarget::Group { group }, b.width() as f64 * 0.5, 10.0);
+        w.show_context(
+            &handle,
+            ContextTarget::Group { group },
+            b.width() as f64 * 0.5,
+            10.0,
+        );
         pump(150);
         let menu = w
             .popovers
@@ -14030,7 +14059,13 @@ fn native_named_workspace_manager_library_and_history() {
     assert_eq!(manager.active_name().as_deref(), Some("Painting"));
     let painting = manager.active_id().unwrap();
     assert!(manager.switcher_ids().contains(&painting));
-    assert!(find_named(w.header.upcast_ref(), &format!("workspace-switch-{painting}")).is_some());
+    assert!(
+        find_named(
+            w.header.upcast_ref(),
+            &format!("workspace-switch-{painting}")
+        )
+        .is_some()
+    );
     let baseline = durable_layout(&state(&w).workspace.layout);
     w.dispatch(UiAction::SetBrushSize { value: 73. });
     w.dispatch(UiAction::MovePanel {
@@ -14088,7 +14123,10 @@ fn native_named_workspace_manager_library_and_history() {
     assert_eq!(state(&w).brush.diameter, 73.);
     let inking = manager.active_id().unwrap();
     assert!(manager.switcher_ids().contains(&inking));
-    assert!(manager.switcher_ids().contains(&painting), "new workspace stays pinned after switching away");
+    assert!(
+        manager.switcher_ids().contains(&painting),
+        "new workspace stays pinned after switching away"
+    );
     w.dispatch(UiAction::SetBrushSize { value: 31. });
     w.customize(CustomizationAction::SetPanelVisible {
         panel: Panel::Color,

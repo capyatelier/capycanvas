@@ -34,7 +34,11 @@ impl WorkspacePreset {
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         if self == Self::Illustrator {
-            return DockLayout::for_platform(platform);
+            let mut layout = DockLayout::for_platform(platform);
+            for column in layout.column_roots() {
+                layout.column_settings_mut(column).mode = ColumnMode::GroupPanel;
+            }
+            return layout;
         }
         use crate::CommandId::*;
         use ToolbarControl::{Color, Divider, Opacity};
@@ -211,10 +215,14 @@ mod tests {
                     serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
                 assert_eq!(round_trip, layout);
             }
-            assert_eq!(
-                WorkspacePreset::Illustrator.layout(platform),
-                DockLayout::for_platform(platform)
+            let layout = WorkspacePreset::Illustrator.layout(platform);
+            assert!(
+                layout
+                    .column_settings
+                    .iter()
+                    .all(|s| s.mode == ColumnMode::GroupPanel)
             );
+            assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
         }
     }
 
