@@ -34,10 +34,19 @@ membership, preferences, widths and ordinary split ratios are saved. Completed
 stacking and resizing gestures each produce one workspace undo step, with
 cancellation restoring the previous state.
 
+A closed stack containing multiple columns has a fixed sidebar width. Its
+outer divider has no resize affordance; dragging it, nudging it with the
+keyboard or resetting its width cannot expand the aggregate tree. Open a member
+with a tile, then resize its canvas-facing edge. That changes only the open
+member's remembered width and stops at its panels' minimum width, preserving
+the stack, its other members and the existing undo/cancel behavior.
+
 Old Group panel settings migrate to “Open individual panels” disabled. The
 custom all-tabs renderer, per-panel height weights and dedicated resize actions
 are retired.
 
 Other hosts retain stack membership and preferences and use ordinary tabbed
 drawers until full-column opening is ported. The shared model does not serialize
-an open member, so reopening a saved workspace starts with its stacks closed.
+an open member. GTK's unchanged Paint default opens its right stack when loaded,
+previewed or reset, with Auto-hide and Open individual panels disabled. Other
+saved arrangements start with their stacks closed.

@@ -128,9 +128,12 @@ pub(super) fn updated_illustrator_default(
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
-    let mut previous = layout.clone();
-    previous.column_stacks.clear();
-    if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
+    let mut previous = layer_ui::DockLayout::for_platform(platform);
+    let without_preferences = previous.clone();
+    previous.column_stacks = layout.column_stacks.clone();
+    if history.revisions.len() != 1 || history.layout() != baseline || baseline == &layout
+        || (baseline != &previous && baseline != &without_preferences)
+    {
         return None;
     }
     let mut content = entity.content.clone();

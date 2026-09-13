@@ -1,4 +1,85 @@
 const STACK_VIEW: [f32; 2] = [1800., 1100.];
+
+#[test]
+fn paint_defaults_open_right_stack_on_load_and_reset() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let layout = crate::WorkspacePreset::Illustrator.layout(Platform::Gtk);
+    let capture = crate::WorkspaceCapture {
+        history: crate::LayoutHistory::new(&layout),
+        working: crate::WorkspacePreset::Illustrator.working_state(),
+    };
+    let assert_open = |s: &UiSession<Recorder>| {
+        let resolved = s.layout(STACK_VIEW);
+        assert_eq!(resolved.collapsed.len(), 1);
+        assert_eq!(resolved.collapsed[0].id, 12);
+        assert!(
+            resolved
+                .groups
+                .iter()
+                .any(|g| g.panels.contains(&Panel::Brushes))
+        );
+        for column in &resolved.collapsed {
+            let stack = s.state.workspace.layout.column_stack(column.id);
+            assert!(!stack.auto_hide && !stack.drawers);
+            assert_eq!(stack.members, [column.id]);
+            let open = column.open.as_ref().unwrap();
+            assert_eq!(open.bounds.y, HEADER_HEIGHT);
+            assert_eq!(
+                open.bounds.height,
+                STACK_VIEW[1] - HEADER_HEIGHT - WORKSPACE_SPACING
+            );
+            assert_eq!(open.connections.len(), column.groups.len());
+            for group in &column.groups {
+                assert!(resolved.groups.iter().any(|g| g.id == group.group));
+            }
+        }
+    };
+    s.adopt_workspace(crate::PreparedWorkspace::new(capture.clone()).unwrap())
+        .unwrap();
+    assert_open(&s);
+    assert_eq!(s.capture_workspace().unwrap().history, capture.history);
+    click_column(&mut s, Panel::Layers);
+    assert!(
+        s.layout(STACK_VIEW)
+            .collapsed
+            .iter()
+            .find(|c| c.id == 12)
+            .unwrap()
+            .open
+            .is_none()
+    );
+    assert_eq!(s.capture_workspace().unwrap().history, capture.history);
+
+    let saved =
+        serde_json::from_value(serde_json::to_value(s.capture_workspace().unwrap()).unwrap())
+            .unwrap();
+    s.adopt_workspace(crate::PreparedWorkspace::new(saved).unwrap())
+        .unwrap();
+    assert_open(&s);
+    click_column(&mut s, Panel::Layers);
+    s.restore_workspace_layout(layout.clone(), "Reset Paint")
+        .unwrap();
+    assert_open(&s);
+
+    let mut customized = layout;
+    customized.header.size = crate::HeaderSize::Large;
+    s.adopt_workspace(
+        crate::PreparedWorkspace::new(crate::WorkspaceCapture {
+            history: crate::LayoutHistory::new(&customized),
+            ..capture
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        s.layout(STACK_VIEW)
+            .collapsed
+            .iter()
+            .all(|c| c.open.is_none())
+    );
+}
+
 fn stack_edit(s: &mut UiSession<Recorder>, action: CustomizationAction) {
     s.dispatch(UiAction::Customize { action }).unwrap();
 }
@@ -39,6 +120,67 @@ fn stack_move(s: &mut UiSession<Recorder>, source: u32, target: u32, before: boo
         viewport: STACK_VIEW,
     })
     .unwrap();
+}
+
+#[test]
+fn closed_multi_column_stacks_ignore_width_resize_without_expanding_their_tree() {
+    for on_left in [false, true] {
+        let (mut s, left, right) = stack_fixture();
+        let (source, target) = if on_left {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        stack_move(&mut s, source, target, false);
+        let stack = s.state.workspace.layout.column_stack(target).column;
+        let resolved = s.layout(STACK_VIEW);
+        let divider = resolved
+            .dividers
+            .iter()
+            .find(|d| {
+                s.state
+                    .workspace
+                    .layout
+                    .collapsed_divider_columns(d)
+                    .contains(&Some(stack))
+            })
+            .unwrap();
+        let id = divider.id;
+        let start = [
+            divider.bounds.x + divider.bounds.width * 0.5,
+            divider.bounds.y + 100.,
+        ];
+        let before = crate::durable_layout(&s.state.workspace.layout);
+        for offset in [-900., 900.] {
+            for phase in [ContactPhase::Down, ContactPhase::Move, ContactPhase::Up] {
+                s.dispatch(UiAction::DragDivider {
+                    id,
+                    phase,
+                    viewport: STACK_VIEW,
+                    position: if phase == ContactPhase::Down {
+                        start
+                    } else {
+                        [start[0] + offset, start[1]]
+                    },
+                })
+                .unwrap();
+                assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+                s.state.workspace.validate().unwrap();
+            }
+        }
+        s.dispatch(UiAction::NudgeDivider {
+            id,
+            forward: true,
+            viewport: STACK_VIEW,
+        })
+        .unwrap();
+        s.dispatch(UiAction::ResetColumnWidth {
+            id,
+            viewport: STACK_VIEW,
+        })
+        .unwrap();
+        assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+    }
 }
 
 #[test]

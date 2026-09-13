@@ -2776,7 +2776,11 @@ impl DockLayout {
             let open = resolved.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == column)).unwrap();
             let delta = coordinate - center;
             let width = open.bounds.width + if open.direction == Edge::Right { delta } else { -delta };
-            self.collapsed.iter_mut().find(|c| c.root == column).unwrap().expanded_width = width.clamp(128., 800.);
+            let minimum = expanded_tab_min_width(self.node(column).unwrap(), self).clamp(128., 800.);
+            self.collapsed.iter_mut().find(|c| c.root == column).unwrap().expanded_width = width.clamp(minimum, 800.);
+            return Ok(());
+        }
+        if self.fixed_stack_divider(d) {
             return Ok(());
         }
         let base = self.column_stacks.iter().any(|s| self.open_stack_column(s.column).is_some())
@@ -3944,6 +3948,10 @@ fn tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
     if layout.is_collapsed(node.id()) {
         return TILE_SIZE;
     }
+    expanded_tab_min_width(node, layout)
+}
+
+fn expanded_tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
     match node {
         DockNode::Tabs { id, .. } => layout.group_min_width(*id),
         DockNode::Split {

@@ -608,6 +608,11 @@ impl DockLayout {
             self.collapsed.iter_mut().find(|c| c.root == member).unwrap().expanded_width = width;
             return Ok(());
         }
+        if resolved.dividers.iter().find(|d| d.id == id)
+            .is_some_and(|d| self.fixed_stack_divider(d))
+        {
+            return Ok(());
+        }
         let mut root = self.bands[index].root.clone();
         let bounds = subtree_bounds(&root, &resolved).ok_or("The column is not visible")?;
         self.collapsed.retain(|c| c.root != root.id());
@@ -745,6 +750,15 @@ impl DockLayout {
         } else {
             [None; 2]
         }
+    }
+
+    /// A closed stack has no column body whose width could be changed.
+    /// Expanding its aggregate tree would expose partially collapsed members.
+    pub fn fixed_stack_divider(&self, divider: &Divider) -> bool {
+        self.collapsed_divider_columns(divider).into_iter().flatten().any(|column| {
+            self.column_stack(column).members.len() > 1
+                && self.open_stack_column(column).is_none()
+        })
     }
 
     pub(crate) fn collapse_at_divider(

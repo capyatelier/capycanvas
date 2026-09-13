@@ -1552,7 +1552,8 @@ impl Workspace {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
             if !matches!(slot, Slot::Canvas) {
                 let hidden = hidden && !widget.has_css_class("floating-panel");
-                let can_target = !hidden && !matches!(slot, Slot::DrawerShadow(_) | Slot::ColumnConnection(_, _));
+                let can_target = !hidden && !widget.has_css_class("fixed-stack-divider")
+                    && !matches!(slot, Slot::DrawerShadow(_) | Slot::ColumnConnection(_, _));
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target
                 {
                     continue;
@@ -2315,6 +2316,26 @@ impl Workspace {
                     self.add_divider(divider.clone());
                 }
             }
+        }
+        for (slot, handle) in self.surface.imp().children.borrow().iter() {
+            let Slot::Divider(id) = slot else { continue };
+            let Some(divider) = resolved.dividers.iter().find(|d| d.id == *id) else { continue };
+            let fixed = layout.fixed_stack_divider(divider);
+            if fixed {
+                handle.add_css_class("fixed-stack-divider");
+            } else {
+                handle.remove_css_class("fixed-stack-divider");
+            }
+            handle.set_can_target(!fixed && !handle.has_css_class("zen-hidden"));
+            handle.set_focusable(!fixed);
+            handle.set_tooltip_text((!fixed).then_some("Resize dock"));
+            handle.set_cursor_from_name(Some(if fixed {
+                "default"
+            } else if divider.axis == Axis::Horizontal {
+                "col-resize"
+            } else {
+                "row-resize"
+            }));
         }
         self.surface.remove_slots(|slot| {
             matches!(slot, Slot::FloatingResize(id, _)

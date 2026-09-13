@@ -2312,6 +2312,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::RestoreWorkspace { mut workspace } => {
                 workspace.validate()?;
+                workspace.layout.open_default_columns(self.state.platform);
                 workspace.layout.collapse_empty_toolbar_groups();
                 workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                 workspace.layout.bottom_inset = self.state.workspace.layout.bottom_inset;
@@ -3150,6 +3151,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         let point = drag.position(position);
         let resolved = self.layout(viewport);
+        if resolved.dividers.iter().find(|d| d.id == id)
+            .is_some_and(|d| self.state.workspace.layout.fixed_stack_divider(d))
+        {
+            return Ok(());
+        }
         let projected = resolved.open_column_at_divider(id).is_some()
             || resolved.collapsed.iter().filter_map(|c| c.open.as_ref()).any(|o| {
                 self.state.workspace.layout.column_contains(o.column, id)

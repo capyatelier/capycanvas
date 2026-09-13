@@ -37,6 +37,53 @@ fn native_column_stack_input() {
     std::fs::write(dir.join("ready"), "ready").unwrap();
     pump(500);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: layer_ui::WorkspaceState {
+                layout: layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk),
+                ..Default::default()
+            },
+        });
+        pump(300);
+        let resolved = w.resolved();
+        assert_eq!(resolved.collapsed.len(), 1);
+        assert_eq!(resolved.collapsed[0].id, 12);
+        assert!(
+            resolved
+                .groups
+                .iter()
+                .any(|g| g.panels.contains(&Panel::Brushes))
+        );
+        for column in &resolved.collapsed {
+            let stack = state(&w).workspace.layout.column_stack(column.id);
+            assert!(!stack.auto_hide && !stack.drawers);
+            let open = column.open.as_ref().unwrap();
+            assert_eq!(open.bounds.y, column.bounds.y);
+            assert_eq!(open.bounds.height, column.bounds.height);
+            for group in &column.groups {
+                let view = w
+                    .groups
+                    .borrow()
+                    .iter()
+                    .find(|g| g.id == group.group)
+                    .unwrap()
+                    .root
+                    .clone();
+                assert!(view.is_mapped() && view.width() > 100 && view.height() > 30);
+            }
+        }
+        let canvas = center(resolved.work_area);
+        perform(serde_json::json!([{"point":canvas,"down":true},{"down":false}]));
+        assert!(w.resolved().collapsed.iter().all(|c| c.open.is_some()));
+        crate::capture(
+            &w,
+            output
+                .join(format!("paint-default-{theme:?}.png"))
+                .to_str()
+                .unwrap(),
+        );
+    }
     for (theme, edge) in [(Theme::Dark, Edge::Left), (Theme::Light, Edge::Right)] {
         for touch in [false, true] {
             let event = |phase: &str, point: [f32; 2]| {
@@ -95,6 +142,35 @@ fn native_column_stack_input() {
                 command: CommandId::RedoWorkspace,
             });
             pump(150);
+            assert_eq!(
+                layer_ui::durable_layout(&state(&w).workspace.layout),
+                stacked
+            );
+            let resolved = w.resolved();
+            let layout = state(&w).workspace.layout;
+            let fixed = resolved
+                .dividers
+                .iter()
+                .find(|d| layout.fixed_stack_divider(d))
+                .unwrap();
+            let handle = w
+                .surface
+                .imp()
+                .children
+                .borrow()
+                .iter()
+                .find(|(slot, _)| *slot == Slot::Divider(fixed.id))
+                .unwrap()
+                .1
+                .clone();
+            assert!(!handle.can_target() && !handle.is_focusable());
+            let start = center(fixed.bounds);
+            let moved = [viewport[0] * 0.5, start[1]];
+            perform(serde_json::json!([
+                event("down", start),
+                event("move", moved),
+                event("up", moved)
+            ]));
             assert_eq!(
                 layer_ui::durable_layout(&state(&w).workspace.layout),
                 stacked
@@ -347,6 +423,58 @@ fn native_column_stack_input() {
                 state(&w).workspace.layout.column_stack(4).open_column,
                 Some(8)
             );
+            let resolved = w.resolved();
+            let divider = resolved
+                .dividers
+                .iter()
+                .find(|d| resolved.open_column_at_divider(d.id) == Some(8))
+                .unwrap();
+            let open = resolved
+                .collapsed
+                .iter()
+                .find(|c| c.id == 8)
+                .unwrap()
+                .open
+                .as_ref()
+                .unwrap();
+            let start = center(divider.bounds);
+            let inward = if open.direction == Edge::Right {
+                -600.
+            } else {
+                600.
+            };
+            let moved = [(start[0] + inward).clamp(2., viewport[0] - 2.), start[1]];
+            perform(serde_json::json!([
+                event("down", start),
+                event("move", moved),
+                event("up", moved)
+            ]));
+            let resolved = w.resolved();
+            let open = resolved
+                .collapsed
+                .iter()
+                .find(|c| c.id == 8)
+                .unwrap()
+                .open
+                .as_ref()
+                .unwrap();
+            assert!(open.bounds.width >= layer_ui::LAYERS_MIN_WIDTH);
+            assert_eq!(state(&w).workspace.layout.column_stack(4).members, [4, 8]);
+            let group = resolved
+                .groups
+                .iter()
+                .find(|g| g.panels.contains(&Panel::Layers))
+                .unwrap();
+            let root = w
+                .groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == group.id)
+                .unwrap()
+                .root
+                .clone();
+            let actual = root.compute_bounds(&w.surface).unwrap();
+            assert!((actual.width() - group.bounds.width).abs() <= 1.);
             assert_eq!(
                 w.resolved()
                     .collapsed
