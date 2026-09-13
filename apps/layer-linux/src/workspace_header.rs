@@ -126,7 +126,7 @@ impl Header {
             let b = gtk::MenuButton::builder()
                 .child(&crate::icons::image("layer-menu-symbolic"))
                 .tooltip_text(format!(
-                    "More {} window-bar items",
+                    "More {} title-bar items",
                     HeaderZone::ALL[i].label().to_lowercase()
                 ))
                 .build();
@@ -137,7 +137,7 @@ impl Header {
         });
         let recovery = gtk::MenuButton::builder()
             .child(&crate::icons::image("layer-menu-symbolic"))
-            .tooltip_text("Window bar recovery: menus and customization")
+            .tooltip_text("Title bar recovery: menus and customization")
             .build();
         recovery.set_widget_name("header-recovery");
         recovery.add_css_class("flat");

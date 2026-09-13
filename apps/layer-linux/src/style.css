@@ -23,7 +23,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: 8px; box-shadow: 0 3px 12px alpha(black, .18); }
-.header-editor-content { padding: 12px; }
+.header-editor-content { padding: 8px 12px; }
 .header-editor button { min-height: 24px; padding: 4px 8px; border-radius: 6px; }
 .header-editor .header-component { border-radius: 6px; background: alpha(var(--window-fg-color), .06); }
 .header-editor .header-component button { font-weight: 400; padding: 4px 6px; }

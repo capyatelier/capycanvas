@@ -747,7 +747,7 @@ impl CommandId {
             Self::RedoWorkspace => "Redo Layout Change",
             Self::NewToolbar => "New Toolbar…",
             Self::ManageToolbars => "Manage Toolbars…",
-            Self::CustomizeWorkspaceUi => "Customize Window Bar…",
+            Self::CustomizeWorkspaceUi => "Customize Title Bar…",
             Self::FitCanvas => "Fit canvas",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",

@@ -143,7 +143,7 @@ CAPY_WORKSPACE_DIR="$preview_dir/workspaces" LAYER_SETTINGS_FILE="$preview_dir/s
   dbus-run-session -- target/release/layer-linux
 ```
 
-Choose Paint, then Window → Customize Window Bar….
+Choose Paint, then Window → Customize Title Bar….
 Keep the printed/assigned profile path to reopen the same review workspace.
 Existing customized workspace histories deliberately do not receive the new
 defaults automatically, so a fresh profile is useful when reviewing the design.
@@ -302,3 +302,41 @@ default bar, light/dark editor, sliding and detached ghosts, narrow overflow
 drag and minimum-window captures. These tests deliver real GTK mouse, virtual
 touch and keyboard input under private Mutter; physical pen and other hosts
 were not revalidated. Nothing was pushed and no existing user profile was wiped.
+
+## Horizontal title-bar editor refinement — 2026-09-13
+
+Checkpointed the previous validated implementation locally as `264024f` before
+these refinements. Renamed the command, context actions, tool picker and related
+UI copy to Title Bar; internal model/command IDs remain stable.
+
+The editor now uses one native wrapping layout across the available window
+width. It has no heading or visible size label. Components lead; the size
+choices, Show footer and Cancel/Done form a trailing group that stays together.
+The ordinary Paint palette occupies one 48px-high row at 1600px. At 640×480 the
+entire available-component catalog wraps into a 168px-high strip with all
+controls visible. Sizes retain accessible naming and tooltips without a visible
+label. Show footer controls the existing fixed bottom-right readout.
+
+An empty center gets up to one third of the usable width, capped at 320 logical
+pixels, with 12px visual gaps on either side. The shared policy keeps it truly
+centered, protects native controls, and only reserves this extra space during
+editing. New regression coverage drops near both enlarged edges, beyond the
+old 80px target, using mouse/touch at all sizes and at 1×/2×.
+
+Validation: 439 shared tests passed (342 UI, 25 host, 72 workspace; one hardware
+host test ignored), release executable built and smoke-tested in a private
+compositor (`/tmp/capy-titlebar-release.ZKLyuM/release.png`), formatting/diff checks passed.
+Nine isolated native runs passed with no GTK criticals:
+
+- Wide-strip controls, palette and footer: `D1Zmjm`.
+- 640×480 full catalog and keyboard Done/recovery: `38Gzj7`.
+- Empty-center edge drops at 640×600: `Q4uUBa`; 2× desktop: `GMPbb9`.
+- Light/dark, all sizes, spacing/drawer-corner captures: `s5X2bG`.
+- Keyboard/context/focus: `3Bama5`; palette holds/grips/cancel: `ohKZSB`.
+- Palette Tools drop and nested picker: `Yulizy`.
+- Footer/layout persistence, switching, reopen and Cancel: `Ju7ZcS`.
+
+IDs are under `/tmp/capy-workspace-motion.<ID>`. Visually inspected wide strips
+in both themes, the full palette at minimum size, and the widened drop targets.
+Tests use private Mutter mouse/virtual-touch/keyboard input; physical pen and
+other hosts were not revalidated. No existing user workspace was reset.

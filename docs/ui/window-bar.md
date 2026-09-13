@@ -1,6 +1,6 @@
-# Workspace window bar (GTK)
+# Workspace title bar (GTK)
 
-The window bar is a workspace-owned arrangement of individual controls, not a
+The title bar is a workspace-owned arrangement of individual controls, not a
 dock for toolbar containers. The default workspaces are **Sketch**, **Paint** and
 **Photo** (their internal IDs remain unchanged). Paint starts with Capy, Main
 Menu, Filters, Lasso and Transform on the left; workspace choices in the center;
@@ -11,9 +11,13 @@ user-owned; changing the defaults does not reset them.
 
 ## Customize inline
 
-Choose **Window → Customize Window Bar…** or use an item's
-secondary-click/long-press menu. The compact editor appears below the bar;
-there is no separate designer or opening shortcut.
+Choose **Window → Customize Title Bar…** or use an item's
+secondary-click/long-press menu. The editor is a full-width horizontal strip
+below the bar, with no repeated heading or size label. Components sit on the
+left; size, Show footer and Cancel/Done stay together at the trailing edge.
+The strip uses one row when it fits and wraps at narrower widths, keeping
+every component and confirmation control reachable. There is no separate
+designer or opening shortcut.
 
 - The palette offers **Add Tools…**, Capy, Main Menu, Menu Labels, Settings,
   Full Screen, Workspaces, Document Title, Clock, Battery and Space.
@@ -22,6 +26,9 @@ there is no separate designer or opening shortcut.
 - Drag a component into the bar, or click it to insert at the marked position.
   Click in the bar to choose a position; focusing an item also chooses a
   position before it. There are no separate Left/Center/Right insertion buttons.
+  An empty center reserves up to one third of the usable width (capped at
+  320 logical pixels) while editing, with visible gaps separating the regions.
+  It stays centered and never covers side items or native window controls.
 - **Add Tools…** is a palette component, not a separate top-row action.
   Clicking it or dropping it in the bar opens the same searchable, multi-select
   picker used by toolbars. No Tools placeholder is saved. Filtering preserves
@@ -47,7 +54,7 @@ there is no separate designer or opening shortcut.
 - **Small / Medium / Large** resizes the bar and its icons together. Items
   have consistent 6px gaps; **Space** adds exactly one tile, never flexible
   space. Native window controls remain toolkit-owned and fixed.
-- **Show zoom and rotation** toggles the bottom-right canvas readout.
+- **Show footer** toggles the bottom-right canvas readout (zoom and rotation).
   Its position is not customizable. Menu labels are added or removed as a
   component, with no separate Show Menu Bar toggle.
 - **Done** commits the preview; **Cancel** restores the arrangement and canvas
@@ -130,6 +137,9 @@ checks live neighbor shifts, backtracking, grab offsets, detachment, re-entry,
 removal and palette return with mouse and touch; run it at 1× and 2×.
 `native_header_overflow_drag_input` runs at 640×600 and checks that hidden
 neighbors survive preview, removal and Cancel at every size.
+`native_header_empty_center_input` removes the center item and restores it by
+dropping near either edge of the enlarged target, with mouse and touch at every
+size. Run it both at 640×600 and at 2× scale.
 `native_header_tools_drop_input` checks the palette-to-modal handoff, and
 `native_header_window_actions_input` checks Settings and Full Screen at all
 sizes, including reopening Settings and restoring keyboard focus.

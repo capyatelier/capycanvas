@@ -8057,7 +8057,7 @@ mod tests {
             };
             let mut menu = s.workspace_menu();
             if platform == Platform::Gtk {
-                assert_eq!(menu.sections[0][0].label, "Customize Window Bar…");
+                assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
                 assert!(!format!("{menu:?}").contains("Show Menu Bar"));
                 menu.sections.remove(0);
             }

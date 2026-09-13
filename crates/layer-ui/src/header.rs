@@ -151,13 +151,13 @@ impl HeaderLayout {
             Vec::new()
         } else {
             vec![vec![ContextMenuItem::command(
-                "Customize Window Bar…",
+                "Customize Title Bar…",
                 UiAction::Invoke {
                     command: CommandId::CustomizeWorkspaceUi,
                 },
             )]]
         };
-        let mut title = "Window Bar".to_string();
+        let mut title = "Title Bar".to_string();
         if let Some(id) = id {
             let item = self.entry(id)?;
             title = item.item.label();
@@ -214,7 +214,7 @@ impl HeaderLayout {
             sections.push(vec![
                 earlier,
                 later,
-                entry("Remove from Window Bar", HeaderAction::Remove { id }),
+                entry("Remove from Title Bar", HeaderAction::Remove { id }),
             ]);
         }
         if editing {
@@ -286,7 +286,7 @@ impl HeaderLayout {
     pub fn entry(&self, id: u32) -> Result<&HeaderEntry, String> {
         self.entries()
             .find(|e| e.id == id)
-            .ok_or_else(|| "The window-bar item no longer exists".into())
+            .ok_or_else(|| "The title-bar item no longer exists".into())
     }
     pub fn location(&self, id: u32) -> Option<(HeaderZone, usize)> {
         HeaderZone::ALL.into_iter().find_map(|zone| {
@@ -299,7 +299,7 @@ impl HeaderLayout {
     pub fn validate(&self) -> Result<(), String> {
         let entries: Vec<_> = self.entries().collect();
         if entries.len() > 128 || self.next_id == 0 || self.next_id == u32::MAX {
-            return Err("Too many window-bar items".into());
+            return Err("Too many title-bar items".into());
         }
         for (i, e) in entries.iter().enumerate() {
             if e.id == 0
@@ -308,7 +308,7 @@ impl HeaderLayout {
                     .iter()
                     .any(|p| p.id == e.id || (e.item.singleton() && p.item == e.item))
             {
-                return Err("Invalid window-bar item identity".into());
+                return Err("Invalid title-bar item identity".into());
             }
             if let HeaderItem::Tool { control } = e.item {
                 control.validate()?;
@@ -357,7 +357,7 @@ impl HeaderLayout {
     ) -> Result<(), String> {
         let (source, index) = self
             .location(id)
-            .ok_or("The window-bar item no longer exists")?;
+            .ok_or("The title-bar item no longer exists")?;
         self.insertion(zone, before)?;
         if before == Some(id) {
             return Ok(());
@@ -370,7 +370,7 @@ impl HeaderLayout {
     pub fn remove(&mut self, id: u32) -> Result<(), String> {
         let (zone, index) = self
             .location(id)
-            .ok_or("The window-bar item no longer exists")?;
+            .ok_or("The title-bar item no longer exists")?;
         self.zones[zone.index()].remove(index);
         Ok(())
     }
@@ -488,21 +488,24 @@ impl HeaderLayout {
         ];
         if self.zones[1].is_empty() {
             let split = (mid).clamp(left, right);
-            // Keep the empty Center region's editor label and drop target usable.
+            // Reserve a generous visible drop target, not a tiny fixed slot.
+            // Scale with the usable width, retaining true centering and room
+            // for both side regions and protected native window controls.
             let half = if editing {
-                40_f32.min((right - left) / 2.)
+                center_limit.min(320.) / 2.
             } else {
                 gap
             };
-            result.zones[0].width = (split - half - left).max(0.);
+            let spacing = if editing { gap } else { 0. };
+            result.zones[0].width = (split - half - spacing - left).max(0.);
             result.zones[1] = Bounds {
                 x: split - half,
                 y,
                 width: 2. * half,
                 height: tile,
             };
-            result.zones[2].x = split + half;
-            result.zones[2].width = (right - split - half).max(0.);
+            result.zones[2].x = (split + half + spacing).min(right);
+            result.zones[2].width = (right - result.zones[2].x).max(0.);
         }
         for zone in 0..3 {
             let bounds = result.zones[zone];
@@ -688,7 +691,7 @@ mod tests {
             .flatten()
             .map(|i| i.label.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(labels, ["Customize Window Bar…", "Change icon…"]);
+        assert_eq!(labels, ["Customize Title Bar…", "Change icon…"]);
         for id in [None, Some(capy), Some(h.zones[2][0].id)] {
             let menu = h.context_menu(id, true).unwrap();
             let items = menu.sections.iter().flatten().collect::<Vec<_>>();
@@ -816,6 +819,47 @@ mod tests {
                             );
                         }
                     }
+                }
+            }
+        }
+    }
+    #[test]
+    fn empty_center_drop_target_scales_with_width_without_covering_native_controls() {
+        for size in HeaderSize::ALL {
+            for width in [320., 640., 800., 1600., 3200.] {
+                for insets in [[0., 72.], [96., 0.], [80., 120.]] {
+                    let mut h = HeaderLayout::painter();
+                    h.size = size;
+                    h.zones[1].clear();
+                    let g = h.resolve(width, insets, &[], true);
+                    let b = g.zones[1];
+                    assert!((b.x + b.width / 2. - width / 2.).abs() < 0.01);
+                    let usable = width - insets[0] - insets[1] - 12.;
+                    let centered =
+                        2. * (width / 2. - insets[0] - 6.).min(width / 2. - insets[1] - 6.);
+                    assert!((b.width - (usable / 3.).min(centered).min(320.)).abs() < 0.01);
+                    for x in [b.x + 1., b.x + b.width / 2., b.x + b.width - 1.] {
+                        assert_eq!(
+                            g.destination([x, size.height() / 2.], size.height()),
+                            Some((HeaderZone::Center, None))
+                        );
+                    }
+                    for rect in g
+                        .items
+                        .iter()
+                        .map(|i| i.bounds)
+                        .chain(g.overflow.into_iter().flatten())
+                    {
+                        assert!(rect.intersection(b).is_none());
+                        assert!(
+                            rect.x >= insets[0] && rect.x + rect.width <= width - insets[1] + 0.01
+                        );
+                    }
+                    let normal = h.resolve(width, insets, &[], false);
+                    assert_eq!(
+                        normal.zones[1].width, 24.,
+                        "extra space is only reserved while editing"
+                    );
                 }
             }
         }

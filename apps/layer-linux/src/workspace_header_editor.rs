@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) struct Editor {
     pub root: gtk::ScrolledWindow,
-    content: gtk::Box,
+    content: adw::WrapBox,
     sizes: [gtk::ToggleButton; 3],
     canvas_info: gtk::CheckButton,
     components: Vec<(HeaderDragSource, gtk::Box)>,
@@ -19,7 +19,10 @@ impl Editor {
         root.set_propagate_natural_height(true);
         root.set_widget_name("header-editor");
         root.add_css_class("header-editor");
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let content = adw::WrapBox::new();
+        content.set_widget_name("header-components");
+        content.set_child_spacing(6);
+        content.set_line_spacing(8);
         content.add_css_class("header-editor-content");
         root.set_child(Some(&content));
         let sizes = std::array::from_fn(|i| {
@@ -27,7 +30,7 @@ impl Editor {
             button.set_widget_name(&format!("header-size-{i}"));
             button
         });
-        let canvas_info = gtk::CheckButton::with_label("Show zoom and rotation");
+        let canvas_info = gtk::CheckButton::with_label("Show footer");
         canvas_info.set_widget_name("header-canvas-info");
         Self {
             root,
@@ -49,14 +52,6 @@ impl Editor {
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
-        let title = gtk::Label::new(Some("Customize Window Bar"));
-        title.add_css_class("heading");
-        title.set_xalign(0.);
-        self.content.append(&title);
-        let palette = adw::WrapBox::new();
-        palette.set_widget_name("header-components");
-        palette.set_child_spacing(6);
-        palette.set_line_spacing(6);
         for (source, chip) in &self.components {
             let source = *source;
             let (label, icon) = match source {
@@ -89,7 +84,7 @@ impl Editor {
             grip.set_valign(gtk::Align::Center);
             grip.set_focusable(false);
             grip.set_widget_name(&format!("header-add-grip-{name}"));
-            grip.set_tooltip_text(Some(&format!("Drag {label} into the window bar")));
+            grip.set_tooltip_text(Some(&format!("Drag {label} into the title bar")));
             w.register_drag(&grip, DragTarget::Header(source));
             chip.append(&grip);
             let button = gtk::Button::new();
@@ -139,20 +134,22 @@ impl Editor {
             ));
             button.add_controller(hold);
             chip.append(&button);
-            palette.append(chip);
+            self.content.append(chip);
         }
-        self.content.append(&palette);
-        self.content
-            .append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        let size = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let label = gtk::Label::new(Some("Bar size"));
-        label.set_xalign(0.);
-        label.set_hexpand(true);
-        size.append(&label);
+        // Keep settings and confirmation together at the trailing edge. The
+        // native wrap layout puts this group on another line only when needed.
+        let options = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        options.set_widget_name("header-editor-options");
+        options.set_hexpand(true);
+        options.set_halign(gtk::Align::End);
+        options.set_valign(gtk::Align::Center);
+        options.set_margin_start(6);
         let choices = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         choices.add_css_class("linked");
         choices.set_homogeneous(true);
+        choices.update_property(&[gtk::accessible::Property::Label("Title bar size")]);
         for (i, button) in self.sizes.iter().enumerate() {
+            button.set_tooltip_text(Some(&format!("{} title bar", HeaderSize::ALL[i].label())));
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -167,8 +164,7 @@ impl Editor {
             ));
             choices.append(button);
         }
-        size.append(&choices);
-        self.content.append(&size);
+        options.append(&choices);
         self.canvas_info.connect_toggled(glib::clone!(
             #[weak]
             w,
@@ -183,7 +179,7 @@ impl Editor {
                 }
             }
         ));
-        self.content.append(&self.canvas_info);
+        options.append(&self.canvas_info);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         footer.set_halign(gtk::Align::End);
         let cancel = w.action_button("Cancel", HeaderAction::Cancel.action());
@@ -193,7 +189,8 @@ impl Editor {
         done.set_widget_name("header-edit-done");
         done.add_css_class("suggested-action");
         footer.append(&done);
-        self.content.append(&footer);
+        options.append(&footer);
+        self.content.append(&options);
     }
     pub fn select(
         &self,
@@ -269,7 +266,7 @@ impl Editor {
         }
     }
     pub fn allocate(&self, width: f32, bar_height: f32, available_height: f32) {
-        let width = (width - 12.).clamp(1., 420.);
+        let width = (width - 12.).max(1.);
         let height = self
             .content
             .measure(gtk::Orientation::Vertical, width as i32)

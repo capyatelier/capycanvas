@@ -191,7 +191,7 @@ impl Driver {
             self.click_name("header-recovery");
             self.click_label("Window");
         }
-        self.click_label("Customize Window Bar…");
+        self.click_label("Customize Title Bar…");
         if !state(&self.w).customization.header_editing {
             crate::capture(&self.w, self.dir.join("failed-entry.png").to_str().unwrap());
             eprintln!(
@@ -1132,7 +1132,7 @@ fn native_header_cancel_caption_input() {
             .session
             .application_menu(ApplicationMenu::Window);
     assert!(!format!("{menu_model:?}").contains("Show Menu Bar"));
-    d.click_label("Customize Window Bar…");
+    d.click_label("Customize Title Bar…");
     d.click_name("header-add-menu-labels");
     d.click_name("header-edit-done");
     assert!(
@@ -1395,7 +1395,7 @@ fn native_header_hold_context_input() {
     pump(160);
     let p = d.point(&d.named(&format!("header-item-{id}")));
     d.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
-    d.click_label("Customize Window Bar…");
+    d.click_label("Customize Title Bar…");
     let p = d.point(&d.named(&format!("header-item-{id}")));
     d.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
     d.click_label("Move to Center");
@@ -1406,7 +1406,7 @@ fn native_header_hold_context_input() {
     let item = d.named(&format!("header-item-{id}"));
     item.grab_focus();
     d.perform(serde_json::json!([{ "key": 0xffe1, "down": true }, { "key": 0xffc7, "down": true }, { "key": 0xffc7, "down": false }, { "key": 0xffe1, "down": false }]));
-    d.click_label("Remove from Window Bar");
+    d.click_label("Remove from Title Bar");
     assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
     d.w.dispatch(HeaderAction::Cancel.action());
     pump(160);
@@ -1426,10 +1426,16 @@ fn native_header_editor_controls_input() {
         assert_eq!(state(&d.w).workspace.layout.header.size, size);
         let editor = d.named("header-editor");
         assert!(
-            editor.height() < 450 && editor.width() <= 460,
-            "The inline editor is compact at {size:?}"
+            editor.height() <= 56 && editor.width() == d.w.surface.width() - 12,
+            "The editor is one full-width strip at {size:?}: {}x{}",
+            editor.width(),
+            editor.height()
         );
-        assert!(d.w.header.root.height() < size.height() as i32 + 470);
+        let palette = d.named("header-add-tools").compute_bounds(&editor).unwrap();
+        let done = d.named("header-edit-done").compute_bounds(&editor).unwrap();
+        assert!((palette.y() + palette.height() / 2. - done.y() - done.height() / 2.).abs() < 1.);
+        assert!(done.x() + done.width() >= editor.width() as f32 - 13.);
+        assert!(d.w.header.root.height() <= size.height() as i32 + 68);
         assert_eq!(d.w.area.height(), d.w.surface.height());
     }
     for name in ["clock", "menu-labels"] {
@@ -1461,6 +1467,14 @@ fn native_header_editor_controls_input() {
         "Existing singleton components do not clutter the palette"
     );
     d.click_name("header-canvas-info");
+    assert_eq!(
+        d.named("header-canvas-info")
+            .downcast::<gtk::CheckButton>()
+            .unwrap()
+            .label()
+            .as_deref(),
+        Some("Show footer")
+    );
     assert!(state(&d.w).workspace.layout.canvas_info.visible && d.w.view_info.is_visible());
     assert!(d.w.resolved().status.y > d.w.surface.height() as f32 / 2.);
     assert_eq!(d.w.view_info.halign(), gtk::Align::End);
@@ -1483,7 +1497,7 @@ fn native_header_editor_controls_input() {
     assert!(d.named("header-recovery").is_mapped());
     d.click_name("header-recovery");
     d.click_label("Window");
-    d.click_label("Customize Window Bar…");
+    d.click_label("Customize Title Bar…");
     assert!(state(&d.w).customization.header_editing);
     crate::capture(&d.w, d.dir.join("empty-bar-palette.png").to_str().unwrap());
     for (i, item) in HeaderItem::COMPONENTS.into_iter().enumerate() {
@@ -1635,6 +1649,11 @@ fn native_header_editor_short_window_input() {
         .unwrap();
     let bounds = panel.compute_bounds(&d.w.surface).unwrap();
     assert!(bounds.y() + bounds.height() <= d.w.surface.height() as f32);
+    assert_eq!(panel.width(), d.w.surface.width() - 12);
+    assert!(
+        panel.height() <= 200,
+        "full palette uses the available width"
+    );
     // The simplified palette can fit without scrolling even at the minimum
     // size. Either way, native focus must reveal the footer, never clip it.
     assert!(panel.height() <= 480 - HeaderSize::Large.height() as i32 - 12);
@@ -2178,6 +2197,63 @@ fn native_header_overflow_drag_input() {
             // ones. No temporary capture allocation becomes authoritative.
             d.click_name("header-edit-cancel");
             assert_eq!(state(&d.w).workspace.layout.header, original);
+        }
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_header_empty_center_input"]
+fn native_header_empty_center_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderEmptyCenter");
+    for size in HeaderSize::ALL {
+        d.w.dispatch(HeaderAction::SetSize { size }.action());
+        pump(250);
+        for touch in [false, true] {
+            for edge in [-1., 1.] {
+                d.edit();
+                let original = state(&d.w).workspace.layout.header;
+                let id = original.zones[1][0].id;
+                d.click_name(&format!("header-item-{id}"));
+                d.key(0xffff);
+                assert!(state(&d.w).workspace.layout.header.zones[1].is_empty());
+                let b = d.w.header.geometry_for_test().zones[1];
+                assert!(b.width >= 160., "empty center remains easy to target");
+                let point = [
+                    b.x + b.width / 2. + edge * (b.width / 2. - 10.),
+                    b.y + b.height / 2.,
+                ];
+                assert!((point[0] - d.w.surface.width() as f32 / 2.).abs() > 40.);
+                let start = d.point(&d.named("header-add-grip-workspace-switcher"));
+                d.perform(if touch {
+                    serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":point}])
+                } else {
+                    serde_json::json!([{"point":start},{"down":true},{"point":point}])
+                });
+                assert_eq!(
+                    d.w.header.drag_for_test().unwrap().target,
+                    Some((HeaderZone::Center, None))
+                );
+                crate::capture(
+                    &d.w,
+                    d.dir
+                        .join(format!("empty-center-{size:?}-{touch}-{edge}.png"))
+                        .to_str()
+                        .unwrap(),
+                );
+                d.perform(if touch {
+                    serde_json::json!([{"touch":"up"}])
+                } else {
+                    serde_json::json!([{"down":false}])
+                });
+                let model = state(&d.w).workspace.layout.header;
+                assert_eq!(model.zones[1].len(), 1);
+                assert_eq!(model.zones[1][0].item, HeaderItem::Workspaces);
+                assert_eq!(model.zones[0], original.zones[0]);
+                assert_eq!(model.zones[2], original.zones[2]);
+                d.click_name("header-edit-cancel");
+                assert_eq!(state(&d.w).workspace.layout.header, original);
+            }
         }
     }
     d.finish();

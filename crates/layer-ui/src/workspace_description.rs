@@ -69,21 +69,21 @@ pub(crate) fn item_name(layout: &DockLayout, item: DockItem) -> String {
 pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> String {
     if before.header != after.header {
         return if before.header.size != after.header.size {
-            format!("Set window bar size to {}", after.header.size.label())
+            format!("Set title bar size to {}", after.header.size.label())
         } else if let Some(e) = after
             .header
             .entries()
             .find(|e| before.header.entry(e.id).is_err())
         {
-            format!("Added {} to window bar", e.item.label())
+            format!("Added {} to title bar", e.item.label())
         } else if let Some(e) = before
             .header
             .entries()
             .find(|e| after.header.entry(e.id).is_err())
         {
-            format!("Removed {} from window bar", e.item.label())
+            format!("Removed {} from title bar", e.item.label())
         } else {
-            "Rearranged window bar".into()
+            "Rearranged title bar".into()
         };
     }
     if before.canvas_info != after.canvas_info {

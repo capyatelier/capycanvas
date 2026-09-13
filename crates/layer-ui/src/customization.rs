@@ -982,7 +982,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::ResetLayout => "Restore panel docking positions",
                 CommandId::ZenMode => "Hide or show the editor controls",
                 CommandId::CustomizeWorkspaceUi => {
-                    "Arrange the window bar and canvas information inline"
+                    "Arrange the title bar and footer inline"
                 }
                 CommandId::Fullscreen => "Enter or leave full screen",
                 CommandId::NewWindow => "Open another drawing window",
@@ -1291,7 +1291,7 @@ impl ToolPicker {
             ToolDestination::Header { zone, before } => {
                 layout.header.insertion(*zone, *before)?;
                 if layout.header.entries().count() + self.selected.len() > 128 {
-                    return Err("Too many window-bar items".into());
+                    return Err("Too many title-bar items".into());
                 }
             }
         }
@@ -1319,7 +1319,7 @@ impl ToolPicker {
             .collect();
         ToolPickerView {
             title: if matches!(self.destination, ToolDestination::Header { .. }) {
-                "Add Tools to Window Bar"
+                "Add Tools to Title Bar"
             } else if name.is_some() {
                 "New Toolbar"
             } else {
@@ -1607,7 +1607,7 @@ impl CustomizationState {
                     }
                     H::InsertTools { zone, before } => {
                         if !self.header_editing {
-                            return Err("Open window-bar customization first".into());
+                            return Err("Open title-bar customization first".into());
                         }
                         layout.header.insertion(zone, before)?;
                         self.picker = Some(ToolPicker {
