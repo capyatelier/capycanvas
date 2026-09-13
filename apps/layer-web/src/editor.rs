@@ -50,6 +50,31 @@ impl WebApp {
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().colors.view())
     }
+    /// Static for each shape; fetch when switching models, not on every drag.
+    pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.state().colors.wheel_hue_stops())
+    }
+    pub fn color_panel_layout(&self, size: f32) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::ColorPanelLayout::new(size))
+    }
+    /// Small cached UI raster only; the painting canvas remains on WebGPU.
+    pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
+        if !(1..=2048).contains(&side) {
+            return Err(js("Invalid color field size"));
+        }
+        let state = &self.session.state().colors;
+        let hue = state.wheel_components()[0];
+        let mut pixels = vec![0; side as usize * side as usize * 4];
+        let valid = match state.wheel_shape() {
+            layer_ui::ColorShape::Circle => layer_ui::render_okhsv_disc(side, hue, &mut pixels),
+            layer_ui::ColorShape::Triangle => layer_ui::render_hls_field(side, hue, &mut pixels),
+            layer_ui::ColorShape::Square => false,
+        };
+        if !valid {
+            return Err(js("Color field does not use a raster"));
+        }
+        Ok(pixels)
+    }
     pub fn workspace_projection(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         let state = self.session.state();
         serialize(&(
@@ -67,7 +92,7 @@ impl WebApp {
     pub fn color_wheel_hit(&self, size: f32, x: f32, y: f32) -> Result<JsValue, JsValue> {
         serialize(
             &layer_ui::ColorWheelGeometry::new(size)
-                .and_then(|g| g.hit([x, y], self.session.state().colors.space)),
+                .and_then(|g| g.hit_shape([x, y], self.session.state().colors.wheel_shape())),
         )
     }
     pub fn navigator_geometry(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {

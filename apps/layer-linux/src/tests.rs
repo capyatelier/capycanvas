@@ -1,6 +1,8 @@
 //! Native control/lifecycle integration on a hardware desktop. Control signals
 //! exercise GTK bindings; pen records exercise scheduling and GPU presentation.
 //! Physical tablet/touch delivery remains a human test (not faked here).
+#[path = "color_panel_tests.rs"]
+mod color_panel;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_group_tests.rs"]
@@ -239,12 +241,12 @@ fn native_default_workspace() {
             }
         }
         let wheel = find_named(&w.panel_widget(Panel::Color), "color-wheel").unwrap();
-        let size = wheel.width().min(wheel.height()) as f32;
-        assert!(size >= 128.);
-        let origin = [
-            (wheel.width() as f32 - size) * 0.5,
-            (wheel.height() as f32 - size) * 0.5,
-        ];
+        let (size, origin) = wheel
+            .clone()
+            .downcast::<crate::tool_panels::ColorWheel>()
+            .unwrap()
+            .drawing_bounds();
+        assert!(size >= 92.);
         let point = layer_ui::ColorWheelGeometry::new(size)
             .unwrap()
             .hue_marker(210.);
@@ -261,7 +263,7 @@ fn native_default_workspace() {
         );
         assert!((state(&w).colors.components()[0] - 210.).abs() < 0.01);
         let viewport = w.panel_widget(Panel::Color);
-        let component = find_named(&viewport, "color-component-2")
+        let component = find_named(&viewport, "color-readout")
             .unwrap()
             .compute_bounds(&viewport)
             .unwrap();
@@ -4230,20 +4232,23 @@ fn native_tool_and_color_panels() {
             .unwrap(),
     );
     assert!(state(&w).colors.transparent());
-    let hue = find_named(&color, "color-component-0")
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap();
-    edit_number(&hue, "180/2");
-    assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
-    assert!((state(&w).colors.components()[0] - 90.0).abs() < 1e-4);
+    let before = state(&w).colors.rgba();
     click(
-        &find_named(&color, "color-space")
-            .unwrap()
-            .downcast()
-            .unwrap(),
+        &find_named(&color, "color-readout").unwrap().downcast().unwrap(),
     );
-    assert_eq!(state(&w).colors.space, layer_ui::ColorSpace::Hls);
+    assert_eq!(state(&w).colors.readout, layer_ui::ColorReadout::Rgb);
+    assert_eq!(state(&w).colors.rgba(), before);
+    for expected in [
+        layer_ui::ColorShape::Square,
+        layer_ui::ColorShape::Triangle,
+        layer_ui::ColorShape::Circle,
+    ] {
+        let index = state(&w).colors.other_shapes().iter().position(|shape| *shape == expected).unwrap();
+        click(
+            &find_named(&color, &format!("color-shape-{index}")).unwrap().downcast().unwrap(),
+        );
+        assert_eq!(state(&w).colors.wheel_shape(), expected);
+    }
     let before = state(&w).colors;
     click(
         &find_named(&color, "color-swap")

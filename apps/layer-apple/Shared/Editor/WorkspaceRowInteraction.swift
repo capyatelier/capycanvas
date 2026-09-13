@@ -34,24 +34,15 @@ struct WorkspaceRowMeasurement: ViewModifier {
     struct Hint { let before: String?; let y: CGFloat }
     let contact = ReorderContact()
     @Published private(set) var menu: String?
-    @Published private(set) var menuPoint = CGPoint.zero
     @Published private(set) var drag: Drag?
     @Published private(set) var hint: Hint?
     @Published private(set) var nativeDragging = false
-    @Published var menuSize = CGSize(width: 240, height: 180)
     var frames: [String: WorkspaceRowFrame] = [:]
     var viewport = CGRect.zero
     var enabled = true
     var items: [JSON] = []
     var commit: (String, String?) -> Void = { _, _ in }
     var activate: (JSON) -> Void = { _ in }
-    var usesNativeRowMenus: Bool {
-        #if os(iOS)
-        true
-        #else
-        false
-        #endif
-    }
     func nativeDragChanged(_ active: Bool) { if nativeDragging != active { nativeDragging = active } }
     func nativeMenu(at point: CGPoint) -> NativeReorderMenu? {
         guard enabled, viewport.contains(point),
@@ -70,11 +61,6 @@ struct WorkspaceRowMeasurement: ViewModifier {
                 closeMenu(); activate(action)
             })
     }
-    var menuBounds: CGRect {
-        let width = min(240, viewport.width), height = min(menuSize.height, viewport.height)
-        return CGRect(x: max(viewport.minX, min(menuPoint.x, viewport.maxX - width)),
-            y: max(viewport.minY, min(menuPoint.y, viewport.maxY - height)), width: width, height: height)
-    }
     func update(items: [JSON], enabled: Bool) {
         self.items = items; self.enabled = enabled
         if contact.target != nil { _ = contact.validate() }
@@ -82,7 +68,6 @@ struct WorkspaceRowMeasurement: ViewModifier {
     }
     func showMenu(_ id: String, at point: CGPoint? = nil) {
         guard enabled, items.contains(where: { $0["id"].string == id }) else { return }
-        menuPoint = point ?? CGPoint(x: frames[id]?.options.minX ?? 0, y: frames[id]?.row.maxY ?? 0)
         menu = id
     }
     func closeMenu() { if menu != nil { menu = nil } }
@@ -95,7 +80,6 @@ struct WorkspaceRowMeasurement: ViewModifier {
     }
     func source(at point: CGPoint) -> ReorderTarget? {
         guard enabled, viewport.contains(point) else { closeMenu(); return nil }
-        if menu != nil && menuBounds.contains(point) { return nil }
         closeMenu()
         guard let (id, frame) = frames.first(where: { $0.value.row.contains(point) }),
             items.contains(where: { $0["id"].string == id }), !frame.options.contains(point) else { return nil }

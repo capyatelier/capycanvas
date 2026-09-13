@@ -77,6 +77,37 @@ The editor check includes actual Navigator pointer hits and a rendered-pixel
 check that zoomed paper appears through empty header space. These checks do not
 establish complete editor parity or hardware performance.
 
+For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
+for mouse/pen input, readout and shape buttons, swap, keyboard activation,
+cancellation, and both-theme captures at 144/160/200/280/360 px panel widths.
+All three shapes and their two readouts (shape units or RGB) fit one square;
+the four-tile minimum and short docks retain every control. GTK and Web use the
+same Rust allocations, coordinate memory and smooth elliptical Okhsv circle raster.
+The disc has extra spacing inside the hue ring, from the shared geometry.
+The circle's hue guide rotates 24° counterclockwise and uses Okhsl's smooth C/L
+curve with a 5% margin. Normalizing linear RGB preserves hue and softens the ring
+without the maximum-saturation boundary jump; actual Okhsv picking is unchanged.
+Selecting a shape always restores its units: OKLCH for circle (lightness %,
+chroma to three decimals, hue °), HSB for square, HLS for triangle. Tapping the
+label toggles between those units and RGB. Shape units are the default;
+saved RGB preferences remain RGB. All readouts
+use fixed digit cells and stable arc positions. The focused test checks actual
+HSB/HLS/OKLCH glyph transforms across 9/10/100 at three widths.
+Square and triangle retain their original
+color models; switching shapes preserves the selected sRGB paint. Regression cases
+include dragging through different black positions and then changing hue.
+The CPU raster reuses saturation/transfer curves and logical-pixel samples;
+ring, clip and markers retain display resolution. The focused test compares
+the interpolated field against a full 2× raster across sizes and hue cusps.
+The host retains staging canvases and the static ring, fetching hue stops only
+when rebuilding that ring. Measure both raster cost and complete DOM updates
+on the target device: a raster below 8.33 ms does not establish 120 Hz presentation.
+On Linux, use
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/web" bash tools/performance/workspace-motion.sh web --color-panel`
+to verify mouse and touch through the private Mutter compositor, plus pen through
+CDP. Some Chrome builds deliver CDP touch contacts without compatibility clicks;
+the compositor run verifies actual touch activation of the corner buttons.
+
 ## Debug headless Chrome
 
 Run from the repository root with the development server in another terminal,

@@ -164,6 +164,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var lastWorkspaceGroup: Pair<Int, androidx.compose.ui.geometry.Rect>? = null
         private set
+    /** Focused native color buttons own Space/Enter instead of canvas shortcuts. */
+    internal var colorControlFocus: Any? = null
     private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
     private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.

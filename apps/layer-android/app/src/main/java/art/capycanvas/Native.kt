@@ -38,4 +38,8 @@ internal object Native {
     @JvmStatic external fun number(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun colorWheelHit(request: String): String
+    @JvmStatic external fun colorPanelLayout(size: Float): String
+    @JvmStatic external fun colorHueStops(shape: String): String
+    /** Shared sRGB field raster as Android ARGB pixels; no session access. */
+    @JvmStatic external fun colorFieldPixels(size: Int, hue: Float, shape: String): IntArray
 }

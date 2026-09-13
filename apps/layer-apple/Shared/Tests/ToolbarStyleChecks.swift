@@ -34,7 +34,7 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: (usesValue ? "value" : "label") + " != %@", previous), evaluatedWith: camera)
         waitForExpectations(timeout: 10)
         activate(app.descendants(matching: .any)["toolbar-options-commands"].firstMatch)
-        activate(app.buttons["workspace-action-Medium Tiles"])
+        activate(app.buttons["menu-action-Medium Tiles"])
         expectation(for: NSPredicate { _, _ in abs(zoom.frame.width - 54) <= 1 }, evaluatedWith: zoom)
         waitForExpectations(timeout: 10)
         XCTAssertEqual(zoom.frame.height, 54, accuracy: 1)

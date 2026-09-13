@@ -6,6 +6,7 @@ struct LayerPanel: View {
     let panel: JSON
     @StateObject private var interaction = LayerRowInteraction()
     @State private var importing = false
+    @State private var popupID = UUID()
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var view: JSON { store.state["layer_tools"] }
     private var current: JSON { view["editing_layer"] }
@@ -24,7 +25,7 @@ struct LayerPanel: View {
                                 LayerRow(store: store, layer: layer, previews: store.layerThumbnails, interaction: interaction)
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
                                     .overlay { dropMark(layer) }
-                                    .popover(isPresented: menuPresented(at: .row(layer["id"].uint))) { menuContent }
+                                    .editorPopover(isPresented: menuPresented(at: .row(layer["id"].uint)), placement: .inward) { menuContent }
                                     .onAppear { store.layerThumbnails.show(layer["id"].uint) }
                                     .onDisappear {
                                         store.layerThumbnails.hide(layer["id"].uint)
@@ -42,12 +43,13 @@ struct LayerPanel: View {
             }
         }
             .onAppear { interaction.store = store }
+            .onChange(of: interaction.menu.isNull) { _, empty in store.workspace.popover(popupID, open: !empty) }
             .onChange(of: store.state["revision"].uint) { _, _ in
                 interaction.validate(); store.layerThumbnails.refresh()
             }
             .onChange(of: store.state["layer_tools"]["rename_layer"].uint) { _, _ in interaction.validate() }
             .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in interaction.cancel() }
-            .onDisappear { interaction.cancel() }
+            .onDisappear { interaction.cancel(); store.workspace.popover(popupID, open: false) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.image]) { result in
                 switch result {
                 case .success(let url): store.importLayer(url)
@@ -102,7 +104,7 @@ struct LayerPanel: View {
             Spacer(minLength: 0)
             LayerButton(icon: "more", label: "Layer actions", enabled: !current.isNull) {
                 openMenu(current, mask: current["mask_selected"].bool, source: .footer)
-            }.popover(isPresented: menuPresented(at: .footer)) { menuContent }
+            }.editorPopover(isPresented: menuPresented(at: .footer), placement: .inward) { menuContent }
         }.padding(.horizontal, 6).padding(.vertical, 4)
     }
     private func menuPresented(at source: LayerMenuSource) -> Binding<Bool> {
@@ -111,9 +113,8 @@ struct LayerPanel: View {
         })
     }
     private var menuContent: some View {
-        LayerActionMenu(store: store, menu: interaction.menu, dismiss: closeMenu)
-            .presentationCompactAdaptation(.popover)
-            .modifier(EditorPopupPresentation())
+        EditorActionMenu(model: AppleContextMenu(interaction.menu) { store.dispatch($0) },
+            identifier: "layer-context-menu", dismiss: closeMenu)
     }
     private func closeMenu() { interaction.closeMenu() }
     private func openMenu(_ layer: JSON, mask: Bool, source: LayerMenuSource? = nil) {
@@ -324,38 +325,5 @@ struct LayerOpacityField: View {
             }
             store.edit(["type": "set_layer_opacity", "id": layer["id"].raw, "opacity": value], completion: completion)
         }.id("\(epoch):\(layer["id"].uint)")
-    }
-}
-
-private struct LayerActionMenu: View {
-    @ObservedObject var store: EditorStore
-    let menu: JSON
-    let dismiss: () -> Void
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(menu["sections"].array.indices, id: \.self) { section in
-                    if section > 0 { Divider().padding(.vertical, 4) }
-                    ForEach(menu["sections"][section].array.indices, id: \.self) { index in
-                        let item = menu["sections"][section][index]
-                        if item["sections"].array.isEmpty {
-                            Button { store.dispatch(item["action"]); dismiss() } label: { label(item) }.buttonStyle(.plain).disabled(!item["enabled"].bool)
-                        } else {
-                            Menu { MenuItems(store: store, sections: item["sections"], didInvoke: dismiss) } label: { label(item) }
-                                .menuStyle(.borderlessButton).disabled(!item["enabled"].bool)
-                        }
-                    }
-                }
-            }.padding(6)
-        }.frame(width: 340).frame(maxHeight: 560).font(.system(size: store.catalog["text_size_pt"].number * 4 / 3))
-            .accessibilityElement(children: .contain).accessibilityIdentifier("layer-context-menu")
-    }
-    private func label(_ item: JSON) -> some View {
-        HStack(spacing: 6) {
-            SharedIcon(name: "check").opacity(item["selected"].bool ? 1 : 0).frame(width: 16)
-            Text(item["label"].string).lineLimit(1)
-            Spacer(minLength: 4)
-            Text(item["hint"].string).opacity(0.75)
-        }.padding(.horizontal, 4).frame(height: 28).contentShape(Rectangle())
     }
 }

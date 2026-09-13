@@ -60,13 +60,6 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         return value.uint
     }
     var enabled: Bool { store != nil && !layers.isEmpty }
-    var usesNativeRowMenus: Bool {
-        #if os(iOS)
-        true
-        #else
-        false
-        #endif
-    }
     func nativeDragChanged(_ active: Bool) { if nativeDragging != active { nativeDragging = active } }
     private func row(at point: CGPoint) -> JSON? {
         guard enabled, viewport.contains(point),

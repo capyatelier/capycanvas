@@ -40,6 +40,41 @@ final class EditorLaunchTests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    @MainActor func testLayerMenuDragUpward() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_ROW_MENU_PROBE"] = "1"
+        app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
+        let actions = (0..<10).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let list = app.descendants(matching: .any)["layer-rows"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 20))
+        func order() -> [String] { (list.value as? String ?? "").split(separator: ",").map(String.init) }
+        expectation(for: NSPredicate { _, _ in order().count == 12 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let initial = order(), movedID = initial[6]
+        let row = app.otherElements["layer-row-" + movedID]
+        XCTAssertTrue(row.isHittable)
+        let destination = list.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0)).withOffset(CGVector(dx: 0, dy: 8))
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).press(forDuration: 0.8,
+            thenDragTo: destination, withVelocity: .slow, thenHoldForDuration: 0.3)
+        expectation(for: NSPredicate { _, _ in order().first == movedID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let moved = order()
+        XCTAssertEqual(moved.filter { $0 != movedID }, initial.filter { $0 != movedID })
+        func command(_ label: String) {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch.tap()
+        }
+        command("Undo")
+        expectation(for: NSPredicate { _, _ in order() == initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        command("Redo")
+        expectation(for: NSPredicate { _, _ in order() == moved }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
     @MainActor func testLayerListScrolling() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorTestApplication()

@@ -14,7 +14,7 @@ struct ApplicationMenus: View {
             HStack(spacing: compact ? 0 : 6) {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
-                    Menu { CatalogMenuItems(store: store, id: menu["id"].string) } label: {
+                    ApplicationMenuButton(store: store, id: menu["id"].string) {
                         Text(menu["label"].string).fontWeight(.bold).fixedSize()
                             .frame(width: HeaderTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
                             .padding(.horizontal, 6).frame(height: 36)
@@ -23,17 +23,56 @@ struct ApplicationMenus: View {
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
             }.font(.system(size: textSize)).fixedSize()
-            Menu {
-                ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
-                    let menu = store.snapshot["application_menus"][index]
-                    Menu(menu["label"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
-                }
-            } label: {
+            ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu").frame(width: 36, height: 36)
                     .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             }.buttonStyle(.plain).accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
                 .modifier(HeaderControlMeasurement(id: "application-menus"))
         }
+    }
+}
+
+private struct ApplicationMenuButton<Label: View>: View {
+    @ObservedObject var store: EditorStore
+    var id: String? = nil
+    @ViewBuilder let label: () -> Label
+    var body: some View {
+        #if os(iOS)
+        EditorMenuButton(menu: {
+            AppleContextMenu(model) { action in
+                if action["type"].string == "apple_recovery" { store.recovery.refresh(); store.recovery.presented = true }
+                else { store.dispatch(action) }
+            }
+        }, identifier: "application-menu-content", label: label)
+            .disabled(!store.snapshot["preferences"].isNull)
+        #else
+        Menu {
+            if let id { CatalogMenuItems(store: store, id: id) }
+            else {
+                ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
+                    let menu = store.snapshot["application_menus"][index]
+                    Menu(menu["label"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
+                }
+            }
+        } label: { label() }
+        #endif
+    }
+    private func catalog(_ id: String) -> JSON {
+        var value = store.applicationMenu(id)["model"]
+        if id == "file" {
+            value = value.replacing("sections", with: JSON(value["sections"].array.map(\.raw) + [[[
+                "label": "Recovered Drawings…", "enabled": store.snapshot["preferences"].isNull && !store.projectFiles.busy,
+                "action": ["type": "apple_recovery"]
+            ]]]))
+        }
+        return value
+    }
+    private var model: JSON {
+        if let id { return catalog(id) }
+        return JSON(["sections": [store.snapshot["application_menus"].array.map { menu in
+            ["label": menu["label"].raw, "enabled": store.snapshot["preferences"].isNull,
+             "sections": catalog(menu["id"].string)["sections"].raw]
+        }]])
     }
 }
 

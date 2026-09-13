@@ -110,12 +110,15 @@ struct ToolActionControl: View {
     var body: some View {
         Button(action: action) {
             let words = command["label"].string.split(whereSeparator: \.isWhitespace).map(String.init)
-            ToolActionWords(widths: words.map(textWidth), spacing: textWidth(" ")) {
-                ForEach(words.indices, id: \.self) { index in
-                    Text(words[index]).font(.system(size: textSize, weight: .bold)).fixedSize()
+            HStack(spacing: 6) {
+                SharedIcon(name: command["icon"].string)
+                ToolActionWords(widths: words.map(textWidth), spacing: textWidth(" ")) {
+                    ForEach(words.indices, id: \.self) { index in
+                        Text(words[index]).font(.system(size: textSize, weight: .bold)).fixedSize()
+                    }
                 }
             }
-                .frame(maxWidth: .infinity, minHeight: 24)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 24, alignment: .leading)
                 .padding(.horizontal, 17).padding(.vertical, 5)
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }.buttonStyle(EditorControlButtonStyle(selected: selected))
@@ -151,7 +154,10 @@ private struct ToolActionWords: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let natural = widths.reduce(CGFloat(0), +)
             + CGFloat(max(0, subviews.count - 1)) * spacing
-        let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? natural
+        // A browser flex item's text span shrinks to its longest word, and
+        // retains its natural width when there is room beside the icon.
+        let available = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? natural
+        let width = max(widths.max() ?? 0, min(natural, available))
         return CGSize(width: width, height: CGFloat(rows(width, subviews).count) * 24)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
