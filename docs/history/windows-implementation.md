@@ -2192,3 +2192,42 @@ Editor checks cover titlebar hits, tools, Zen modes, retained resize, workspace
 restoration, themes and zero exit. Rust is unchanged from the 523-test and
 strict-Clippy checkpoint. Physical pen, other display scales and 120 Hz painting
 remain open acceptance work.
+
+### Compact picker retained circle field
+
+The circular color field now fills a native ellipse using a retained bitmap
+brush. The brush follows the field cache's hue, size, shape and device lifetime.
+This removes the temporary ellipse clipping layer from each redraw and improves
+field-edge coverage. The shared field pixels and input geometry are unchanged.
+
+At actual display scale 1.5, all default surfaces improve in average error:
+
+| Theme / size | Exact differing pixels | Mean absolute RGB error (0–255) | Maximum |
+| --- | ---: | ---: | ---: |
+| dark 128 | 21.470% | 0.8240 | 64 |
+| dark 160 | 25.020% | 0.6433 | 63 |
+| dark 226 | 25.273% | 0.4873 | 68 |
+| dark 360 | 25.900% | 0.3369 | 68 |
+| light 128 | 21.715% | 0.7818 | 71 |
+| light 160 | 25.238% | 0.6269 | 58 |
+| light 226 | 25.321% | 0.4748 | 68 |
+| light 360 | 25.965% | 0.3412 | 78 |
+
+Four focus and three hover states in both themes have mean error 0.6226–0.6525
+and maximum error 58–78. **All twenty-two complete-image comparisons still fail
+exact equality.** References remain byte-identical to the preceding recapture;
+capture boundaries and comparator tolerances are unchanged.
+
+Independent plain white circle probes also reproduce the browser edge error,
+isolating it from color conversion. The installed browser's
+[pinned Skia revision](https://github.com/google/skia/tree/4f574af2444846ceca4d277a8095c5d4229d175f)
+uses curve subdivision and scan-position rounding. Contour reconstruction remains
+diagnostic research; no additional rasterizer or dependency was introduced.
+
+Normal Debug/Release and Color fixture builds pass. Full Release picker checks
+pass all three shapes with synthetic mouse/pen/touch, cancellation, keyboard,
+slots/swap, native menus, retained drawer input and unchanged document. Full
+Release editor checks also pass, including titlebar hits, tools, Zen, resize,
+workspace restoration, themes and zero exit. Rust remains unchanged from the
+523-test and strict-Clippy checkpoint. Physical input, other physical scales,
+strict visual parity and 120 Hz painting remain open.

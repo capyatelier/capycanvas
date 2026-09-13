@@ -159,12 +159,13 @@ struct WheelImage {
     int pixels=0;
     com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
+    com_ptr<ID2D1BitmapBrush> disc;
     hstring ringShape,fieldKey;
     void draw(Image const& image,J const& model,double size,double scale,bool reset=false){
         int next=std::max(1,int(std::ceil(size*scale)));
         if(reset){surface=nullptr;device.reset();}
         if(!surface||pixels!=next||!device||FAILED(device->d3d->GetDeviceRemovedReason())){
-            device=Device::get();pixels=next;ring=nullptr;field=nullptr;
+            device=Device::get();pixels=next;ring=nullptr;field=nullptr;disc=nullptr;
             surface=Imaging::SurfaceImageSource(pixels,pixels,false);
             check_hresult(surface.as<ISurfaceImageSourceNativeWithD2D>()->SetDevice(device->d2d.get()));
             image.Source(surface);
@@ -258,16 +259,15 @@ struct WheelImage {
                         throw hresult_invalid_argument(L"Invalid shared color field");
                     field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(fieldPixels,fieldPixels),bytes.data(),fieldPixels*4,
                         D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
+                    disc=nullptr;
+                    if(projection==2)check_hresult(context->CreateBitmapBrush(field.get(),D2D1::BitmapBrushProperties(),
+                        D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1.f/fieldPixels,1.f/fieldPixels)),disc.put()));
                     fieldKey=wanted;
                 }
                 if(projection==2){
-                    com_ptr<ID2D1EllipseGeometry> clip;
                     float radius=float(num(geometry,L"disc_radius"));
-                    check_hresult(factory->CreateEllipseGeometry(D2D1::Ellipse(center,radius,radius),clip.put()));
-                    context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clip.get()),nullptr);
-                }
-                context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-                if(projection==2)context->PopLayer();
+                    context->FillEllipse(D2D1::Ellipse(center,radius,radius),disc.get());
+                }else context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
             }
             // Stroke one ellipse, as in the reference canvas, to keep both rims consistent.
             context->DrawEllipse(D2D1::Ellipse(center,(inner+outer)/2,(inner+outer)/2),ring.get(),outer-inner);

@@ -238,6 +238,8 @@ at their final transform, using the shared canvas's integral backing size.
 Labels preserve pair kerning and quarter-pixel glyph positions; font metrics
 use the reference's hundredth-pixel font size. The hue brush strokes a single
 ellipse, and the transparency checker preserves conic-gradient boundaries.
+The circular field retains a bitmap brush and fills its ellipse directly;
+field changes invalidate the brush together with the shared pixel cache.
 Glyph images and text correction tables are retained across updates; size,
 scale, text and ink changes invalidate the corresponding images. The native
 readout button retains the complete accessible color description.
