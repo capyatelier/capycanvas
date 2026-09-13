@@ -704,7 +704,8 @@ pub struct FloatingGroup {
     /// Width inherited on tear-off, retained when manually resizing.
     #[serde(default)]
     pub default_width: Option<f32>,
-    /// None sizes to the active content; resizing supplies an explicit height.
+    /// None sizes to active content; a preserved tear-off size or manual resize
+    /// supplies an explicit height.
     pub height: Option<f32>,
     /// Default-size cycle and flow direction for a standalone floating toolbar.
     #[serde(default)]

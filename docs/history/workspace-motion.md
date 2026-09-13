@@ -1,5 +1,47 @@
 # GTK and Web workspace motion
 
+## GTK drag edges and tear-off sizing (2026-09-13, awaiting human review)
+
+GTK keeps a fixed-size panel presentation under the original contact while it
+crosses any workspace edge. `UiSession` publishes transient displayed bounds;
+the saved floating layout remains fitted to the usable workspace. GTK clips the
+retained widgets at its application surface, including in decorated windows.
+The pointer selects the existing shared drop target and the insertion indicator
+paints above the moving panel. Release into a dock uses that dock's dimensions;
+release elsewhere exposes the fitted floating placement. Cancellation and the
+complete drop remain one workspace history transaction.
+
+The size audit found that ordinary tear-off inherited the source width but
+recomputed height from natural content plus chrome, capped at 75% of the window.
+A scrolled list could grow abruptly, and later native measurements could change
+its size again. GTK now preserves a visible content panel's source width and
+height, including its drawer projection, and freezes the drag presentation.
+Existing floating panels start at their displayed size. Standalone toolbars
+still convert to their compact grid; collapsed icons still use measured content
+or the 320px fallback plus chrome and the existing cap, since they have no
+visible panel body to preserve. Explicit default-size actions keep their natural
+content sizing. Other hosts retain their existing behavior pending this review.
+
+Validation uses `--workspace-edges` (six sources × mouse/touch × dark/light),
+`--workspace-window` (windowed/maximized/fullscreen/restored), and
+`--workspace-motion`. Edge cases check all four edges, late measurements and
+native allocation, the lowest dock insertion slot, release reflow, cancellation,
+undo and redo. The native runner waits for Mutter's DisplayConfig service before
+applying scale; touch events convert logical fixture coordinates to stream
+pixels, matching [Mutter's monitor-stream coordinate transform](https://github.com/GNOME/mutter/blob/gnome-50/src/backends/meta-screen-cast-monitor-stream.c).
+
+The shared suites pass 337 UI and 25 host tests (one unrelated host test remains
+ignored); the normal GTK release build passes. All eight 120 Hz native motion
+cases pass the 115 Hz floor, with 117.17–120.03 Hz presentation and zero full model
+refreshes. Maximum per-case p95 dispatch/placement is 0.0642/0.0628ms. This uses
+the private Mutter 50.4 display, GTK 4.22.4 and NVIDIA Blackwell/Vulkan setup
+described below; it is not physical input-latency evidence. Mouse/touch edge
+validation also passes at monitor scale 2. Physical pen and human interaction
+review remain pending. Clippy completes with existing warnings in main; strict
+all-target Clippy is not clean because of those pre-existing warnings.
+
+## Retained workspace publication
+
 The GTK and Web migrations consume `UiSession::workspace_update()` from
 `c3840f5`. A matching `model_revision` retains all panel models and content.
 Every delivered input phase still enters the shared Rust gesture state machine;

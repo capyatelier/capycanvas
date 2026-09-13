@@ -891,6 +891,9 @@ impl Workspace {
         let surface: DockSurface = glib::Object::new();
         surface.set_hexpand(true);
         surface.set_vexpand(true);
+        // Dragged panels retain their size and may extend beyond any edge.
+        // Clip at the application surface even in a decorated, windowed app.
+        surface.set_overflow(gtk::Overflow::Hidden);
         let tab = gtk::Label::new(Some(APP_NAME));
         tab.add_css_class("document-title");
         tab.set_ellipsize(gtk::pango::EllipsizeMode::End);
