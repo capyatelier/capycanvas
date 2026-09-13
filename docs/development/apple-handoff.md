@@ -10,6 +10,60 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Native docking validation
+
+- Milestone `d520d49` groups the docking fixes with their native validation.
+  Main advanced before publication; the clean integration now includes
+  `688fd76`, preserving both branches and every recovery stash.
+- Both hosts pass the drawer-tab reorder, tear-off, redock and group tear-off
+  workflow, collapsed/nested drawers, and panel configuration followed by a live
+  group drag. The iPad also passes held toolbar tiles with exact Undo/Redo and
+  attached-column width/split resizing with history.
+- The first Mac drawer test failed because successive injected mouse-down
+  events reused event number zero. The native adapter incorrectly retained the
+  preceding collapsed icon's hold policy for the next drawer-tab contact.
+  It now identifies the mouse-down event object shared by pan and press.
+  An unreachable event-type branch is removed; tablet subtype still distinguishes
+  pen from mouse. Shared Rust movement, docking and history are unchanged.
+- Panel-control tests scope the duplicate Color swatch to its popup and locate
+  Brush Size's containing group through its visible tab, replacing a stale
+  preset group ID. No product UI workaround is added. Native input fixtures use
+  the shared popup host and permit only sub-millionth-point event round-trip
+  rounding while keeping device, button, window and event checks.
+- Native AppKit workspace checks pass on both Apple presets with increasing and
+  repeated zero event numbers. Mouse and pen drawer-tab drags include continuous
+  movement and exact Undo/Redo. Earlier full-editor and real-canvas isolation
+  checks also pass. These injected contacts do not establish physical Pencil
+  coverage. Both signed iteration-28 builds pass; the iPad app executable is
+  identical to the installed iteration-23 review app.
+- Native layer and workspace-list regressions also pass on both presets,
+  including pen holds, immediate mouse rows/grips, history, keyboard menus,
+  scrolling, focus loss and source removal. The workspace-list fixture now mounts
+  the shared popup host; its earlier keyboard failure remains recorded.
+- The final signed Mac batch passes all four workflows with no failures or
+  skips: drawer docking, panel configuration/live dragging, collapsed/nested
+  drawers and workspace-switcher order/pin persistence across restart.
+- Evidence, original failures and temporary diagnostic cleanup are recorded in
+  `artifacts/apple-docking-workflows-v1/checkpoint.json`. The review namespace is
+  restored and the artist app descriptor remains unchanged. After the user
+  opened Files, the regenerated export test reached the visible picker without
+  an authentication prompt. Its Cancel tap did not dismiss the picker; XCTest
+  reported no usable hit point for that remote element. Cancellation remains
+  unverified. See `files-unlocked-v28/` for the failure and restored review state;
+  no further Files-unlock confirmation is pending.
+- Incoming shared GPU uploads now return mapping failures to the host; Apple's
+  blank presentation forwards those errors. Both signed iteration-29 builds
+  pass. Mac mouse drawing/Undo/Redo/layers and iPad Metal launch/layers each
+  pass with no failures or skips. The new review app and runner are installed,
+  the review namespace is restored and the artist descriptor is unchanged.
+- The integrated regression has 529 passes and 19 existing hardware/benchmark
+  skips. Its one strict filter-reference failure remains: all decoded input,
+  output and reference pixels, plus the per-case error table, exactly match the
+  retained Metal baseline. No reference or tolerance is changed. Integration
+  evidence is under `artifacts/apple-main-integration-688fd76/`; final native
+  results and installed descriptors are under `integrated-v29/` in the docking
+  evidence folder. Overall acceptance remains incomplete.
+
 ## Workspace recovery and editor workflow milestone
 
 - The Color milestone is published as `6c36d0a`. The periodic pull now includes
@@ -56,9 +110,9 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
   regression, both signed iteration-23 builds and the same two native follow-ups.
 - Mac passes all four lifecycle workflows: settings/workspace restart, artwork
   recovery, independent windows and New/Export cancellation. The iPad passes
-  the first three. Its export cancellation awaits the user unlocking Files;
-  do not repeat that physical test until the condition changes. All initial
-  failures remain recorded.
+  the first three. The later unlocked Files follow-up reaches the picker but
+  still fails cancellation, as recorded above. All initial failures remain
+  recorded.
 - Installed-device XCTest uses `UseDestinationArtifacts` without local
   `DependentProductPaths` or bundle paths. Original `app.launch()` works,
   including terminate/relaunch. The unsuccessful explicit-bundle experiment and

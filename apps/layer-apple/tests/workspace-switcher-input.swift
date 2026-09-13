@@ -111,7 +111,8 @@ import SwiftUI
         window.title = "Workspace gesture check"; window.isReleasedWhenClosed = false
         window.animationBehavior = .none
         defer { window.contentView = nil; window.close() }
-        let host = NSHostingView(rootView: WorkspaceSwitcherRows(manager: manager, library: library).padding(12))
+        let host = NSHostingView(rootView: WorkspaceSwitcherRows(manager: manager, library: library)
+            .padding(12).modifier(EditorPopoverHost()))
         window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         note("Window mounted")
         try await drain(0.3); host.layoutSubtreeIfNeeded()
