@@ -1,6 +1,8 @@
 //! Platform-neutral policy for the replaceable tip of an active stroke.
 
+use crate::input::{PenEvent, SampleFlags, ToolKind};
 use layer_core::{Point, StrokePoint};
+use std::collections::VecDeque;
 
 const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
@@ -15,8 +17,8 @@ pub struct InstantFeedbackConfig {
     pub use_engine_prediction: bool,
     /// Real input newer than this remains in the replaceable tail.
     pub finalization_lag_micros: u32,
-    /// Prediction used when a frontend cannot provide an exact presentation
-    /// timestamp, and the maximum lookahead accepted from any predictor.
+    /// Engine lookahead, also used without a presentation timestamp. Native
+    /// samples use their own horizon, capped independently at 64 ms.
     pub prediction_horizon_micros: u32,
     /// Clamp in physical surface pixels, independent of document zoom.
     pub max_prediction_distance_px: f32,
@@ -97,6 +99,191 @@ pub(crate) struct TipEstimate {
     pub source: TipSource,
 }
 
+/// Per-contact, preview-only state. Never changes recorded stroke samples.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PredictionState {
+    pressure: VecDeque<(u64, f32)>,
+    lead: Option<(u32, f32, Point)>,
+}
+
+impl PredictionState {
+    pub fn observe(&mut self, event: PenEvent) {
+        if event.flags.contains(SampleFlags::PREDICTED)
+            || event.flags.contains(SampleFlags::CORRECTION)
+        {
+            return;
+        }
+        if event.flags.contains(SampleFlags::ESTIMATED)
+            || !matches!(
+                event.tool,
+                ToolKind::Pen
+                    | ToolKind::Eraser
+                    | ToolKind::Brush
+                    | ToolKind::Pencil
+                    | ToolKind::Airbrush
+            )
+            || !event.pressure.is_finite()
+        {
+            self.pressure.clear();
+            return;
+        }
+        if let Some(&(time, pressure)) = self.pressure.back() {
+            if event.timestamp_ns <= time {
+                return;
+            }
+            // A rebound ends the release gesture; do not keep an old falling
+            // trend alive through a fresh press or a gap in the input stream.
+            if event.pressure > pressure + 0.01 || event.timestamp_ns - time > 32_000_000 {
+                self.pressure.clear();
+            }
+        }
+        self.pressure
+            .push_back((event.timestamp_ns, event.pressure.clamp(0.0, 1.0)));
+        while self.pressure.len() > 16
+            || self
+                .pressure
+                .front()
+                .is_some_and(|&(time, _)| event.timestamp_ns - time > 24_000_000)
+        {
+            self.pressure.pop_front();
+        }
+    }
+
+    fn lift_horizon(&self) -> Option<u32> {
+        if self.pressure.len() < 3 {
+            return None;
+        }
+        let &(start, first) = self.pressure.front()?;
+        let &(end, last) = self.pressure.back()?;
+        if end - start < 6_000_000
+            || first - last < 0.04
+            || last >= self.pressure[self.pressure.len() - 2].1
+        {
+            return None;
+        }
+        let n = self.pressure.len() as f64;
+        let mean_t = self
+            .pressure
+            .iter()
+            .map(|&(t, _)| (t - start) as f64 / 1000.0)
+            .sum::<f64>()
+            / n;
+        let mean_p = self
+            .pressure
+            .iter()
+            .map(|&(_, p)| f64::from(p))
+            .sum::<f64>()
+            / n;
+        let mut covariance = 0.0;
+        let mut variance = 0.0;
+        for &(time, pressure) in &self.pressure {
+            let dt = (time - start) as f64 / 1000.0 - mean_t;
+            covariance += dt * (f64::from(pressure) - mean_p);
+            variance += dt * dt;
+        }
+        let slope = covariance / variance;
+        if slope >= -0.000_001 {
+            return None;
+        }
+        // Predict only halfway to the estimated zero-pressure time. This is a
+        // safety bound, not a synthetic pen-up or a brush-pressure adjustment.
+        Some((f64::from(last) / -slope * 0.5).clamp(0.0, 64_000.0) as u32)
+    }
+
+    pub fn estimate(
+        &mut self,
+        real: &[StrokePoint],
+        platform: &[StrokePoint],
+        requested: u32,
+        transform: [f32; 6],
+        config: InstantFeedbackConfig,
+    ) -> Option<TipEstimate> {
+        let latest = *real.last()?;
+        let requested = requested.max(latest.elapsed_micros);
+        let horizon = self.lift_horizon();
+        let limited = horizon.map_or(requested, |h| {
+            requested.min(latest.elapsed_micros.saturating_add(h))
+        });
+        let mut estimate = estimate_tip(real, platform, limited, transform, config)?;
+        let delta = Point {
+            x: estimate.point.position.x - latest.position.x,
+            y: estimate.point.position.y - latest.position.y,
+        };
+        let surface = transform_vector(transform, delta);
+        let distance = surface.x.hypot(surface.y);
+        // Retreat immediately for loss of motion, corners and impending lift.
+        // Otherwise smooth lead length (not raw position) with faster retreat
+        // than extension. Time comes from presentation, not number of frames.
+        let unsafe_motion = motion_confidence(real, transform, config) < 0.5;
+        let mut lead = distance;
+        if let Some((time, old, direction)) = self.lead {
+            let agreement = direction.x * surface.x + direction.y * surface.y;
+            if distance > 0.0
+                && (old == 0.0 || agreement > 0.0)
+                && !unsafe_motion
+                && limited == requested
+            {
+                let dt = requested.saturating_sub(time).min(32_000) as f32;
+                let tau = if distance > old { 16_000.0 } else { 6_000.0 };
+                let filtered = old + (distance - old) * (1.0 - (-dt / tau).exp());
+                lead = filtered
+                    .min(old + dt * 0.0015)
+                    .min(config.max_prediction_distance_px);
+            }
+        }
+        if unsafe_motion && estimate.source == TipSource::Platform {
+            // A native predictor may still supply a long tail after a real
+            // stop/reversal. Only real samples decide this safety veto.
+            if real.len() >= 3 {
+                lead = 0.0;
+            }
+        }
+        if distance > 0.0 {
+            let scale = lead / distance;
+            estimate.point.position = Point {
+                x: latest.position.x + delta.x * scale,
+                y: latest.position.y + delta.y * scale,
+            };
+        }
+        if lead == 0.0 {
+            estimate = TipEstimate {
+                point: latest,
+                source: TipSource::Real,
+            };
+        }
+        self.lead = Some((requested, lead, surface));
+        Some(estimate)
+    }
+
+    /// Apply the same endpoint correction and safety radius to every native
+    /// sample. Otherwise an intermediate point could leave a long loop even
+    /// after the terminal estimate was shortened.
+    pub fn platform_point(
+        anchor: StrokePoint,
+        point: StrokePoint,
+        raw_tip: StrokePoint,
+        tip: StrokePoint,
+        transform: [f32; 6],
+        maximum: f32,
+    ) -> StrokePoint {
+        let raw_distance = surface_distance(anchor.position, raw_tip.position, transform);
+        let lead = surface_distance(anchor.position, tip.position, transform);
+        let scale = if raw_distance > f32::EPSILON {
+            lead / raw_distance
+        } else {
+            0.0
+        };
+        let point = StrokePoint {
+            position: Point {
+                x: anchor.position.x + (point.position.x - anchor.position.x) * scale,
+                y: anchor.position.y + (point.position.y - anchor.position.y) * scale,
+            },
+            ..point
+        };
+        clamp_prediction(anchor, point, transform, maximum.min(lead))
+    }
+}
+
 pub(crate) fn finalized_count(
     real: &[StrokePoint],
     already_finalized: usize,
@@ -129,6 +316,11 @@ pub(crate) fn estimate_tip(
             .iter()
             .position(|point| point.elapsed_micros > latest.elapsed_micros)
     {
+        let target_time = requested_elapsed_micros.min(
+            latest
+                .elapsed_micros
+                .saturating_add(MAX_PREDICTION_HORIZON_MICROS),
+        );
         let point = clamp_prediction(
             latest,
             sample_at_time(latest, &platform[first..], target_time),
@@ -183,10 +375,9 @@ fn extrapolate(
     config: InstantFeedbackConfig,
 ) -> Option<StrokePoint> {
     let current = *real.last()?;
-    let previous_index = (0..real.len().saturating_sub(1)).rev().find(|index| {
-        real[*index].elapsed_micros < current.elapsed_micros
-            && distance(real[*index].position, current.position) > f32::EPSILON
-    })?;
+    let previous_index = (0..real.len().saturating_sub(1))
+        .rev()
+        .find(|index| real[*index].elapsed_micros < current.elapsed_micros)?;
     let previous = real[previous_index];
     let elapsed = current
         .elapsed_micros
@@ -204,6 +395,59 @@ fn extrapolate(
         return None;
     }
 
+    let confidence = motion_confidence(real, document_to_surface, config);
+    if confidence <= f32::EPSILON {
+        return None;
+    }
+
+    let future = target_time.saturating_sub(current.elapsed_micros) as f32;
+    let delta = Point {
+        x: velocity.x * future * confidence,
+        y: velocity.y * future * confidence,
+    };
+    Some(clamp_prediction(
+        current,
+        StrokePoint {
+            position: Point {
+                x: current.position.x + delta.x,
+                y: current.position.y + delta.y,
+            },
+            elapsed_micros: target_time,
+            ..current
+        },
+        document_to_surface,
+        config.max_prediction_distance_px,
+    ))
+}
+
+fn motion_confidence(
+    real: &[StrokePoint],
+    document_to_surface: [f32; 6],
+    config: InstantFeedbackConfig,
+) -> f32 {
+    let Some(&current) = real.last() else {
+        return 0.0;
+    };
+    let Some(previous_index) = (0..real.len().saturating_sub(1))
+        .rev()
+        .find(|&i| real[i].elapsed_micros < current.elapsed_micros)
+    else {
+        return 1.0;
+    };
+    let previous = real[previous_index];
+    let elapsed = (current.elapsed_micros - previous.elapsed_micros) as f32;
+    let surface_velocity = transform_vector(
+        document_to_surface,
+        Point {
+            x: (current.position.x - previous.position.x) / elapsed,
+            y: (current.position.y - previous.position.y) / elapsed,
+        },
+    );
+    if surface_velocity.x.hypot(surface_velocity.y) * 1_000_000.0
+        < config.minimum_prediction_speed_px_per_second
+    {
+        return 0.0;
+    }
     let mut confidence = 1.0;
     if previous_index > 0 {
         let older = real[previous_index - 1];
@@ -226,30 +470,7 @@ fn extrapolate(
             }
         }
     }
-    if confidence <= f32::EPSILON {
-        return None;
-    }
-
-    let future = target_time.saturating_sub(current.elapsed_micros) as f32;
-    let mut delta = Point {
-        x: velocity.x * future * confidence,
-        y: velocity.y * future * confidence,
-    };
-    let surface_delta = transform_vector(document_to_surface, delta);
-    let surface_distance = surface_delta.x.hypot(surface_delta.y);
-    if surface_distance > config.max_prediction_distance_px && surface_distance > 0.0 {
-        let scale = config.max_prediction_distance_px / surface_distance;
-        delta.x *= scale;
-        delta.y *= scale;
-    }
-    Some(StrokePoint {
-        position: Point {
-            x: current.position.x + delta.x,
-            y: current.position.y + delta.y,
-        },
-        elapsed_micros: target_time,
-        ..current
-    })
+    confidence
 }
 
 fn clamp_prediction(
@@ -314,13 +535,205 @@ pub(crate) fn surface_distance(a: Point, b: Point, transform: [f32; 6]) -> f32 {
     delta.x.hypot(delta.y)
 }
 
-fn distance(a: Point, b: Point) -> f32 {
-    (a.x - b.x).hypot(a.y - b.y)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::PenPhase;
+
+    const IDENTITY: [f32; 6] = [1., 0., 0., 1., 0., 0.];
+
+    fn pressure_sample(index: u64, pressure: f32) -> PenEvent {
+        PenEvent {
+            device_id: 1,
+            sequence: index,
+            timestamp_ns: index * 4_000_000,
+            view_revision: 1,
+            surface_position: Point {
+                x: index as f32 * 4.,
+                y: 0.,
+            },
+            pressure,
+            tilt_radians: [0.; 2],
+            twist_radians: 0.,
+            distance: 0.,
+            phase: PenPhase::Move,
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
+        }
+    }
+
+    #[test]
+    fn lead_filter_reduces_jitter_and_bounds_extension_at_different_frame_rates_and_zoom() {
+        let config = InstantFeedbackConfig::default();
+        for zoom in [0.25, 1., 4.] {
+            for step in [4_000, 8_000, 16_000] {
+                let transform = [zoom, 0., 0., zoom, 0., 0.];
+                let mut real = vec![point(0., 0., 0)];
+                let mut state = PredictionState::default();
+                let mut raw_leads = Vec::new();
+                let mut filtered_leads = Vec::new();
+                for i in 1..40 {
+                    let time = i * step;
+                    // Constant physical motion with alternating native horizon
+                    // noise, including intermittent shared fallback frames.
+                    real.push(point(time as f32 * 0.001 / zoom, 0., time));
+                    let latest = *real.last().unwrap();
+                    let platform = [point(
+                        latest.position.x + if i % 2 == 0 { 16. / zoom } else { 8. / zoom },
+                        0.,
+                        time + 8_000,
+                    )];
+                    let platform = if i % 3 == 0 { &[][..] } else { &platform[..] };
+                    let raw =
+                        estimate_tip(&real, platform, time + 8_000, transform, config).unwrap();
+                    let tip = state
+                        .estimate(&real, platform, time + 8_000, transform, config)
+                        .unwrap();
+                    let lead = surface_distance(latest.position, tip.point.position, transform);
+                    if let Some(&old) = filtered_leads.last() {
+                        assert!(lead <= old + step as f32 * 0.0015 + 0.001);
+                    }
+                    raw_leads.push(surface_distance(
+                        latest.position,
+                        raw.point.position,
+                        transform,
+                    ));
+                    filtered_leads.push(lead);
+                    assert_eq!(
+                        state
+                            .estimate(&real, platform, time + 8_000, transform, config)
+                            .unwrap(),
+                        tip,
+                        "same presentation cannot advance the filter"
+                    );
+                }
+                let variation =
+                    |values: &[f32]| values.windows(2).map(|p| (p[1] - p[0]).abs()).sum::<f32>();
+                assert!(variation(&filtered_leads) < variation(&raw_leads) * 0.65);
+                assert!(
+                    filtered_leads.last().unwrap() > &6.,
+                    "keep useful lookahead"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stop_reversal_and_pressure_release_retract_without_filter_lag() {
+        for last in [
+            point(8., 0., 12_000),
+            point(6., 0., 12_000),
+            point(8., 4., 12_000),
+        ] {
+            let mut state = PredictionState::default();
+            let mut real = vec![point(0., 0., 0), point(4., 0., 4_000), point(8., 0., 8_000)];
+            state
+                .estimate(
+                    &real,
+                    &[point(40., 0., 16_000)],
+                    16_000,
+                    IDENTITY,
+                    InstantFeedbackConfig::default(),
+                )
+                .unwrap();
+            // A stop, reversal or right-angle corner must also veto stale OS
+            // predictions, including a stationary latest sample.
+            real.push(last);
+            let tip = state
+                .estimate(
+                    &real,
+                    &[point(60., 0., 20_000)],
+                    20_000,
+                    IDENTITY,
+                    InstantFeedbackConfig::default(),
+                )
+                .unwrap();
+            assert_eq!(tip.point, last);
+            assert_eq!(tip.source, TipSource::Real);
+        }
+        let mut state = PredictionState::default();
+        let real = [
+            point(0., 0., 0),
+            point(4., 0., 4_000),
+            point(8., 0., 8_000),
+            point(12., 0., 12_000),
+        ];
+        state
+            .estimate(
+                &real[..3],
+                &[],
+                16_000,
+                IDENTITY,
+                InstantFeedbackConfig::default(),
+            )
+            .unwrap();
+        for (i, p) in [0.8, 0.6, 0.4, 0.2].into_iter().enumerate() {
+            state.observe(pressure_sample(i as u64, p));
+        }
+        for platform in [&[][..], &[point(28., 0., 28_000)][..]] {
+            let tip = state
+                .estimate(
+                    &real,
+                    platform,
+                    20_000,
+                    IDENTITY,
+                    InstantFeedbackConfig::default(),
+                )
+                .unwrap();
+            assert!(
+                tip.point.position.x <= 14.01,
+                "release limits even a previously extended tail"
+            );
+        }
+    }
+
+    #[test]
+    fn pressure_gate_ignores_light_steady_noisy_and_non_pen_input() {
+        for values in [
+            [0.08; 5],
+            [0.6, 0.59, 0.61, 0.6, 0.59],
+            [0.8, 0.6, 0.4, 0.2, 0.3],
+        ] {
+            let mut state = PredictionState::default();
+            for (i, p) in values.into_iter().enumerate() {
+                state.observe(pressure_sample(i as u64, p));
+            }
+            assert_eq!(state.lift_horizon(), None);
+        }
+        for (tool, flags) in [
+            (ToolKind::Mouse, SampleFlags::NONE),
+            (ToolKind::Finger, SampleFlags::NONE),
+            (ToolKind::Pen, SampleFlags::PREDICTED),
+            (ToolKind::Pen, SampleFlags::CORRECTION),
+            (ToolKind::Pen, SampleFlags::ESTIMATED),
+        ] {
+            let mut state = PredictionState::default();
+            for (i, p) in [0.8, 0.6, 0.4, 0.2].into_iter().enumerate() {
+                state.observe(PenEvent {
+                    tool,
+                    flags,
+                    ..pressure_sample(i as u64, p)
+                });
+            }
+            assert_eq!(state.lift_horizon(), None);
+        }
+    }
+
+    #[test]
+    fn native_horizon_is_independent_of_manual_time_and_entire_tail_is_bounded() {
+        let real = [point(0., 0., 0), point(4., 0., 4_000)];
+        let platform = [point(400., 200., 6_000), point(20., 0., 20_000)];
+        let config = InstantFeedbackConfig {
+            prediction_horizon_micros: 0,
+            ..InstantFeedbackConfig::default()
+        };
+        let raw = estimate_tip(&real, &platform, 20_000, IDENTITY, config).unwrap();
+        assert_eq!(raw.point, platform[1]);
+        let tip = point(8., 0., 20_000);
+        let intermediate =
+            PredictionState::platform_point(real[1], platform[0], raw.point, tip, IDENTITY, 96.);
+        assert!(surface_distance(real[1].position, intermediate.position, IDENTITY) <= 4.001);
+    }
 
     fn point(x: f32, y: f32, elapsed_micros: u32) -> StrokePoint {
         StrokePoint {

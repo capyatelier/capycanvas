@@ -6,8 +6,8 @@
 
 use crate::brush::{DabGenerator, dabs_cover_point, damage_for_dabs, lock_dab_tail};
 use crate::feedback::{
-    FeedbackConfigError, InstantFeedbackConfig, TipSource, estimate_tip, finalized_count,
-    surface_distance,
+    FeedbackConfigError, InstantFeedbackConfig, PredictionState, TipSource, estimate_tip,
+    finalized_count, surface_distance,
 };
 use crate::input::{
     InputConsumer, PenEvent, PenPhase, PressureCurve, SampleFlags, StrokeBuilder, ToolKind,
@@ -81,6 +81,7 @@ struct ActiveStroke {
     brush: BrushSnapshot,
     style: DabStyle,
     feedback: InstantFeedbackConfig,
+    prediction: PredictionState,
     persistent_started: bool,
     committed_smudge_dabs: usize,
     material_updates: Vec<u32>,
@@ -904,12 +905,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     brush,
                     style,
                     feedback,
+                    prediction: PredictionState::default(),
                     persistent_started: false,
                     committed_smudge_dabs: 0,
                     material_updates: Vec::new(),
                     ruler,
                 };
                 self.active_stroke = Some(active);
+                if feedback.enabled {
+                    self.active_stroke
+                        .as_mut()
+                        .unwrap()
+                        .prediction
+                        .observe(event);
+                }
                 self.pending_smudge_dabs.clear();
                 self.finalized_real_points = 0;
                 self.builder.begin(event, transform, self.pressure);
@@ -936,6 +945,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 self.builder.push(event, transform, self.pressure);
+                let active = self.active_stroke.as_mut().unwrap();
+                if active.feedback.enabled {
+                    active.prediction.observe(event);
+                }
                 self.track_estimate(event, transform);
                 if !event.flags.contains(SampleFlags::PREDICTED)
                     && !self
@@ -1144,7 +1157,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         timestamp_ns: Option<u64>,
         presentation_timestamp_ns: Option<u64>,
     ) {
-        let Some(active) = self.active_stroke.as_ref() else {
+        let Some(active) = self.active_stroke.as_mut() else {
             return;
         };
         let start = self.dabs.len();
@@ -1175,7 +1188,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .elapsed_micros
                     .saturating_add(active.feedback.prediction_horizon_micros)
             });
-        let Some(estimate) = estimate_tip(
+        let Some(estimate) = active.prediction.estimate(
             self.builder.real_points(),
             self.builder.predicted_points(),
             requested_elapsed,
@@ -1194,6 +1207,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             generator.append(point, &active.brush, &mut self.dabs);
         }
         if estimate.source == TipSource::Platform {
+            let raw_tip = estimate_tip(
+                self.builder.real_points(),
+                self.builder.predicted_points(),
+                estimate.point.elapsed_micros,
+                self.view.document_to_surface,
+                active.feedback,
+            )
+            .unwrap()
+            .point;
             for point in self
                 .builder
                 .predicted_points()
@@ -1204,6 +1226,14 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         && point.elapsed_micros < estimate.point.elapsed_micros
                 })
             {
+                let point = PredictionState::platform_point(
+                    latest,
+                    point,
+                    raw_tip,
+                    estimate.point,
+                    self.view.document_to_surface,
+                    active.feedback.max_prediction_distance_px,
+                );
                 generator.append(point, &active.brush, &mut self.dabs);
             }
         }
@@ -2868,6 +2898,98 @@ mod tests {
         DabGenerator::generate(stroke, &mut replay);
         assert_eq!(engine.backend().persistent, replay);
         assert!(engine.backend().preview.is_empty());
+    }
+
+    #[test]
+    fn lift_prediction_uses_raw_pressure_and_never_changes_commit_or_next_contact() {
+        for gamma in [0.5, 2.0] {
+            let (mut producer, consumer) = input_queue(32);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("lift", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine.set_pressure_curve(PressureCurve {
+                gamma,
+                ..PressureCurve::default()
+            });
+            let mut inputs = Vec::new();
+            for (i, pressure) in [0.8, 0.6, 0.4, 0.2].into_iter().enumerate() {
+                let mut sample = event(
+                    i as u64 + 1,
+                    if i == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    4. + i as f32 * 16.,
+                );
+                sample.timestamp_ns = 1_000_000 + i as u64 * 4_000_000;
+                sample.pressure = pressure;
+                inputs.push(sample);
+                producer.push(sample).unwrap();
+                engine
+                    .render_frame_for(sample.timestamp_ns, sample.timestamp_ns + 8_000_000)
+                    .unwrap();
+            }
+            assert!(dabs_cover_point(
+                &engine.backend().preview,
+                Point { x: 60., y: 16. }
+            ));
+            assert!(
+                engine
+                    .backend()
+                    .preview
+                    .iter()
+                    .all(|dab| dab.center.x <= 60.01)
+            );
+            let mut up = event(5, PenPhase::Up, 56.);
+            up.timestamp_ns = 14_000_000;
+            up.pressure = 0.;
+            inputs.push(up);
+            producer.push(up).unwrap();
+            engine
+                .render_frame_for(up.timestamp_ns, up.timestamp_ns)
+                .unwrap();
+            let stroke = engine.document().strokes().next().unwrap();
+            assert_eq!(stroke.points.len(), inputs.len());
+            for (point, input) in stroke.points.iter().zip(inputs) {
+                assert_eq!(point.position, input.surface_position);
+                assert_eq!(point.pressure, input.pressure.powf(gamma));
+            }
+            let mut replay = Vec::new();
+            DabGenerator::generate(stroke, &mut replay);
+            assert_eq!(engine.backend().persistent, replay);
+            assert!(engine.backend().preview.is_empty());
+            for phase in [PenPhase::Up, PenPhase::Cancel] {
+                let mut down = event(6, PenPhase::Down, 4.);
+                down.timestamp_ns = 20_000_000;
+                let mut moved = event(7, PenPhase::Move, 20.);
+                moved.timestamp_ns = 24_000_000;
+                producer.push(down).unwrap();
+                producer.push(moved).unwrap();
+                engine.render_frame_for(24_000_000, 32_000_000).unwrap();
+                assert!(
+                    dabs_cover_point(&engine.backend().preview, Point { x: 52., y: 16. }),
+                    "new contact has no old pressure or lead history"
+                );
+                producer
+                    .push(PenEvent {
+                        phase,
+                        timestamp_ns: 25_000_000,
+                        ..moved
+                    })
+                    .unwrap();
+                engine.render_frame().unwrap();
+                assert!(engine.backend().preview.is_empty());
+            }
+        }
     }
 
     #[test]

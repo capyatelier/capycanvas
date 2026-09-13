@@ -94,7 +94,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             if changed {
                 self.metrics.corrected_input_samples += 1;
                 if active {
-                    let active = self.active_stroke.as_ref().unwrap();
+                    let active = self.active_stroke.as_mut().unwrap();
+                    // A late sensor update is not fresh pressure/motion. Drop
+                    // preview history instead of treating delivery as input.
+                    active.prediction = PredictionState::default();
                     if !active.feedback.enabled || estimate.index < self.finalized_real_points {
                         self.rebuild_corrected_active();
                     }
