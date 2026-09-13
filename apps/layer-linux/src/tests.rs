@@ -7,6 +7,8 @@ mod column_drop;
 mod column_group_tests;
 #[path = "drag_pickup_tests.rs"]
 mod drag_pickup;
+#[path = "icon_tests.rs"]
+mod icons;
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
 #[path = "tooltip_tests.rs"]
@@ -4443,6 +4445,22 @@ fn native_adjustment_panels_review() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(900);
+    let show_adjustments = || {
+        let group = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.panels.contains(&Panel::Adjustments))
+            .unwrap();
+        if group.active != Panel::Adjustments {
+            w.dispatch(UiAction::SelectPanelTab {
+                group: group.id,
+                panel: Panel::Adjustments,
+            });
+        }
+        pump(80);
+        assert!(w.effects.adjustments.is_mapped());
+    };
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Dark),
     });
@@ -4479,10 +4497,7 @@ fn native_adjustment_panels_review() {
     pump(300);
     let dir = "../../artifacts/ui/adjustments-gtk";
     std::fs::create_dir_all(dir).unwrap();
-    w.dispatch(UiAction::SelectPanelTab {
-        group: 8,
-        panel: Panel::Adjustments,
-    });
+    show_adjustments();
     pump(900);
     crate::capture(&w, &format!("{dir}/01-adjustments.png"));
     let first = find_named(w.effects.adjustments.upcast_ref(), "adjustment-curves").unwrap();
@@ -4495,10 +4510,14 @@ fn native_adjustment_panels_review() {
         .unwrap()
         .downcast::<gtk::Picture>()
         .unwrap();
-    assert!(
-        picture.paintable().is_some(),
-        "visible filter rows receive asynchronous GPU previews"
-    );
+    let preview_deadline = Instant::now() + Duration::from_secs(20);
+    while picture.paintable().is_none() {
+        assert!(
+            Instant::now() < preview_deadline,
+            "visible filter rows receive asynchronous GPU previews"
+        );
+        pump(30);
+    }
     let second = find_named(w.effects.adjustments.upcast_ref(), "adjustment-levels").unwrap();
     assert!(first.width() > 160);
     assert!(
@@ -4510,10 +4529,7 @@ fn native_adjustment_panels_review() {
         .iter()
         .enumerate()
     {
-        w.dispatch(UiAction::SelectPanelTab {
-            group: 8,
-            panel: Panel::Adjustments,
-        });
+        show_adjustments();
         pump(80);
         find_named(
             w.effects.adjustments.upcast_ref(),
@@ -4631,10 +4647,7 @@ fn native_adjustment_panels_review() {
     }
     // Category/search changes use the shared policy and preserve the selected
     // editing layer. The GTK view only rebuilds the matching rows.
-    w.dispatch(UiAction::SelectPanelTab {
-        group: 8,
-        panel: Panel::Adjustments,
-    });
+    show_adjustments();
     w.dispatch(UiAction::FilterPicker {
         action: layer_ui::FilterPickerAction::Category {
             category: Some("distort".into()),
@@ -4677,6 +4690,22 @@ fn native_adjustment_panels_review() {
         id: layer,
         visible: true,
     });
+    // Inserting an effect selects Properties. Diagnostics collect only while
+    // their panel is active, so activate it before measuring the edits.
+    let stats_group = w
+        .resolved()
+        .groups
+        .into_iter()
+        .find(|g| g.panels.contains(&Panel::Stats))
+        .unwrap();
+    if stats_group.active != Panel::Stats {
+        w.dispatch(UiAction::SelectPanelTab {
+            group: stats_group.id,
+            panel: Panel::Stats,
+        });
+    }
+    pump(100);
+    assert!(w.effects.stats.is_mapped());
     for i in 0..16 {
         w.dispatch(UiAction::Effect {
             action: EffectAction::Set {
@@ -5813,18 +5842,28 @@ fn native_toolbar_sizing() {
             pump(100);
             let g = placement();
             assert!(!g.floating);
-            assert_eq!(
-                if g.axis == Axis::Vertical {
-                    g.bounds.width
-                } else {
-                    g.bounds.height
-                },
-                if g.axis == Axis::Vertical {
-                    108.0
-                } else {
-                    72.0
+            // Lane count depends on the current toolbar contents, style and
+            // viewport. Verify the native allocations against the shared wrap
+            // projection instead of assuming a one-lane ribbon.
+            let strip = w.panel_widget(Panel::Toolbar);
+            let projection = g.tiles.as_ref().unwrap();
+            let mut child = strip.first_child();
+            for expected in &projection.tiles {
+                let tile = child.take().unwrap();
+                child = tile.next_sibling();
+                let actual = tile.compute_bounds(&strip).unwrap();
+                for (actual, expected) in [
+                    (actual.x(), expected.x),
+                    (actual.y(), expected.y),
+                    (actual.width(), expected.width),
+                    (actual.height(), expected.height),
+                ] {
+                    assert!(
+                        (actual - expected).abs() <= 1.,
+                        "native toolbar follows shared wrapping"
+                    );
                 }
-            );
+            }
             capture_reference(
                 &w,
                 &format!("{dir}/toolbar-docked-{edge:?}-{theme:?}.png"),
@@ -5851,7 +5890,7 @@ fn native_zen_icons() {
     assert_eq!(image.pixel_size(), layer_ui::ZEN_ICON_SIZE as i32);
     assert_eq!(w.preferences.dialog.content_height(), 744);
     assert_eq!(
-        image.icon_name().as_deref(),
+        crate::icons::name(&image).as_deref(),
         Some("layer-zen-looking-up-symbolic")
     );
     for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
@@ -5890,7 +5929,7 @@ fn native_zen_icons() {
             assert!(tile.is_active());
             assert_eq!(state(&w).settings.zen_icon, symbol);
             assert_eq!(
-                image.icon_name().as_deref(),
+                crate::icons::name(&image).as_deref(),
                 Some(format!("layer-{}-symbolic", symbol.icon()).as_str())
             );
             assert_eq!(image.pixel_size(), layer_ui::ZEN_ICON_SIZE as i32);
@@ -7518,9 +7557,9 @@ fn native_workspace_management() {
                 .first_child()
                 .and_downcast::<gtk::Image>()
                 .unwrap()
-                .icon_name()
-                .as_deref(),
-            Some(format!("layer-{expected}-symbolic").as_str())
+                .widget_name()
+                .as_str(),
+            format!("layer-{expected}-symbolic").as_str()
         );
         send(CustomizationAction::SetTabStyle {
             group: floated,
@@ -7730,9 +7769,9 @@ fn native_panel_customization() {
                 .first_child()
                 .and_downcast::<gtk::Image>()
                 .unwrap()
-                .icon_name()
-                .as_deref(),
-            Some("layer-size-symbolic")
+                .widget_name()
+                .as_str(),
+            "layer-size-symbolic"
         );
         send(CustomizationAction::SetTabStyle {
             group: 8,
@@ -8604,7 +8643,7 @@ fn native_web_parity_reference() {
             "bounds": [b.x(), b.y(), b.width(), b.height()],
             "font": widget.pango_context().font_description().map(|f| f.to_string()),
             "text": widget.downcast_ref::<gtk::Label>().map(|l| l.text().to_string()),
-            "icon": widget.downcast_ref::<gtk::Image>().and_then(|i| i.icon_name()).map(|s| s.to_string()),
+            "icon": widget.downcast_ref::<gtk::Image>().and_then(crate::icons::name).map(|s| s.to_string()),
             "children": children,
         })
     }
@@ -10125,27 +10164,12 @@ fn native_cursor_vectors() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
-    let theme = gtk::IconTheme::for_display(&w.area.display());
     for icon in ui_catalog().icons {
-        for scale in [1, 2] {
-            let asset = theme.lookup_icon(
-                &format!("layer-{icon}-symbolic"),
-                &[],
-                16,
-                scale,
-                gtk::TextDirection::Ltr,
-                gtk::IconLookupFlags::FORCE_SYMBOLIC,
-            );
-            assert!(asset.is_symbolic());
-            assert!(
-                asset
-                    .file()
-                    .unwrap()
-                    .uri()
-                    .starts_with("resource:///dev/layer/icons/"),
-                "{icon} must come from the shared bank"
-            );
-        }
+        let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
+        assert!(
+            image.paintable().unwrap().is::<gtk::Svg>(),
+            "{icon} uses the shared vectors"
+        );
     }
     std::fs::create_dir_all("../../artifacts/ui/cursors").unwrap();
     let scale = w.area.scale_factor() as f32;
@@ -13227,7 +13251,13 @@ fn native_workspace_controls_docking_and_ink() {
     std::fs::create_dir_all("../../artifacts/ui").unwrap();
     review(&w, "dark");
     assert_eq!(
-        command(&w, CommandId::ZenMode).icon_name().as_deref(),
+        crate::icons::name(
+            &command(&w, CommandId::ZenMode)
+                .child()
+                .and_downcast::<gtk::Image>()
+                .unwrap()
+        )
+        .as_deref(),
         Some("layer-zen-looking-up-symbolic")
     );
     let toolbar_bounds = w.toolbar.compute_bounds(&w.surface).unwrap();

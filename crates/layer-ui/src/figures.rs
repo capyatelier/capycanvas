@@ -45,7 +45,16 @@ pub(crate) fn tool_set(shape: FigureShape, paint: FigurePaint) -> ToolSetView {
         ]
         .into_iter()
         .filter(|(p, _)| shape != FigureShape::Line || *p == FigurePaint::Outline)
-        .map(|(p, label)| item(label, icon, shape, p, p == paint))
+        .map(|(p, label)| {
+            let icon = match (shape, p) {
+                (FigureShape::Rectangle, FigurePaint::Fill) => "rectangle-fill",
+                (FigureShape::Rectangle, FigurePaint::Both) => "rectangle-both",
+                (FigureShape::Ellipse, FigurePaint::Fill) => "ellipse-fill",
+                (FigureShape::Ellipse, FigurePaint::Both) => "ellipse-both",
+                _ => icon,
+            };
+            item(label, icon, shape, p, p == paint)
+        })
         .collect(),
     }
 }

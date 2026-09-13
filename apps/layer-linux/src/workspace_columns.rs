@@ -5,7 +5,7 @@ use super::*;
 struct Strip {
     id: u32,
     root: gtk::Box,
-    expand_glyph: gtk::Label,
+    expand_glyph: gtk::Image,
     key: Vec<(u32, Vec<Panel>)>,
     buttons: Vec<(Panel, gtk::Button)>,
     groups: Vec<(u32, gtk::Box)>,
@@ -86,8 +86,7 @@ impl Columns {
                 expand.set_widget_name(&format!("expand-column-{}", c.id));
                 expand.add_css_class("flat");
                 expand.add_css_class("column-expand");
-                // Match Web's original compact text guillemet, including its weight.
-                let expand_glyph = gtk::Label::new(None);
+                let expand_glyph = crate::icons::image("layer-chevron-double-right-symbolic");
                 expand_glyph.set_halign(gtk::Align::Center);
                 expand_glyph.set_valign(gtk::Align::Center);
                 expand.set_child(Some(&expand_glyph));
@@ -117,10 +116,8 @@ impl Columns {
                         button.add_css_class("flat");
                         button.add_css_class("tile-button");
                         button.set_size_request(TILE_SIZE as i32, TILE_SIZE as i32);
-                        let image = gtk::Image::from_icon_name(&format!(
-                            "layer-{}-symbolic",
-                            config.icon()
-                        ));
+                        let image =
+                            crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
                         image.set_pixel_size(20);
                         button.set_child(Some(&image));
                         // An icon tile remains a held source even though it moves a panel.
@@ -235,13 +232,11 @@ impl Columns {
             let expand_glyph = if c.bounds.x + c.bounds.width * 0.5
                 < resolved.work_area.x + resolved.work_area.width * 0.5
             {
-                "»"
+                "layer-chevron-double-right-symbolic"
             } else {
-                "«"
+                "layer-chevron-double-left-symbolic"
             };
-            if strip.expand_glyph.text() != expand_glyph {
-                strip.expand_glyph.set_text(expand_glyph);
-            }
+            crate::icons::set(&strip.expand_glyph, Some(expand_glyph));
             let offset = layout
                 .column_scroll
                 .iter()

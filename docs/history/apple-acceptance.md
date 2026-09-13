@@ -118,6 +118,27 @@ Do not force AppKit's high-contrast appearance names: Apple's
 reserves their selection for the system accessibility setting. These focused
 comparisons do not constitute a complete accessibility or physical-device pass.
 
+## Shared icon integration — 2026-09-13
+
+Integrated the published 157-icon bank and its shared command, tool, category
+and filter mappings. Both Apple hosts retain brush stroke previews while showing
+each preset's medium icon; filter categories and choices now expose their shared
+icons. New Layer and custom close/check/more/plus controls use the canonical
+assets. Filename normalization preserves internal words such as `add-layer`.
+
+Both signed Debug targets build. Six SVG conversion tests, 306 shared UI tests
+and 41 Apple bridge tests pass. Compiled AppKit/SwiftUI and isolated Chrome grids
+cover all 157 icons in 18 combinations of size, theme, tint and disabled opacity.
+All 216 flat paint samples pass with at most 1/255 channel error. Full unmasked
+pixel differences remain visible; the [icon audit](../ui/icon-audit.md#apple-integration--2026-09-13)
+records their bounds and distinguishes AppKit components from UIKit and whole
+editor acceptance. The isolated physical iPad editor includes the new icons.
+
+The user's physical layer check confirms downward held-menu dragging, scrolling
+and dropping, but upward movement can remain in the overlapping native menu.
+Upward pickup is an open interaction defect. A separate candidate and local
+gesture probe are under validation; icon integration does not mark it fixed.
+
 ## Presentation-capacity retry — 2026-09-13
 
 The shared Apple driver now makes one deadline-bounded retry when a presentation

@@ -1014,7 +1014,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                     "{} brush preset",
                     choice.map(|b| b.category).unwrap_or("Paint")
                 ),
-                "brush",
+                choice.map_or("brush", |b| crate::tools::group(b.id).icon()),
             )
         }
         ToolbarControl::Size { pixels } => (

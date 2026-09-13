@@ -89,7 +89,7 @@ import org.json.JSONObject
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(view.getString("title"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                     IconButton(close, Modifier.size(36.dp).semantics { contentDescription = view.getString("close_label") }.testTag("close-toolbar-manager")) {
-                        Text("×", fontSize = 24.sp)
+                        SharedIcon("close", null)
                     }
                 }
                 Text(view.getString("description"), color = colors.settingsSecondary)

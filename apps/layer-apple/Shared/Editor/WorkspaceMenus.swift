@@ -87,7 +87,7 @@ struct WorkspaceMenu: View {
                                 SharedIcon(name: "check").opacity(item["selected"].bool ? 1 : 0)
                                 Text(item["label"].string).frame(maxWidth: .infinity, alignment: .leading)
                                 if !item["hint"].string.isEmpty { Text(item["hint"].string).opacity(0.75) }
-                                if !item["sections"].array.isEmpty { Image(systemName: "chevron.right") }
+                                if !item["sections"].array.isEmpty { SharedIcon(name: "down").rotationEffect(.degrees(-90)) }
                             }.padding(.horizontal, 8).frame(minHeight: 32).contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(!item["enabled"].bool)
                             .accessibilityIdentifier("workspace-action-" + item["label"].string)

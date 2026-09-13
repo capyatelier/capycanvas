@@ -140,7 +140,7 @@ struct WorkspaceSwitcherRows: View {
             interaction.closeMenu(); manager.activate(item["action"])
         } label: {
             HStack(spacing: 8) {
-                Group { if item["checked"].bool { Image(systemName: "checkmark") } else { Color.clear } }.frame(width: 16, height: 16)
+                Group { if item["checked"].bool { SharedIcon(name: "check") } else { Color.clear } }.frame(width: 16, height: 16)
                 Text(item["label"].string); Spacer()
             }.padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(!item["enabled"].bool || !available)

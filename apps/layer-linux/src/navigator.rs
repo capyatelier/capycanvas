@@ -348,8 +348,7 @@ impl Navigator {
         ]
         .into_iter()
         .map(|id| {
-            let button =
-                gtk::Button::from_icon_name(&format!("layer-{}-symbolic", id.icon().unwrap()));
+            let button = crate::icons::button(&format!("layer-{}-symbolic", id.icon().unwrap()));
             button.add_css_class("flat");
             button.set_widget_name(&format!("navigator-{id:?}"));
             button.set_tooltip_text(Some(id.label()));

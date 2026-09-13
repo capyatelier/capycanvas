@@ -24,10 +24,8 @@ impl ImageSelector {
         let select = Rc::new(select);
         let mut buttons = Vec::<gtk::ToggleButton>::new();
         for (i, (label, icon)) in labels.iter().zip(icons).enumerate() {
-            let image = gtk::Image::builder()
-                .icon_name(format!("layer-{icon}-symbolic"))
-                .pixel_size(48)
-                .build();
+            let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
+            image.set_pixel_size(48);
             let button = gtk::ToggleButton::builder()
                 .child(&image)
                 .tooltip_text(label)

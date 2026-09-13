@@ -92,7 +92,7 @@ struct LayerPanel: View {
     }
     private var footer: some View {
         HStack(spacing: 2) {
-            LayerButton(icon: "plus", label: "New layer") { store.layer(["op": "new", "group": false, "clipped": false]) }
+            LayerButton(icon: "add-layer", label: "New layer") { store.layer(["op": "new", "group": false, "clipped": false]) }
             LayerButton(icon: "folder", label: "New group") { store.layer(["op": "new", "group": true, "clipped": false]) }
             LayerButton(icon: "mask", label: "Add layer mask", enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
@@ -352,7 +352,7 @@ private struct LayerActionMenu: View {
     }
     private func label(_ item: JSON) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "checkmark").opacity(item["selected"].bool ? 1 : 0).frame(width: 16)
+            SharedIcon(name: "check").opacity(item["selected"].bool ? 1 : 0).frame(width: 16)
             Text(item["label"].string).lineLimit(1)
             Spacer(minLength: 4)
             Text(item["hint"].string).opacity(0.75)

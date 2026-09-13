@@ -758,10 +758,10 @@ impl Preferences {
                                     if let Some(index) =
                                         options.iter().position(|s| s == text.as_str())
                                     {
-                                        image.set_icon_name(Some(&format!(
-                                            "layer-{}-symbolic",
-                                            icons[index]
-                                        )));
+                                        crate::icons::set(
+                                            &image,
+                                            Some(&format!("layer-{}-symbolic", icons[index])),
+                                        );
                                     }
                                 });
                                 control.set_factory(Some(&factory));

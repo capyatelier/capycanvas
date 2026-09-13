@@ -13,8 +13,8 @@ ports are compared.
 
 Install a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`,
 GTK4 and libadwaita development packages, and Wayland development libraries.
-Package names vary by distribution. The current development stack is GTK 4.22
-and libadwaita 1.9; the enabled API features are declared in
+Package names vary by distribution. GTK 4.22 or later is required for the shared
+SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features are declared in
 [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
 
 Check the libraries visible to the build:
@@ -75,6 +75,15 @@ does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
 
 ## Validate
+
+Run `bash tools/performance/workspace-motion.sh gtk --icons` for the complete
+shared icon bank and actual category, preset, mode, filter and toolbar controls.
+It uses the private compositor and fresh storage described below, checks both
+themes at 16/24/32 pixels, and writes native captures to
+`artifacts/icon-audit/gtk/`. Set `LAYER_MOTION_SCALE=2`,
+`LAYER_MOTION_VIEWPORT=2400x2000`, and an absolute `LAYER_TEST_ARTIFACTS` path for
+a separate high-DPI run. See the [icon audit](../ui/icon-audit.md) for paint checks
+and full-image comparison with the canonical SVGs in Chrome.
 
 The [testing guide](testing.md) lists GTK interaction and shared-engine checks.
 The [UI implementation record](../history/ui-implementation.md) and

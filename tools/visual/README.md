@@ -201,9 +201,11 @@ Ordinary symbolic icons remain one image. Mixed paints retain drawing order and
 composite as a group before disabled opacity. The generator rejects unsupported
 mixed groups/effects rather than silently changing their compositing semantics.
 
-The direct fixture captures all 96 compiled icons at 16/24/32 points, two explicit
+The direct fixture captures all canonical compiled icons at 16/24/32 points, two explicit
 foreground/background palettes, and normal/accent/disabled states: 18 complete
-grids with 1,728 glyphs per host. These are shared AppKit component captures;
+grids (157 icons and 2,826 glyphs per host in the current bank). It checks that
+bare model keys and SVG filename stems resolve to the same asset, including
+hyphenated names such as `add-layer`. These are shared AppKit component captures;
 building the iPad target does not turn them into UIKit pixel evidence.
 
 ```sh
@@ -214,7 +216,7 @@ CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/
 CAPY_ICON_SOURCES="$PWD/apps/layer-web/icons" \
 CAPY_ICON_CAPTURES="$PWD/artifacts/apple-icons" \
   bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/icon-capture.swift
-node tools/visual/chrome-capture.mjs 576 384 2 artifacts/apple-icons light icons \
+node tools/visual/chrome-capture.mjs 576 672 2 artifacts/apple-icons light icons \
   artifacts/apple-icons/fixtures.json
 artifacts/ui/parity/python-env/bin/python tools/visual/check_icon_paints.py \
   artifacts/apple-icons --output artifacts/apple-icons/paint-check.json

@@ -41,7 +41,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   };
   for (const group of [false, true]) {
     const getAction = () => ({ op: "new", group, clipped: false });
-    footer.append(glyphButton(group ? "folder" : "plus", group ? "New group" : "New layer", () => send(getAction()), "", getAction));
+    footer.append(glyphButton(group ? "folder" : "add-layer", group ? "New group" : "New layer", () => send(getAction()), "", getAction));
   }
   const addMask = () => ({ op: "add_mask", id: active().id, replace: false });
   const maskButton = glyphButton("mask", "Add layer mask", () => send(addMask()), "", addMask); footer.append(maskButton);

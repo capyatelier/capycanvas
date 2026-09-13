@@ -43,7 +43,7 @@ struct WorkspaceManagerView: View {
                 if manager.prompt == nil && manager.history.isNull && !manager.toolbarMode {
                     Button {
                         manager.activate(JSON(["type": "new"]))
-                    } label: { Image(systemName: "plus").frame(width: 24, height: 24) }
+                    } label: { SharedIcon(name: "plus").frame(width: 24, height: 24) }
                         .accessibilityLabel("New Workspace")
                         .accessibilityIdentifier("workspace-action-new")
                         .disabled(manager.processing)
@@ -135,7 +135,7 @@ struct WorkspaceManagerView: View {
             let secondary = row["actions"].array.filter { !$0["primary"].bool }
             if !secondary.isEmpty {
                 Menu { ForEach(secondary, id: \.managerActionID) { button in action(button) } }
-                    label: { Image(systemName: "ellipsis").frame(width: 20) }
+                    label: { SharedIcon(name: "more").frame(width: 20) }
                     .accessibilityLabel("Actions for " + row["title"].string)
             }
         }.fixedSize(horizontal: true, vertical: false)
@@ -153,7 +153,7 @@ struct WorkspaceManagerView: View {
                         Button { manager.selectHistory(row["id"].string) } label: {
                             HStack {
                                 rowLabel(row)
-                                if manager.history["selected"].string == row["id"].string { Image(systemName: "checkmark") }
+                                if manager.history["selected"].string == row["id"].string { SharedIcon(name: "check") }
                             }.padding(12).contentShape(Rectangle())
                                 .background(Color.accentColor.opacity(manager.history["selected"].string == row["id"].string ? 0.14 : 0), in: RoundedRectangle(cornerRadius: 10))
                         }.buttonStyle(.plain).accessibilityIdentifier("workspace-history-" + row["id"].string)

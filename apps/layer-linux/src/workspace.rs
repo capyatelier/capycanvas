@@ -853,7 +853,7 @@ impl Workspace {
     ) -> Rc<Self> {
         static ICONS: std::sync::Once = std::sync::Once::new();
         ICONS.call_once(|| {
-            gtk::gio::resources_register_include!("layer-icons.gresource").expect("bundled icons");
+            crate::icons::register();
             gtk::IconTheme::for_display(&gdk::Display::default().unwrap())
                 .add_resource_path("/dev/layer/icons");
         });
@@ -1217,7 +1217,7 @@ impl Workspace {
     fn command_button(self: &Rc<Self>, command: CommandId) -> gtk::Button {
         let button = self.action_button(command.label(), UiAction::Invoke { command });
         if let Some(icon) = command.icon() {
-            button.set_icon_name(&format!("layer-{icon}-symbolic"));
+            crate::icons::set_button(&button, &format!("layer-{icon}-symbolic"));
         }
         button.add_css_class("flat");
         button.set_tooltip_text(Some(command.label()));
@@ -1264,7 +1264,7 @@ impl Workspace {
             self.header.pack_start(&self.chrome_menu(menu));
         }
         let primary = self.chrome_menu(ApplicationMenu::Primary);
-        primary.set_icon_name("layer-menu-symbolic");
+        primary.set_child(Some(&crate::icons::image("layer-menu-symbolic")));
         self.header.pack_end(&primary);
         self.header.pack_end(&self.header_status);
         // Observe native title-bar grabs without claiming events from Adw's
@@ -2014,8 +2014,8 @@ impl Workspace {
                         && let Some(image) = button.child().and_downcast::<gtk::Image>()
                     {
                         let name = format!("layer-{icon}-symbolic");
-                        if image.icon_name().as_deref() != Some(&name) {
-                            image.set_icon_name(Some(&name));
+                        if crate::icons::name(&image).as_deref() != Some(&name) {
+                            crate::icons::set(&image, Some(&name));
                         }
                     }
                 }
@@ -2403,7 +2403,7 @@ impl Workspace {
                 let content = button.child().unwrap();
                 let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();
                 let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
-                icon.set_icon_name(Some(&format!("layer-{}-symbolic", config.icon())));
+                crate::icons::set(&icon, Some(&format!("layer-{}-symbolic", config.icon())));
                 icon.set_visible(tab.show_icon);
                 label.set_label(config.title());
                 label.set_visible(tab.show_name);

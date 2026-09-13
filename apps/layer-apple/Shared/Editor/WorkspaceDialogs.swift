@@ -50,7 +50,7 @@ private struct WorkspaceDialog: View {
                                     Text(choice["label"].string).fontWeight(.medium)
                                     Text(choice["description"].string).font(.caption).foregroundStyle(.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
-                                Image(systemName: choice["selected"].bool ? "checkmark.square.fill" : "square")
+                                SharedIcon(name: choice["selected"].bool ? "selection-checked" : "selection-empty")
                             }.frame(minHeight: 50).padding(.horizontal, 8).contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("tool-choice-" + choice["label"].string)
                             .accessibilityAddTraits(choice["selected"].bool ? .isSelected : [])

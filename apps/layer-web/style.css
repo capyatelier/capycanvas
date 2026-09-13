@@ -396,7 +396,8 @@ dialog::backdrop { background: #0008; }
 body[data-theme="light"] dialog::backdrop { background: #0002; }
 .dialog-header { position: relative; display: grid; place-items: center; height: 46px; flex: none; }
 dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
-.dialog-close { position: absolute; right: 11px; top: 11px; min-height: 24px; width: 24px; height: 24px; padding: 0; line-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); font-size: 20px; }
+.dialog-close { display: grid; place-items: center; position: absolute; right: 11px; top: 11px; min-height: 24px; width: 24px; height: 24px; padding: 0; line-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); font-size: 20px; }
+.dialog-close > svg { width: 16px; height: 16px; }
 .preferences-layout { height: 100%; display: grid; grid-template-columns: clamp(190px, 26%, 210px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .preferences-sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); box-shadow: inset -1px 0 #0003; }
 .preferences-navigation { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
@@ -534,9 +535,13 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .panel .filter-picker-header button { flex:none; display:grid; place-items:center; width:48px; height:34px; padding:0; min-height:0; }
 .filter-picker-list { flex:1; min-height:0; overflow:auto; scrollbar-width:none; }
 .filter-category { margin:8px; font-size:inherit; font-weight:700; opacity:.55; }
+.filter-category { display:flex; align-items:center; gap:6px; }
+.filter-category-icon { display:flex; }
+.filter-category-icon[hidden] { display:none; }
 .panel .filter-row { display:flex; flex-direction:column; align-items:stretch; width:100%; text-align:right; padding:3px 6px; min-width:0; min-height:0; font-weight:400; line-height:18px; }
 .filter-row canvas { display:block; width:100%; height:40px; pointer-events:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 .filter-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.filter-row span > svg:not(.filter-animation) { display:inline-block; width:16px; height:16px; margin-right:6px; vertical-align:-3px; }
 .filter-animation { display:inline-block; width:12px; height:12px; margin-right:4px; vertical-align:-1px; opacity:.55; }
 .effect-properties,.renderer-stats { margin:6px; }
 .effect-properties h3 { font-size:inherit; margin:0 0 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -564,6 +569,9 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .header-menu .popover { max-height:calc(100dvh - 60px); overflow:auto; }
 .tool-groups { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
 .tool-choice-button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; }
+.tool-choice-label { display:flex; align-items:center; gap:6px; }
+.tool-choice-button svg, .tool-choice-label svg { flex-shrink:0; }
+.tool-setting-action { display:flex; align-items:center; gap:6px; }
 .tool-groups .tool-choice-button { width:auto; flex:1; min-width:70px; flex-direction:column; font-size:.85em; }
 .tool-subtools { display:flex; flex-direction:column; gap:4px; }
 .tool-subtools .brush-preview { width:82px; height:32px; object-fit:contain; }

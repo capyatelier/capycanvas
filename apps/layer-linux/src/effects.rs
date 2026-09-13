@@ -23,6 +23,7 @@ pub struct EffectPanels {
     picker_body: gtk::Box,
     picker_scroller: gtk::ScrolledWindow,
     category: gtk::DropDown,
+    category_icon: gtk::Image,
     search_button: gtk::Button,
     search_entry: gtk::SearchEntry,
     picker_bound: Cell<bool>,
@@ -65,12 +66,15 @@ impl EffectPanels {
         header.add_css_class("filter-picker-header");
         let category = gtk::DropDown::from_strings(&[]);
         category.set_hexpand(true);
+        let category_icon = crate::icons::image("layer-adjustments-symbolic");
+        category_icon.add_css_class("dim-label");
         let search_entry = gtk::SearchEntry::builder()
             .hexpand(true)
             .visible(false)
             .build();
-        let search_button = gtk::Button::from_icon_name("system-search-symbolic");
+        let search_button = crate::icons::button("system-search-symbolic");
         search_button.add_css_class("flat");
+        header.append(&category_icon);
         header.append(&category);
         header.append(&search_entry);
         header.append(&search_button);
@@ -134,6 +138,7 @@ impl EffectPanels {
             picker_body,
             picker_scroller: scroller,
             category,
+            category_icon,
             search_button,
             search_entry,
             picker_bound: Cell::new(false),
@@ -268,6 +273,17 @@ impl EffectPanels {
         }
         let picker = &state.filter_picker;
         self.category.set_visible(picker.search.is_none());
+        self.category_icon.set_visible(picker.search.is_none());
+        if let Some(choice) = state
+            .filter_categories
+            .iter()
+            .find(|c| c.id == picker.category)
+        {
+            crate::icons::set(
+                &self.category_icon,
+                Some(&format!("layer-{}-symbolic", choice.icon)),
+            );
+        }
         self.category.set_selected(
             state
                 .filter_categories
@@ -292,8 +308,8 @@ impl EffectPanels {
         let mut rows = self.picker_rows.borrow_mut();
         for choice in &state.adjustments {
             if category.as_ref() != Some(&choice.category) {
-                let heading = gtk::Label::new(Some(&choice.category_label));
-                heading.set_xalign(0.);
+                let heading =
+                    crate::tool_panels::icon_label(&choice.category_label, choice.category_icon);
                 heading.add_css_class("filter-category");
                 self.picker_body.append(&heading);
                 category = Some(choice.category.clone());
@@ -310,8 +326,12 @@ impl EffectPanels {
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 let caption = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                 caption.set_halign(gtk::Align::End);
+                caption.append(&crate::icons::image(&format!(
+                    "layer-{}-symbolic",
+                    choice.icon
+                )));
                 if choice.animated {
-                    let icon = gtk::Image::from_icon_name("layer-animation-symbolic");
+                    let icon = crate::icons::image("layer-animation-symbolic");
                     icon.set_pixel_size(12);
                     icon.add_css_class("dim-label");
                     caption.append(&icon);
@@ -662,9 +682,9 @@ impl GradientEditor {
         let color =
             gtk::ColorDialogButton::new(Some(gtk::ColorDialog::builder().with_alpha(true).build()));
         let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "");
-        let remove = gtk::Button::from_icon_name("layer-minus-symbolic");
+        let remove = crate::icons::button("layer-minus-symbolic");
         remove.set_tooltip_text(Some("Remove color stop"));
-        let reset = gtk::Button::from_icon_name("layer-undo-symbolic");
+        let reset = crate::icons::button("layer-reset-symbolic");
         reset.set_tooltip_text(Some("Reset gradient"));
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let label = gtk::Label::new(Some("Color"));

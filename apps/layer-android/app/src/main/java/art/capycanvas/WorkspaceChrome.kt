@@ -31,10 +31,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import org.json.JSONArray
@@ -98,7 +96,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         key(id) {
             val bounds = column.getJSONObject("bounds")
             val workArea = snapshot.getJSONObject("layout").getJSONObject("work_area")
-            val expandGlyph = if (bounds.number("x") + bounds.number("width") / 2 < workArea.number("x") + workArea.number("width") / 2) "»" else "«"
+            val expandGlyph = if (bounds.number("x") + bounds.number("width") / 2 < workArea.number("x") + workArea.number("width") / 2) "chevron-double-right" else "chevron-double-left"
             val shape = dock.drawerContainerShape(bounds)
             val content = column.getJSONObject("content")
             val current by rememberUpdatedState(column)
@@ -121,7 +119,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                     Box(Modifier.placed(column.getJSONObject("expand").relativeTo(bounds), dock.density)
                         .testTag("expand-column-$id").semantics { contentDescription = "Expand column" }
                         .clickable(role = Role.Button) { host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false)) }, contentAlignment = Alignment.Center) {
-                        Text(expandGlyph, Modifier.clearAndSetSemantics {}, fontWeight = FontWeight.Bold)
+                        SharedIcon(expandGlyph, null)
                     }
                     Box(Modifier.placed(content.relativeTo(bounds), dock.density).clipToBounds().scrollable(scroll, Orientation.Vertical)) {
                         val groups = column.array("groups").objects()

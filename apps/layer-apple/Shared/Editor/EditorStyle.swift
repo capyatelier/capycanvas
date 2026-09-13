@@ -32,7 +32,7 @@ struct SharedIcon: View {
     let name: String
     var size: CGFloat = 16
     var body: some View {
-        let key = name.replacingOccurrences(of: "layer-", with: "").replacingOccurrences(of: "-symbolic", with: "")
+        let key = Self.assetKey(name)
         Group {
             if let layers = Self.layers[key] {
                 ZStack {
@@ -44,6 +44,12 @@ struct SharedIcon: View {
                 glyph("icon-" + key, template: true)
             }
         }.accessibilityHidden(true)
+    }
+    static func assetKey(_ name: String) -> String {
+        var key = name
+        if key.hasPrefix("layer-") { key.removeFirst("layer-".count) }
+        if key.hasSuffix("-symbolic") { key.removeLast("-symbolic".count) }
+        return key
     }
     private func glyph(_ asset: String, template: Bool) -> some View {
         Image(asset).resizable().renderingMode(template ? .template : .original)
