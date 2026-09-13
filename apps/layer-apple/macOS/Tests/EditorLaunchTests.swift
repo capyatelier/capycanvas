@@ -45,24 +45,20 @@ final class EditorLaunchTests: XCTestCase {
 
 
 
-    @MainActor func testPartialZenToolbar() throws {
+    @MainActor func testZenHidesChromeAndTabRestoresIt() {
         let app = editorTestApplication()
-        #if os(iOS)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        #else
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]"#
         app.launch()
-        let section = app.descendants(matching: .any)["zen-toolbar-0"].firstMatch
-        XCTAssertTrue(section.waitForExistence(timeout: 20))
-        XCTAssertTrue(app.windows.firstMatch.frame.contains(section.frame))
-        #if os(macOS)
-        app.buttons["zen-button"].click()
-        #else
-        app.buttons["zen-button"].tap()
-        #endif
-        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 5))
+        let canvas = app.windows.firstMatch.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["document-title"].exists)
+        XCTAssertFalse(app.buttons["zen-button"].exists)
+        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
+        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["document-title"].exists)
+        XCTAssertTrue(app.buttons["zen-button"].exists)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 

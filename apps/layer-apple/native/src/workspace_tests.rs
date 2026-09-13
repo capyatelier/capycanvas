@@ -304,7 +304,7 @@ fn apple_column_drawer_drags_preserve_history_and_accept_measured_drop_targets()
 }
 
 #[test]
-fn apple_toolbar_styles_reach_ribbons_drawers_and_zen_with_shared_metrics() {
+fn apple_toolbar_styles_reach_ribbons_and_drawers_with_shared_metrics() {
     for platform in [0, 1] {
         let app = App::new(platform);
         let before = app.state();
@@ -375,18 +375,10 @@ fn apple_toolbar_styles_reach_ribbons_drawers_and_zen_with_shared_metrics() {
             app.invoke("redo_workspace");
             assert_eq!(config(&app, "commands")["tile_style"], style);
             app.invoke("zen_mode");
-            let zen = snapshot(&app);
-            let sections: Vec<_> = zen["zen_toolbars"]["sections"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|s| s["panel"] == "commands")
-                .collect();
-            assert!(!sections.is_empty());
-            for section in sections {
-                assert_eq!(section["style"], style);
-            }
+            assert_eq!(app.state()["workspace"]["zen_mode"], true);
+            assert_eq!(config(&app, "commands")["tile_style"], style);
             app.invoke("zen_mode");
+            assert_eq!(app.state()["workspace"]["zen_mode"], false);
             assert_eq!(app.state()["brush"], before["brush"]);
             assert_eq!(app.state()["layers"], before["layers"]);
         }
@@ -400,9 +392,13 @@ fn apple_default_workspace_reaches_every_grouped_brush_without_changing_artwork(
         let app = App::new(platform);
         assert_eq!(
             app.state()["workspace"]["layout"],
-            serde_json::to_value(layer_ui::DockLayout::for_platform(layer_ui::Platform::Web))
-                .unwrap(),
-            "Fresh Apple editors use the same workspace as the web editor"
+            serde_json::to_value(layer_ui::DockLayout::for_platform(if platform == 0 {
+                layer_ui::Platform::Ios
+            } else {
+                layer_ui::Platform::Mac
+            }))
+            .unwrap(),
+            "Fresh Apple editors use the shared workspace defaults for their platform"
         );
         let catalog = app.request(2, json!({"type":"catalog"})).unwrap();
         let expected: BTreeSet<_> = catalog["brush_categories"]
@@ -856,16 +852,11 @@ fn apple_collapsed_toolbar_child_drawers_follow_live_tiles_and_preserve_topology
         app.invoke("undo_workspace"); // Restore the outward-facing lone toolbar.
         let zen_layout = app.state()["workspace"].clone();
         app.invoke("zen_mode");
-        let zen = snapshot(&app);
-        assert_eq!(zen["partial_zen"], true);
-        assert!(
-            !zen["zen_toolbars"]["sections"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(app.state()["workspace"]["zen_mode"], true);
         assert_eq!(app.state()["workspace"]["layout"], zen_layout["layout"]);
         app.invoke("zen_mode");
+        assert_eq!(app.state()["workspace"]["zen_mode"], false);
+        assert_eq!(app.state()["workspace"]["layout"], zen_layout["layout"]);
         app.invoke("new_toolbar");
         assert!(
             snapshot(&app)["picker"]["choices"]

@@ -95,19 +95,19 @@ list has no search field; toolbar management retains its search controls.
 Deleting the active workspace selects an available included workspace through
 shared policy. The confirmation describes deletion as permanent.
 
-The included Painter, Illustrator and Photographer workspaces retain stable
+The included Sketch, Paint and Photo workspaces retain stable
 identities, edited names, arrangements and tool settings. Switching saves the outgoing workspace;
-an existing owner is focused instead of replaced. Fresh storage opens Illustrator,
-while upgrades resume their previous workspace. Reset All Brushes uses the shared
+an existing owner is focused instead of replaced. Fresh storage uses the shared
+default workspace; returning editors resume their previous workspace. Reset All Brushes uses the shared
 confirmation and clears every brush override in the current workspace, preserving
 its color, selected tool, layout, document and other workspaces.
 
 Both hosts support all five shared toolbar styles: small, medium, large, medium
-labeled and large labeled. Ribbons, floating panels, content drawers and partial
-Zen use the Rust icon sizes, label line counts and weight. Labeled tiles place
+labeled and large labeled. Ribbons, floating panels and content drawers
+use the Rust icon sizes, label line counts and weight. Labeled tiles place
 text beside the icon; size controls retain the shared size glyph. Vertical bars
-use horizontal separators. Zen strips retain individually accessible buttons,
-and disabled toolbar controls apply one dimming step while remaining inactive.
+use horizontal separators. Zen hides editor controls until Tab restores them;
+disabled toolbar controls apply one dimming step while remaining inactive.
 `testToolbarStylesAndActions` checks native style selection, button bounds,
 the Zoom action and Zen visibility. Direct bridge checks cover all style
 projections and workspace history on both hosts.
@@ -464,6 +464,14 @@ Omit `TestHostPath`, `TestBundlePath`, `UITargetAppPath` and
 to install an unavailable bundle during `app.launch()`. Tests launch their own
 isolated namespaces; no separate prelaunch/attach path is needed.
 
+Use `bash apps/layer-apple/scripts/test-project-files.sh` for routine file
+regressions. Its isolated dialog fixtures exercise both Apple configurations,
+including New, Save/Open, PNG export, cancellation and preserved file contents.
+Run `testNewDrawingAndExportCancellation` when native picker acceptance or a
+picker presentation change needs device validation. If Files requires device
+authentication, batch necessary picker checks within the authenticated session
+to avoid repeated interruptions.
+
 Check editor behavior directly without driving system menus:
 
 ```sh
@@ -699,8 +707,8 @@ check also verifies canvas pinch navigation through empty workspace regions.
 Run the faster shared Metal/action regressions with
 `cargo test -p layer-apple workspace -- --test-threads=1`.
 The Chrome `panel-configuration` fixture enables direct full-image comparison.
-Collapsed columns, tabbed content drawers, child tool drawers and partial-Zen
-edge toolbars now share native projections on both targets. Content-panel tiles
+Collapsed columns, tabbed content drawers and child tool drawers share native
+projections on both targets. Content-panel tiles
 and the Commands panel are available. The core supplies column geometry, drawer
 composition, natural toolbar height, anchors, connections and dismissal policy.
 Native scrolling reports clipped tile bounds so a child drawer follows its
@@ -750,12 +758,20 @@ native surface size, so layout actions use the editor's viewport instead of the
 owner's 1×1 placeholder. Release builds have no fixture override.
 
 `testCollapsedColumnsDrawersAndZen` exercises column tabs, a child drawer,
-outside dismissal and restoring the column; `testPartialZenToolbar` checks the
-default standalone toolbar projection and exiting Zen. These shared checks use
-in-app controls. The `partial-zen` Chrome fixture uses the same shared workspace
-policy; its older comparison predates the browser's edge toolbar implementation.
+outside dismissal and restoring the column; `testZenHidesChromeAndTabRestoresIt`
+checks full Zen and its keyboard exit. The removed partial-Zen toolbar projection
+and Total Zen preference have no native UI or test paths.
 Full interaction, visual, physical input and performance acceptance remain open
 on both targets.
+
+The opt-in iPad `testNativeFilesProjectRoundTrip` uses a fresh UUID supplied as
+`CAPY_FILE_TEST_TOKEN` in the test runner environment. It creates a matching
+folder in On My iPad, saves generated artwork, reopens it after restarting the
+editor, and exports a PNG. Retain the token with ignored local evidence. After
+reviewing the result, run `testNativeFilesProjectRoundTripCleanup` with the same
+token to remove that folder through Files. Cleanup verifies the expected two
+items before deletion. Routine tests skip both native provider checks unless
+explicitly selected and configured.
 
 Full port acceptance remains open. The simulator renders
 the live canvas; the iPad target builds, signs, installs and launches; the AppKit

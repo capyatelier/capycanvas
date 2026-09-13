@@ -10,6 +10,78 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Native Files and raster integration
+
+Local main includes `39a772c`: shared title-bar editing, per-workspace kernel
+locks, immutable raster projects and the Web capture follow-up. All seven
+recovery stashes are preserved. This work is grouped for one Apple milestone.
+
+Native Files exposed a real callback race: SwiftUI dismissed the picker sheet
+before UIKit delivered the selected URL. The sheet's cancellation handler cleared
+the pending operation, so Open ignored the valid selection and Save could deliver
+a file without acknowledging its location. Both Apple file services now finish
+through the document-picker delegate and share one native picker adapter.
+Temporary callback instrumentation is removed. Evidence remains ignored under
+`artifacts/apple-native-files-v1/`. Native roundtrip iteration 43 established
+the fix before raster integration; iteration 50 repeats it with the new format.
+The fresh process restores all three layers and artwork, Files contains the
+generated PNG, and the editable project title remains unchanged. Files no longer
+requires authentication. Its hidden non-button Cancel element is excluded from
+native test queries. Both file services use normal delegate cancellation.
+
+Apple now follows shared save/recovery policy during drawing: capture the last
+committed raster boundary while active ink remains dirty. Opening still waits
+for the contact. Exact raster samples, pressure/tilt/twist corrections, mask
+coverage, fresh-GPU restoration and Undo/Redo pass on both Apple presets.
+Tests compare loaded content instead of process-local raster identities and
+wait for completed input when capture pressure defers pen-up. No stroke-history
+reader or old project codec is retained. Apple also removes the retired partial
+Zen projection and guards; full Zen/Tab and Change icon remain covered.
+
+Against `c6a6587`, 469 Apple/host/core/UI regressions pass with one existing host
+benchmark ignored. The Swift file-service fixture passes both Apple presets.
+Both signed iteration-50 builds pass. Native iteration 50 passes five Mac and
+six iPad workflows, with no failures or skips: Metal launch/drawing as supported,
+artwork recovery, New/export cancellation, workspace order/pin persistence and
+full Zen/Tab, plus the iPad Files roundtrip. The review namespace is restored
+and the artist app descriptor is unchanged. The iteration-51 runner adds an
+opt-in fixture cleanup check; its production executable is unchanged.
+The generated Files folder is removed by iteration 51, with the review app
+restored. Final `39a772c` integration passes 113 Apple/host/core checks with one
+existing benchmark ignored; the unchanged UI suite's 356 passes remain applicable.
+Both signed iteration-52 builds pass. Each host passes its final native Metal
+launch/layer workflow, including mouse drawing and Undo/Redo on Mac, with no
+failures or skips. The current iPad review app and runner are installed, its
+review namespace is restored and the artist descriptor is unchanged. Evidence
+is under the matching main-integration folders and `apple-native-files-v1/`.
+
+The shared title-bar editor still needs an Apple projection. Full feature,
+provider/interruption, visual, physical-input and sustained-performance acceptance
+remains incomplete. The new encoded-sRGB8 raster format also requires current
+visual and performance baselines; older linear8 filter evidence is historical.
+
+## Native file-dialog cancellation
+
+- This earlier cancellation checkpoint followed published milestone `f60ae15`.
+  The Files callback and raster integration above supersede its source baseline.
+- The original New/Export cancellation workflow now passes on both native hosts
+  with no failures or skips. It rejects invalid dimensions, creates a 63×47
+  drawing, cancels the native export picker and retains the drawing. The iPad
+  also closes the editor afterward, confirming the file operation released it.
+- Files exposes a non-button element named Cancel ahead of its real close
+  buttons. The old generic query selected that element with unusable bounds;
+  the corrected test selects a native button. Production picker code is unchanged.
+  An authenticated diagnostic also confirms cancellation re-enables Export.
+- Both signed iteration-32 builds pass, with production executables identical
+  to iteration 29. Temporary probe source is removed. The current test runner
+  is installed, the iPad review namespace is restored and the artist app
+  descriptor is unchanged. Evidence and earlier failures remain under
+  `artifacts/apple-export-cancel-v1/`; final results are in `validation-v32/`.
+- Authentication is no longer a test blocker. Use existing isolated dialog
+  fixtures for routine file regressions and real picker checks for native
+  acceptance or presentation changes; avoid unnecessary authentication retries.
+  The full provider/interruption, feature, visual and performance gates remain open.
+
 ## Native docking validation
 
 - Milestone `d520d49` groups the docking fixes with their native validation.

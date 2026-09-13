@@ -5,8 +5,8 @@
 mod color_panel;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
-#[path = "column_group_tests.rs"]
-mod column_group_tests;
+#[path = "column_stack_tests.rs"]
+mod column_stack_tests;
 #[path = "drag_pickup_tests.rs"]
 mod drag_pickup;
 #[path = "icon_tests.rs"]
@@ -1345,11 +1345,8 @@ fn native_collapsed_drop_and_resize() {
         pump(80);
         assert_eq!(state(&w).workspace, collapsed, "hold below the threshold");
         drag.end();
-        let expand = find_named(w.surface.upcast_ref(), &format!("expand-column-{root}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
-        click(&expand);
+        assert!(find_named(w.surface.upcast_ref(), &format!("expand-column-{root}")).is_none());
+        w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group: root, collapsed: false } });
         pump(180);
         assert!(!state(&w).workspace.layout.is_collapsed(root));
         assert!((width() - before_width).abs() < 1.);
@@ -1920,8 +1917,10 @@ fn native_collapsed_columns() {
         assert_eq!(state(&w).workspace.layout.collapsed.len(), 2);
         let r = w.resolved();
         assert!(r.collapsed.iter().find(|c| c.id == 4).unwrap().bounds.x > viewport[0] * 0.5);
-        press("expand-column-4");
-        press("expand-column-8");
+        for group in [4, 8] {
+            w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group, collapsed: false } });
+            pump(150);
+        }
         assert!(state(&w).workspace.layout.collapsed.is_empty());
         assert!(state(&w).customization.column_drawers.is_empty());
     }
@@ -12355,7 +12354,8 @@ fn native_collapsed_column_input() {
         pump(250);
         let column = w.resolved().collapsed.into_iter().next().unwrap();
         let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-        assert_eq!(w.columns.background_at(&w, center(column.expand)), None);
+        assert_eq!(column.expand.height, 0.);
+        assert!(find_named(w.surface.upcast_ref(), &format!("expand-column-{}", column.id)).is_none());
         for icon in column.groups.iter().flat_map(|g| &g.icons) {
             let point = center(icon.bounds);
             assert_eq!(w.columns.background_at(&w, point), None);

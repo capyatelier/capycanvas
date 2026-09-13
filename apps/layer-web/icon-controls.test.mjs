@@ -99,12 +99,8 @@ export async function checkIconControls({call,evaluate,settle}, output) {
       await dispatch({type:"customize",action:{type:"set_column_collapsed",group,collapsed:true}});
       const column=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.icons.some(i=>i.panel===${JSON.stringify(panel)})))`);
       const selector=`.collapsed-column[data-column="${column.id}"] .column-expand`;
-      const glyph=await evaluate(`(()=>{const b=document.querySelector(${JSON.stringify(selector)}),s=b.querySelector('svg'),r=s.getBoundingClientRect(),p=b.getBoundingClientRect();return{icon:s.dataset.asset,w:r.width,h:r.height,dx:r.x+r.width/2-p.x-p.width/2,dy:r.y+r.height/2-p.y-p.height/2,label:b.getAttribute('aria-label')};})()`);
-      assert.ok(["chevron-double-left","chevron-double-right"].includes(glyph.icon));
-      assert.equal(glyph.label,"Expand column");assert.equal(glyph.w,16);assert.equal(glyph.h,16);
-      assert.ok(Math.abs(glyph.dx)<.1&&Math.abs(glyph.dy)<.1,"Expand glyph is centered");
-      records.push({kind:"chrome",panel,icon:glyph.icon});
-      await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await settle();
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})`),null,'Expand caret is retired');
+      await dispatch({type:"customize",action:{type:"set_column_collapsed",group:column.id,collapsed:false}});await settle();
       assert.ok(await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.some(g=>g.panels.includes(${JSON.stringify(panel)}))`));
     }
     await writeFile(`${output}/controls.json`,JSON.stringify(records,null,2));

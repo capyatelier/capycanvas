@@ -49,7 +49,20 @@ impl WorkspacePreset {
         if self == Self::Illustrator {
             let mut layout = DockLayout::for_platform(platform);
             for column in layout.column_roots() {
-                layout.column_settings_mut(column).mode = ColumnMode::GroupPanel;
+                let stack = layout.column_stack_mut(column);
+                stack.drawers = false;
+                stack.auto_hide = false;
+                if platform == crate::Platform::Gtk {
+                    let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
+                    if band.edge != Edge::Right {
+                        continue;
+                    }
+                    layout.collapsed.push(CollapsedColumn {
+                        root: column,
+                        expanded_width: band.extent - WORKSPACE_SPACING,
+                    });
+                    band.extent = TILE_SIZE + WORKSPACE_SPACING;
+                }
             }
             return layout;
         }
@@ -214,6 +227,23 @@ impl WorkspacePreset {
     }
 }
 
+impl DockLayout {
+    /// The shipped Paint arrangement opens its right column on adoption or
+    /// reset. This is initial presentation; ordinary open/close stays transient.
+    pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
+        if platform == crate::Platform::Gtk
+            && self.collapsed.len() == 1
+            && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
+        {
+            for stack in &mut self.column_stacks {
+                if self.collapsed.iter().any(|c| c.root == stack.column) {
+                    stack.open_column = Some(stack.column);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,14 +270,22 @@ mod tests {
                     items.contains(&HeaderItem::Fullscreen),
                     platform == Platform::Web
                 );
-                assert_eq!(
-                    layout.header.zones[2].last().unwrap().item,
-                    HeaderItem::Settings
-                );
                 assert!(
                     items.contains(&HeaderItem::Capy) && items.contains(&HeaderItem::Workspaces)
                 );
                 let minimal = preset == WorkspacePreset::Painter;
+                assert_eq!(items.contains(&HeaderItem::Settings), !minimal);
+                let last = layout.header.zones[2].last().unwrap().item;
+                assert_eq!(
+                    last,
+                    if !minimal {
+                        HeaderItem::Settings
+                    } else if platform == Platform::Web {
+                        HeaderItem::Fullscreen
+                    } else {
+                        HeaderItem::Tool { control: ToolbarControl::Color }
+                    }
+                );
                 assert_eq!(items.contains(&HeaderItem::Clock), !minimal);
                 assert_eq!(items.contains(&HeaderItem::Battery), !minimal);
                 assert_eq!(items.contains(&HeaderItem::MenuLabels), !minimal);
@@ -293,11 +331,24 @@ mod tests {
             let layout = WorkspacePreset::Illustrator.layout(platform);
             assert!(
                 layout
-                    .column_settings
+                    .column_stacks
                     .iter()
-                    .all(|s| s.mode == ColumnMode::GroupPanel)
+                    .all(|s| !s.drawers)
             );
-            assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
+            if platform == crate::Platform::Gtk {
+                assert_eq!(layout.collapsed.len(), 1);
+                assert!(layout.is_collapsed(12) && !layout.is_collapsed(4));
+                assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
+                for (band, original) in layout.bands.iter().zip(DockLayout::for_platform(platform).bands) {
+                    assert_eq!(band.root, original.root);
+                    assert_eq!(band.edge, original.edge);
+                    if band.edge == Edge::Left {
+                        assert_eq!(band.extent, original.extent);
+                    }
+                }
+            } else {
+                assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
+            }
         }
     }
 

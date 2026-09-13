@@ -48,8 +48,8 @@ pub fn durable_layout(layout: &DockLayout) -> DockLayout {
     let mut layout = layout.clone();
     layout.measurements.clear();
     layout.column_scroll.clear();
-    for s in &mut layout.column_settings {
-        s.open_group = None;
+    for s in &mut layout.column_stacks {
+        s.open_column = None;
     }
     layout.titlebar_insets = [0.0; 3];
     layout.bottom_inset = 0.0;
@@ -219,10 +219,8 @@ impl WorkspaceHistory {
         layout.measurements.clone_from(&state.layout.measurements);
         layout.column_scroll.clone_from(&state.layout.column_scroll);
         layout.titlebar_insets = state.layout.titlebar_insets;
-        for s in &mut layout.column_settings {
-            s.open_group = s
-                .open_group
-                .or_else(|| state.layout.column_settings(s.column).open_group);
+        for s in &mut layout.column_stacks {
+            s.open_column = s.open_column.or_else(|| state.layout.column_stack(s.column).open_column);
         }
         layout.bottom_inset = state.layout.bottom_inset;
         layout.header_presentation = state.layout.header_presentation.clone();

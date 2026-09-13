@@ -168,8 +168,11 @@ impl HeaderLayout {
 
     fn with_platform_controls(mut self, platform: Platform) -> Self {
         if platform == Platform::Web {
-            let settings = self.zones[2].last().unwrap().id;
-            self.add(HeaderZone::Right, Some(settings), &[HeaderItem::Fullscreen])
+            let settings = self.zones[2]
+                .iter()
+                .find(|entry| entry.item == HeaderItem::Settings)
+                .map(|entry| entry.id);
+            self.add(HeaderZone::Right, settings, &[HeaderItem::Fullscreen])
                 .unwrap();
         }
         self
@@ -305,7 +308,6 @@ impl HeaderLayout {
                     Tool {
                         control: ToolbarControl::Color,
                     },
-                    Settings,
                 ],
             ],
         )

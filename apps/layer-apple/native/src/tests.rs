@@ -17,6 +17,53 @@ mod workspace_library;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 
+type RasterSamples = (
+    std::collections::BTreeMap<
+        layer_core::raster::TileKey,
+        (layer_core::color::PixelDescriptor, Vec<u8>),
+    >,
+    Option<layer_core::raster::RasterWatercolor>,
+);
+
+fn raster_samples(revision: &layer_core::raster::RasterRevision) -> RasterSamples {
+    let data = revision.wait_data().unwrap();
+    let tiles = data
+        .tiles
+        .iter()
+        .map(|(key, tile)| {
+            let blob = tile.wait_backing().unwrap();
+            (*key, (blob.descriptor, blob.decode().unwrap()))
+        })
+        .collect();
+    (tiles, data.watercolor)
+}
+
+fn assert_project_document(actual: &layer_core::Document, expected: &layer_core::Document) {
+    assert_eq!(
+        serde_json::to_value(actual).unwrap(),
+        serde_json::to_value(expected).unwrap(),
+        "Project metadata must round-trip exactly"
+    );
+    // Raster backing is stored separately from metadata. Its process-local
+    // publication identity changes on load; exact sample values must not.
+    for (actual, expected) in actual.layers.iter().zip(&expected.layers) {
+        for layer in [actual, expected] {
+            assert!(layer.pending_operations.is_empty());
+            assert!(layer.masks().all(|mask| mask.pending_operations.is_empty()));
+        }
+        assert_eq!(
+            raster_samples(&actual.raster),
+            raster_samples(&expected.raster)
+        );
+        for (actual, expected) in actual.masks().zip(expected.masks()) {
+            assert_eq!(
+                raster_samples(&actual.raster),
+                raster_samples(&expected.raster)
+            );
+        }
+    }
+}
+
 #[test]
 fn hls_raster_ffi_validates_buffer_and_matches_shared_pixels() {
     let mut bytes = [23; 16];
@@ -446,7 +493,7 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
         let saved = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-        assert_eq!(saved.document, original);
+        assert_project_document(&saved.document, &original);
         let stale = ProjectJob::new(&app, true);
         file.rewind().unwrap();
         let pointer = stale.0 as usize;
@@ -831,7 +878,7 @@ impl App {
         let error = unsafe { capy_apple_error(self.0) };
         assert!(
             error.is_null(),
-            "{}",
+            "request {kind} {value}: {}",
             unsafe { CStr::from_ptr(error) }.to_string_lossy()
         );
         if result.is_null() {
@@ -855,6 +902,23 @@ impl App {
         app.host
             .prepare_canvas_frame(2_000_000_000, 2_000_000_000, true)
             .unwrap();
+    }
+    fn draw_until_idle(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            self.draw_frame();
+            let session = &unsafe { &*self.0 }.host.session;
+            if session.require_document_idle().is_ok()
+                && !session.engine().has_pending_document_edits()
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Canvas did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
     fn layer_action(&self, action: Value) {
         self.action(json!({"type": "layer", "action": action}));
@@ -948,7 +1012,7 @@ impl Drop for App {
 }
 
 #[test]
-fn apple_document_archive_replays_exact_pixels_in_a_fresh_gpu_session() {
+fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
     use layer_core::{Project, ProjectAssetFormat, ProjectLimits};
     use layer_render::{HostImage, PixelFormat};
     for platform in [0, 1] {
@@ -982,17 +1046,22 @@ fn apple_document_archive_replays_exact_pixels_in_a_fresh_gpu_session() {
         );
         app.action(json!({"type":"set_color","rgba":[0.7,0.2,0.9,1]}));
         app.stroke();
-        app.draw_frame();
+        app.draw_until_idle();
         app.layer_action(json!({"op":"add_mask","id":id,"replace":false}));
         app.action(json!({"type":"set_color","rgba":[0,0,0,1]}));
         app.stroke();
-        app.draw_frame();
+        app.draw_until_idle();
         app.layer_action(json!({"op":"apply_mask","id":id}));
-        app.draw_frame();
+        app.draw_until_idle();
         app.invoke("scale_rotate");
         app.action(json!({"type":"set_tool_setting","id":"transform_x","value":48}));
         app.invoke("apply_transform");
-        app.draw_frame();
+        app.draw_until_idle();
+        app.layer_action(json!({"op":"add_mask","id":id,"replace":false}));
+        app.layer_action(json!({"op":"select","id":id,"mask":true}));
+        app.stroke();
+        app.draw_until_idle();
+        app.layer_action(json!({"op":"select","id":id,"mask":false}));
         let expected = app.pixels();
         assert!(expected != paper, "Fixture must contain visible artwork");
         let source = unsafe { &*app.0 };
@@ -1006,17 +1075,24 @@ fn apple_document_archive_replays_exact_pixels_in_a_fresh_gpu_session() {
                 .values()
                 .any(|a| a.format == ProjectAssetFormat::Rgba8Srgb)
         );
+        let mask = engine
+            .document()
+            .layer(layer_core::LayerId(id))
+            .unwrap()
+            .mask
+            .as_ref()
+            .unwrap();
+        let coverage = raster_samples(&mask.raster).0;
         assert!(
-            original
-                .assets
-                .values()
-                .any(|a| a.format == ProjectAssetFormat::R8Unorm)
+            !coverage.is_empty(),
+            "Fixture must contain retained mask pixels"
         );
+        assert!(coverage.values().all(|(descriptor, _)| *descriptor == layer_core::color::PixelDescriptor::COVERAGE8));
         let mut bytes = Vec::new();
         original.write(&mut bytes).unwrap();
         let Project { document, assets } =
             Project::read(bytes.as_slice(), ProjectLimits::default()).unwrap();
-        assert_eq!(&original.document, &document);
+        assert_project_document(&document, &original.document);
         let mut gpu =
             layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required");
         for (id, asset) in &assets {
@@ -1053,7 +1129,7 @@ fn apple_document_archive_replays_exact_pixels_in_a_fresh_gpu_session() {
         restored.draw_frame();
         assert!(
             restored.pixels() == expected,
-            "Fresh GPU replay must match every document byte, platform {platform}"
+            "Fresh GPU must restore every document pixel, platform {platform}"
         );
         restored.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
         restored.stroke();

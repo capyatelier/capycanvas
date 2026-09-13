@@ -29,20 +29,59 @@ pub struct CollapsedGroup {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CollapsedColumnPlacement {
     pub id: u32,
+    /// The owner of Drawers and Auto-hide; a singleton owns itself.
+    pub stack: u32,
     pub bounds: Bounds,
+    /// Legacy wire field; zero height while the expand caret is retired.
     pub expand: Bounds,
     pub grip: Bounds,
     pub empty: Bounds,
-    /// Clip/scroll the groups in this area, leaving expand and grip fixed.
+    /// Clip/scroll the groups in this area, leaving the grip fixed.
     pub content: Bounds,
     pub groups: Vec<CollapsedGroup>,
     #[serde(default)]
-    pub group_panel: Option<ColumnGroupPanel>,
+    pub open: Option<OpenColumn>,
 }
 impl CollapsedColumnPlacement {
+    /// The final tile boundary has the same 12px reach as an internal divider.
+    /// Compact members have only the 6px footer margin below their last tile:
+    /// use that margin and the tile's lower edge, without taking the grip.
+    pub(crate) fn append_group_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        let last = self.groups.last()?;
+        let bottom = last.bounds.y + last.bounds.height;
+        if bottom <= self.content.y || bottom > self.content.y + self.content.height {
+            return None;
+        }
+        let available = Bounds {
+            height: (self.grip.y - self.content.y).max(0.),
+            ..self.content
+        };
+        let target = Bounds {
+            y: bottom - TILE_SIZE / 6.,
+            height: TILE_SIZE / 3.,
+            ..self.content
+        }
+        .intersection(available)?;
+        if !target.contains(point[0], point[1]) || self.grip.contains(point[0], point[1]) {
+            return None;
+        }
+        Some(DropHint {
+            target: DockTarget::Split {
+                group: last.group,
+                edge: Edge::Bottom,
+            },
+            bounds: Bounds {
+                y: bottom - 1.5,
+                height: 3.,
+                ..self.content
+            }
+            .intersection(available)?,
+        })
+    }
+
     fn divider_bounds(bounds: Bounds, leading: bool) -> Bounds {
-        // The leading line is flush below Expand. Later dividers retain the
-        // toolbar's centered 8px slot and 2px tile gaps.
+        // Top padding keeps its prepend drop target, without a painted line.
+        // Dividers between groups retain the toolbar's centered 8px slot.
         let center = bounds.y
             - if leading {
                 5.5
@@ -53,7 +92,7 @@ impl CollapsedColumnPlacement {
             x: bounds.x + 4.,
             y: center - 0.5,
             width: (bounds.width - 8.).max(0.),
-            height: 1.,
+            height: if leading { 0. } else { 1. },
         }
     }
     fn divider_y(&self, group: &CollapsedGroup) -> f32 {
@@ -196,18 +235,13 @@ impl CollapsedColumnPlacement {
         shift(&mut self.grip);
         shift(&mut self.empty);
         shift(&mut self.content);
-        if let Some(p) = &mut self.group_panel {
+        if let Some(p) = &mut self.open {
             shift(&mut p.bounds);
-            shift(&mut p.resize);
-            for panel in &mut p.panels {
-                shift(&mut panel.bounds);
-            }
-            for divider in &mut p.dividers {
-                shift(divider);
-            }
+            for (_, connection) in &mut p.connections { shift(&mut connection.bounds); }
         }
         for group in &mut self.groups {
             shift(&mut group.bounds);
+            shift(&mut group.divider);
             for icon in &mut group.icons {
                 shift(&mut icon.bounds);
             }
@@ -266,20 +300,15 @@ impl DockLayout {
         fn visible(node: &DockNode, group: u32, layout: &DockLayout) -> Option<u32> {
             node.find(group)?;
             if layout.is_collapsed(node.id()) {
-                return Some(node.id());
+                return layout.column_stack(node.id()).members.into_iter()
+                    .find(|m| node.find(*m).is_some_and(|n| n.find(group).is_some()));
             }
             match node {
                 DockNode::Tabs { .. } => None,
-                DockNode::Split { first, second, .. } => {
-                    visible(first, group, layout).or_else(|| visible(second, group, layout))
-                }
+                DockNode::Split { first, second, .. } => visible(first, group, layout).or_else(|| visible(second, group, layout)),
             }
         }
-        // An expanded column may itself contain collapsed subcolumns. When
-        // its parent collapses too, only the outer strip is a visible anchor.
-        self.bands
-            .iter()
-            .find_map(|b| visible(&b.root, group, self))
+        self.bands.iter().find_map(|b| visible(&b.root, group, self))
     }
 
     /// A column moves intact through the same dock tree, never through a float
@@ -291,6 +320,9 @@ impl DockLayout {
         column: u32,
         target: DockTarget,
     ) -> Result<(), String> {
+        if let DockTarget::StackColumn { column: target, before } = target {
+            return self.stack_column(viewport, column, target, before);
+        }
         if !self.is_collapsed(column) {
             return Err("Only collapsed columns move as a unit".into());
         }
@@ -346,15 +378,30 @@ impl DockLayout {
             .filter(|c| moving.find(c.root).is_some())
             .cloned()
             .collect();
-        let preferences: Vec<_> = self
-            .column_settings
+        let mut preferences: Vec<_> = self
+            .column_stacks
             .iter()
             .filter(|s| moving.find(s.column).is_some())
             .cloned()
             .collect();
+        if !preferences.iter().any(|s| s.column == column) {
+            let inherited = self.column_stack(column);
+            preferences.push(ColumnStack { drawers: inherited.drawers, auto_hide: inherited.auto_hide,
+                ..ColumnStack::single(column) });
+        }
         let mut next = self.clone();
         next.detach(&panels);
         next.reclaim_removed_columns(self, &before);
+        // Removing one member can replace a two-member stack's root. A drop
+        // beside that stack follows its surviving member, not the retired ID.
+        let target = match target {
+            DockTarget::Split { group, edge } => {
+                let anchor = self.column_stacks.iter().find(|s| s.column == group)
+                    .and_then(|s| s.members.iter().find(|m| moving.find(**m).is_none()));
+                DockTarget::Split { group: anchor.map_or(group, |m| next.column_stack(*m).column), edge }
+            }
+            target => target,
+        };
         match target {
             DockTarget::Edge { .. } | DockTarget::BesideBand { .. } => {
                 let (edge, index) = match target {
@@ -427,7 +474,7 @@ impl DockLayout {
             _ => unreachable!(),
         }
         next.collapsed.extend(collapsed);
-        next.column_settings.extend(preferences);
+        next.column_stacks.extend(preferences);
         if self.same_placement(&next) {
             return Ok(());
         }
@@ -443,9 +490,51 @@ impl DockLayout {
         point: [f32; 2],
     ) -> Option<DropHint> {
         let moving = self.node(source)?;
+        // Member handles insert whole columns. Tile/group drop rules never
+        // reinterpret this target as merging tabs.
+        for member in &resolved.collapsed {
+            if member.id != source && member.bounds.contains(point[0], point[1]) {
+                let before = point[1] < member.bounds.y + member.bounds.height * 0.5;
+                return Some(DropHint {
+                    target: DockTarget::StackColumn { column: member.id, before },
+                    bounds: edge_line(member.bounds, if before { Edge::Top } else { Edge::Bottom }),
+                });
+            }
+        }
+        // The spacing between members is also an insertion target. Dropping
+        // there must not pull the column out beside its own stack.
+        for pair in resolved.collapsed.windows(2) {
+            let (above, below) = (&pair[0], &pair[1]);
+            if above.stack != below.stack {
+                continue;
+            }
+            let gap = Bounds {
+                x: above.bounds.x,
+                y: above.bounds.y + above.bounds.height,
+                width: above.bounds.width,
+                height: below.bounds.y - above.bounds.y - above.bounds.height,
+            };
+            if gap.contains(point[0], point[1]) {
+                let (column, before) = if above.id == source {
+                    (below.id, true)
+                } else {
+                    (above.id, false)
+                };
+                let height = gap.height.min(3.);
+                return Some(DropHint {
+                    target: DockTarget::StackColumn { column, before },
+                    bounds: Bounds {
+                        y: gap.y + (gap.height - height) * 0.5,
+                        height,
+                        ..gap
+                    },
+                });
+            }
+        }
+
         // Only the visible outside of a column is eligible, not its internal
         // stacked groups. The closest boundary wins in gaps between columns.
-        let mut roots: Vec<_> = resolved.collapsed.iter().map(|c| c.id).collect();
+        let mut roots: Vec<_> = resolved.collapsed.iter().map(|c| c.stack).collect();
         roots.extend(
             resolved
                 .groups
@@ -506,11 +595,21 @@ impl DockLayout {
         collapsed: bool,
         viewport: [f32; 2],
     ) -> Result<(), String> {
+        let stack = self.column_stack(group);
+        if !collapsed && stack.members.len() > 1 && stack.members.contains(&group) {
+            let edge = self.bands.iter().find(|b| b.root.find(group).is_some())
+                .map_or(Edge::Right, |b| if b.edge == Edge::Right { Edge::Left } else { Edge::Right });
+            let mut next = self.clone();
+            next.move_column(viewport, group, DockTarget::Split { group: stack.column, edge })?;
+            next.set_column_collapsed(group, false, viewport)?;
+            *self = next;
+            return Ok(());
+        }
         self.set_column_collapsed_with_minimum(group, collapsed, viewport, false)?;
         if !collapsed {
-            for s in &mut self.column_settings {
+            for s in &mut self.column_stacks {
                 if !self.collapsed.iter().any(|c| c.root == s.column) {
-                    s.open_group = None;
+                    s.open_column = None;
                 }
             }
         }
@@ -534,6 +633,22 @@ impl DockLayout {
             crate::HEADER_HEIGHT,
             crate::STATUS_HEIGHT,
         );
+        if let Some(member) = resolved.open_column_at_divider(id) {
+            let mut tree = self.node(member).ok_or("Unknown open column")?.clone();
+            let height = resolved.collapsed.iter().find_map(|c| c.open.as_ref()
+                .filter(|o| o.column == member)).unwrap().bounds.height;
+            let mut expanded = self.clone();
+            expanded.collapsed.retain(|c| c.root != member);
+            let width = default_column_width(&mut tree, height, &expanded);
+            *self.node_mut(member).unwrap() = tree;
+            self.collapsed.iter_mut().find(|c| c.root == member).unwrap().expanded_width = width;
+            return Ok(());
+        }
+        if resolved.dividers.iter().find(|d| d.id == id)
+            .is_some_and(|d| self.fixed_stack_divider(d))
+        {
+            return Ok(());
+        }
         let mut root = self.bands[index].root.clone();
         let bounds = subtree_bounds(&root, &resolved).ok_or("The column is not visible")?;
         self.collapsed.retain(|c| c.root != root.id());
@@ -673,6 +788,15 @@ impl DockLayout {
         }
     }
 
+    /// A closed stack has no column body whose width could be changed.
+    /// Expanding its aggregate tree would expose partially collapsed members.
+    pub fn fixed_stack_divider(&self, divider: &Divider) -> bool {
+        self.collapsed_divider_columns(divider).into_iter().flatten().any(|column| {
+            self.column_stack(column).members.len() > 1
+                && self.open_stack_column(column).is_none()
+        })
+    }
+
     pub(crate) fn collapse_at_divider(
         &self,
         id: u32,
@@ -742,21 +866,30 @@ impl DockLayout {
                 return Err("Invalid collapsed column".into());
             }
         }
-        for (i, s) in self.column_settings.iter().enumerate() {
-            if self.column_settings[..i]
-                .iter()
-                .any(|p| p.column == s.column)
-                || s.width
-                    .is_some_and(|v| !v.is_finite() || !(128. ..=800.).contains(&v))
-                || s.heights.iter().enumerate().any(|(i, h)| {
-                    !h.weight.is_finite()
-                        || h.weight <= 0.
-                        || s.heights[..i]
-                            .iter()
-                            .any(|p| p.group == h.group && p.panel == h.panel)
-                })
+        for (i, stack) in self.column_stacks.iter().enumerate() {
+            if self.column_stacks[..i].iter().any(|s| s.column == stack.column)
+                || stack.members.is_empty()
             {
-                return Err("Invalid column settings".into());
+                return Err("Invalid column stack".into());
+            }
+            let Some(root) = self.node(stack.column) else {
+                // Legacy single-column preferences can outlive a hidden column.
+                if stack.members == [stack.column] { continue; }
+                return Err("Invalid column stack".into());
+            };
+            if stack.members.iter().enumerate().any(|(i, member)| {
+                stack.members[..i].contains(member)
+                    || root.find(*member).is_none()
+                    || stack.members.iter().any(|other| {
+                        other != member && self.column_contains(*other, *member)
+                    })
+            }) || self.panels.iter().any(|p| {
+                root.group_for(p.id).is_some()
+                    && !stack.members.iter().any(|m| {
+                        self.node(*m).is_some_and(|n| n.group_for(p.id).is_some())
+                    })
+            }) {
+                return Err("Invalid column stack".into());
             }
         }
         Ok(())
@@ -766,23 +899,24 @@ impl DockLayout {
     // its surviving child. Transfer collapse state to that child, not a stale ID.
     pub(super) fn detach_column_members(&mut self, panels: &[Panel]) {
         let mut preferences = Vec::new();
-        for setting in &self.column_settings {
-            let mut retained = self.node(setting.column).cloned();
-            for panel in panels {
-                retained = retained.and_then(|n| n.remove(*panel));
-            }
-            if let Some(node) = retained {
+        for setting in &self.column_stacks {
+            let remove = |root| {
+                let mut retained = self.node(root).cloned();
+                for panel in panels { retained = retained.and_then(|n| n.remove(*panel)); }
+                retained.map(|n| n.id())
+            };
+            if let Some(column) = remove(setting.column) {
                 let mut setting = setting.clone();
-                setting.column = node.id();
-                if !preferences
-                    .iter()
-                    .any(|s: &ColumnSettings| s.column == setting.column)
-                {
+                setting.column = column;
+                setting.members = setting.members.iter().filter_map(|m| remove(*m)).collect();
+                setting.open_column = setting.open_column.and_then(remove)
+                    .filter(|m| setting.members.contains(m));
+                if !setting.members.is_empty() && !preferences.iter().any(|s: &ColumnStack| s.column == column) {
                     preferences.push(setting);
                 }
             }
         }
-        self.column_settings = preferences;
+        self.column_stacks = preferences;
         let mut columns: Vec<CollapsedColumn> = Vec::new();
         for column in &self.collapsed {
             let mut retained = self.node(column.root).cloned();
@@ -925,7 +1059,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
     let width = bounds.width.min(TILE_SIZE);
     let bounds = Bounds { width, ..bounds };
     let expand = Bounds {
-        height: 24.0_f32.min(bounds.height * 0.5),
+        height: 0.,
         width,
         ..bounds
     };
@@ -982,7 +1116,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
             }
         }
     }
-    // No padding above the first divider; retain the space below its line.
+    // Keep top padding for rounded tiles and the prepend drop target.
     let mut y = content.y + 6.;
     visit(node, content, &mut y, &mut groups);
     let empty = Bounds {
@@ -992,8 +1126,9 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         ..bounds
     };
     CollapsedColumnPlacement {
-        group_panel: None,
+        open: None,
         id: node.id(),
+        stack: node.id(),
         bounds,
         expand,
         grip,
@@ -1586,7 +1721,7 @@ mod tests {
                         DockTarget::Tab { .. }
                     ));
                     // The new target is beside the strip, never over its controls.
-                    for control in [c.expand, c.grip] {
+                    for control in [c.grip] {
                         assert!(!matches!(
                             r.drop_hint(x, control.y + control.height * 0.5, &[], true)
                                 .map(|h| h.target),
@@ -1669,8 +1804,8 @@ mod tests {
             );
             assert_eq!(c.groups[0].divider.y, c.expand.y + c.expand.height);
             c.scroll(offset);
-            for group in &c.groups {
-                assert_eq!(group.divider.height, 1.);
+            for (index, group) in c.groups.iter().enumerate() {
+                assert_eq!(group.divider.height, if index == 0 { 0. } else { 1. });
                 assert_eq!(group.divider.y + 0.5, c.divider_y(group));
                 assert_eq!(group.divider.x, c.content.x + 4.);
                 assert_eq!(group.divider.width, c.content.width - 8.);
@@ -1681,7 +1816,7 @@ mod tests {
                 serde_json::to_value(c.groups[0].divider).unwrap()
             );
             let x = c.bounds.x + 18.;
-            for control in [c.expand, c.grip] {
+            for control in [c.grip] {
                 assert!(c.drop_hint([x, control.y + control.height / 2.]).is_none());
             }
             for y in (c.content.y as i32)..((c.content.y + c.content.height) as i32) {
@@ -1755,7 +1890,7 @@ mod tests {
                 edge: Edge::Bottom
             }
         );
-        assert!(c.drop_hint([x, c.expand.y + 2.]).is_none());
+        assert_eq!(c.expand.height, 0.);
         assert!(c.drop_hint([x, c.grip.y + 2.]).is_none());
     }
 

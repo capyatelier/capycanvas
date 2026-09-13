@@ -89,7 +89,6 @@ pub struct UiSession<R: CanvasRenderer> {
     platform_prediction_available: Option<bool>,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
-    column_panel_drag: Option<(u32, Option<Panel>, ResizeDrag)>,
     divider_drag: Option<(u32, ResizeDrag)>,
     floating_resize: Option<FloatingResize>,
     workspace_drag: Option<WorkspaceDrag>,
@@ -148,7 +147,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             platform_prediction_available: None,
             logical_viewport: None,
             initial_fit: true,
-            column_panel_drag: None,
             divider_drag: None,
             floating_resize: None,
             workspace_drag: None,
@@ -633,7 +631,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     position, canvas, ..
                 } = event
                     && !facts.popup_open
-                    && self.column_panel_drag.is_none()
+                    && self.divider_drag.is_none()
                     && self.workspace_drag.is_none()
                 {
                     let layout = self.layout(viewport);
@@ -652,11 +650,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                             let strip = layout.collapsed.iter().find(|c| c.id == column)?;
                             if layout.dividers.iter().any(|divider| {
                                 divider.bounds.contains(position[0], position[1])
-                                    && layout.column_panel_at_divider(divider.id) == Some(column)
+                                    && layout.open_column_at_divider(divider.id) == Some(column)
                             }) {
                                 return None;
                             }
-                            let body = strip.group_panel.as_ref().map(|p| p.bounds).or_else(|| {
+                            let body = strip.open.as_ref().map(|p| p.bounds).or_else(|| {
                                 self.state
                                     .customization
                                     .column_drawer_bounds
@@ -671,7 +669,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                                     &vec![0.; d.columns.len()],
                                 )
                                 .and_then(|p| p.connection());
-                            (!strip.bounds.contains(position[0], position[1])
+                            (!layout.collapsed.iter().any(|c| c.stack == strip.stack
+                                    && c.bounds.contains(position[0], position[1]))
                                 && !body.is_some_and(|b| b.contains(position[0], position[1]))
                                 && !connection
                                     .is_some_and(|c| c.bounds.contains(position[0], position[1]))
@@ -684,6 +683,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .then_some(column)
                         })
                         .collect();
+                    let mut outside = outside;
+                    for stack in &self.state.workspace.layout.column_stacks {
+                        if !stack.auto_hide || stack.open_column.is_none() { continue; }
+                        let inside = layout.collapsed.iter().filter(|c| c.stack == stack.column).any(|c| {
+                            c.bounds.contains(position[0], position[1])
+                                || c.open.as_ref().is_some_and(|o| o.bounds.contains(position[0], position[1])
+                                    || o.connections.iter().any(|(_, c)| c.bounds.contains(position[0], position[1])))
+                        }) || layout.dividers.iter().any(|d| d.bounds.contains(position[0], position[1])
+                            && layout.open_column_at_divider(d.id) == stack.open_column)
+                            || facts.content_drawer.is_some_and(|b| b.contains(position[0], position[1]))
+                            || facts.drawer_connection.is_some_and(|b| b.contains(position[0], position[1]));
+                        if !inside { outside.push(stack.column); }
+                    }
                     for column in outside {
                         let change = self.dispatch(UiAction::Customize {
                             action: CustomizationAction::CloseColumn { column },
@@ -852,7 +864,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     if key == "escape"
                         && !self.interaction.facts.popup_open
-                        && self.column_panel_drag.is_none()
+                        && self.divider_drag.is_none()
                     {
                         let columns: Vec<_> = self
                             .state
@@ -863,6 +875,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 DrawerAnchor::Column { column, .. } => Some(column),
                                 _ => None,
                             })
+                            .chain(self.state.workspace.layout.column_stacks.iter()
+                                .filter(|s| s.open_column.is_some()).map(|s| s.column))
                             .collect();
                         for column in columns {
                             reply.change = self.dispatch(UiAction::Customize {
@@ -994,13 +1008,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // A native DND grab can blur the window without ending the
                 // drag. Only the host's drag-end/cancel lifecycle releases it.
                 self.interaction.hover = None;
-                let column_panel = self.column_panel_drag.take();
                 let divider = self.divider_drag.take();
                 let floating = self.floating_resize.take();
                 let workspace = self.workspace_drag.take();
                 self.workspace_tab_drag = None;
-                if column_panel.is_some()
-                    || divider.is_some()
+                if divider.is_some()
                     || floating.is_some()
                     || workspace.is_some()
                 {
@@ -1090,7 +1102,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 floating: &layout.floating,
                 collapsed: &layout.collapsed,
                 fit_tab_groups: &layout.fit_tab_groups,
-                column_settings: &layout.column_settings,
+                column_stacks: &layout.column_stacks,
             },
             camera: &self.state.camera,
             panel_measurements: &layout.measurements,
@@ -1614,7 +1626,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .flatten();
             group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
-            resolved.drop_hint(position[0], position[1], tabs, !docks_hidden)?
+            // GTK first: other hosts retain their existing group insertion
+            // until they adopt and validate the new stack-member destination.
+            (self.state.platform == Platform::Gtk && !docks_hidden)
+                .then(|| resolved.stack_item_drop_hint(position))
+                .flatten()
+                .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
         };
         // The attached preview and the committed drop use the same frozen
         // switch points, including a release between pointer-motion events.
@@ -1821,31 +1838,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.rendering_suspended && !Self::action_without_renderer(&action) {
             return Err("Painting is unavailable. Save the drawing and reopen it.".into());
         }
-        // One resize contract for both sides of an attached panel's outside
-        // edge. Resolve before revision classification so either hit surface
-        // follows the retained-content path and one-step gesture history.
-        let action = match action {
-            UiAction::DragDivider {
-                id,
-                phase,
-                position,
-                viewport,
-            } => {
-                valid_viewport(viewport)?;
-                if let Some(column) = self.layout(viewport).column_panel_at_divider(id) {
-                    UiAction::ResizeColumnPanel {
-                        column,
-                        after: None,
-                        phase,
-                        position,
-                        viewport,
-                    }
-                } else {
-                    action
-                }
-            }
-            _ => action,
-        };
         if self.workspace_read_only
             && !matches!(
                 &action,
@@ -1877,10 +1869,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         phase: ContactPhase::Up | ContactPhase::Cancel,
                         ..
                     }
-                    | UiAction::ResizeColumnPanel {
-                        phase: ContactPhase::Up | ContactPhase::Cancel,
-                        ..
-                    }
+
             )
         {
             return Err(
@@ -1912,28 +1901,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let content_revision = self.workspace_content_revision;
         // Only a dimension/measurement change with no open customization UI can
         // retain content. Collapse/expand transitions still require full models.
-        let column_resize = matches!(
-            &action,
-            UiAction::ResizeColumnPanel {
-                phase: ContactPhase::Move,
-                ..
-            }
-        );
-        let layout_only = (!self.state.customization.is_open() || column_resize)
-            && matches!(
-                &action,
-                UiAction::DragDivider {
-                    phase: ContactPhase::Move,
-                    ..
-                } | UiAction::ResizeFloating {
-                    phase: ContactPhase::Move,
-                    ..
-                } | UiAction::ResizeColumnPanel {
-                    phase: ContactPhase::Move,
-                    ..
-                } | UiAction::MeasurePanels { .. }
-            );
-        let collapsed_before = layout_only.then(|| self.state.workspace.layout.collapsed.clone());
+        let layout_only = (!self.state.customization.is_open())
+            && matches!(&action, UiAction::DragDivider { phase: ContactPhase::Move, .. }
+                | UiAction::ResizeFloating { phase: ContactPhase::Move, .. } | UiAction::MeasurePanels { .. });
+        let collapsed_before = layout_only.then(|| self.state.workspace.layout.collapsed.iter().map(|c| c.root).collect::<Vec<_>>());
         let drag_before = self.workspace_drag;
         let moving_workspace = matches!(
             &action,
@@ -2345,6 +2316,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::RestoreWorkspace { mut workspace } => {
                 workspace.validate()?;
+                workspace.layout.open_default_columns(self.state.platform);
                 workspace.layout.collapse_empty_toolbar_groups();
                 workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
                 workspace.layout.bottom_inset = self.state.workspace.layout.bottom_inset;
@@ -2352,7 +2324,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.state.workspace.layout.header_presentation.clone();
                 self.state.workspace = workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
-                self.column_panel_drag = None;
                 self.divider_drag = None;
                 self.floating_resize = None;
                 self.workspace_drag = None;
@@ -2589,65 +2560,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .resize_workspace(id, position, viewport)?;
                 (LAYOUT, false)
             }
-            UiAction::ResizeColumnPanel {
-                column,
-                after,
-                phase,
-                position,
-                viewport,
-            } => {
-                valid_viewport(viewport)?;
-                if !position.into_iter().all(f32::is_finite) {
-                    return Err("Invalid resize position".into());
-                }
-                if phase == ContactPhase::Cancel {
-                    if self
-                        .column_panel_drag
-                        .is_some_and(|(c, a, _)| c == column && a == after)
-                    {
-                        self.workspace_history.cancel(&mut self.state.workspace);
-                        self.column_panel_drag = None;
-                    }
-                } else if phase == ContactPhase::Down {
-                    let layout = self.layout(viewport);
-                    let p = layout
-                        .collapsed
-                        .iter()
-                        .find(|c| c.id == column)
-                        .and_then(|c| c.group_panel.as_ref())
-                        .ok_or("The group panel is not open")?;
-                    let bounds = if let Some(after) = after {
-                        let i = p
-                            .panels
-                            .iter()
-                            .position(|p| p.panel == after)
-                            .ok_or("Unknown panel divider")?;
-                        *p.dividers.get(i).ok_or("Unknown panel divider")?
-                    } else {
-                        p.resize
-                    };
-                    self.workspace_history
-                        .begin_named(&self.state.workspace, "Resize group panel".into());
-                    self.column_panel_drag =
-                        Some((column, after, ResizeDrag::new(position, bounds)));
-                } else {
-                    let (_, _, drag) = self
-                        .column_panel_drag
-                        .filter(|(c, a, _)| *c == column && *a == after)
-                        .ok_or("Group panel resize is not active")?;
-                    self.state.workspace.layout.resize_column_panel(
-                        column,
-                        after,
-                        drag.position(position),
-                        viewport,
-                    )?;
-                    if phase == ContactPhase::Up {
-                        self.column_panel_drag = None;
-                        self.workspace_history.finish(&self.state.workspace);
-                    }
-                }
-                (LAYOUT, false)
-            }
             UiAction::DragDivider {
                 id,
                 phase,
@@ -2668,7 +2580,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down {
                         let divider = self.divider(id, viewport)?;
                         let mut drag = ResizeDrag::new(position, divider.bounds);
-                        if self.column_resize_enabled() {
+                        if self.column_resize_enabled() && self.layout(viewport).open_column_at_divider(id).is_none() {
                             let columns = self
                                 .state
                                 .workspace
@@ -2895,6 +2807,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .iter()
                 .filter_map(|d| match d.anchor {
                     DrawerAnchor::Column { group, origin, .. } => {
+                        let layout = &self.state.workspace.layout;
+                        let column = layout.collapsed_column_for_group(group)?;
+                        if self.state.platform.stacked_columns() && !layout.column_stack(column).drawers {
+                            return None;
+                        }
                         // These hosts draw the sidebar selection and connector at the visible tab.
                         let origin = if matches!(
                             self.state.platform,
@@ -2911,28 +2828,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .collect();
             changed |= CUSTOMIZATION;
         }
-        if changed & (LAYOUT | CUSTOMIZATION) != 0 {
-            // Attached groups survive transient popup resets, including opening
-            // Preferences. Keep their bodies consistent with the allocated space.
-            // Undo/redo also preserves the open group in layout history.
-            for settings in &self.state.workspace.layout.column_settings {
-                let Some(group) = self
-                    .state
-                    .workspace
-                    .layout
-                    .open_column_group(settings.column)
-                else {
-                    continue;
-                };
-                if !self.state.customization.column_drawers.iter().any(|d| matches!(d.anchor, DrawerAnchor::Column { column, .. } if column == settings.column))
-                    && let Ok(panels) = self.state.workspace.layout.group_panels(group)
-                    && let Some(panel) = panels.first()
-                    && let Ok(drawer) = ContentDrawer::for_column(&self.state.workspace.layout, group, *panel) {
-                    self.state.customization.column_drawers.push(drawer);
-                }
-            }
-            changed |= CUSTOMIZATION;
-        }
         if let Some(anchor) = self
             .state
             .customization
@@ -2946,6 +2841,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .layout
                 .collapsed_column_for_group(group)
                 .is_some()
+            && !self.state.workspace.layout.column_stacks.iter().any(|s| s.open_column.is_some_and(|c| self.state.workspace.layout.collapsed_column_for_group(group) == Some(c)))
             && !self.state.customization.column_drawers.iter().any(|d| {
                 matches!(d.anchor, DrawerAnchor::Column { group: g, .. } if g == group)
                     && d.columns.iter().flatten().any(|p| *p == anchor.panel)
@@ -2994,8 +2890,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if layout_only
             && changed == (LAYOUT | CUSTOMIZATION)
-            && collapsed_before.as_ref() == Some(&self.state.workspace.layout.collapsed)
-            && (!self.state.customization.is_open() || column_resize)
+            && collapsed_before.as_ref() == Some(&self.state.workspace.layout.collapsed.iter().map(|c| c.root).collect::<Vec<_>>())
+            && !self.state.customization.is_open()
         {
             self.workspace_content_revision = content_revision;
         }
@@ -3258,6 +3154,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         drag: &mut ResizeDrag,
     ) -> Result<(), String> {
         let point = drag.position(position);
+        let resolved = self.layout(viewport);
+        if resolved.dividers.iter().find(|d| d.id == id)
+            .is_some_and(|d| self.state.workspace.layout.fixed_stack_divider(d))
+        {
+            return Ok(());
+        }
+        let projected = resolved.open_column_at_divider(id).is_some()
+            || resolved.collapsed.iter().filter_map(|c| c.open.as_ref()).any(|o| {
+                self.state.workspace.layout.column_contains(o.column, id)
+            });
+        if projected { return self.state.workspace.layout.resize_workspace(id, point, viewport); }
+
         loop {
             match drag.phase {
                 ResizeDragPhase::Resizing => break,
@@ -3716,7 +3624,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     self.workspace_history.redo(&mut self.state.workspace);
                 }
-                self.column_panel_drag = None;
                 self.divider_drag = None;
                 self.state.customization = CustomizationState {
                     header_editing,
@@ -10901,9 +10808,9 @@ mod tests {
                         1,
                     ) => {}
                     (
-                        DockTarget::Split {
-                            group: 6,
-                            edge: Edge::Bottom,
+                        DockTarget::StackColumn {
+                            column: 4,
+                            before: false,
                         },
                         2,
                     ) => {}
@@ -10912,17 +10819,21 @@ mod tests {
                 s.dispatch(item.move_action(hint.target, viewport)).unwrap();
                 s.state.workspace.validate().unwrap();
                 assert!(s.state.workspace.layout.floating.is_empty());
-                let c = &s.layout(viewport).collapsed[0];
+                let resolved = s.layout(viewport);
+                let c = &resolved.collapsed[0];
                 assert_eq!(c.id, 4);
-                assert_eq!(c.groups.len(), if slot == 0 { 2 } else { 3 });
+                assert_eq!(c.groups.len(), if slot == 1 { 3 } else { 2 });
+                assert_eq!(resolved.collapsed.len(), if slot == 2 { 2 } else { 1 });
                 let moved = match item {
                     DockItem::Panel { panel } => panel,
                     DockItem::Group { group: 8 } => Panel::Layers,
                     _ => Panel::Toolbar,
                 };
                 assert!(
-                    c.groups
+                    resolved
+                        .collapsed
                         .iter()
+                        .flat_map(|c| &c.groups)
                         .flat_map(|g| &g.icons)
                         .any(|i| i.panel == moved)
                 );
@@ -15874,14 +15785,8 @@ mod tests {
         assert_eq!(app.state.workspace.layout.bands.len(), 4);
         assert!(serde_json::to_value(&app.state).unwrap()["commands"].is_array());
     }
-    mod gtk_column_groups {
+    mod column_stack_tests {
         use super::*;
-        const COLUMN_PLATFORM: Platform = Platform::Gtk;
-        include!("column_group_tests.rs");
-    }
-    mod windows_column_groups {
-        use super::*;
-        const COLUMN_PLATFORM: Platform = Platform::Windows;
-        include!("column_group_tests.rs");
+        include!("column_stack_tests.rs");
     }
 }

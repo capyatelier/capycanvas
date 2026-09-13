@@ -88,7 +88,8 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('!!document.querySelector(".content-drawer")'),"Column drawers remain open while drawing");
   await click('.collapsed-column [data-panel="navigator"]');
   await wait('!document.querySelector(".content-drawer")');
-  await click(".column-expand");
+  assert.equal(await evaluate('document.querySelector(".column-expand")'),null);
+  await evaluate('layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:window.editorColumnGroup,collapsed:false}})');
   await settle();
   assert.equal(await evaluate('layerApp.state().workspace.layout.collapsed.length'),0);
   await evaluate('(()=>{const send=action=>layerApp.dispatch({type:"customize",action});send({type:"insert_tools",panel:"toolbar",before:1});send({type:"picker_select",control:{kind:"divider"},selected:true});send({type:"picker_select",control:{kind:"panel",panel:"color"},selected:true});send({type:"confirm_tools"});window.editorDrawerTile=layerApp.state().workspace.layout.panels.find(p=>p.id==="toolbar").content.tiles.find(t=>t.control.kind==="panel"&&t.control.panel==="color").id;const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));layerApp.dispatch({type:"move_panel",panel:"toolbar",target:{kind:"tab",group:group.id,index:null}});send({type:"set_column_collapsed",group:group.id,collapsed:true});})()');

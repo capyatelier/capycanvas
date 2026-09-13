@@ -227,7 +227,8 @@ class AndroidFeatureParityTest {
         compose.waitUntil(10_000) { state().getJSONObject("customization").objectOrNull("drawer") == null }
         assertEquals(1, state().getJSONObject("customization").array("column_drawers").length())
         shown("column-drawer-$column")
-        compose.onNodeWithTag("expand-column-$column").performTouchInput { click() }
+        compose.onNodeWithTag("expand-column-$column").assertDoesNotExist()
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to column, "collapsed" to false)))
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().none { it.getInt("id") == column } }
         compose.onNodeWithTag("tile-toolbar-$pen").assertIsDisplayed()
     }

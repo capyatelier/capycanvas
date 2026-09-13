@@ -33,8 +33,8 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color, Settings (plus Full Screen on Web) |
-| Paint | Existing Tools toolbar and Tool Set/Tool/Brush size/Color column | Existing Commands toolbar | Existing Navigator/Diagnostics, Properties/Filters, Layers arrangement |
+| Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color (plus Full Screen on Web) |
+| Paint | Tools toolbar and expanded Tool Set/Tool/Brush size/Color column | Commands toolbar | Open collapsed stack for Navigator/Diagnostics, Properties/Filters and Layers |
 | Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
 
 GTK/Web Sketch uses Medium window-bar icons, a transparent canvas overlay, no menu
@@ -43,13 +43,17 @@ Painter arrangement until their window-bar projection is implemented.
 Photographer uses Small toolbar tiles. Painter starts with Brush
 selected and no docked content panels. Photographer starts with Operation selected,
 devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
-the illustration Tool Set/Brush size columns and Diagnostics. Illustrator retains
-the existing default arrangement and tool selection.
+the illustration Tool Set/Brush size columns and Diagnostics. GTK Paint uses
+an open collapsed stack on the right, with its original width and split
+proportions. The left column stays expanded normally. Auto-hide and Open
+individual panels both start off. Other hosts retain Paint's expanded columns
+until full-column opening is ported.
 
 ## Workspace behavior
 
-- Common title-bar defaults include Settings at the right, with a Full Screen
-  button only on Web. Native fullscreen commands/shortcuts remain available.
+- Paint and Photo title-bar defaults include Settings at the right. Sketch ends
+  with Color; Web adds a Full Screen button. Native fullscreen commands/shortcuts
+  remain available.
   GTK/Web status components show only in fullscreen; the builder retains editable
   Clock/Battery placeholders when their values are hidden. Workspace-specific
   tools and panels remain distinct.
@@ -104,9 +108,13 @@ the existing default arrangement and tool selection.
 - The first Photographer arrangement used Medium tiles. On switching to an
   untouched copy of that arrangement, update it and its starting layout to Small.
   Keep renamed workspaces and brush edits; leave customized layout histories alone.
+- Untouched GTK Paint workspaces upgrade from an expanded right column to the
+  collapsed stack. Loading or resetting the default opens that column;
+  ordinary open/close remains transient and adds no layout history entry.
 - Untouched GTK/Web Sketch workspaces upgrade from the shipped two-toolbar layout
-  to the window bar. Working brush/color values remain intact. Any edited
-  history, custom baseline or independent copy is left alone.
+  or the earlier title bar with Settings to the current title bar. Working
+  brush/color values remain intact. Any edited history, custom baseline or
+  independent copy is left alone.
 
 ## Configurable switcher
 

@@ -656,7 +656,7 @@
 		"B29F8723F9FB3BA886825436" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
-			"path" = "iOS/Tests/ColumnPanelChecks.swift";
+			"path" = "iOS/Tests/ColumnStackCompatibilityChecks.swift";
 			"sourceTree" = "<group>";
 		};
 		"421C829F55D51AEC9446F61C" = {
