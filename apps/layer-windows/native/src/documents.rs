@@ -193,8 +193,12 @@ impl Worker {
         mailbox.pending = Some(job);
         self.shared.ready.notify_one();
     }
-    fn take(&self) -> Option<Result<Completed, String>> {
-        self.shared.mailbox.lock().unwrap().completed.take()
+    fn take(&self, defer_import: bool) -> Option<Result<Completed, String>> {
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        if defer_import && matches!(mailbox.completed, Some(Ok(Completed::Imported(_)))) {
+            return None;
+        }
+        mailbox.completed.take()
     }
     fn retire(&self, session: Box<UiSession<Renderer>>) {
         let mut mailbox = self.shared.mailbox.lock().unwrap();
@@ -736,7 +740,20 @@ impl DocumentService {
         {
             self.cancel_import(host);
         }
-        let Some(completed) = self.worker.take() else {
+        // Keep decoded CPU bytes in the bounded completion slot until they can
+        // be uploaded. Canceled/stale imports and errors drain without a GPU.
+        let defer_import = self.import.as_ref().is_some_and(|import| {
+            if import.cancelled.load(Ordering::Acquire) || import.check(host).is_err() {
+                return false;
+            }
+            let gpu = host.session.engine().backend().0.as_ref();
+            let renderer_ready = gpu.is_some();
+            #[cfg(target_os = "windows")]
+            let renderer_ready = renderer_ready
+                && !gpu.is_some_and(|gpu| crate::device::removed(gpu.device()));
+            !renderer_ready
+        });
+        let Some(completed) = self.worker.take(defer_import) else {
             return Ok(());
         };
         if let Some(import) = self.import.take() {
@@ -1103,6 +1120,35 @@ mod tests {
         }
     }
     #[test]
+    fn decoded_import_waits_for_renderer_and_can_still_be_superseded() {
+        let mut f = Fixture::new();
+        pending_import(&mut f, 1, true);
+        let original = f.host.session.engine().document().clone();
+        let asset = ProjectAsset {
+            extent: [1, 1],
+            format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+            bytes: Arc::from([40u8, 60, 80, 255]),
+        };
+        f.service.worker.shared.mailbox.lock().unwrap().completed =
+            Some(Ok(Completed::Imported(asset)));
+        f.service.poll(&mut f.host).unwrap();
+        assert!(
+            f.service.importing(),
+            "a temporary GPU gap must retain the decode"
+        );
+        assert!(f.host.error.is_none());
+        assert_eq!(f.host.session.engine().document(), &original);
+        // Save must remain able to cancel the import even without a renderer.
+        f.invoke(CommandId::SaveDocument);
+        f.service.poll(&mut f.host).unwrap();
+        assert!(!f.service.importing());
+        assert!(f.host.error.is_none());
+        assert_eq!(f.host.session.engine().document(), &original);
+        f.act(DocumentAction::Cancel { id: f.request() });
+        assert!(!f.host.session.state().document_file.busy);
+    }
+
+    #[test]
     fn import_errors_recover_and_superseding_document_request_cancels_picker() {
         let mut f = Fixture::new();
         pending_import(&mut f, 1, true);
@@ -1388,10 +1434,10 @@ mod gpu_tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction};
     use std::sync::mpsc;
-    fn invoke(host: &mut NativeHost, command: CommandId) {
+    pub(super) fn invoke(host: &mut NativeHost, command: CommandId) {
         host.dispatch(UiAction::Invoke { command }).unwrap();
     }
-    fn request(host: &NativeHost) -> (u32, u64, u64) {
+    pub(super) fn request(host: &NativeHost) -> (u32, u64, u64) {
         let id = host
             .session
             .state()
@@ -1418,7 +1464,7 @@ mod gpu_tests {
         }
         service.poll(host).unwrap();
     }
-    fn image(host: &mut NativeHost) -> layer_render::ReadbackImage {
+    pub(super) fn image(host: &mut NativeHost) -> layer_render::ReadbackImage {
         host.session.frame(0, 0).unwrap();
         // Explicit functional-test readback; project saving never reads the GPU.
         let renderer = host.session.renderer_mut();
@@ -1426,7 +1472,7 @@ mod gpu_tests {
         renderer.take_readback().unwrap().unwrap()
     }
 
-    fn png_pixels(path: &std::path::Path) -> layer_render::ReadbackImage {
+    pub(super) fn png_pixels(path: &std::path::Path) -> layer_render::ReadbackImage {
         let mut reader = png::Decoder::new(File::open(path).unwrap())
             .read_info()
             .unwrap();
@@ -1446,7 +1492,7 @@ mod gpu_tests {
             bytes,
         }
     }
-    fn capture_export(
+    pub(super) fn capture_export(
         service: &mut DocumentService,
         host: &mut NativeHost,
         path: &std::path::Path,
@@ -1884,3 +1930,7 @@ mod gpu_tests {
         std::fs::remove_dir(directory).unwrap();
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "document_recovery_tests.rs"]
+mod recovery_tests;

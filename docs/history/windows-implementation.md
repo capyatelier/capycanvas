@@ -2394,3 +2394,57 @@ recovery fixture passes Save/Save As, Zen, Cancel/Discard, durable reopen and
 identical PNG output. The compact picker regression also passes all three shapes,
 synthetic mouse/pen/touch, cancellation, keyboard, menus, slots/swap and retained
 drawer input. This integration preserves the accepted native wheel renderer.
+
+### Document operations overlapping GPU removal
+
+A decoded image could finish while reconstruction temporarily removed the
+renderer. The document service then discarded that import, and successful GPU
+recovery cleared its transient error. The completion now waits in the existing
+bounded mailbox until a usable renderer returns. Canceled or stale imports and
+decoder errors still drain immediately, including after permanent GPU failure.
+
+Actual removal during New/Open also exposed mapped-buffer panics inside document
+preparation. The zero-filled unrestricted-coverage buffer now uses wgpu's normal
+zero initialization, without mapping. Uploads retain the same staging belt and
+copy commands but use its allocation API to return mapping errors. Rendering and
+viewport presentation propagate those errors through the existing host paths.
+The Windows, Web, GTK, Apple and Android presenter callers consume the result;
+no alternative renderer, queue or dependency was introduced.
+
+Four opt-in hardware D3D12 tests pass without worker panics:
+
+- A completed import survives removal before adoption, then temporary renderer
+  absence, even after its original source file is deleted. Restored pixels and
+  one-step Undo/Redo match the pre-removal reference.
+- New/Open candidates are checked both after worker completion and immediately
+  after submission. An obsolete candidate cannot replace the live document;
+  retry succeeds with embedded image data. A save accepted before removal still
+  completes durably and preserves source assets.
+- A captured PNG ticket either produces the exact captured image or reports an
+  error while preserving the existing destination. Export succeeds after GPU
+  replacement and does not acknowledge a document save.
+- A viewport upload on a removed device returns a mapping error without
+  unwinding. Retiring those resources permits reconstruction and identical pixels.
+
+The 579-test ordinary engine/host/UI/Windows/workspace suite passes, with nine
+opt-in hardware tests excluded. Strict all-target engine/host/UI/Windows Clippy,
+renderer-library Clippy and the Web Wasm compile check pass. Nine further rendering
+tests pass with hardware D3D12 selected, covering Navigator presentation,
+selection outlines and pixel transforms. Their two opt-in latency benchmarks
+were not run.
+
+These are process-owned device-removal and functional rendering checks. Physical
+digitizer input, mixed-display and sleep/driver-reset behavior, all native
+picker/input/filter overlaps, installed MSIX/clean-machine delivery, broad visual
+acceptance and 120 Hz painting/input latency remain separate. The other native
+presenter callers were mechanically updated and reviewed; their platform builds
+are not established by this Windows validation. No package was regenerated.
+
+Normal Debug and Release builds pass. The Debug native document fixture passes
+repeated reconstruction; the Release exhausted-recovery fixture passes Save,
+Save As, Cancel/Discard, restored Zen preferences, durable reopen and identical
+PNG output. The complete Release editor fixture also passes. A fixture race on
+reopen was corrected: it now waits for asynchronous workspace restoration before
+checking Zen, and for a visible header before invoking File. The same failed
+window successfully exited Zen and opened File during diagnosis; no production
+UI change was needed for that race.

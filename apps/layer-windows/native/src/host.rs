@@ -254,7 +254,7 @@ impl CapyHost {
             &target.texture.create_view(&Default::default()),
             view,
             surround,
-        );
+        ).map_err(err)?;
         gpu.queue().present(target);
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
