@@ -105,6 +105,55 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Native docking and contact identity — 2026-09-13
+
+Both hosts pass drawer-tab reorder, tear-off, redock and whole-group tear-off,
+collapsed/nested drawer navigation, and panel configuration followed by a live
+group drag. The connected iPad also passes held toolbar tiles with exact
+Undo/Redo and attached-column width/split resizing with history. Resulting panel
+captures retain readable controls and the accepted compact Color appearance.
+
+The original Mac drawer test failed at its first reorder. Native event tracing
+showed consecutive injected mouse-down events with the same event number zero;
+the adapter reused the preceding collapsed icon's hold policy for the drawer
+tab. AppKit now compares the mouse-down event object shared by its pan and press
+recognizers. This preserves native hold/slop and shared Rust drag/history rules.
+An unreachable event-type branch is removed; tablet subtype classification
+remains. Temporary diagnostic code is removed and the unchanged full Mac
+drawer workflow passes with zero failures or skips.
+
+The AppKit workspace fixture covers mouse and pen with both increasing and
+repeated zero event counters, immediate drawer-tab movement through intermediate
+points, exact Undo/Redo, held tile menus/release, collapsed-icon tear-off and
+focus cancellation on both Apple presets. It now mounts the shared popup host.
+Event round-trip checks tolerate only sub-millionth-point floating-point
+rounding; button, event, window and tablet-subtype checks remain. Separate full
+editor and real-canvas diagnostic fixtures also pass. Injected AppKit tablet
+events do not establish physical digitizer acceptance.
+
+Native layer and workspace-list checks pass on both presets. They retain pen
+hold/menu continuation, immediate mouse rows and pen grips, shared order/history,
+covered-row rejection, keyboard menus, scrolling, focus loss and source-removal
+checks. The workspace-list fixture now mounts the shared popup host, resolving
+its earlier keyboard-menu failure without changing product menu behavior.
+The final signed Mac batch passes all four workflows with zero failures or
+skips: drawer docking, panel configuration/live dragging, collapsed/nested
+drawers and workspace-switcher order/pin persistence across restart.
+
+The panel-control test now scopes duplicate Color controls to their popup and
+finds the current group through the visible Brush Size tab. It no longer relies
+on an obsolete preset group ID. Both signed iteration-28 builds pass; the iPad
+production executable is identical to the validated, installed iteration-23 app.
+All original failures, later passes, diagnostic cleanup and restored review
+state remain under `artifacts/apple-docking-workflows-v1/`. After the user
+opened Files, the `files-unlocked-v28` follow-up reached the visible export
+picker without an authentication prompt. XCTest reported no usable hit point
+for its remote Cancel element; tapping did not dismiss the picker and the test
+failed. The review namespace was restored and the artist descriptor is
+unchanged. Cancellation remains unverified, with no unlock question pending.
+The full feature, visual, physical-input, lifecycle and sustained-performance
+gates remain open.
+
 ## Workspace recovery and editor workflows — 2026-09-13
 
 Fast native restarts now reclaim abandoned workspace ownership once every prior

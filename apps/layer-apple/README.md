@@ -730,6 +730,21 @@ dispatch, reordered presentation, restored drop targets and closing input retire
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-drawers.swift
 ```
 
+For native AppKit mouse/tablet contacts, run these fixtures one at a time; each
+owns a temporary foreground window and isolated storage:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-native-input.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/layer-row-input.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-switcher-input.swift
+```
+
+The workspace check covers held tiles, immediate drawer tabs, continuous moves,
+menus, cancellation and exact Undo/Redo on both Apple presets. It includes
+repeated injected event numbers: pan and press share the mouse-down event object,
+while separate contacts must reclassify their visible source. These fixtures do
+not establish physical Pencil or tablet-sensor acceptance.
+
 Debug-only `CAPY_INITIAL_ACTIONS` fixtures run once after restoration and the first
 native surface size, so layout actions use the editor's viewport instead of the
 owner's 1×1 placeholder. Release builds have no fixture override.
