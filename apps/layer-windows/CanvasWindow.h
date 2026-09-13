@@ -118,7 +118,10 @@ private:
     bool SendIndependent(CanvasWork item);
     void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);
-    void Replay(bool pan, bool backlog=false); // Explicit smoke-test fixture, not OS input evidence.
+    // Explicit smoke fixtures; only the input dispatcher touches replayTime.
+    enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd };
+    uint64_t replayTime=0;
+    void Replay(ReplayKind);
     void StartInput();
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
 };

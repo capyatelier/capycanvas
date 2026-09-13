@@ -116,9 +116,11 @@ void CanvasWindow::Open() {
     toolbar.HorizontalAlignment(HorizontalAlignment::Center);toolbar.VerticalAlignment(VerticalAlignment::Bottom);
     toolbar.Margin({0,0,0,8});
     if(GetEnvironmentVariableW(L"CAPY_SMOKE_TEST",nullptr,0)){
-        for(int mode=0;mode<3;++mode){
-            Button test;test.Content(box_value(mode==0?L"Test stroke":mode==1?L"Test pan":L"Test backlog"));
-            test.Click([weak=weak_from_this(),mode](auto&&,auto&&){if(auto self=weak.lock())self->Replay(mode==1,mode==2);});
+        for(auto [kind,label]:{std::pair{ReplayKind::Stroke,L"Test stroke"},
+            {ReplayKind::Pan,L"Test pan"},{ReplayKind::Backlog,L"Test backlog"},
+            {ReplayKind::Pen,L"Test pen"},{ReplayKind::PenBegin,L"Test pen begin"},{ReplayKind::PenEnd,L"Test pen end"}}){
+            Button test;test.Content(box_value(label));
+            test.Click([weak=weak_from_this(),kind](auto&&,auto&&){if(auto self=weak.lock())self->Replay(kind);});
             toolbar.Children().Append(test);
         }
         Button reload;reload.Content(box_value(L"Test filter reload"));
@@ -335,18 +337,25 @@ bool CanvasWindow::SendIndependent(CanvasWork item) {
     lock.unlock();wake.notify_one();
     return true;
 }
-void CanvasWindow::Replay(bool pan,bool backlog) {
-    inputDispatcher.TryEnqueue([weak=weak_from_this(),pan,backlog] {
+void CanvasWindow::Replay(ReplayKind kind) {
+    inputDispatcher.TryEnqueue([weak=weak_from_this(),kind] {
+        bool pan=kind==ReplayKind::Pan,backlog=kind==ReplayKind::Backlog;
+        bool pen=kind==ReplayKind::Pen||kind==ReplayKind::PenBegin||kind==ReplayKind::PenEnd;
         auto self=weak.lock();if(!self)return;
         Size size;uint64_t view;
         {std::lock_guard lock(self->mutex);if(self->closing)return;size=self->desired;view=self->revision;}
         std::vector<CapyPointer> records;records.reserve(CanvasWorkBuffer::PointerBatch);
         uint32_t count=backlog?32768:pan?3:42;
-        uint64_t now=Now();
-        for(uint32_t i=0;i<count;i++) {
+        if(kind==ReplayKind::PenEnd&&!self->replayTime)return;
+        uint64_t start=kind==ReplayKind::PenEnd?self->replayTime:Now()-count*1000000ULL;
+        if(kind==ReplayKind::PenBegin)self->replayTime=start;
+        uint32_t first=kind==ReplayKind::PenEnd?21:0,limit=kind==ReplayKind::PenBegin?21:count;
+        for(uint32_t i=first;i<limit;i++) {
             CapyPointer p{};
-            p.id=77;p.sequence=++self->sequence;p.timestamp_ns=now-(count-i)*1000000ULL;
-            p.view_revision=view;p.tool=1;p.button=pan?1:0;p.flags=2;p.pressure=0.5f;
+            p.id=77;p.sequence=++self->sequence;p.timestamp_ns=start+i*1000000ULL;
+            p.view_revision=view;p.tool=pen?0:1;p.button=pan?1:0;p.flags=2;
+            p.pressure=pen?0.2f+0.7f*float(i)/float(count-1):0.5f;
+            if(pen){p.tilt_x=0.4f*std::sin(float(i)/7);p.tilt_y=0.2f*std::cos(float(i)/7);p.twist=float(i)/42;}
             p.phase=i==0?1:i==count-1?3:2;
             p.x=size.width*0.4f+(pan?0.0f:float(backlog?i%42:i)*5);
             p.y=pan?(i==0?size.height*0.5f:28.0f):size.height*0.5f+24.0f*std::sin(float(i)/6);
@@ -356,7 +365,10 @@ void CanvasWindow::Replay(bool pan,bool backlog) {
                 records={};records.reserve(CanvasWorkBuffer::PointerBatch);
             }
         }
-        if(!records.empty())self->SendIndependent(std::move(records));
+        if(!records.empty()&&!self->SendIndependent(std::move(records)))return;
+        if(kind==ReplayKind::PenEnd)self->replayTime=0;
+        if(pen)CapyLifecycle(kind==ReplayKind::PenBegin?"test_pen_begin_queued":
+            kind==ReplayKind::PenEnd?"test_pen_end_queued":"test_pen_queued");
     });
 }
 
@@ -617,7 +629,9 @@ void CanvasWindow::Run() {
             }
             std::deque<CanvasWork> pending;
             bool overflow;std::optional<Hover> hover;
-            {std::lock_guard lock(mutex);pending=work.Take();overflow=transportFailed;hover=std::exchange(pendingHover,std::nullopt);}
+            // Samples admitted during reconstruction must wait for replacement
+            // brushes; draining sooner would classify their presses as unready.
+            {std::lock_guard lock(mutex);if(!recoveryAttempts)pending=work.Take();overflow=transportFailed;hover=std::exchange(pendingHover,std::nullopt);}
             space.notify_all();
             bool failed=false;
             if(hover&&capy_chrome(host,hover->leave?3:1,hover->x,hover->y,false,menuOpen.load(),hover->touch)<0){Fail(capy_error());break;}

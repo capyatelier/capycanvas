@@ -7,6 +7,10 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class CapyDocumentControls {
+    [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect rect);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr result);
     [DllImport("user32.dll",SetLastError=true)] public static extern bool PostMessage(IntPtr h,uint message,UIntPtr w,IntPtr l);
     [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,StringBuilder text,uint flags,uint timeout,out UIntPtr result);
@@ -147,13 +151,59 @@ function Choose-Path([string]$Path) {
     [CapyDocumentControls]::TypeText([IntPtr]$entry.Current.NativeWindowHandle,$Path)
     Picker-Button '1'
 }
-function Fail-Gpu {
+function Stroke-Pixels {
+    $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    try {
+        $rect=[CapyDocumentControls+Rect]::new()
+        if(![CapyDocumentControls]::GetClientRect($review.MainWindowHandle,[ref]$rect)){throw 'No canvas bounds'}
+        $bitmap=[Drawing.Bitmap]::new($rect.right,$rect.bottom)
+        try {
+            $graphics=[Drawing.Graphics]::FromImage($bitmap);$dc=$graphics.GetHdc()
+            try{if(![CapyDocumentControls]::PrintWindow($review.MainWindowHandle,$dc,3)){throw 'No canvas capture'}}
+            finally{$graphics.ReleaseHdc($dc);$graphics.Dispose()}
+            # Early pen segment, away from its current cursor and chrome.
+            $left=[int][Math]::Floor($rect.right*0.4)+20;$top=[int][Math]::Floor($rect.bottom/2)+10
+            $bytes=[byte[]]::new(30*20*4);$offset=0
+            for($y=$top;$y -lt $top+20;$y++){for($x=$left;$x -lt $left+30;$x++){
+                $pixel=[BitConverter]::GetBytes($bitmap.GetPixel($x,$y).ToArgb())
+                [Buffer]::BlockCopy($pixel,0,$bytes,$offset,4);$offset+=4
+            }}
+            [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
+        }finally{$bitmap.Dispose()}
+    }finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
+}
+function Recovery-Events {
+    foreach($line in Get-Content (Join-Path $directory 'lifecycle.log') -ErrorAction SilentlyContinue){
+        $parts=$line.Split(' ')
+        if($parts.Count -eq 3 -and $parts[0] -eq [string]$review.Id){
+            [pscustomobject]@{time=[uint64]$parts[1];event=$parts[2]}
+        }
+    }
+}
+function Start-GpuLoss([string[]]$Queued=@()) {
+    $script:scope=$root
+    $before=@(Recovery-Events|Where-Object event -eq 'gpu_recovery_preparing').Count
+    Invoke-Control 'Test GPU loss'
+    if(!$Queued.Count){return}
+    Wait-Until {@(Recovery-Events|Where-Object event -eq 'gpu_recovery_preparing').Count -gt $before} 'GPU reconstruction did not start' 30
+    $start=@(Recovery-Events|Where-Object event -eq 'gpu_recovery_preparing')[-1].time
+    foreach($action in $Queued){Invoke-Control $action}
+    $endEvent=if($FailGpu){'gpu_recovery_save_available'}else{'gpu_recovery_prepared'}
+    Wait-Until {@(Recovery-Events|Where-Object {$_.event -eq $endEvent -and $_.time -gt $start}).Count -gt 0} 'GPU reconstruction boundary did not finish' 30
+    $end=@(Recovery-Events|Where-Object {$_.event -eq $endEvent -and $_.time -gt $start})[0].time
+    $events=@(Recovery-Events|Where-Object {$_.time -gt $start -and $_.time -lt $end -and $_.event.StartsWith('test_pen_')})
+    $expected=@($Queued|ForEach-Object {switch($_){'Test pen' {'test_pen_queued'};'Test pen begin' {'test_pen_begin_queued'};'Test pen end' {'test_pen_end_queued'};default {throw 'Unknown pen replay stage'}}})
+    if(($events.event -join ',') -ne ($expected -join ',')){throw 'Pen replay missed the reconstruction interval; this run does not prove queued input recovery'}
+}
+function Fail-Gpu([string[]]$Queued=@()) {
     if(!$FailGpu){return}
     $script:scope=$root
     $revision=(Model).state.document_file.revision
-    Invoke-Control 'Test GPU loss'
+    Start-GpuLoss $Queued
     Wait-Until {(Model).windows_rendering_suspended} 'Exhausted GPU recovery did not preserve save services' 30
-    if((Model).state.document_file.revision -ne $revision){throw 'GPU failure changed committed drawing history'}
+    if($Queued.Count){
+        if((Model).state.document_file.revision -le $revision){throw 'GPU failure lost the admitted complete pen stroke'}
+    }elseif((Model).state.document_file.revision -ne $revision){throw 'GPU failure changed committed drawing history'}
     foreach($id in @('save_document','save_document_as','close_document')){
         if(!((Model).state.commands|Where-Object id -eq $id).enabled){throw "GPU failure disabled $id"}
     }
@@ -186,7 +236,7 @@ function Start-RecoveryReview([string]$label){
 function Draw {
     $script:scope=$root
     $revision=(Model).state.document_file.revision
-    Invoke-Control 'Test stroke'
+    Invoke-Control 'Test pen'
     Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
 }
 Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No review window' 30
@@ -276,9 +326,22 @@ if($RecoverGpu){
         $generation=(Model).windows_gpu_generation
         $documentRevision=(Model).state.document_file.revision
         $script:scope=$root
-        Invoke-Control 'Test GPU loss'
+        $paintedPixels=Stroke-Pixels
+        Invoke-Control 'Undo'
+        Wait-Until {(Model).state.document_file.revision -gt $documentRevision} 'Pre-recovery Undo did not finish'
+        $undone=(Model).state.document_file.revision
+        if($attempt -eq 2){
+            Wait-Until {(Stroke-Pixels) -ne $paintedPixels} 'Pre-recovery Undo did not reach the canvas'
+            Invoke-Control 'Test pen begin'
+            Wait-Until {(Stroke-Pixels) -eq $paintedPixels} 'Active pen stroke did not render before removal'
+            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'active-pen-before-loss.png') -ClientOnly *> (Join-Path $run 'active-pen-before-loss.json')
+            Start-GpuLoss @('Test pen end')
+        }else{
+            Start-GpuLoss @('Test pen')
+        }
         Wait-Until {(Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready} 'GPU reconstruction did not finish' 60
-        if((Model).state.document_file.revision -ne $documentRevision){throw 'GPU recovery changed the document revision'}
+        Wait-Until {(Model).state.document_file.revision -gt $undone} 'GPU recovery lost queued pen samples'
+        $documentRevision=(Model).state.document_file.revision
         Wait-Until {(Signature) -eq $beforeRecovery} 'GPU recovery changed document, history, camera, workspace or brush'
         $status=Find-Id 'canvas-status'
         if($status -and !$status.Current.IsOffscreen){throw ('GPU recovery reports an error: '+$status.Current.Name)}
@@ -361,9 +424,15 @@ if($FailGpu){
     $before=Join-Path $run 'Before GPU failure.png'
     File-Command 'export_document';Picker 'Save As';Choose-Path $before;Idle
     Wait-Until {Test-Path -LiteralPath $before} 'Baseline export did not finish'
-    $script:scope=$root;Invoke-Control 'Zen mode'
+    $script:scope=$root
+    $revision=(Model).state.document_file.revision
+    Invoke-Control 'Undo'
+    Wait-Until {(Model).state.document_file.revision -gt $revision} 'Pre-failure Undo did not finish'
+    Invoke-Control 'Zen mode'
     Wait-Until {(Model).state.workspace.zen_mode -and (Model).chrome_hidden} 'Zen did not hide the editor before GPU failure'
-    Fail-Gpu
+    # Admit one complete stroke and an unfinished tail during failed recovery.
+    # CPU retirement must keep the complete stroke and cancel only the tail.
+    Fail-Gpu @('Test pen','Test pen begin')
     if(!(Model).state.workspace.zen_mode){throw 'GPU failure rewrote the saved Zen preference'}
     $recovered=Join-Path $run 'Saved after GPU failure.capy'
     File-Command 'save_document_as';Picker 'Save As';Choose-Path $recovered;Idle
@@ -385,13 +454,13 @@ if($FailGpu){
     if((Get-Item -LiteralPath $stderr).Length){throw 'Reopened recovery project reported stderr'}
 }
 [PSCustomObject]@{
-    gpu_failure_save=if($FailGpu){'Save/Save As, Cancel, Discard, durable reopen and identical exported pixels passed'}else{'not requested'}
+    gpu_failure_save=if($FailGpu){'Save/Save As, queued pen completion and tail cancellation, Cancel, Discard, durable reopen and identical exported pixels passed'}else{'not requested'}
     shared_new_size_and_validation='passed'
     image_picker_draft_cancel_and_error_recovery='passed'
     image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'
     save_cancel_and_unicode_path='passed'
     png_export_cancel_dimensions_and_checkpoint='passed'
-    gpu_recovery=if($RecoverGpu){'two device replacements, identical exported pixels, thumbnails and Undo/Redo passed'}else{'not requested'}
+    gpu_recovery=if($RecoverGpu){'two replacements, queued and active pen strokes, identical exported pixels, thumbnails and Undo/Redo passed'}else{'not requested'}
     save_existing_and_save_as='passed'
     corrupt_open_preserves_live_document='passed'
     replacement_cancel_and_save_before_open='passed'

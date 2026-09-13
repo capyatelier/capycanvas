@@ -68,28 +68,35 @@ function Select-Tool([string]$Id){
 }
 function Check-Projection {
     $state=(Model).state
-    foreach($set in @(@('groups','tool-group-'),@('subtools','tool-subtool-'))){
-        $items=@($state.tool_set.($set[0]))
-        for($i=0;$i -lt $items.Count;$i++){
-            $item=$items[$i];$native=Control ($set[1]+$i) -Id
-            if($native.Current.Name -ne $item.label){throw 'Tool label differs from shared model'}
-            Wait-Until {($native.Current.ItemStatus -eq 'Selected') -eq $item.selected} 'Tool selection decoration differs from shared model'
-        }
-        if(Find ($set[1]+$items.Count) -Id){throw 'Stale tool controls survived a schema change'}
-    }
-    foreach($setting in $state.tool_settings){
-        if((Field $setting.id).Current.Name -ne $setting.label){throw 'Tool setting label differs from shared model'}
-    }
-    foreach($action in $state.tool_actions){
-        $command=$state.commands|Where-Object id -eq $action.command
-        $type=if($action.checkable){[System.Windows.Automation.ControlType]::CheckBox}else{[System.Windows.Automation.ControlType]::Button}
-        $native=Control ('tool-action-'+$action.command) $type -Id
-        if($native.Current.Name -ne $command.label -or $native.Current.IsEnabled -ne $command.enabled){throw 'Tool command label/enabled state differs'}
-        if($action.checkable){
-            $checked=$native.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
-            if($checked -ne $command.selected){throw 'Tool checkbox differs from shared state'}
-        }
-    }
+    # The shared snapshot can precede XAML publication. Reacquire controls while
+    # waiting: rebuilding a tool schema retires the old elements with the same IDs.
+    Wait-Until {
+        try {
+            foreach($set in @(@('groups','tool-group-'),@('subtools','tool-subtool-'))){
+                $items=@($state.tool_set.($set[0]))
+                for($i=0;$i -lt $items.Count;$i++){
+                    $item=$items[$i];$native=Find ($set[1]+$i) -Id
+                    if(!$native -or $native.Current.Name -ne $item.label -or (($native.Current.ItemStatus -eq 'Selected') -ne $item.selected)){return $false}
+                }
+                if(Find ($set[1]+$items.Count) -Id){return $false}
+            }
+            foreach($setting in $state.tool_settings){
+                $native=Find ('tool-setting-'+$setting.id) ([System.Windows.Automation.ControlType]::Edit) -Id
+                if(!$native -or $native.Current.Name -ne $setting.label){return $false}
+            }
+            foreach($action in $state.tool_actions){
+                $command=$state.commands|Where-Object id -eq $action.command
+                $type=if($action.checkable){[System.Windows.Automation.ControlType]::CheckBox}else{[System.Windows.Automation.ControlType]::Button}
+                $native=Find ('tool-action-'+$action.command) $type -Id
+                if(!$native -or $native.Current.Name -ne $command.label -or $native.Current.IsEnabled -ne $command.enabled){return $false}
+                if($action.checkable){
+                    $checked=$native.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+                    if($checked -ne $command.selected){return $false}
+                }
+            }
+            return $true
+        }catch [System.Windows.Automation.ElementNotAvailableException]{return $false}
+    } 'Native tool labels, selection, settings or actions did not reach the shared model'
 }
 if(!@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count){
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'

@@ -2489,3 +2489,103 @@ Actual native queued pointer overlap, physical pen and mixed-display acceptance,
 sleep/driver-reset behavior, installed MSIX/clean-machine checks, remaining visual
 review and 120 Hz painting/input latency remain open. No package or performance
 measurement was regenerated for this milestone.
+
+### Native pen queue during GPU reconstruction
+
+The native render loop could drain a complete stroke after GPU replacement but
+before the replacement brushes became ready. Shared startup policy then deferred
+the press and discarded the whole contact. An isolated native UI reproduction
+confirmed a ready, responsive canvas with a missing queued stroke.
+
+The loop now leaves work in its existing bounded queue until the existing GPU
+recovery counter resets at brush readiness. There is no additional queue, renderer
+state or timing protocol. Initial startup keeps its existing input policy.
+
+The document fixture now replays typed pen samples with varying pressure, tilt
+and twist. Per-process trace timestamps prove the samples were admitted during
+reconstruction; missing that interval fails the fixture. It checks a whole queued
+stroke and an already-visible active stroke with its completion queued during
+removal. Full exported PNGs, thumbnails and one-step Undo/Redo match the reference.
+The active-stroke fixture checks canvas pixels away from the cursor and chrome;
+command enabled styling deliberately stays stable during painting.
+
+The original missing-stroke reproduction fails before the queue fix and passes
+with exact exported pixels afterwards. Normal Debug/Release builds and C++ queue,
+publication and preview-mailbox checks pass. Debug and Release native document
+recovery runs pass both queued and active pen cases, with the active stroke
+visually inspected before removal.
+
+Release exhausted recovery also passes with a complete pen stroke followed by an
+unfinished tail admitted while reconstruction fails. CPU retirement preserves the
+complete stroke, cancels the tail, keeps File accessible in Zen, and permits
+Save/Save As. Reopening the saved project reproduces the baseline exported pixels.
+The Release multiwindow fixture still passes two shared device removals,
+independent documents, Undo/Redo and clean shutdown.
+
+These checks use the actual native input queue and process-owned D3D12 removal,
+with controlled samples. They do not establish physical digitizer delivery,
+sleep/driver-reset behavior, mixed-display acceptance or 120 Hz painting latency.
+Broader interaction/visual acceptance and installed MSIX remain open; no package
+or performance measurement was regenerated for this milestone.
+
+The final Release document run also waits for Undo to reach the canvas before
+checking the active pen segment. The complete Release editor regression passes
+native titlebar hits, geometry, tools, both Zen modes, retained resize, themes,
+workspace restoration and zero exit. Its tool-projection fixture now waits for
+exact labels/selection/settings/actions on freshly acquired native controls;
+the shared snapshot can arrive before XAML replaces the old schema. The original
+assertions passed on the same failed window after publication settled, so only
+the fixture needed adjustment.
+
+### Shared title-bar and native ownership integration
+
+Upstream integration brings the shared workspace-owned title-bar model, native
+per-item kernel ownership locks and full Zen. The Windows editor fixture now
+checks full Zen in both themes, hidden chrome, retained canvas/device on resize,
+and restored workspace geometry. Its obsolete partial-Zen toolbars and Total Zen
+preference checks were removed to match the shared behavior.
+
+The integrated tree passes 653 ordinary core/engine/host/UI/Windows/workspace
+tests, a normal Release build and the Web Wasm check. Native Release queued/active
+pen recovery, exhausted-recovery Save/Save As with tail cancellation, full editor
+and two-window recovery checks pass with clean shutdown. Strict Clippy currently
+reports three incoming shared UI issues: the header measurement clamp, the drag
+constructor argument count, and the large workspace-restore action variant.
+These were not suppressed or represented as a passing check.
+
+The subsequent committed-header picker baseline change also passes a fresh
+normal Release build, the ordinary suites and Wasm check. The native workspace
+manager verifies preview cancellation, history, starting-layout Undo/Redo,
+creation, switching, rename/delete, brush reset, preview-close restart and clean
+exit. Its header selectors now resolve stable workspace IDs through the shared
+model, following the new Sketch/Paint/Photo keys without changing production
+controls. Actual switching was confirmed in the same window as the obsolete
+selector failure before rerunning the complete fixture successfully.
+
+Windows still uses its existing native header projection, as allowed by the
+shared port handoff. Projecting the new customizable title bar is remaining
+Windows design work. Physical input/display, packaging and performance acceptance
+remain open as described above.
+
+
+### Portable and MSIX refresh after native pen recovery
+
+The portable Windows 11 x64 package was rebuilt from clean published source
+`33eead2674bf7b7474fc318417dc72de90c836fc`. It contains 1,079 files and its two
+archive assemblies have identical SHA-256
+`155220f475ffa3d45a912fd9090208dbd36bf3bfbb78dad158162fa3603f5615`.
+The extracted package passes its complete inventory, launch from a path with
+spaces and unrelated working directory, app-local runtime origins, packaged
+filters, drawing/Undo/Redo, pan/resize and clean process exit on this host.
+
+An unsigned MSIX was then assembled from that exact portable payload, using the
+same committed packager source. Repeated assembly matches SHA-256
+`321f7da0b3e759d7ce75ce3adc92d78d3978dba5078ef90c1da1151b0ba44b3f`.
+Its 1,085-file archive passes inventory and MakeAppx extraction, activation
+metadata, repeat logo generation, normalization idempotence, ZIP32 preservation,
+signed-archive refusal without mutation and invalid-input rejection.
+
+This verifies reproducible archive assembly for the recorded inputs and portable
+runtime behavior on the development host. Installed MSIX launch/update/uninstall,
+distribution signing and clean-machine acceptance remain open. No elevation or
+installation was attempted. Artifacts and local reports remain outside Git.

@@ -48,8 +48,10 @@ The full acceptance plan is in ../../docs/history/windows-implementation.md.
 ## Controlled rendering smoke test
 
 Set CAPY_TEST_DISPLAY=1 to select an active display running at 120 Hz or higher.
-Set CAPY_SMOKE_TEST=1 to expose Test stroke and Test pan commands. These commands
-replay records through the input dispatcher; they do not validate OS input delivery.
+Set CAPY_SMOKE_TEST=1 to expose controlled stroke, pan and pen commands.
+Test pen varies pressure/tilt/twist; Test pen begin/end split the same samples
+across a recovery boundary. These controls are absent from the production UI.
+They replay records through the input dispatcher; they do not validate OS input delivery.
 Use exercise-window.ps1 with -Action 'Test stroke', Undo, Redo, 'Test pan', Resize,
 and Close, and inspect-window.ps1 to capture the app after each change. The ordinary
 Stroke action uses OS SendInput and fails unless the pointer reaches this process.
