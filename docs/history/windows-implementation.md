@@ -2489,3 +2489,50 @@ Actual native queued pointer overlap, physical pen and mixed-display acceptance,
 sleep/driver-reset behavior, installed MSIX/clean-machine checks, remaining visual
 review and 120 Hz painting/input latency remain open. No package or performance
 measurement was regenerated for this milestone.
+
+### Native pen queue during GPU reconstruction
+
+The native render loop could drain a complete stroke after GPU replacement but
+before the replacement brushes became ready. Shared startup policy then deferred
+the press and discarded the whole contact. An isolated native UI reproduction
+confirmed a ready, responsive canvas with a missing queued stroke.
+
+The loop now leaves work in its existing bounded queue until the existing GPU
+recovery counter resets at brush readiness. There is no additional queue, renderer
+state or timing protocol. Initial startup keeps its existing input policy.
+
+The document fixture now replays typed pen samples with varying pressure, tilt
+and twist. Per-process trace timestamps prove the samples were admitted during
+reconstruction; missing that interval fails the fixture. It checks a whole queued
+stroke and an already-visible active stroke with its completion queued during
+removal. Full exported PNGs, thumbnails and one-step Undo/Redo match the reference.
+The active-stroke fixture checks canvas pixels away from the cursor and chrome;
+command enabled styling deliberately stays stable during painting.
+
+The original missing-stroke reproduction fails before the queue fix and passes
+with exact exported pixels afterwards. Normal Debug/Release builds and C++ queue,
+publication and preview-mailbox checks pass. Debug and Release native document
+recovery runs pass both queued and active pen cases, with the active stroke
+visually inspected before removal.
+
+Release exhausted recovery also passes with a complete pen stroke followed by an
+unfinished tail admitted while reconstruction fails. CPU retirement preserves the
+complete stroke, cancels the tail, keeps File accessible in Zen, and permits
+Save/Save As. Reopening the saved project reproduces the baseline exported pixels.
+The Release multiwindow fixture still passes two shared device removals,
+independent documents, Undo/Redo and clean shutdown.
+
+These checks use the actual native input queue and process-owned D3D12 removal,
+with controlled samples. They do not establish physical digitizer delivery,
+sleep/driver-reset behavior, mixed-display acceptance or 120 Hz painting latency.
+Broader interaction/visual acceptance and installed MSIX remain open; no package
+or performance measurement was regenerated for this milestone.
+
+The final Release document run also waits for Undo to reach the canvas before
+checking the active pen segment. The complete Release editor regression passes
+native titlebar hits, geometry, tools, both Zen modes, retained resize, themes,
+workspace restoration and zero exit. Its tool-projection fixture now waits for
+exact labels/selection/settings/actions on freshly acquired native controls;
+the shared snapshot can arrive before XAML replaces the old schema. The original
+assertions passed on the same failed window after publication settled, so only
+the fixture needed adjustment.
