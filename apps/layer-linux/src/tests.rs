@@ -13950,6 +13950,13 @@ fn native_workspace_database_resume_and_independent_windows() {
         again.workspaces.manager.as_ref().unwrap().active_id(),
         second.workspaces.manager.as_ref().unwrap().active_id()
     );
+    let second_manager = second.workspaces.manager.as_ref().unwrap();
+    assert!(second_manager.current().unwrap().metadata.builtin);
+    assert_eq!(
+        second_manager.items().len(),
+        3,
+        "Opening a second window must reuse a built-in workspace"
+    );
     second.dispatch(UiAction::SetBrushSize { value: 121. });
     wait_saved(&second);
     assert_eq!(state(&again).brush.diameter, 73.);

@@ -222,14 +222,19 @@ fn apple_workspace_library_handoff_round_trips_history_tools_and_scene_identity(
         let other = Library::new(platform, &directory.0, "scene:other");
         let other_app = App::new(platform);
         other_app.request(6, json!({"type":"begin"})).unwrap();
-        let other_initial = other.request(json!({"type":"initialize","now":7100}));
+        let other_initial =
+            other.request(json!({"type":"initialize","preferred":original,"now":7100}));
         let other_id = other.adopt(&other_app, &other_initial);
-        assert_ne!(other_id, original);
+        assert_eq!(other_id, layer_workspace::DEFAULT_WORKSPACES[0].0);
         let view = json!({"type":"view","page":"workspaces","query":"","idle":true,"now":7200});
         let before_reopen = other.request(view.clone())["value"]["rows"]
             .as_array()
             .unwrap()
             .len();
+        assert_eq!(
+            before_reopen, 4,
+            "An occupied scene must reuse an available workspace"
+        );
         library.request(json!({"type":"close"}));
         drop(library);
         let reopened = Library::new(platform, &directory.0, "scene:first");

@@ -306,22 +306,9 @@ impl CapyWorkspaceLibrary {
                         Err(error) if error.kind == ErrorKind::NotFound => None,
                         Err(error) => return Err(error),
                     };
-                    if let Some(candidate) = candidate {
+                    if candidate.is_some() {
                         self.manager.initialize_catalog(now).await?;
-                        match self.manager.prepare_switch(&id, now).await {
-                            Ok(incoming) => incoming,
-                            Err(error) if error.kind == ErrorKind::OwnedElsewhere => {
-                                self.manager
-                                    .create_from_snapshot(
-                                        candidate.entity,
-                                        "My Workspace",
-                                        true,
-                                        now,
-                                    )
-                                    .await?
-                            }
-                            Err(error) => return Err(error),
-                        }
+                        self.manager.prepare_startup(&id, now).await?
                     } else {
                         self.manager.initialize(now).await?
                     }

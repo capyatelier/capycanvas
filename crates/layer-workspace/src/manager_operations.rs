@@ -399,41 +399,24 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             metadata.deleted_at_ms = Some(now);
             let mut mutations = vec![update(&deleting, Some(metadata), None, None)?];
             let replacement_id = if active {
-                if let Some(replacement) = replacement {
-                    if replacement == id {
-                        return Err(StoreError::invalid(
-                            "Choose a different replacement workspace.",
-                        ));
-                    }
-                    let claimed = self.claim(replacement).await?;
-                    PreparedWorkspace::new(claimed.entity.capture()?)
-                        .map_err(StoreError::invalid)?;
-                    let mut metadata = claimed.entity.metadata.clone();
-                    metadata.last_used_ms = now;
-                    mutations.push(update(&claimed, Some(metadata), None, None)?);
-                    incoming = Some(claimed);
-                    Some(replacement.to_string())
-                } else {
-                    let preset = layer_ui::WorkspacePreset::Illustrator;
-                    let layout = preset.layout(self.platform);
-                    let entity = Entity::workspace(
-                        "My Workspace",
-                        WorkspaceCapture {
-                            history: layer_ui::LayoutHistory::new(&layout),
-                            working: preset.working_state(),
-                        },
-                        layout,
-                        None,
-                        now,
-                    );
-                    let replacement = entity.id.clone();
-                    mutations.push(Mutation::Create {
-                        entity,
-                        claim: true,
-                        name_policy: NamePolicy::Unique,
-                    });
-                    Some(replacement)
+                let replacement = match replacement {
+                    Some(id) => id.to_string(),
+                    None => self.replacement_for_delete(id, now).await?.ok_or_else(|| {
+                        StoreError::invalid("No replacement workspace is available.")
+                    })?,
+                };
+                if replacement == id {
+                    return Err(StoreError::invalid(
+                        "Choose a different replacement workspace.",
+                    ));
                 }
+                let claimed = self.claim(&replacement).await?;
+                incoming = Some(claimed.clone());
+                PreparedWorkspace::new(claimed.entity.capture()?).map_err(StoreError::invalid)?;
+                let mut metadata = claimed.entity.metadata.clone();
+                metadata.last_used_ms = now;
+                mutations.push(update(&claimed, Some(metadata), None, None)?);
+                Some(replacement)
             } else {
                 None
             };

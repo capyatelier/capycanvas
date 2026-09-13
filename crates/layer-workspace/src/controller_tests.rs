@@ -105,6 +105,35 @@ impl Fixture {
     }
 }
 #[test]
+fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
+    let mut f = Fixture::new();
+    let original = f.controller.view.id.clone().unwrap();
+    let owner = f.controller.manager.owner.clone();
+    f.input(serde_json::json!({"type":"suspend"}));
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    let claimed = pollster::block_on(other.prepare_switch(&original, 1_000)).unwrap();
+    other.activate(claimed);
+    f.controller = WorkspaceController::new_owned(
+        Store(f.backend.clone()),
+        Platform::Web,
+        "legacy:test".into(),
+        None,
+        owner,
+        1_000,
+    );
+    f.pump();
+    assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
+    assert_eq!(
+        f.controller.view.id.as_deref(),
+        Some(DEFAULT_WORKSPACES[1].0)
+    );
+    assert_eq!(f.controller.manager.items().len(), 4);
+    assert_eq!(other.active_id().as_deref(), Some(original.as_str()));
+    let saved = pollster::block_on(other.load(&original)).unwrap();
+    assert_eq!(saved.claim.unwrap().owner, other.owner);
+}
+
+#[test]
 fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
     let defaults = [
         DEFAULT_WORKSPACES[1].0,
@@ -649,6 +678,27 @@ fn interrupted_capture_migration_retries_the_same_operation_once() {
         revision.timestamp_ms = 1000;
     }
     assert_eq!(stored.entity.capture().unwrap(), expected);
+    drop(deliveries);
+    pollster::block_on(async {
+        manager.delete_item(&id, None, 1_003).await.unwrap();
+        restarted
+            .migrate_legacy_capture("interrupted", expected, 1_004)
+            .await
+            .unwrap();
+        restarted.refresh().await.unwrap();
+        assert_eq!(restarted.items().len(), 1);
+        assert!(
+            restarted
+                .load(&id)
+                .await
+                .unwrap()
+                .entity
+                .metadata
+                .deleted_at_ms
+                .is_some(),
+            "Deleted legacy workspaces must not be imported again"
+        );
+    });
 }
 
 #[test]
