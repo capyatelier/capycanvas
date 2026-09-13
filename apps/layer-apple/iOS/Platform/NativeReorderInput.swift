@@ -99,6 +99,8 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive incoming: UITouch) -> Bool {
         guard let model, incoming.type == .direct || incoming.type == .pencil || incoming.type == .indirectPointer else { return false }
         if nativeRows?.isMenuVisible == true { return false }
+        // Window-root recognition must not pick rows behind another panel.
+        if let scroll, incoming.view?.isDescendant(of: scroll) != true { return false }
         if gestureRecognizer === secondary {
             if nativeRows != nil { return false }
             updateViewport()

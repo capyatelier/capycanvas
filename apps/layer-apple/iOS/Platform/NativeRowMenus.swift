@@ -81,7 +81,16 @@ import UIKit
         ticket = UUID(); let current = ticket
         let configuration = UIContextMenuConfiguration(identifier: current.uuidString as NSString,
             previewProvider: nil) { [weak self] _ in
-                guard let self, ticket == current else { return nil }; return source.content.nativeMenu()
+                guard let self, ticket == current else { return nil }
+                return UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+                    Task { @MainActor in
+                        guard let self, self.ticket == current else { completion([]); return }
+                        source.load { [weak self] menu in
+                            guard let self, self.ticket == current else { completion([]); return }
+                            completion(menu?.nativeMenu().children ?? [])
+                        }
+                    }
+                }])
             }
         configuration.preferredMenuElementOrder = .fixed
         return configuration
@@ -118,7 +127,7 @@ import UIKit
     }
     func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: UIDragSession) -> [UIDragItem] {
         guard let input, let model, model.enabled, model.contact.device != .mouse,
-              let target = model.contact.target, target.surface == .row,
+              let target = model.contact.target, target.surface == .row, target.canDrag,
               let source = model.nativeMenu(at: session.location(in: input)), source.id == target.id else { return [] }
         guard active == nil else { return [] }
         let active = RowDrag(model: model, source: source, session: session); self.active = active

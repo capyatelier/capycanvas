@@ -19,6 +19,7 @@ enum ReorderSurface: Equatable {
 @MainActor struct ReorderTarget {
     let id: String
     let surface: ReorderSurface
+    var canDrag = true
     let valid: (_ dragging: Bool) -> Bool
     var openContext: (() -> Void)?
     var closeContext: (() -> Void)?
@@ -61,7 +62,7 @@ enum ReorderSurface: Equatable {
     /// Called once native movement recognition wins. A pre-hold pan cannot
     /// admit a tile or a touch/pen row, even if an adapter calls it accidentally.
     @discardableResult func move(to point: CGPoint) -> Bool {
-        guard validate(), let target, !requiresHold || held else { return false }
+        guard validate(), let target, target.canDrag, !requiresHold || held else { return false }
         if !dragging {
             dragging = true; suppressClick = true
             target.closeContext?()

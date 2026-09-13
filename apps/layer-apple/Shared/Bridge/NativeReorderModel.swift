@@ -36,5 +36,11 @@ extension NativeReorderModel {
 @MainActor struct NativeReorderMenu {
     let id: String
     let bounds: CGRect
-    let content: AppleContextMenu
+    let load: AppleContextMenuRequest
+    init(id: String, bounds: CGRect, content: AppleContextMenu) {
+        self.id = id; self.bounds = bounds; load = { $0(content) }
+    }
+    init(id: String, bounds: CGRect, load: @escaping AppleContextMenuRequest) {
+        self.id = id; self.bounds = bounds; self.load = load
+    }
 }

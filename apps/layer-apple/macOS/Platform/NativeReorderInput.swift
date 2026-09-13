@@ -85,6 +85,9 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         guard let model else { return false }
         updateViewport()
         let point = convert(event.locationInWindow, from: nil)
+        // The marker remains mounted when another panel covers its rows.
+        // Only the scroll view actually under the contact may admit pickup.
+        if let scroll = enclosingScrollView, scrollAt(point) !== scroll { return false }
         if recognizer === secondary {
             return event.type == .rightMouseDown && model.acceptsContext(at: point)
         }

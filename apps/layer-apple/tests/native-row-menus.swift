@@ -3,6 +3,15 @@
 // synthesizing the physical finger/Pencil menu-to-drag handoff.
 import UIKit
 
+@MainActor private final class Contact: UITouch {
+    var sourceView: UIView?
+    var device: UITouch.TouchType = .direct
+    override var view: UIView? { sourceView }
+    override var type: UITouch.TouchType { device }
+    override var timestamp: TimeInterval { 1 }
+    override func location(in view: UIView?) -> CGPoint { CGPoint(x: 100, y: 20) }
+}
+
 @MainActor private class Session: NSObject, UIDragDropSession {
     var items: [UIDragItem] = []
     var point = CGPoint(x: 100, y: 20)
@@ -89,6 +98,19 @@ import UIKit
 }
 
 @MainActor private func checks() async {
+    for device: UITouch.TouchType in [.direct, .pencil, .indirectPointer] {
+        let f = Fixture(), contact = Contact(), recognizer = UIPanGestureRecognizer()
+        f.input.validate(); contact.device = device
+        contact.sourceView = UIView() // Another panel above the measured rows.
+        _ = f.input.gestureRecognizer(recognizer, shouldReceive: contact)
+        precondition(f.model.contact.target == nil, "A covered row cannot claim another view's contact")
+        let row = UIView(frame: f.scroll.bounds); f.scroll.addSubview(row)
+        contact.sourceView = row
+        _ = f.input.gestureRecognizer(recognizer, shouldReceive: contact)
+        precondition(f.model.contact.target?.id == "A", "A visible row must retain native pickup")
+        precondition(f.model.contact.device == (device == .pencil ? .pen : device == .direct ? .touch : .mouse))
+        f.adapter.cancel()
+    }
     do {
         let f = Fixture(), session = f.session(), config = f.menu(), animator = MenuAnimator()
         f.adapter.contextMenuInteraction(f.context, willEndFor: config, animator: animator)

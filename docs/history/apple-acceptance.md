@@ -118,6 +118,55 @@ Do not force AppKit's high-contrast appearance names: Apple's
 reserves their selection for the system accessibility setting. These focused
 comparisons do not constitute a complete accessibility or physical-device pass.
 
+## Whole-layer-row pickup and workspace footer — 2026-09-12
+
+Both Apple hosts now route layer-row bodies and their grips through the retained
+native input adapter. Mouse bodies and every grip drag immediately after native
+movement slop; touch/pen bodies preserve scrolling before a hold. iPad rows use
+native vertical context menus with a preview of the source row. Mac keeps the
+row-anchored vertical popover, whose same-contact pen continuation passes the
+owned-window fixture. The separate footer action keeps its existing popover.
+Rust still owns mask/content context selection, menu capabilities, hierarchy
+changes and the one completed drop/Undo transaction. Menu queries are deferred
+until presentation, and removed sources cannot supply a deferred menu.
+
+Measured row, grip, name and mask bounds distinguish pickup, native name editing
+and mask actions. Paper keeps its context menu without becoming draggable.
+Drag previews do not publish duplicate row measurements. Window-root recognizers
+check which scroll view actually received the contact, so a floating panel
+cannot accidentally pick a layer underneath it. The Mac regression reproduced
+that covered-row failure before the guard and passes after it.
+
+The direct AppKit fixture covers immediate mouse bodies and pen grips, early
+pen rejection, retained hold/menu/drag contact, shared drop/Undo/Redo, covered
+rows and focus cancellation on both presets. Separate model checks cover Paper,
+rename ownership, checked multiselection and removed deferred-menu sources.
+The iPad simulator passes mask creation/selection/deletion, content and footer
+menus, short checkbox actions, immediate touch grip dragging and actual toolbar
+Undo/Redo. The native UIKit callback fixture checks contact admission for all
+three devices alongside existing session/cancellation/edge-scrolling coverage.
+These are targeted checks: physical layer-row finger/Pencil continuation, long
+layer lists, group/locked/descendant drops and the wider interruption matrix
+still need coverage. Workspace physical input evidence below is separate.
+
+Manage Workspaces now gives Cancel and Switch equal-width 40pt buttons with an
+8pt gap, a subdued secondary fill and a solid shared-blue primary action.
+The same shared style serves both hosts and follows the editor's text palette;
+disabled and pressed states remain distinct. Actual component captures were
+reviewed in light and dark themes. This changes appearance without changing
+workspace selection or switching behavior. Final signed builds pass on both
+hosts, and the isolated physical iPad app installs and launches with its existing
+workspace list and order retained. The direct workspace row regression also
+passes after the common native contact-admission change.
+
+Reproduce the owned-window layer fixture through
+`bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/layer-row-input.swift`.
+The focused iPad tests are `EditorLaunchTests/testLayerContextMenuAnchors` and
+`EditorLaunchTests/testLayerGripAndChildActions`. Use the existing portable
+`test-native-rows.py` runner for UIKit delegate checks; it does not synthesize a
+physical Pencil. Results, captures, destinations and signing details remain in
+ignored local artifacts. Full visual and hardware performance gates remain open.
+
 ## Native context menus and workspace rows — 2026-09-12
 
 The Apple targets now share a menu projection of Rust sections, availability,
@@ -150,16 +199,19 @@ immediate grip dragging, offscreen capture and persisted order. Direct UIKit
 delegate checks exercise native-session edge scrolling, leaving/reentering the
 viewport, the resulting insertion target, cancelled lifts, old/new sessions and
 deferred teardown. The user confirmed the production finger/Pencil hold-to-drag
-workflow before the edge-scrolling extension; physical long-list edge scrolling
-is pending. Signed builds pass on both hosts. These checks do not establish
-complete visual parity or sustained drawing performance.
+workflow and subsequently confirmed the 27-row edge-scrolling check with both
+finger and Pencil: the same held contact scrolls at the list edge and drops at
+the indicated position without changing the selected workspace. Signed builds
+pass on both hosts. These checks do not establish complete visual parity or
+sustained drawing performance.
 
 Mac workspace row menus retain the working vertical custom surface. An owned
 AppKit context-menu probe posted tablet-subtype drag events during native menu
 tracking; the app-local event monitor did not receive them. Native row handoff
 therefore remains unaccepted on Mac; a native replacement must preserve the
 same held contact. This does not affect the native non-row source/action checks.
-Whole-layer-row pickup remains required on both hosts and is a separate gap.
+The subsequent whole-layer-row milestone above extends the shared input adapter
+to layer bodies and grips; its physical coverage remains separate.
 
 ## Readable popup surfaces — 2026-09-12
 

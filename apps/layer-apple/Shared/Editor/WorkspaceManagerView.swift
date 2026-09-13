@@ -101,15 +101,18 @@ struct WorkspaceManagerView: View {
                 }
             } }
             if !manager.toolbarMode {
-                HStack {
-                    Spacer()
+                HStack(spacing: 8) {
                     Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("workspace-manager-close")
+                        .buttonStyle(WorkspaceManagerButtonStyle())
                     if manager.view["details"].isNull {
                         Button(manager.catalog["switch_label"].string) { }
+                            .buttonStyle(WorkspaceManagerButtonStyle(primary: true))
                             .disabled(true)
                     }
-                    ForEach(manager.view["details"]["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
+                    ForEach(manager.view["details"]["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in
+                        action(button).buttonStyle(WorkspaceManagerButtonStyle(primary: true))
+                    }
                         .disabled(manager.selecting)
                 }
             }
@@ -165,6 +168,28 @@ struct WorkspaceManagerView: View {
                     .accessibilityIdentifier("workspace-history-restore")
             }
         }
+    }
+}
+
+/// Solid, equally sized footer actions matching the shared workspace manager.
+private struct WorkspaceManagerButtonStyle: ButtonStyle {
+    var primary = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.editorPopupStore) private var store
+    private var foreground: Color {
+        guard let source = store?.state["palette"], !source["text"].isNull else { return .primary }
+        return EditorPalette(source: source)["text"]
+    }
+    func makeBody(configuration: Configuration) -> some View {
+        let prominent = primary && enabled
+        configuration.label.fontWeight(.semibold).lineLimit(1)
+            .padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 40)
+            .foregroundStyle(prominent ? .white : foreground)
+            .background(prominent ? EditorPalette.sharedAccent : foreground.opacity(0.10))
+            .overlay { if configuration.isPressed { Color.black.opacity(0.12) } }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(foreground.opacity(prominent ? 0 : 0.10)) }
+            .opacity(enabled ? 1 : 0.55).contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

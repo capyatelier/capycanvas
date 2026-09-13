@@ -42,6 +42,7 @@ def main():
     app.mkdir()
     sources = ["Shared/Bridge/JSON.swift", "Shared/Bridge/ReorderContact.swift",
                "Shared/Bridge/NativeReorderModel.swift", "Shared/Bridge/AppleContextMenu.swift",
+               "Shared/Bridge/AppleContextMenuRequest.swift",
                "Shared/Editor/WorkspaceRowInteraction.swift", "iOS/Platform/NativeContextMenu.swift",
                "iOS/Platform/NativeReorderInput.swift", "iOS/Platform/NativeRowMenus.swift",
                "tests/native-row-menus.swift"]

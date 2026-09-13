@@ -7,6 +7,39 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
+    @MainActor func testLayerGripAndChildActions() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launch()
+        let add = app.buttons["layer-New layer"]
+        XCTAssertTrue(add.waitForExistence(timeout: 20))
+        add.tap()
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let addedID = rows.element(boundBy: 0).identifier
+        let originalID = rows.element(boundBy: 1).identifier
+        let original = app.otherElements[originalID]
+        original.buttons["Select layer without changing drawing target"].tap()
+        XCTAssertTrue(original.buttons["Select layer without changing drawing target"].isSelected)
+        XCTAssertTrue(app.otherElements[addedID].buttons["Edit layer content"].isSelected)
+        let grip = app.descendants(matching: .any)[addedID.replacingOccurrences(of: "layer-row-", with: "layer-grip-")].firstMatch
+        grip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.01,
+            thenDragTo: original.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.85)))
+        expectation(for: NSPredicate { _, _ in rows.element(boundBy: 0).identifier == originalID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        func command(_ label: String) {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch.tap()
+        }
+        command("Undo")
+        expectation(for: NSPredicate { _, _ in rows.element(boundBy: 0).identifier == addedID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        command("Redo")
+        expectation(for: NSPredicate { _, _ in rows.element(boundBy: 0).identifier == originalID }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
     @MainActor func testLayerContextMenuAnchors() {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
@@ -16,13 +49,14 @@ final class EditorLaunchTests: XCTestCase {
         let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let row = rows.element(boundBy: 1)
         row.buttons["Edit layer content"].press(forDuration: 0.6)
-        let menu = app.descendants(matching: .any)["layer-context-menu"].firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        let nativeMenuItem = app.buttons["Rename layer…"]
+        XCTAssertTrue(nativeMenuItem.waitForExistence(timeout: 5))
         attachLayerMenu("layer-content-context-anchor")
         // Dismiss through the app canvas, then check the separate footer origin.
         app.otherElements["canvas"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(nativeMenuItem.waitForNonExistence(timeout: 5))
         app.buttons["layer-Layer actions"].tap()
+        let menu = app.descendants(matching: .any)["layer-context-menu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         attachLayerMenu("layer-footer-context-anchor")
     }
