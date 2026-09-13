@@ -2,6 +2,299 @@
 use super::*;
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_stack_member_drop_input"]
+fn native_stack_member_drop_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let output = std::path::PathBuf::from(
+        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
+    );
+    std::fs::create_dir_all(&output).unwrap();
+    let app = native_test_app("art.capycanvas.StackMemberDrops");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1600);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut step = 0;
+    let mut perform = |events: serde_json::Value| {
+        let file = dir.join(format!("step-{step}.json"));
+        let temporary = file.with_extension("tmp");
+        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
+        std::fs::rename(temporary, file).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !dir.join(format!("done-{step}")).exists() {
+            assert!(Instant::now() < deadline, "native input timed out");
+            pump(5);
+        }
+        step += 1;
+        pump(100);
+    };
+    let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    pump(500);
+    for (theme, edge) in [(Theme::Dark, Edge::Left), (Theme::Light, Edge::Right)] {
+        for touch in [false, true] {
+            let event = |phase: &str, point: [f32; 2]| {
+                if touch {
+                    serde_json::json!({"touch":phase,"point":point})
+                } else {
+                    match phase {
+                        "down" => serde_json::json!({"point":point,"down":true}),
+                        "up" => serde_json::json!({"down":false}),
+                        _ => serde_json::json!({"point":point}),
+                    }
+                }
+            };
+            for stacked in [false, true] {
+                for source in ["panel", "group", "toolbar", "icon", "drawer-tab"] {
+                    eprintln!(
+                        "Stack member drop: {theme:?}, touch={touch}, stacked={stacked}, {source}"
+                    );
+                    let mut fixture = layer_ui::WorkspaceState::default();
+                    fixture.layout.bands[0].edge = edge;
+                    fixture.layout.bands[1].edge = if edge == Edge::Left {
+                        Edge::Right
+                    } else {
+                        Edge::Left
+                    };
+                    fixture
+                        .layout
+                        .set_column_collapsed(5, true, viewport)
+                        .unwrap();
+                    let target = if stacked {
+                        fixture
+                            .layout
+                            .set_panel_visible(Panel::Navigator, true)
+                            .unwrap();
+                        let group = fixture.layout.panel_group(Panel::Navigator).unwrap();
+                        fixture
+                            .layout
+                            .set_column_collapsed(group, true, viewport)
+                            .unwrap();
+                        fixture
+                            .layout
+                            .move_item(
+                                viewport,
+                                DockItem::Column { column: group },
+                                DockTarget::StackColumn {
+                                    column: 4,
+                                    before: false,
+                                },
+                            )
+                            .unwrap();
+                        group
+                    } else {
+                        4
+                    };
+                    if source == "group" {
+                        fixture.layout.select_tab(8, Panel::Properties).unwrap();
+                        fixture
+                            .layout
+                            .move_item(
+                                viewport,
+                                DockItem::Group { group: 8 },
+                                DockTarget::Float {
+                                    position: [700., 300.],
+                                },
+                            )
+                            .unwrap();
+                    }
+                    if source == "icon" || source == "drawer-tab" {
+                        fixture
+                            .layout
+                            .set_column_collapsed(8, true, viewport)
+                            .unwrap();
+                    }
+                    w.dispatch(UiAction::RestoreWorkspace { workspace: fixture });
+                    w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+                    w.dispatch(UiAction::Customize {
+                        action: CustomizationAction::SetColumnDrawers {
+                            column: 4,
+                            drawers: false,
+                        },
+                    });
+                    if source == "drawer-tab" {
+                        w.dispatch(UiAction::Customize {
+                            action: CustomizationAction::ToggleColumnDrawer {
+                                group: 8,
+                                panel: Panel::Layers,
+                            },
+                        });
+                    }
+                    pump(300);
+                    let before = layer_ui::durable_layout(&state(&w).workspace.layout);
+                    let old_members = state(&w).workspace.layout.column_stack(4).members;
+                    let registry = state(&w).workspace.layout.panels;
+                    let selected = if source == "group" {
+                        Panel::Properties
+                    } else if source == "toolbar" {
+                        Panel::Toolbar
+                    } else {
+                        Panel::Layers
+                    };
+                    let start = if source == "icon" {
+                        let b = w
+                            .columns
+                            .button(8, Panel::Layers)
+                            .unwrap()
+                            .compute_bounds(&w.surface)
+                            .unwrap();
+                        [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
+                    } else if source == "panel" || source == "drawer-tab" {
+                        let hit = w
+                            .tab_hits()
+                            .into_iter()
+                            .find(|h| h.group == 8 && h.index == 0)
+                            .unwrap();
+                        center(hit.bounds)
+                    } else if source == "toolbar" {
+                        let grip = find_css(w.toolbar.upcast_ref(), "panel-grip").unwrap();
+                        let b = grip.compute_bounds(&w.surface).unwrap();
+                        [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
+                    } else {
+                        let b = w
+                            .resolved()
+                            .groups
+                            .iter()
+                            .find(|g| g.id == 8)
+                            .unwrap()
+                            .bounds;
+                        [b.x + b.width - 10., b.y + layer_ui::TAB_BAR_HEIGHT * 0.5]
+                    };
+                    let target_bounds = w
+                        .resolved()
+                        .collapsed
+                        .iter()
+                        .find(|c| c.id == target)
+                        .unwrap()
+                        .grip;
+                    let destination = center(target_bounds);
+                    if source == "icon" {
+                        perform(serde_json::json!([
+                            event("down", start),
+                            event("move", destination),
+                            event("up", destination)
+                        ]));
+                        assert_eq!(
+                            layer_ui::durable_layout(&state(&w).workspace.layout),
+                            before,
+                            "collapsed tiles cannot reorder before holding"
+                        );
+                    }
+                    perform(serde_json::json!([event("down", start)]));
+                    if source == "icon" {
+                        pump(800);
+                    }
+                    perform(serde_json::json!([
+                        event("move", [viewport[0] * 0.5, viewport[1] * 0.5]),
+                        event("move", destination)
+                    ]));
+                    let hint = w
+                        .drop_hint
+                        .borrow()
+                        .clone()
+                        .expect("visible stack insertion preview");
+                    assert_eq!(
+                        hint.target,
+                        DockTarget::StackColumn {
+                            column: target,
+                            before: false
+                        }
+                    );
+                    assert!(hint.bounds.height <= 3. && hint.bounds.width == TILE_SIZE);
+                    if source == "panel" && !stacked {
+                        // Cancellation must return the torn-off tab and its original selection.
+                        perform(
+                            serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
+                        );
+                        perform(serde_json::json!([event("up", destination)]));
+                        assert_eq!(
+                            layer_ui::durable_layout(&state(&w).workspace.layout),
+                            before
+                        );
+                        perform(serde_json::json!([
+                            event("down", start),
+                            event("move", destination)
+                        ]));
+                    }
+                    if source == "group" && stacked && !touch {
+                        capture_reference(
+                            &w,
+                            output
+                                .join(format!("stack-member-preview-{theme:?}.png"))
+                                .to_str()
+                                .unwrap(),
+                            1.,
+                        );
+                    }
+                    perform(serde_json::json!([event("up", destination)]));
+                    assert!(w.workspace_drag.borrow().is_none() && w.drop_hint.borrow().is_none());
+                    let layout = state(&w).workspace.layout;
+                    layout.validate().unwrap();
+                    let member = layout.panel_group(selected).unwrap();
+                    let stack = layout.column_stack(4);
+                    assert_eq!(stack.members, [old_members.clone(), vec![member]].concat());
+                    assert!(!stack.drawers && !stack.auto_hide);
+                    assert_eq!(layout.panels, registry);
+                    assert_eq!(
+                        layout.group_panels(member).unwrap(),
+                        if source == "group" {
+                            vec![Panel::Layers, Panel::Adjustments, Panel::Properties]
+                        } else {
+                            vec![selected]
+                        }
+                    );
+                    let after = layer_ui::durable_layout(&layout);
+                    let icon = w.columns.button(member, selected).unwrap();
+                    let b = icon.compute_bounds(&w.surface).unwrap();
+                    let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+                    perform(serde_json::json!([
+                        event("down", point),
+                        event("up", point)
+                    ]));
+                    let r = w.resolved();
+                    let open = r
+                        .collapsed
+                        .iter()
+                        .find(|c| c.id == member)
+                        .unwrap()
+                        .open
+                        .as_ref()
+                        .unwrap();
+                    assert!(open.bounds.width >= 128.);
+                    assert_eq!(
+                        r.groups.iter().find(|g| g.id == member).unwrap().active,
+                        selected
+                    );
+                    if source == "group" && stacked && !touch {
+                        crate::capture(
+                            &w,
+                            output
+                                .join(format!("stack-member-open-{theme:?}.png"))
+                                .to_str()
+                                .unwrap(),
+                        );
+                    }
+                    w.dispatch(UiAction::Invoke {
+                        command: CommandId::UndoWorkspace,
+                    });
+                    pump(150);
+                    assert_eq!(
+                        layer_ui::durable_layout(&state(&w).workspace.layout),
+                        before
+                    );
+                    w.dispatch(UiAction::Invoke {
+                        command: CommandId::RedoWorkspace,
+                    });
+                    pump(150);
+                    assert_eq!(layer_ui::durable_layout(&state(&w).workspace.layout), after);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "isolated Mutter mouse/touch driver: --column-stacks"]
 fn native_column_stack_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());

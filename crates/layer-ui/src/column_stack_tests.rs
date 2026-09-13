@@ -1,6 +1,348 @@
 const STACK_VIEW: [f32; 2] = [1800., 1100.];
 
 #[test]
+fn panels_groups_and_toolbars_become_independent_stack_members() {
+    for stacked in [false, true] {
+        for floating in [false, true] {
+            for kind in ["panel", "group", "toolbar", "custom-toolbar"] {
+                let mut layout = DockLayout::default();
+                layout.set_column_collapsed(5, true, STACK_VIEW).unwrap();
+                if stacked {
+                    layout.set_panel_visible(Panel::Navigator, true).unwrap();
+                    let group = layout.panel_group(Panel::Navigator).unwrap();
+                    layout
+                        .set_column_collapsed(group, true, STACK_VIEW)
+                        .unwrap();
+                    layout
+                        .move_item(
+                            STACK_VIEW,
+                            DockItem::Column { column: group },
+                            DockTarget::StackColumn {
+                                column: 4,
+                                before: false,
+                            },
+                        )
+                        .unwrap();
+                }
+                let preference = layout.column_stack_mut(4);
+                preference.drawers = false;
+                preference.auto_hide = true;
+                preference.open_column = Some(4);
+                let members = preference.members.clone();
+                let item = match kind {
+                    "panel" => DockItem::Panel {
+                        panel: Panel::Adjustments,
+                    },
+                    "group" => {
+                        layout.select_tab(8, Panel::Properties).unwrap();
+                        layout.set_tab_style(8, crate::TabStyle::IconName).unwrap();
+                        DockItem::Group { group: 8 }
+                    }
+                    "toolbar" => DockItem::Panel {
+                        panel: Panel::Toolbar,
+                    },
+                    _ => DockItem::Panel {
+                        panel: layout
+                            .add_toolbar(
+                                None,
+                                "Stack tools",
+                                &[ToolbarControl::Command {
+                                    command: CommandId::Brush,
+                                }],
+                            )
+                            .unwrap(),
+                    },
+                };
+                if floating {
+                    layout
+                        .move_item(
+                            STACK_VIEW,
+                            item,
+                            DockTarget::Float {
+                                position: [700., 300.],
+                            },
+                        )
+                        .unwrap();
+                }
+                let source_group = match item {
+                    DockItem::Panel { panel } => layout.panel_group(panel).unwrap(),
+                    DockItem::Group { group } => group,
+                    _ => unreachable!(),
+                };
+                let source_tree = layout.node(source_group).unwrap().clone();
+                let registry = layout.panels.clone();
+                let target = *members.last().unwrap();
+                layout
+                    .move_item(
+                        STACK_VIEW,
+                        item,
+                        DockTarget::StackColumn {
+                            column: target,
+                            before: false,
+                        },
+                    )
+                    .unwrap();
+                layout.validate().unwrap();
+                let stack = layout.column_stack(4);
+                assert_eq!(&stack.members[..members.len()], &members);
+                assert_eq!(stack.members.len(), members.len() + 1);
+                assert!(!stack.drawers && stack.auto_hide);
+                assert_eq!(stack.open_column, Some(4));
+                assert_eq!(
+                    layout.panels, registry,
+                    "tool IDs and configuration survive"
+                );
+                let member = *stack.members.last().unwrap();
+                assert!(layout.is_collapsed(member));
+                assert!(layout.expanded_column_width(member) >= 128.);
+                let moving = layout.node(member).unwrap();
+                if kind == "panel" {
+                    assert_eq!(layout.group_panels(member).unwrap(), [Panel::Adjustments]);
+                    assert_eq!(
+                        layout.group_panels(8).unwrap(),
+                        [Panel::Layers, Panel::Properties]
+                    );
+                } else {
+                    assert_eq!(
+                        moving, &source_tree,
+                        "whole groups retain identity and selection"
+                    );
+                }
+                let durable = crate::durable_layout(&layout);
+                let loaded: DockLayout =
+                    serde_json::from_value(serde_json::to_value(&layout).unwrap()).unwrap();
+                loaded.validate().unwrap();
+                assert_eq!(crate::durable_layout(&loaded), durable);
+            }
+        }
+    }
+}
+
+#[test]
+fn extracting_a_group_from_its_own_stack_follows_the_surviving_member() {
+    for whole in [false, true] {
+        let (mut s, left, right) = stack_fixture();
+        stack_move(&mut s, right, left, false);
+        let layout = &mut s.state.workspace.layout;
+        let source = if whole {
+            DockItem::Group { group: 5 }
+        } else {
+            DockItem::Panel {
+                panel: Panel::Adjustments,
+            }
+        };
+        let target = if whole { left } else { right };
+        layout
+            .move_item(
+                STACK_VIEW,
+                source,
+                DockTarget::StackColumn {
+                    column: target,
+                    before: false,
+                },
+            )
+            .unwrap();
+        layout.validate().unwrap();
+        let group = layout
+            .panel_group(if whole {
+                Panel::Brushes
+            } else {
+                Panel::Adjustments
+            })
+            .unwrap();
+        let stack = layout.column_stack(group);
+        assert_eq!(stack.members.len(), 3);
+        if whole {
+            assert_eq!(stack.members, [6, 5, right]);
+        } else {
+            assert_eq!(stack.members, [left, right, group]);
+        }
+        let before = layout.clone();
+        layout
+            .move_item(
+                STACK_VIEW,
+                DockItem::Group { group },
+                DockTarget::StackColumn {
+                    column: group,
+                    before: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            layout, &before,
+            "dropping a sole group on its own footer is a no-op"
+        );
+    }
+}
+
+#[test]
+fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
+    let (mut s, left, right) = stack_fixture();
+    stack_move(&mut s, right, left, false);
+    let item = DockItem::Panel {
+        panel: Panel::Toolbar,
+    };
+    let resolved = s.layout(STACK_VIEW);
+    let above = resolved.collapsed.iter().find(|c| c.id == left).unwrap();
+    let below = resolved.collapsed.iter().find(|c| c.id == right).unwrap();
+    let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+    let gap = [
+        above.bounds.x + TILE_SIZE * 0.5,
+        below.bounds.y - WORKSPACE_SPACING * 0.5,
+    ];
+    for (point, column) in [
+        (center(above.grip), left),
+        (center(below.grip), right),
+        (center(below.empty), right),
+        (gap, left),
+    ] {
+        let hint = s.drop_hint(STACK_VIEW, point, &[], item, None).unwrap();
+        assert_eq!(
+            hint.target,
+            DockTarget::StackColumn {
+                column,
+                before: false
+            }
+        );
+    }
+    let icon = center(above.groups[0].icons[0].bounds);
+    assert!(matches!(
+        s.drop_hint(STACK_VIEW, icon, &[], item, None)
+            .unwrap()
+            .target,
+        DockTarget::Tab { .. }
+    ));
+    let divider = center(above.groups[1].divider);
+    assert!(matches!(
+        s.drop_hint(STACK_VIEW, divider, &[], item, None)
+            .unwrap()
+            .target,
+        DockTarget::Split {
+            edge: Edge::Top,
+            ..
+        }
+    ));
+    for platform in [Platform::Web, Platform::Android] {
+        s.set_platform(platform);
+        for point in [center(below.empty), center(below.grip), gap] {
+            assert!(
+                !s.drop_hint(STACK_VIEW, point, &[], item, None)
+                    .is_some_and(|h| matches!(h.target, DockTarget::StackColumn { .. }))
+            );
+        }
+    }
+    s.set_platform(Platform::Gtk);
+    let tile = s
+        .state
+        .workspace
+        .layout
+        .panel(Panel::Toolbar)
+        .unwrap()
+        .tiles()[0]
+        .id;
+    assert!(
+        s.drop_hint(
+            STACK_VIEW,
+            center(below.grip),
+            &[],
+            DockItem::Tile {
+                panel: Panel::Toolbar,
+                tile
+            },
+            None
+        )
+        .is_none()
+    );
+    let before = s.state.workspace.layout.clone();
+    assert!(
+        s.state
+            .workspace
+            .layout
+            .move_item(
+                STACK_VIEW,
+                item,
+                DockTarget::StackColumn {
+                    column: u32::MAX,
+                    before: false
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(s.state.workspace.layout, before);
+}
+
+#[test]
+fn stack_member_drops_cancel_and_undo_in_one_step() {
+    for item in [
+        DockItem::Panel {
+            panel: Panel::Adjustments,
+        },
+        DockItem::Group { group: 8 },
+        DockItem::Panel {
+            panel: Panel::Toolbar,
+        },
+    ] {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        stack_edit(
+            &mut s,
+            CustomizationAction::SetColumnCollapsed {
+                group: 5,
+                collapsed: true,
+            },
+        );
+        let before = crate::durable_layout(&s.state.workspace.layout);
+        let resolved = s.layout(STACK_VIEW);
+        let source_group = match item {
+            DockItem::Group { group } => group,
+            DockItem::Panel { panel } => s.state.workspace.layout.panel_group(panel).unwrap(),
+            _ => unreachable!(),
+        };
+        let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+        let source = center(
+            resolved
+                .groups
+                .iter()
+                .find(|g| g.id == source_group)
+                .unwrap()
+                .bounds,
+        );
+        let target = center(resolved.collapsed[0].grip);
+        for end in [ContactPhase::Cancel, ContactPhase::Up] {
+            for (phase, position) in [
+                (ContactPhase::Down, source),
+                (ContactPhase::Move, target),
+                (end, target),
+            ] {
+                s.dispatch(UiAction::DragWorkspace {
+                    item,
+                    phase,
+                    position,
+                    viewport: STACK_VIEW,
+                    tabs: Vec::new(),
+                })
+                .unwrap();
+                if phase == ContactPhase::Move {
+                    assert!(matches!(
+                        s.workspace_update().drag.unwrap().drop_hint.unwrap().target,
+                        DockTarget::StackColumn { .. }
+                    ));
+                }
+            }
+            if end == ContactPhase::Cancel {
+                assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+            }
+        }
+        let after = crate::durable_layout(&s.state.workspace.layout);
+        assert_eq!(s.state.workspace.layout.column_stack(4).members.len(), 2);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
+    }
+}
+
+#[test]
 fn paint_defaults_open_right_stack_on_load_and_reset() {
     let mut s = session();
     s.set_platform(Platform::Gtk);

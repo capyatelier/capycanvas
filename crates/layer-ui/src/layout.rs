@@ -833,6 +833,7 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DockTarget {
+    /// Insert a collapsed column, or a panel/tab group as a new column member.
     StackColumn { column: u32, before: bool },
     Float {
         position: [f32; 2],
@@ -2261,6 +2262,23 @@ impl DockLayout {
             DockItem::Tile { .. } | DockItem::Column { .. } => unreachable!(),
         };
         let whole = moving.len() == source_len;
+        let stack_target = if let DockTarget::StackColumn { column, .. } = target {
+            if !self.is_collapsed(column) || !self.column_stack(column).members.contains(&column) {
+                return Err("The target must be a collapsed column member".into());
+            }
+            // Removing a group from its own column can replace the column root.
+            // Follow the survivor, or keep an already standalone member as is.
+            let mut retained = self.node(column).cloned();
+            for panel in &moving {
+                retained = retained.and_then(|n| n.remove(*panel));
+            }
+            let Some(retained) = retained else {
+                return Ok(());
+            };
+            Some(retained.id())
+        } else {
+            None
+        };
         if let DockTarget::Tab { group, index } = target
             && group == source_group
         {
@@ -2315,7 +2333,28 @@ impl DockLayout {
             },
         };
         match target {
-            DockTarget::StackColumn { .. } => return Err("Only a column handle can stack columns".into()),
+            DockTarget::StackColumn {
+                before: insert_before,
+                ..
+            } => {
+                let width = self
+                    .collapsed_column_for_group(source_group)
+                    .map_or(moved_width, |column| self.expanded_column_width(column))
+                    .max(self.group_min_width(source_group))
+                    .clamp(128., 800.);
+                next.reclaim_removed_columns(self, &before);
+                next.collapsed.push(CollapsedColumn {
+                    root: moving_id,
+                    expanded_width: width,
+                });
+                next.insert_stack_member(moving, stack_target.unwrap(), insert_before)?;
+                if was_fitted {
+                    next.fit_tabs(moving_id);
+                }
+                next.validate()?;
+                *self = next;
+                return Ok(());
+            }
             DockTarget::Float { position } => {
                 let width = previous_float.as_ref().map(|f| f.width).unwrap_or_else(|| {
                     if tiles {

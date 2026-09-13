@@ -63,6 +63,54 @@ pub struct OpenColumn {
 }
 
 impl ResolvedLayout {
+    /// Empty space and footer grips append a new member; the gap between
+    /// members inserts there. Icons and group dividers keep their own targets.
+    pub(crate) fn stack_item_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        if self
+            .groups
+            .iter()
+            .any(|g| g.bounds.contains(point[0], point[1]))
+        {
+            return None;
+        }
+        for member in &self.collapsed {
+            if member.empty.contains(point[0], point[1]) || member.grip.contains(point[0], point[1])
+            {
+                return Some(DropHint {
+                    target: DockTarget::StackColumn {
+                        column: member.id,
+                        before: false,
+                    },
+                    bounds: edge_line(member.bounds, Edge::Bottom),
+                });
+            }
+        }
+        for pair in self.collapsed.windows(2) {
+            let (above, below) = (&pair[0], &pair[1]);
+            let gap = Bounds {
+                x: above.bounds.x,
+                y: above.bounds.y + above.bounds.height,
+                width: above.bounds.width,
+                height: below.bounds.y - above.bounds.y - above.bounds.height,
+            };
+            if above.stack == below.stack && gap.contains(point[0], point[1]) {
+                let height = gap.height.min(3.);
+                return Some(DropHint {
+                    target: DockTarget::StackColumn {
+                        column: above.id,
+                        before: false,
+                    },
+                    bounds: Bounds {
+                        y: gap.y + (gap.height - height) * 0.5,
+                        height,
+                        ..gap
+                    },
+                });
+            }
+        }
+        None
+    }
+
     pub fn open_column_at_divider(&self, id: u32) -> Option<u32> {
         let d = self
             .dividers
@@ -124,7 +172,23 @@ impl DockLayout {
         let mut next = self.clone();
         next.detach(&panels);
         next.reclaim_removed_columns(self, &geometry);
-        let mut stack = next.column_stack(target);
+        next.collapsed.extend(collapsed);
+        next.insert_stack_member(moving, target, before)?;
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Insert an already detached, collapsed tree using the destination's
+    /// preferences. Callers publish the completed move as one transaction.
+    pub(super) fn insert_stack_member(
+        &mut self,
+        moving: DockNode,
+        target: u32,
+        before: bool,
+    ) -> Result<(), String> {
+        let source = moving.id();
+        let mut stack = self.column_stack(target);
         let old_root = stack.column;
         let index = stack
             .members
@@ -138,13 +202,13 @@ impl DockLayout {
             members.push(if *member == source {
                 moving.clone()
             } else {
-                next.node(*member).ok_or("Unknown stack member")?.clone()
+                self.node(*member).ok_or("Unknown stack member")?.clone()
             });
         }
         let mut tree = members.remove(0);
         for member in members {
             tree = DockNode::Split {
-                id: next.allocate()?,
+                id: self.allocate()?,
                 axis: Axis::Vertical,
                 fraction: 0.5,
                 first: Box::new(tree),
@@ -152,26 +216,23 @@ impl DockLayout {
             };
         }
         let root = tree.id();
-        *next.node_mut(old_root).ok_or("Unknown target stack")? = tree;
+        *self.node_mut(old_root).ok_or("Unknown target stack")? = tree;
         if !stack.members.contains(&old_root) {
-            next.collapsed.retain(|c| c.root != old_root);
+            self.collapsed.retain(|c| c.root != old_root);
         }
-        next.collapsed.extend(collapsed);
         let width = stack
             .members
             .iter()
-            .map(|m| next.expanded_column_width(*m))
+            .map(|m| self.expanded_column_width(*m))
             .fold(128., f32::max);
-        next.collapsed.push(CollapsedColumn {
+        self.collapsed.push(CollapsedColumn {
             root,
             expanded_width: width,
         });
-        next.column_stacks
+        self.column_stacks
             .retain(|s| s.column != old_root && !stack.members.contains(&s.column));
         stack.column = root;
-        next.column_stacks.push(stack);
-        next.validate()?;
-        *self = next;
+        self.column_stacks.push(stack);
         Ok(())
     }
 

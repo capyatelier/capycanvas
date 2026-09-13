@@ -1626,7 +1626,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .flatten();
             group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
-            resolved.drop_hint(position[0], position[1], tabs, !docks_hidden)?
+            // GTK first: other hosts retain their existing group insertion
+            // until they adopt and validate the new stack-member destination.
+            (self.state.platform == Platform::Gtk && !docks_hidden)
+                .then(|| resolved.stack_item_drop_hint(position))
+                .flatten()
+                .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
         };
         // The attached preview and the committed drop use the same frozen
         // switch points, including a release between pointer-motion events.
@@ -10553,9 +10558,9 @@ mod tests {
                         1,
                     ) => {}
                     (
-                        DockTarget::Split {
-                            group: 6,
-                            edge: Edge::Bottom,
+                        DockTarget::StackColumn {
+                            column: 4,
+                            before: false,
                         },
                         2,
                     ) => {}
@@ -10564,17 +10569,21 @@ mod tests {
                 s.dispatch(item.move_action(hint.target, viewport)).unwrap();
                 s.state.workspace.validate().unwrap();
                 assert!(s.state.workspace.layout.floating.is_empty());
-                let c = &s.layout(viewport).collapsed[0];
+                let resolved = s.layout(viewport);
+                let c = &resolved.collapsed[0];
                 assert_eq!(c.id, 4);
-                assert_eq!(c.groups.len(), if slot == 0 { 2 } else { 3 });
+                assert_eq!(c.groups.len(), if slot == 1 { 3 } else { 2 });
+                assert_eq!(resolved.collapsed.len(), if slot == 2 { 2 } else { 1 });
                 let moved = match item {
                     DockItem::Panel { panel } => panel,
                     DockItem::Group { group: 8 } => Panel::Layers,
                     _ => Panel::Toolbar,
                 };
                 assert!(
-                    c.groups
+                    resolved
+                        .collapsed
                         .iter()
+                        .flat_map(|c| &c.groups)
                         .flat_map(|g| &g.icons)
                         .any(|i| i.panel == moved)
                 );
