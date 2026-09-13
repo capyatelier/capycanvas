@@ -68,8 +68,8 @@ pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,
 };
 pub use layout::{
-    Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, ColumnGroupPanel,
-    ColumnIcon, ColumnMode, ColumnPanelHeight, ColumnSettings, Divider, DockBand, DockItem,
+    Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,
+    ColumnIcon, ColumnStack, Divider, DockBand, DockItem,
     DockLayout, DockNode, DockTarget, Edge, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
     PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
@@ -1035,13 +1035,6 @@ pub enum UiAction {
     /// Divider center in logical workspace units, for mouse/touch or keyboard.
     ResizeDock {
         id: u32,
-        position: [f32; 2],
-        viewport: [f32; 2],
-    },
-    ResizeColumnPanel {
-        column: u32,
-        after: Option<Panel>,
-        phase: ContactPhase,
         position: [f32; 2],
         viewport: [f32; 2],
     },

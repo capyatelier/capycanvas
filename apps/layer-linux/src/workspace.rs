@@ -248,6 +248,10 @@ mod allocation {
                         .iter()
                         .find(|(i, _)| i == id)
                         .and_then(|(_, d)| d.connection().map(|c| c.bounds)),
+                    Slot::ColumnConnection(id, panel) => resolved.collapsed.iter()
+                        .find(|c| c.id == *id).and_then(|c| c.open.as_ref())
+                        .and_then(|o| o.connections.iter().find(|(p, _)| p == panel))
+                        .map(|(_, connection)| connection.bounds),
                     Slot::Column(id) => resolved
                         .collapsed
                         .iter()
@@ -469,6 +473,7 @@ enum Slot {
     DrawerShadow(u32),
     DrawerConnection(u32),
     Column(u32),
+    ColumnConnection(u32, Panel),
     ZenToolbars,
 }
 glib::wrapper! {
@@ -616,11 +621,10 @@ impl DockSurface {
 #[boxed_type(name = "LayerDockItem")]
 struct NativeDockItem(DockItem);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum DragTarget {
     Dock(DockItem),
     Divider(u32),
-    ColumnPanel(u32, Option<Panel>),
     Resize(u32, ResizeEdge),
 }
 impl DragTarget {
@@ -638,13 +642,6 @@ impl DragTarget {
                 position,
                 viewport,
                 tabs,
-            },
-            Self::ColumnPanel(column, after) => UiAction::ResizeColumnPanel {
-                column,
-                after,
-                phase,
-                position,
-                viewport,
             },
             Self::Divider(id) => UiAction::DragDivider {
                 id,
@@ -1605,7 +1602,7 @@ impl Workspace {
                 } else {
                     hidden && (hide_floating_panels || !widget.has_css_class("floating-panel"))
                 };
-                let can_target = !hidden && !matches!(slot, Slot::DrawerShadow(_));
+                let can_target = !hidden && !matches!(slot, Slot::DrawerShadow(_) | Slot::ColumnConnection(_, _));
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target
                 {
                     continue;
@@ -1659,10 +1656,6 @@ impl Workspace {
                     ..
                 }
                 | UiAction::DragDivider {
-                    phase: ContactPhase::Up | ContactPhase::Cancel,
-                    ..
-                }
-                | UiAction::ResizeColumnPanel {
                     phase: ContactPhase::Up | ContactPhase::Cancel,
                     ..
                 }
@@ -2654,13 +2647,6 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
-                let target = if let DragTarget::Divider(id) = target
-                    && let Some(column) = self.resolved().column_panel_at_divider(id)
-                {
-                    DragTarget::ColumnPanel(column, None)
-                } else {
-                    target
-                };
                 return Some((widget, target));
             }
             picked = widget.parent();
@@ -2925,7 +2911,7 @@ impl Workspace {
     }
 
     fn install_workspace_drag(self: &Rc<Self>) {
-        let column_click = Rc::new(Cell::new(None::<(DockItem, u32, [f32; 2])>));
+        let column_click = Rc::new(Cell::new(None::<(DragTarget, u32, [f32; 2], Option<gdk::InputSource>)>));
         let click = gtk::GestureClick::new();
         click.set_name(Some("panel-handle-double-click"));
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -2934,56 +2920,28 @@ impl Workspace {
             self,
             #[strong]
             column_click,
-            move |gesture, mut count, x, y| {
+            move |gesture, _, x, y| {
                 let point = [x as f32, y as f32];
                 let target = w.drag_target_at(point);
                 let collapsed_column = w.columns.background_at(&w, point);
-                if let Some(event) = gesture
-                    .current_event()
-                    .filter(|e| e.event_type() == gdk::EventType::ButtonPress)
-                {
-                    let column = collapsed_column
-                        .map(|column| DockItem::Column { column })
-                        .or_else(|| match target {
-                            Some(DragTarget::Dock(DockItem::Group { group }))
-                                if w.surface
-                                    .imp()
-                                    .layout
-                                    .borrow()
-                                    .column_for_group(group)
-                                    .is_some() =>
-                            {
-                                Some(DockItem::Group { group })
-                            }
-                            _ => None,
-                        });
-                    let previous =
-                        column_click.replace(column.map(|item| (item, event.time(), point)));
-                    if let Some(item) = column {
-                        // GTK may cancel a blank header/strip's click sequence on
-                        // release. Keep the pair on the stable workspace using
-                        // GTK's own time/distance limits; drags clear it below.
-                        let settings = gtk::Settings::for_display(&w.surface.display());
-                        let double = previous.is_some_and(|(id, time, position)| {
-                            id == item
-                                && event.time().wrapping_sub(time)
-                                    <= settings.gtk_double_click_time().max(0) as u32
-                                && (point[0] - position[0])
-                                    .abs()
-                                    .max((point[1] - position[1]).abs())
-                                    <= settings.gtk_double_click_distance().max(0) as f32
-                        });
-                        count = if double {
-                            column_click.set(None);
-                            2
-                        } else {
-                            1
-                        };
-                    }
-                }
-                if count != 2 {
-                    return;
-                }
+                let Some(event) = gesture.current_event() else { return };
+                let source = event.device().map(|device| device.source());
+                let handle = collapsed_column
+                    .map(|column| DragTarget::Dock(DockItem::Column { column }))
+                    .or(target);
+                let previous = column_click.replace(handle.map(|item| (item, event.time(), point, source)));
+                let settings = gtk::Settings::for_display(&w.surface.display());
+                // A workspace GestureClick sees every control. Require the same
+                // handle and device class for touch/pen as well as mouse; a tap
+                // on a tile must not turn the next divider press into a reset.
+                let double = handle.is_some_and(|item| previous.is_some_and(|(id, time, position, device)| {
+                    id == item && device == source
+                        && event.time().wrapping_sub(time) <= settings.gtk_double_click_time().max(0) as u32
+                        && (point[0] - position[0]).abs().max((point[1] - position[1]).abs())
+                            <= settings.gtk_double_click_distance().max(0) as f32
+                }));
+                if !double { return; }
+                column_click.set(None);
                 let viewport = [w.surface.width() as f32, w.surface.height() as f32];
                 let action = if let Some(column) = collapsed_column {
                     w.resolved()

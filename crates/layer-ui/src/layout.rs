@@ -4,11 +4,11 @@
 use crate::{PanelConfig, PanelContent, TileStyle, ToolbarControl, ToolbarTile, WORKSPACE_SPACING};
 use serde::{Deserialize, Serialize};
 
-#[path = "column_panels.rs"]
-mod column_panels;
+#[path = "column_stacks.rs"]
+mod column_stacks;
 #[path = "layout_columns.rs"]
 mod columns;
-pub use column_panels::{ColumnGroupPanel, ColumnMode, ColumnPanelHeight, ColumnSettings};
+pub use column_stacks::{ColumnStack, OpenColumn};
 pub use columns::{CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, ColumnIcon};
 #[cfg(test)]
 #[path = "layout_tile_group_tests.rs"]
@@ -779,8 +779,8 @@ pub struct DockLayout {
     /// Collapsing preserves the underlying dock tree and its expanded width.
     #[serde(default)]
     pub collapsed: Vec<CollapsedColumn>,
-    #[serde(default)]
-    pub column_settings: Vec<ColumnSettings>,
+    #[serde(default, alias = "column_settings")]
+    pub column_stacks: Vec<ColumnStack>,
     #[serde(skip)]
     pub column_scroll: Vec<(u32, f32)>,
     /// Adding tabs opts a group into natural width; manual width resize opts out.
@@ -827,6 +827,7 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DockTarget {
+    StackColumn { column: u32, before: bool },
     Float {
         position: [f32; 2],
     },
@@ -1435,7 +1436,7 @@ impl Default for DockLayout {
             panels: PanelConfig::defaults(),
             floating: Vec::new(),
             collapsed: Vec::new(),
-            column_settings: Vec::new(),
+            column_stacks: Vec::new(),
             column_scroll: Vec::new(),
             fit_tab_groups: Vec::new(),
             measurements: Vec::new(),
@@ -2042,7 +2043,7 @@ impl DockLayout {
         next.bands = defaults.bands;
         next.floating.clear();
         next.collapsed.clear();
-        next.column_settings.clear();
+        next.column_stacks.clear();
         next.column_scroll.clear();
         next.fit_tab_groups.clear();
         let tools: Vec<_> = self
@@ -2302,6 +2303,7 @@ impl DockLayout {
             },
         };
         match target {
+            DockTarget::StackColumn { .. } => return Err("Only a column handle can stack columns".into()),
             DockTarget::Float { position } => {
                 let width = previous_float.as_ref().map(|f| f.width).unwrap_or_else(|| {
                     if tiles {
@@ -2456,8 +2458,10 @@ impl DockLayout {
                     && let Some(column) = next.collapsed.iter_mut().find(|c| c.root == group)
                 {
                     column.root = id;
-                    if let Some(s) = next.column_settings.iter_mut().find(|s| s.column == group) {
-                        s.column = id;
+                    for s in &mut next.column_stacks {
+                        if s.column == group { s.column = id; }
+                        for member in &mut s.members { if *member == group { *member = id; } }
+                        if s.open_column == Some(group) { s.open_column = Some(id); }
                     }
                 }
                 let node = next
@@ -2756,7 +2760,14 @@ impl DockLayout {
         if (coordinate - center).abs() < 0.001 {
             return Ok(());
         }
-        let base = self.column_settings.iter().any(|s| self.open_column_group(s.column).is_some())
+        if let Some(column) = resolved.open_column_at_divider(id) {
+            let open = resolved.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == column)).unwrap();
+            let delta = coordinate - center;
+            let width = open.bounds.width + if open.direction == Edge::Right { delta } else { -delta };
+            self.collapsed.iter_mut().find(|c| c.root == column).unwrap().expanded_width = width.clamp(128., 800.);
+            return Ok(());
+        }
+        let base = self.column_stacks.iter().any(|s| self.open_stack_column(s.column).is_some())
             .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false));
         let original = base.as_ref().and_then(|base| base.dividers.iter().find(|b| b.id == id)).unwrap_or(d);
         let dimension = usize::from(d.axis == Axis::Vertical);
@@ -2814,9 +2825,9 @@ impl DockLayout {
     pub fn resolve(&self, width: f32, height: f32) -> ResolvedLayout {
         let base = self.resolve_bands(width, height, &self.bands, false);
         if !self
-            .column_settings
+            .column_stacks
             .iter()
-            .any(|s| self.open_column_group(s.column).is_some())
+            .any(|s| self.open_stack_column(s.column).is_some())
         {
             return base;
         }
@@ -2828,7 +2839,7 @@ impl DockLayout {
         width: f32,
         height: f32,
         bands: &[DockBand],
-        group_panels: bool,
+        open_columns: bool,
     ) -> ResolvedLayout {
         let mut remaining = Bounds {
             x: 0.0,
@@ -2917,7 +2928,7 @@ impl DockLayout {
                 parent,
                 reversed: matches!(band.edge, Edge::Bottom | Edge::Right),
             });
-            resolve_node(&band.root, bounds, axis, self, &mut result, group_panels);
+            resolve_node(&band.root, bounds, axis, self, &mut result, open_columns);
         }
         result.work_area = remaining;
         result
@@ -4114,23 +4125,10 @@ fn resolve_node(
     orientation: Axis,
     layout: &DockLayout,
     result: &mut ResolvedLayout,
-    group_panels: bool,
+    open_columns: bool,
 ) {
     if layout.is_collapsed(node.id()) {
-        let mut strip = bounds;
-        let group_panel = group_panels
-            .then(|| layout.resolve_group_panel(node.id(), bounds, &mut strip))
-            .flatten();
-        let mut column = columns::resolve_column(node, strip);
-        column.group_panel = group_panel;
-        column.scroll(
-            layout
-                .column_scroll
-                .iter()
-                .find(|(id, _)| *id == node.id())
-                .map_or(0., |(_, v)| *v),
-        );
-        result.collapsed.push(column);
+        layout.resolve_stack(node, bounds, result, open_columns);
         return;
     }
     match node {
@@ -4224,8 +4222,8 @@ fn resolve_node(
             if *axis == Axis::Horizontal {
                 if layout.is_collapsed(first.id()) {
                     first_size = (TILE_SIZE
-                        + if group_panels && layout.open_column_group(first.id()).is_some() {
-                            layout.group_panel_width(first.id())
+                        + if open_columns && layout.open_stack_column(first.id()).is_some() {
+                            layout.expanded_column_width(layout.open_stack_column(first.id()).unwrap()) + WORKSPACE_SPACING * 2.
                         } else {
                             0.
                         })
@@ -4233,8 +4231,8 @@ fn resolve_node(
                 } else if layout.is_collapsed(second.id()) {
                     first_size = (usable
                         - TILE_SIZE
-                        - if group_panels && layout.open_column_group(second.id()).is_some() {
-                            layout.group_panel_width(second.id())
+                        - if open_columns && layout.open_stack_column(second.id()).is_some() {
+                            layout.expanded_column_width(layout.open_stack_column(second.id()).unwrap()) + WORKSPACE_SPACING * 2.
                         } else {
                             0.
                         })
@@ -4251,8 +4249,8 @@ fn resolve_node(
                 parent: bounds,
                 reversed: false,
             });
-            resolve_node(first, a, orientation, layout, result, group_panels);
-            resolve_node(second, rest, orientation, layout, result, group_panels);
+            resolve_node(first, a, orientation, layout, result, open_columns);
+            resolve_node(second, rest, orientation, layout, result, open_columns);
         }
     }
 }

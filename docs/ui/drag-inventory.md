@@ -135,7 +135,7 @@ Remaining implementation work is on Apple and Windows; see the
   native row scrolling, menus, source removal, focus loss, and undo/redo.
 - Windows: `exercise-layer-pickup.ps1` checks native mouse/touch/pen row bodies,
   child controls, grips, scrolling, menus and history in docked/floating/drawer
-  presentations, with `-ColumnMode drawers` and `-ColumnMode group_panel`. The user
+  presentations. The former Group panel mode is retired; Windows currently uses drawers. The user
   confirmed physical pen tab tear-off follows contact through release; injected
   pen/touch tab capture loss remains unresolved. Row acceptance does not
   establish the complete physical digitizer matrix.

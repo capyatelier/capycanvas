@@ -1529,7 +1529,7 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
 fn illustrator_column_upgrade_only_changes_untouched_builtin_layouts() {
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk);
     let mut previous = layout.clone();
-    previous.column_settings.clear();
+    previous.column_stacks.clear();
     for customized in [false, true] {
         let mut history = layer_ui::LayoutHistory::new(&previous);
         if customized {

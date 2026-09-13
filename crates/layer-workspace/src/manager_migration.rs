@@ -15,7 +15,7 @@ pub(super) fn updated_illustrator_default(
     };
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
     let mut previous = layout.clone();
-    previous.column_settings.clear();
+    previous.column_stacks.clear();
     if history.revisions.len() != 1 || baseline != &previous || history.layout() != &previous {
         return None;
     }

@@ -350,27 +350,15 @@ impl ContentDrawer {
                 group,
                 origin,
             },
-            columns: if layout.open_column_group(column) == Some(group) {
-                panels.iter().map(|p| vec![*p]).collect()
-            } else {
-                vec![vec![active]]
-            },
-            tabs: (layout.open_column_group(column) != Some(group)).then_some(DrawerTabs {
-                group,
-                panels: panels.to_vec(),
-                active,
-            }),
-            dismissal: if layout.column_settings(column).auto_hide {
+            columns: vec![vec![active]],
+            tabs: Some(DrawerTabs { group, panels: panels.to_vec(), active }),
+            dismissal: if layout.column_stack(column).auto_hide {
                 DrawerDismissal::OutsideContact
             } else {
                 DrawerDismissal::Explicit
             },
         })
     }
-    pub fn is_group_panel(&self) -> bool {
-        matches!(self.anchor, DrawerAnchor::Column { .. }) && self.tabs.is_none()
-    }
-
     pub fn column_widths(&self) -> Vec<f32> {
         if let Some(tabs) = &self.tabs {
             return vec![
@@ -416,38 +404,6 @@ impl ContentDrawer {
             return None;
         }
         let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
-        if let DrawerAnchor::Column { column, group, .. } = self.anchor
-            && self.is_group_panel()
-            && !partial_zen
-        {
-            let column = resolved.collapsed.iter().find(|c| c.id == column)?;
-            let panel = column.group_panel.as_ref().filter(|p| p.group == group)?;
-            let anchor = column
-                .groups
-                .iter()
-                .find(|g| g.group == group)?
-                .bounds
-                .intersection(column.content)
-                .unwrap_or(Bounds {
-                    y: column.content.y,
-                    height: 0.,
-                    ..column.content
-                });
-            return Some(DrawerPlacement {
-                bounds: panel.bounds,
-                anchor,
-                direction: panel.direction,
-                columns: panel
-                    .panels
-                    .iter()
-                    .map(|p| Bounds {
-                        x: p.bounds.x - panel.bounds.x,
-                        y: p.bounds.y - panel.bounds.y,
-                        ..p.bounds
-                    })
-                    .collect(),
-            });
-        }
         let (anchor, edge, axis) = if let DrawerAnchor::Column {
             column,
             group,
@@ -673,7 +629,7 @@ impl CustomizationState {
                     panels: panels.to_vec(),
                     active,
                     axis: Axis::Vertical,
-                    tabs_visible: !d.is_group_panel(),
+                    tabs_visible: true,
                     footer_grip: None,
                     floating: false,
                     resize_handles: Vec::new(),

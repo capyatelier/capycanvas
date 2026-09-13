@@ -96,8 +96,6 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         val id = column.getInt("id")
         key(id) {
             val bounds = column.getJSONObject("bounds")
-            val workArea = snapshot.getJSONObject("layout").getJSONObject("work_area")
-            val expandGlyph = if (bounds.number("x") + bounds.number("width") / 2 < workArea.number("x") + workArea.number("width") / 2) "chevron-double-right" else "chevron-double-left"
             val shape = dock.drawerContainerShape(bounds)
             val content = column.getJSONObject("content")
             val current by rememberUpdatedState(column)
@@ -118,11 +116,6 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                         indication = rememberChromeFocusIndication(), onClick = {}, onDoubleClick = {
                         host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
                     })) {
-                    Box(Modifier.placed(column.getJSONObject("expand").relativeTo(bounds), dock.density)
-                        .testTag("expand-column-$id").semantics { contentDescription = "Expand column" }
-                        .clickable(role = Role.Button) { host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false)) }, contentAlignment = Alignment.Center) {
-                        SharedIcon(expandGlyph, null)
-                    }
                     Box(Modifier.placed(content.relativeTo(bounds), dock.density).clipToBounds().scrollable(scroll, Orientation.Vertical)) {
                         val groups = column.array("groups").objects()
                         groups.forEachIndexed { index, group ->

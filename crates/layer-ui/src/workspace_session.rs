@@ -178,7 +178,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_history.gesture_start().is_some()
             || self.workspace_drag.is_some()
             || self.divider_drag.is_some()
-            || self.column_panel_drag.is_some()
             || self.floating_resize.is_some()
             || self.interaction.pointer.is_some()
             || self.navigator_drag.is_some()

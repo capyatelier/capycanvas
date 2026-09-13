@@ -59,10 +59,11 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: drawer)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(column.exists, "Column drawers use explicit dismissal")
-        workspaceActivate(app.buttons["expand-column-4"])
+        XCTAssertFalse(app.buttons["expand-column-4"].exists)
+        workspaceActivate(app.buttons["column-icon-toolbar"])
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: column)
         waitForExpectations(timeout: 5)
-        XCTAssertTrue(app.buttons["panel-tab-toolbar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["column-icon-toolbar"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachWorkspaceScreen(app, name: "columns-drawers-zen")
     }

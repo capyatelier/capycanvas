@@ -640,38 +640,12 @@ and targeted opacity, Escape, toolbar insertion and theme changes through
 Preferences. Its app-only pixel check verifies a GPU overview over an opaque
 lower panel and restoration after closing configuration.
 
-## Attached column groups
+## Collapsed column stacks
 
-Collapsed columns honor the shared Drawers and Group panel settings. The
-Illustrator preset uses attached groups: every member occupies a resizable
-vertical slot beside its icon strip. Width and split handles use native cursors,
-immediate pickup and stable workspace capture. Rust owns placement, cancellation
-and one-step history; native bodies and scrolling remain retained during resize.
-The column menu also exposes Auto-hide and Apply to all columns. Widths, split
-weights and preferences persist; the currently open group is transient.
-
-Attached groups preserve their allocated content while opening Preferences or
-other customization dialogs. They hide with workspace chrome in Zen mode and
-return afterward. Layers uses its native virtualized viewport at the allocated
-height; Navigator keeps the shared GPU overview and clipped background opening.
-
-~~~powershell
-foreach ($device in 'mouse','pen','touch') {
-    ./apps/layer-windows/scripts/exercise-column-panels.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -Device $device
-}
-~~~
-
-This disposable-profile fixture checks physical arranged bounds against shared
-allocations, both sides, retained width/split resize, cancellation and history,
-mode switching, auto-hide without painting, all-column preferences, Navigator,
-Layers, Zen, both themes and restart. It measures the Win32 client origin and
-current DPI; UI Automation container bounds can omit empty margins. Snapshots
-and arranged views must agree before input and history assertions.
-
-The workspace and layer pickup fixtures also accept
-`-ColumnMode drawers` or `-ColumnMode group_panel` to exercise the same native
-controllers in both retained presentations. Synthetic pen/touch results remain
-separate from physical-device and presentation-performance acceptance.
+The former Group panel renderer is retired. Windows currently renders ordinary
+column drawers while retaining the shared [stacked-column](../../docs/ui/stacked-columns.md)
+preferences and membership. GTK is the first implementation of the replacement
+full-column opening behavior. The double-caret Expand button is removed.
 
 ## Full editor and Zen checkpoint
 
@@ -1080,9 +1054,8 @@ foreach ($device in 'mouse','pen','touch') {
 }
 ~~~
 
-Use `-ColumnMode group_panel` for attached column bodies and `-ColumnMode drawers`
-for tabbed drawers in both pickup fixtures. Each presentation reuses the same
-device arbitration and shared history path.
+Both pickup fixtures exercise tabbed drawers through the same device
+arbitration and shared history path.
 
 The isolated fixture checks docked rows, floating panels and column drawers,
 menus, child controls, whitespace, immediate grips, group drops, scrolling,

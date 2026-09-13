@@ -950,9 +950,9 @@ class AndroidInteractionTest {
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme)); restore()
                 customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
-                assertEquals("Leading divider has only the lower gap below Expand", 6 * density,
-                    bounds("column-icon-brushes").top - bounds("expand-column-46").bottom, 1f)
-                assertEquals("Leading divider touches Expand", bounds("expand-column-46").bottom,
+                assertEquals("Leading divider has only its lower gap", 6 * density,
+                    bounds("column-icon-brushes").top - bounds("collapsed-column-46").top, 1f)
+                assertEquals("Leading divider touches strip top", bounds("collapsed-column-46").top,
                     bounds("column-divider-46-0").top, 1f)
                 assertEquals("Collapsed group spacing matches toolbar divider and gaps", 12 * density,
                     bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)

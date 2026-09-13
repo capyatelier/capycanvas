@@ -36,7 +36,7 @@ impl WorkspacePreset {
         if self == Self::Illustrator {
             let mut layout = DockLayout::for_platform(platform);
             for column in layout.column_roots() {
-                layout.column_settings_mut(column).mode = ColumnMode::GroupPanel;
+                layout.column_stack_mut(column).drawers = false;
             }
             return layout;
         }
@@ -218,9 +218,9 @@ mod tests {
             let layout = WorkspacePreset::Illustrator.layout(platform);
             assert!(
                 layout
-                    .column_settings
+                    .column_stacks
                     .iter()
-                    .all(|s| s.mode == ColumnMode::GroupPanel)
+                    .all(|s| !s.drawers)
             );
             assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
         }
