@@ -1,6 +1,6 @@
 # Stacked collapsed columns
 
-This replaces the former Group panel presentation. GTK and Web implement this presentation;
+This replaces the former Group panel presentation. GTK, Web and Android implement this presentation;
 the workspace model, drop validation, geometry and history are shared Rust.
 
 A stack contains one or more collapsed columns. Each member retains its dock
@@ -9,7 +9,7 @@ has an immediate drag handle. Dropping that handle on another member stacks
 the columns; dropping beside a stack or at a side edge unstacks the member.
 Tile bodies retain the application-wide hold-before-drag convention.
 
-On GTK and Web, dropping an individual panel, a whole toolbar, or a tab group into a
+On GTK, Web and Android, dropping an individual panel, a whole toolbar, or a tab group into a
 member's empty lower area or footer grip creates a new collapsed column after
 that member. The gap between members is also an insertion target. The new
 column contains only the dropped content; a whole group retains its tab order,
@@ -21,7 +21,7 @@ line at the tile boundary. It includes the trailing gap above the footer grip,
 so compact members earlier in a stack have the same target as its last member.
 It only appears when the last group is scrolled into view and excludes the
 grip itself. The grip and spacing between members continue creating stack
-members. Android follows after Web validation.
+members. All three hosts use the shared target geometry.
 
 “Open individual panels” and Auto-hide belong to the stack. Enabling
 “Open individual panels” opens the selected tab group in a compact popover.
@@ -61,7 +61,7 @@ are retired.
 
 Other hosts retain stack membership and preferences and use ordinary tabbed
 drawers until full-column opening is ported. The shared model does not serialize
-an open member. GTK/Web's unchanged Paint default opens its right stack when loaded,
+an open member. GTK/Web/Android's unchanged Paint default opens its right stack when loaded,
 previewed or reset, with Auto-hide and Open individual panels disabled. Other
 saved arrangements start with their stacks closed.
 
@@ -88,3 +88,15 @@ The existing `--column-drops` suite checks adjacent tile and divider boundaries.
 The history comparison includes collapsed member boundaries. Moving the last
 member into the preceding column can preserve the panel order while changing
 the grouping; that remains a real move with one undo step.
+
+Android device coverage is in `AndroidInteractionTest#stackedColumnsOpenAndResizeOrdinaryGroups`
+and `AndroidInteractionTest#stackedColumnDropsKeepFooterAppendTargets`. These use
+an isolated workspace store and typed mouse/finger/stylus events through native
+views. They cover full-height opening, resizing, Back, auto-hide, compact drawers,
+active connectors, first/middle member append targets, stack targets, drawer
+tabs, held icons, cancellation and one-step undo/redo. Physical pen accuracy and
+hover remain separate hardware checks.
+
+Validation on the Wacom MovinkPad 14 used a separate test application ID and
+isolated workspace stores. The production app and its data were retained.
+Native screenshots are written to the test package’s `files/validation` directory.

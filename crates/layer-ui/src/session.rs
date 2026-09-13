@@ -1628,7 +1628,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             // GTK first: other hosts retain their existing group insertion
             // until they adopt and validate the new stack-member destination.
-            (matches!(self.state.platform, Platform::Gtk | Platform::Web) && !docks_hidden)
+            (matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) && !docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
                 .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
