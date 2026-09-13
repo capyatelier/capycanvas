@@ -54,8 +54,10 @@ fn native_workspace_transition_stability() {
     let mut step = 0;
     std::fs::write(dir.join("ready"), "ready").unwrap();
     for _ in 0..2 {
-        for (id, name) in DEFAULT_WORKSPACES.map(|(id, preset)| (id, preset.name().to_lowercase()))
-        {
+        for (id, _) in DEFAULT_WORKSPACES {
+            // The visible Sketch/Paint/Photo labels can change; widget identity
+            // follows the stable stored IDs, as in workspace_switcher.rs.
+            let name = id.rsplit(':').next().unwrap();
             let button = find_named(
                 w.header.root.upcast_ref(),
                 &format!("workspace-switch-{name}"),

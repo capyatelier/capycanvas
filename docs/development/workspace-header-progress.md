@@ -456,3 +456,63 @@ source-replacement cancellation (`ztXIba`) and normal window controls/fullscreen
 and minimum-size editor captures. Artifacts are under
 `/tmp/capy-workspace-motion.<ID>`; no physical stylus or other-host GUI acceptance
 is inferred, and no normal user windows/storage were modified.
+
+## Final integration and native ownership — 2026-09-13
+
+Merged fetched `origin/main` (`2142149`) in `a390356`, retaining both the title-bar
+editor and upstream panel release measurements, drag-edge/drop-size tests and
+input-driver scale handling. The ownership fix is `1b488f1`; see
+[native ownership](workspace-ownership.md) for the kernel-lock protocol,
+window teardown and interrupted-write safeguards. The GTK switching path now
+claims/reclaims authoritatively, including stale SwitchToWindow menu actions.
+No user workspace resets and no pushes were performed.
+
+Current Web port specification: [title-bar handoff](title-bar-web-handoff.md).
+This consolidates the reviewed behavior rather than asking the next agent to
+reconstruct it from the superseded prototypes above. Also updated the old Web
+packaging assertion to validate explicit theme paint for the already-redrawn
+filled filter icons instead of requiring their former outline geometry.
+
+Shared validation: 42 core, 44 engine, 353 UI, 25 host and 86 workspace tests pass
+(550 total; one hardware host test intentionally ignored). GTK release build
+and Web/Wasm check pass. Web launcher/package tests: 19 pass. Workspace Clippy
+completes with the existing enum-size/test-helper warnings, no new warnings.
+
+Post-merge private-compositor acceptance (all storage/settings are disposable):
+
+| Journey | Run suffix |
+| --- | --- |
+| Ownership: stale/live external client, stale menu action, two GTK windows, close/reclaim | `MBQ1z7` |
+| Save/switch/reopen and canceled preview | `CPYAsg` |
+| Individual default corruption/recovery | `USvfZE` |
+| Whole-chip immediate pickup; inert clicks/holds | `5cO3na` |
+| Live reorder, detach/re-entry/remove | `nBTTjK` |
+| Drop-only Add Tools (two completed runs) | `GmQZ40`, `Q9bvmY` |
+| Tool picker search, selection, cancellation | `hnLJ00` |
+| Keyboard move/remove | `TS6aVe` |
+| Components, footer and empty-bar recovery | `0l4HNI` |
+| Holds and context menus | `UjlQaJ` |
+| Caption movement, Cancel and source replacement | `SSmb3v` |
+| All sizes/both themes, spacing, drawers and menu hover | `ZjqHDk` |
+| Window controls and fullscreen/status | `T8E3Zu` |
+| 640×600 overflow dragging and empty-center targets | `OaDi63`, `LTGBsS` |
+| True 2× whole-bank pickup | `2BV7ZJ` |
+| Upstream panel drag edges | `3VW2Ej` |
+| Upstream content-aware floating drop sizes | `S0Uryr` |
+| Workspace transition stability | `OlavbQ` |
+
+These are 20 completed native runs. The transition case was updated to find
+tabs by their stable workspace IDs rather than the renamed display labels. It
+recorded 358 frames with zero resized frames, editor disables or busy notices.
+
+Artifacts are `/tmp/capy-workspace-motion.<suffix>/input`. Inspected the default
+Sketch canvas, wide drag-only editor and light/large editor captures.
+
+One Add Tools run (`Xg6Zle`) crashed before canvas initialization. The core dump
+places the fault in `libvulkan`'s `loader_get_icd_and_device`, called by GTK's
+swapchain startup; another thread was enumerating Vulkan devices. The same test
+then passed twice on fresh sessions. No renderer workaround was introduced and
+this intermittent startup failure is **not claimed fixed**. Backtrace:
+`/tmp/capy-tools-drop-backtrace.log`. A separate initial spacing invocation lacked
+its required `--native-storage` fixture; the correctly configured run passed.
+No physical-stylus, Apple or Windows GUI acceptance is inferred from these runs.
