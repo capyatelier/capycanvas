@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
 Add-Type -TypeDefinition @'
@@ -101,8 +101,12 @@ function Set-Size([string]$Width,[string]$Height) {
 function Idle {Wait-Until {$current=Model;$current -and !$current.state.document_file.busy} 'Document request did not finish' 45}
 function Confirm-Dialog {
     $script:scope=$root
-    Wait-Until {@((Model).state.requests|Where-Object {$_.kind.request.type -eq 'confirm_close'}).Count -eq 1} 'Missing shared unsaved request'
-    $title=((Model).state.requests|Where-Object {$_.kind.request.type -eq 'confirm_close'}).kind.request.title
+    $request=@{value=$null}
+    Wait-Until {
+        $request.value=@((Model).state.requests|Where-Object {$_.kind.request.type -eq 'confirm_close'})
+        $request.value.Count -eq 1
+    } 'Missing shared unsaved request'
+    $title=$request.value[0].kind.request.title
     $script:scope=Control $title ([System.Windows.Automation.ControlType]::Window)
 }
 function Picker([string]$Name) {
@@ -111,9 +115,13 @@ function Picker([string]$Name) {
     if($scope.Current.ClassName -ne '#32770' -or $scope.Current.ProcessId -ne $review.Id){throw 'Picker does not belong to the isolated review'}
 }
 function Picker-Button([string]$Id) {
-    $item=$scope.FindFirst([System.Windows.Automation.TreeScope]::Children,
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
-    if(!$item -or $item.Current.ClassName -ne 'Button'){throw 'Missing native picker button'}
+    $hit=@{item=$null}
+    Wait-Until {
+        $hit.item=$scope.FindFirst([System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
+        $hit.item -and $hit.item.Current.ClassName -eq 'Button' -and $hit.item.Current.IsEnabled
+    } 'Native picker button did not become ready'
+    $item=$hit.item
     $handle=[IntPtr]$item.Current.NativeWindowHandle
     $owner=[uint32]0;[CapyDocumentControls]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
     if($owner -ne $review.Id){throw 'Native picker button has an unexpected owner'}
@@ -217,6 +225,42 @@ if(!(Model).state.document_file.modified -or (Model).state.document_file.locatio
     throw 'PNG export incorrectly acknowledged a project save'
 }
 
+if($RecoverGpu){
+    Wait-Until {(Model).windows_filter_load.phase -eq 'ready'} 'Filters must settle before recovery' 60
+    function Signature {
+        $state=(Model).state
+        $state.document_file.PSObject.Properties.Remove("revision")
+        @($state.document_file,$state.camera,$state.workspace,$state.brush)|ConvertTo-Json -Depth 80 -Compress
+    }
+    $beforeRecovery=Signature
+    $exportHash=(Get-FileHash -LiteralPath $exported -Algorithm SHA256).Hash
+    foreach($attempt in 1..2){
+        $generation=(Model).windows_gpu_generation
+        $documentRevision=(Model).state.document_file.revision
+        $script:scope=$root
+        Invoke-Control 'Test GPU loss'
+        Wait-Until {(Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready} 'GPU reconstruction did not finish' 60
+        if((Model).state.document_file.revision -ne $documentRevision){throw 'GPU recovery changed the document revision'}
+        Wait-Until {(Signature) -eq $beforeRecovery} 'GPU recovery changed document, history, camera, workspace or brush'
+        $status=Find-Id 'canvas-status'
+        if($status -and !$status.Current.IsOffscreen){throw ('GPU recovery reports an error: '+$status.Current.Name)}
+        $restored=Join-Path $run ("Recovered-$attempt.png")
+        File-Command 'export_document';Picker 'Save As';Choose-Path $restored;Idle
+        Wait-Until {Test-Path -LiteralPath $restored} 'Recovered GPU did not export'
+        if((Get-FileHash -LiteralPath $restored -Algorithm SHA256).Hash -ne $exportHash){
+            throw 'GPU reconstruction changed exported pixels'
+        }
+        $script:scope=$root
+        Invoke-Control 'Undo'
+        Wait-Until {(Model).state.document_file.revision -ne $documentRevision} 'Undo after reconstruction did not change the document'
+        $undoRevision=(Model).state.document_file.revision
+        Invoke-Control 'Redo'
+        Wait-Until {(Model).state.document_file.revision -ne $undoRevision -and (Signature) -eq $beforeRecovery} 'Redo after reconstruction did not restore the drawing'
+        Wait-Until {$thumbnail=Find-Id "layer-$imported-thumbnail";$thumbnail -and $thumbnail.Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not recover' 15
+    }
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'gpu-recovered.png') -ClientOnly *> (Join-Path $run 'gpu-capture.json')
+}
+
 File-Command 'save_document';Idle
 Wait-Until {$current=Model;$current -and !$current.state.document_file.modified} 'Save to existing location did not clear the captured checkpoint'
 if((Get-FileHash -LiteralPath $first).Hash -eq $hash){throw 'Save did not update the source project'}
@@ -276,6 +320,7 @@ if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reporte
     image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'
     save_cancel_and_unicode_path='passed'
     png_export_cancel_dimensions_and_checkpoint='passed'
+    gpu_recovery=if($RecoverGpu){'two device replacements, identical exported pixels, thumbnails and Undo/Redo passed'}else{'not requested'}
     save_existing_and_save_as='passed'
     corrupt_open_preserves_live_document='passed'
     replacement_cancel_and_save_before_open='passed'

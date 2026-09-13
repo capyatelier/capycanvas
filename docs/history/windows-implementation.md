@@ -2277,3 +2277,72 @@ styles or comparator tolerances. The preceding interaction and build validation
 still applies to the unchanged implementation. Text/edge antialiasing differences
 remain visible under close comparison; additional physical display scales,
 digitizer behavior, device recovery and 120 Hz painting still need acceptance.
+
+### Windows GPU reconstruction and failed-resource cleanup
+
+The Windows host detects both D3D12 removal and the deferred wgpu device-loss
+callback. It parks the render owner, detaches the old swap chain on the XAML
+thread, retires the renderer, and prepares a replacement with bounded retries.
+The existing session retains document history, queued input, active strokes,
+source image assets, camera, brush settings and workspace. GPU-only readbacks
+are canceled, pending filter validation restarts from owned source bytes, and
+native preview caches reset when the renderer generation changes. Document
+candidates prepared against the old device cannot replace the live document.
+
+The uncaptured-error callback records the first error and returns normally.
+With the pinned wgpu version, a panic during failed pipeline creation can leave
+its resource handle allocated, retaining the removed D3D12 device and preventing
+a second reconstruction. Recording the error lets the returned handle drop;
+normal host boundaries still report validation errors. Callback state never
+owns the GPU. Arbitrary ABI panics continue to poison the host.
+
+Validation at this checkpoint:
+
+- 569 ordinary Rust tests pass across engine, host, UI, Windows and workspace;
+  five hardware tests are explicitly excluded from that ordinary run.
+- The new opt-in D3D12 regression passes: a deliberately invalid pipeline reports
+  its error without a panic, releases its registry handle, and permits a new
+  hardware device after actual removal even while callback state is retained.
+- Strict all-target Clippy for engine, UI and Windows passes. Three existing
+  test-style findings were corrected without changing expected float bits.
+- Normal Debug and Release builds pass. Both native document fixtures pass two
+  actual device removals, byte-identical PNG exports, preserved document and
+  workspace state, Undo/Redo, subsequent Save/Save As and clean shutdown. Release
+  also verifies imported-layer thumbnails become ready after each replacement.
+- Debug lifecycle checks pass removal overlapping startup/brush preparation,
+  close, minimize, Cancel and Discard. The strict C++ work-buffer suite passes.
+
+The removal hook is available only in an isolated smoke-test host and removes
+this process's D3D12 device; it does not reset the physical display adapter.
+This milestone does not cover permanent recovery failure: exhausted retries
+still end render services, so retaining Save/Save As and the dirty-close decision
+in that state remains required work. Pending export/open/import overlaps,
+multiple-window removal, physical driver reset, sleep/resume, digitizer behavior
+and 120 Hz painting remain separate acceptance gates. No package or presentation
+benchmark was regenerated for this checkpoint.
+
+### Integrated GPU recovery and two native windows
+
+The reconstruction milestone is integrated with upstream main through ce41feb,
+including Apple compact color controls and the shared GTK/Web/Android floating
+preview and content-size work. The merged engine/host/UI/Windows/workspace suite
+passes 574 ordinary tests. Strict all-target Clippy passes after a small iterator
+cleanup in the incoming hue-guide and HSV raster loops; their calculations and
+accepted output are unchanged. The full 343-test UI suite passes after cleanup.
+Normal merged Debug and Release builds pass.
+
+The merged Release document fixture passes repeated real removal, unchanged PNG
+exports, thumbnail readiness, state/history preservation and subsequent saving.
+The multiwindow fixture also passes removal initiated once from each of two open
+windows. Both the initiating window and idle sibling reconstruct, retain their
+separate document/camera/brush/workspace state, and support Undo/Redo. Subsequent
+independent closes and creating another native window pass with zero process
+exit and no stderr output.
+
+The complete merged Release editor and compact-color interaction fixtures pass,
+including titlebar hits, retained resize, themes, Zen modes, all three picker
+shapes, synthetic mouse/pen/touch, cancellation, keyboard, menus and drawer input.
+These checks preserve the accepted native wheel implementation. Permanent GPU
+failure and CPU saving, concurrent document-operation recovery, physical input,
+suspend/driver-reset behavior, installed distribution and 120 Hz acceptance
+remain open. Local profiles, screenshots and binaries are excluded from commits.

@@ -31,6 +31,8 @@ mod effects;
 mod filter_loading;
 #[path = "project_files.rs"]
 mod project_files;
+#[path = "renderer_lifecycle.rs"]
+mod renderer_lifecycle;
 pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,

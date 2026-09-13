@@ -302,3 +302,25 @@ separately, with diagnostic tracing off and no competing builds or GPU tests.
 Probe the actual display configuration first. Elevate only the capture script
 if Windows denies ETW access. UI Automation and replay do not establish physical
 pen/touch behavior, painting cadence or input latency.
+
+## GPU reconstruction checks
+
+Run the document and lifecycle fixtures with actual D3D12 device removal enabled:
+
+```powershell
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
+cargo test --locked -p layer-windows --lib device::tests::validation_error_releases_pipeline_and_allows_device_replacement -- --ignored --exact --nocapture
+```
+
+The native fixtures create isolated profiles. The document check removes the
+process-owned device twice, then compares exported PNG bytes and verifies
+history, state, thumbnails and subsequent saving. The lifecycle check overlaps
+removal with startup, minimized windows and close decisions. The Rust regression
+checks failed-pipeline cleanup and replacement of a removed hardware device.
+The multiwindow fixture removes the shared device from each of two open windows,
+checking reconstruction in the idle sibling and independent document Undo/Redo.
+Run these separately from performance measurements. They do not establish
+physical driver-reset or suspend behavior. Saving after all reconstruction
+retries fail still needs implementation and acceptance.

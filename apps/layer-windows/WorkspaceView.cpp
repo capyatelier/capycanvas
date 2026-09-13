@@ -248,6 +248,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         ++fullUpdates;movingGroup.reset();
         data->updating=true;
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
+        auto previousGpu=num(data->model,L"windows_gpu_generation");
+        if(previousGpu>0&&num(snapshot,L"windows_gpu_generation")!=previousGpu){
+            data->thumbnails=CreateLayerThumbnailCache(data->query);
+            data->previews=CreateFilterPreviewCache(data->query);
+        }
         data->model=snapshot;data->state=object(snapshot,L"state");
         // Adoption and layout restoration discard transient host measurements.
         // Reconcile the new model even when retained controls have identical sizes.

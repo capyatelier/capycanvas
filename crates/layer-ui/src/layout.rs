@@ -7065,8 +7065,10 @@ mod tests {
     #[test]
     fn workspace_bottom_clearance_keeps_controls_inside_the_full_canvas() {
         for viewport in [[375., 486.], [1200., 900.]] {
-            let mut layout = DockLayout::default();
-            layout.bottom_inset = TILE_SIZE;
+            let mut layout = DockLayout {
+                bottom_inset: TILE_SIZE,
+                ..Default::default()
+            };
             let bottom = viewport[1] - TILE_SIZE - WORKSPACE_SPACING;
             let resolved = layout.workspace(
                 viewport[0],
