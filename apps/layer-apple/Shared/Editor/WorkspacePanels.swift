@@ -49,6 +49,7 @@ struct WorkspacePanels: View {
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
             WorkspaceTabSlideOverlay(store: store, slide: workspace.tabSlide).zIndex(250)
+            WorkspaceContactMenu(interaction: workspace.input, store: store).zIndex(400)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .compositingGroup()
             .modifier(WorkspaceRootDrag(workspace: workspace))
@@ -57,7 +58,7 @@ struct WorkspacePanels: View {
                 store.native?.navigatorPlacements(JSON(ordered))
             }
             .onDisappear { store.native?.navigatorPlacements(JSON([])) }
-            .onPreferenceChange(WorkspaceSources.self) { workspace.sources = $0 }
+            .onPreferenceChange(WorkspaceSources.self) { workspace.sourceInstances = $0 }
             .onPreferenceChange(PanelSizeFacts.self) { store.panelMeasurements.receive($0) }
             .onChange(of: store.snapshot["panel_measurements"].stableKey) { _, _ in store.panelMeasurements.reconcile() }
             .onPreferenceChange(DrawerTileMeasurements.self) { store.contentDrawers.measureTiles($0) }
@@ -115,7 +116,6 @@ private struct WorkspacePanelGroup: View {
     }
     private var grip: some View {
         WorkspaceGroupGrip(store: store, group: group["id"])
-            .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw])))
     }
 }
 
@@ -131,8 +131,9 @@ struct WorkspaceToolbar: View {
                 let tile = panel["tiles"][index]
                 WorkspaceTile(store: store, panel: panel, tile: tile, vertical: vertical)
                     .modifier(DrawerTileMeasurement(panel: panel["id"].string, tile: tile["id"].uint))
-                    .modifier(WorkspaceContext(store: store, target: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
-                    .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
+                    .modifier(WorkspaceDrag(workspace: store.workspace,
+                        item: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]), surface: .tile,
+                        context: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
                     .placed(geometry["tiles"][index])
             }
             if !geometry["grip"].isNull {
@@ -142,9 +143,9 @@ struct WorkspaceToolbar: View {
                 .accessibilityIdentifier("toolbar-options-" + panel["id"].string)
                 .accessibilityValue(panel["title"].string)
                 .accessibilityHidden(false)
-                .modifier(WorkspaceContext(store: store, target: JSON(["kind": "ribbon", "panel": panel["id"].raw]), openOnTap: true,
+                .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
+                    context: JSON(["kind": "ribbon", "panel": panel["id"].raw]), openOnTap: true,
                     doubleClick: { store.doubleClickHandle(JSON(["kind": "panel", "panel": panel["id"].raw])) }))
-                .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw])))
                 .placed(geometry["grip"])
             }
         }
@@ -161,12 +162,13 @@ private struct WorkspaceTile: View {
     var body: some View {
         Group {
             if kind == "divider" {
-                Rectangle().fill(.secondary.opacity(0.4))
+                Rectangle().fill(palette["text"].opacity(0.3))
                     .frame(width: vertical ? nil : 1, height: vertical ? 1 : nil)
                     .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
                 ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.state["brush"]["color"]) {
+                    guard !store.workspace.input.contact.consumeClick() else { return }
                     store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
                 }
             }

@@ -129,6 +129,154 @@ fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
 }
 
 #[test]
+fn startup_reuses_existing_workspaces_before_creating_an_independent_copy() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let second = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        let incoming = second.initialize(2_000).await.unwrap();
+        assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[0].0);
+        second.activate(incoming);
+        let third = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        let incoming = third.initialize(3_000).await.unwrap();
+        assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[2].0);
+        third.activate(incoming);
+        assert_eq!(third.items().len(), 3);
+
+        second.close().await.unwrap();
+        let reopened = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        let incoming = reopened.initialize(4_000).await.unwrap();
+        assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[0].0);
+        reopened.activate(incoming);
+        assert_eq!(reopened.items().len(), 3);
+
+        // Existing user workspaces, including legacy names, are preserved and
+        // reused when all built-ins are busy.
+        let mut source = m.current().unwrap();
+        let working = source.working.as_mut().unwrap();
+        working
+            .tools
+            .set_override(working.preset, "size", 73.)
+            .unwrap();
+        let custom = m
+            .create_from_snapshot(source, "My Workspace", true, 5_000)
+            .await
+            .unwrap();
+        let custom_id = custom.entity.id.clone();
+        let custom_capture = custom.entity.capture().unwrap();
+        m.release(&custom).await;
+        let fourth = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        fourth.initialize_catalog(6_000).await.unwrap();
+        let incoming = fourth
+            .prepare_startup(DEFAULT_WORKSPACES[1].0, 6_000)
+            .await
+            .unwrap();
+        assert_eq!(incoming.entity.id, custom_id);
+        assert_eq!(incoming.entity.capture().unwrap(), custom_capture);
+        fourth.activate(incoming);
+        assert_eq!(fourth.items().len(), 4);
+
+        // Only an additional window with no free workspace needs a new copy.
+        let fifth = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        let incoming = fifth.initialize(7_000).await.unwrap();
+        let copy_id = incoming.entity.id.clone();
+        assert_ne!(copy_id, custom_id);
+        assert_eq!(incoming.entity.metadata.name, "My Workspace Copy");
+        assert_eq!(incoming.entity.capture().unwrap(), custom_capture);
+        fifth.activate(incoming);
+        assert_eq!(fifth.items().len(), 5);
+        fifth.close().await.unwrap();
+        let reopened_copy = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        let incoming = reopened_copy.initialize(8_000).await.unwrap();
+        assert_eq!(incoming.entity.id, copy_id);
+        reopened_copy.activate(incoming);
+        assert_eq!(reopened_copy.items().len(), 5);
+        for manager in [&reopened, &third, &fourth, &reopened_copy] {
+            manager.close().await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn startup_write_failure_does_not_switch_elsewhere_or_create_a_workspace() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        m.store.fail.set(true);
+        let error = m
+            .prepare_startup(DEFAULT_WORKSPACES[0].0, 2_000)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::FailedWrite);
+        m.refresh().await.unwrap();
+        assert_eq!(m.items().len(), 3);
+        assert_eq!(m.active_id().as_deref(), Some(DEFAULT_WORKSPACES[1].0));
+        assert!(m.has_failed_operation());
+    });
+}
+
+#[test]
+fn active_deletion_without_a_replacement_never_creates_a_workspace() {
+    pollster::block_on(async {
+        let defaults = [
+            DEFAULT_WORKSPACES[1].0,
+            DEFAULT_WORKSPACES[0].0,
+            DEFAULT_WORKSPACES[2].0,
+        ];
+        for occupied in 0..=defaults.len() {
+            let f = Fixture::new();
+            let m = &f.manager;
+            let custom = m
+                .create_from_snapshot(m.current().unwrap(), "Delete Me", true, 2_000)
+                .await
+                .unwrap();
+            let id = custom.entity.id.clone();
+            let outgoing = m.activate(custom).unwrap();
+            m.release(&outgoing).await;
+            let other = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+            for id in &defaults[..occupied] {
+                other.claim(id).await.unwrap();
+            }
+            let result = m.delete_item(&id, None, 3_000).await;
+            if occupied == defaults.len() {
+                assert!(result.is_err());
+                assert!(
+                    m.load(&id)
+                        .await
+                        .unwrap()
+                        .entity
+                        .metadata
+                        .deleted_at_ms
+                        .is_none()
+                );
+                assert_eq!(m.active_id().as_deref(), Some(id.as_str()));
+            } else {
+                let incoming = result.unwrap().unwrap();
+                assert_eq!(incoming.entity.id, defaults[occupied]);
+                assert!(
+                    m.load(&id)
+                        .await
+                        .unwrap()
+                        .entity
+                        .metadata
+                        .deleted_at_ms
+                        .is_some()
+                );
+                let outgoing = m.activate(incoming).unwrap();
+                m.release(&outgoing).await;
+            }
+            m.refresh().await.unwrap();
+            assert_eq!(m.items().len(), 4, "Deletion never adds a replacement row");
+            for id in &defaults[..occupied] {
+                let record = other.load(id).await.unwrap();
+                assert_eq!(record.claim.as_ref().unwrap().owner, other.owner);
+                other.release(&record).await;
+            }
+        }
+    });
+}
+
+#[test]
 fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restart() {
     pollster::block_on(async {
         let f = Fixture::new();

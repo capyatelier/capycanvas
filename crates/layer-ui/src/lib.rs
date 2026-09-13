@@ -846,6 +846,10 @@ pub enum UiAction {
     MeasureTitlebar {
         insets: [f32; 3],
     },
+    /// Runtime clearance for native bottom-edge window controls, in DIPs.
+    MeasureWorkspaceBottom {
+        inset: f32,
+    },
     MeasurePanels {
         measurements: Vec<PanelMeasurement>,
     },

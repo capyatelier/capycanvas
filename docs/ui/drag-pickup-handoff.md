@@ -5,12 +5,15 @@ hold first and scroll before holding. Grips and title/tab bars: immediate for al
 Hold menus: touch/pen only; mouse uses secondary click. Keep same-contact
 menu-to-drag, cancellation, and undo/redo. Mouse tile holds only arm pickup.
 
-- **Apple:** add tile hold gating and whole-row pickup; currently only row grips drag.
+- **Apple:** tile/icon hold gating is implemented with native validation in progress;
+  finish disabled/divider/drawer and physical input coverage, and add whole-layer-row
+  pickup. UIKit toolbar grip/Undo checks pass with shared native-window clearance.
 - **Windows:** gate tiles on hold; preserve contact when menus open; verify and
   enforce row/grip device rules, including row whitespace.
 
-All platforms: collapsed-sidebar expand buttons use two chevrons toward the
-canvas (`>>` on the left, `<<` on the right). GTK/Web use the shared
-`chevron-double-left/right` SVGs; Android/Apple/Windows need to adopt them.
+All platforms: collapsed-sidebar expand buttons use compact inward-pointing
+guillemets (`»` on the left, `«` on the right), matching the current GTK/Web
+controls. Apple and Android use the same directional glyphs; Windows still needs
+alignment. Keep the shared editor text size and bold weight.
 
 Details: [convention](drag-and-reorder.md), [source inventory](drag-inventory.md).

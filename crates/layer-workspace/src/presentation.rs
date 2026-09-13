@@ -357,8 +357,11 @@ pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
     };
     Ok(WorkspacePrompt {
         title: "Restore Starting Layout".into(),
-        message: format!("Restore “{}” to its starting layout?", entity.metadata.name),
-        confirm: "Restore Starting Layout",
+        message: format!(
+            "The arrangement shown behind this dialog is a preview. You can undo restoring it with {} → Undo Workspace.",
+            layer_ui::WORKSPACE_MENU_LABEL
+        ),
+        confirm: "Restore",
     })
 }
 pub fn update_prompt(target: &Entity, source: &Entity) -> WorkspacePrompt {

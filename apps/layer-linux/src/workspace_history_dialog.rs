@@ -77,7 +77,7 @@ impl Preview {
         }
     }
     /// Restore presentation while retaining the operation lock for a commit.
-    fn finish(mut self) -> actions::OperationGuard {
+    pub(super) fn finish(mut self) -> actions::OperationGuard {
         self.restore();
         self.operation.take().unwrap()
     }

@@ -64,6 +64,7 @@ impl DockLayout {
             return result;
         }
         let normal = self.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
+        let viewport = [viewport[0], self.workspace_height(viewport[1])];
         // Only outward-facing lone toolbars in edge bands. Multiple toolbar
         // bands on an edge share its space. A toolbar nested behind a content
         // column or inside a tab group isn't a directly docked toolbar.

@@ -20,6 +20,9 @@ pub struct CollapsedGroup {
     pub group: u32,
     pub active: Panel,
     pub bounds: Bounds,
+    /// Visible one-pixel line, in workspace coordinates, including its inset.
+    #[serde(default)]
+    pub divider: Bounds,
     pub icons: Vec<ColumnIcon>,
 }
 
@@ -37,15 +40,28 @@ pub struct CollapsedColumnPlacement {
     pub group_panel: Option<ColumnGroupPanel>,
 }
 impl CollapsedColumnPlacement {
-    fn divider_y(&self, group: &CollapsedGroup) -> f32 {
+    fn divider_bounds(bounds: Bounds, leading: bool) -> Bounds {
         // The leading line is flush below Expand. Later dividers retain the
         // toolbar's centered 8px slot and 2px tile gaps.
-        group.bounds.y
-            - if self.groups.first().is_some_and(|g| g.group == group.group) {
+        let center = bounds.y
+            - if leading {
                 5.5
             } else {
                 TOOLBAR_DIVIDER_SIZE * 0.5 + 2.
-            }
+            };
+        Bounds {
+            x: bounds.x + 4.,
+            y: center - 0.5,
+            width: (bounds.width - 8.).max(0.),
+            height: 1.,
+        }
+    }
+    fn divider_y(&self, group: &CollapsedGroup) -> f32 {
+        Self::divider_bounds(
+            group.bounds,
+            self.groups.first().is_some_and(|g| g.group == group.group),
+        )
+        .y + 0.5
     }
     fn divider_drop_hint(&self, group: &CollapsedGroup) -> DropHint {
         let center = self.divider_y(group);
@@ -94,6 +110,7 @@ impl CollapsedColumnPlacement {
         let offset = offset.clamp(0., (bottom - self.content.y - self.content.height).max(0.));
         for g in &mut self.groups {
             g.bounds.y -= offset;
+            g.divider.y -= offset;
             for i in &mut g.icons {
                 i.bounds.y -= offset;
             }
@@ -953,6 +970,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
                     group: *id,
                     active: *active,
                     bounds,
+                    divider: CollapsedColumnPlacement::divider_bounds(bounds, groups.is_empty()),
                     icons,
                 });
                 // Match a toolbar divider: 8px separator and a 2px tile gap on each side.
@@ -1640,7 +1658,19 @@ mod tests {
                     height: 110.,
                 },
             );
+            assert_eq!(c.groups[0].divider.y, c.expand.y + c.expand.height);
             c.scroll(offset);
+            for group in &c.groups {
+                assert_eq!(group.divider.height, 1.);
+                assert_eq!(group.divider.y + 0.5, c.divider_y(group));
+                assert_eq!(group.divider.x, c.content.x + 4.);
+                assert_eq!(group.divider.width, c.content.width - 8.);
+            }
+            let encoded = serde_json::to_value(&c).unwrap();
+            assert_eq!(
+                encoded["groups"][0]["divider"],
+                serde_json::to_value(c.groups[0].divider).unwrap()
+            );
             let x = c.bounds.x + 18.;
             for control in [c.expand, c.grip] {
                 assert!(c.drop_hint([x, control.y + control.height / 2.]).is_none());

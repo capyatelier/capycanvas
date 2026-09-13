@@ -105,6 +105,35 @@ impl Fixture {
     }
 }
 #[test]
+fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
+    let mut f = Fixture::new();
+    let original = f.controller.view.id.clone().unwrap();
+    let owner = f.controller.manager.owner.clone();
+    f.input(serde_json::json!({"type":"suspend"}));
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    let claimed = pollster::block_on(other.prepare_switch(&original, 1_000)).unwrap();
+    other.activate(claimed);
+    f.controller = WorkspaceController::new_owned(
+        Store(f.backend.clone()),
+        Platform::Web,
+        "legacy:test".into(),
+        None,
+        owner,
+        1_000,
+    );
+    f.pump();
+    assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
+    assert_eq!(
+        f.controller.view.id.as_deref(),
+        Some(DEFAULT_WORKSPACES[1].0)
+    );
+    assert_eq!(f.controller.manager.items().len(), 4);
+    assert_eq!(other.active_id().as_deref(), Some(original.as_str()));
+    let saved = pollster::block_on(other.load(&original)).unwrap();
+    assert_eq!(saved.claim.unwrap().owner, other.owner);
+}
+
+#[test]
 fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
     let defaults = [
         DEFAULT_WORKSPACES[1].0,
@@ -287,6 +316,62 @@ fn history_rows_repair_legacy_labels_without_rewriting_saved_versions() {
     assert_eq!(f.controller.view.rows[0].id, current);
     f.input(serde_json::json!({"type":"cancel"}));
     assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+}
+
+#[test]
+fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
+    let mut f = Fixture::new();
+    let baseline = f
+        .controller
+        .manager
+        .current()
+        .unwrap()
+        .starting_layout()
+        .unwrap()
+        .clone();
+    f.action(serde_json::json!({"type":"move_panel","panel":"layers","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
+    f.action(serde_json::json!({"type":"set_brush_size","value":73}));
+    f.save();
+    let before = f.host.session.capture_workspace().unwrap();
+    assert_ne!(before.history.layout(), &baseline);
+    for confirm in [false, true] {
+        let saved = f.controller.manager.current().unwrap();
+        f.input(serde_json::json!({"type":"form","kind":"reset"}));
+        assert_eq!(f.host.session.state().workspace.layout, baseline);
+        assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+        f.save();
+        assert_eq!(
+            f.controller.manager.current().unwrap(),
+            saved,
+            "preview is never persisted"
+        );
+        let prompt = f.controller.view.form.as_ref().unwrap();
+        assert_eq!(prompt.message, reset_prompt(&saved).unwrap().message);
+        assert!(prompt.message.contains("Window → Undo Workspace"));
+        f.input(if confirm {
+            serde_json::json!({"type":"submit","name":""})
+        } else {
+            serde_json::json!({"type":"cancel"})
+        });
+        if !confirm {
+            assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+            assert_eq!(
+                &f.host.session.state().workspace.layout,
+                before.history.layout()
+            );
+        }
+    }
+    let restored = f.host.session.capture_workspace().unwrap();
+    assert_eq!(restored.history.layout(), &baseline);
+    assert_eq!(restored.working, before.working);
+    assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
+    f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
+    assert_eq!(
+        &f.host.session.state().workspace.layout,
+        before.history.layout()
+    );
+    f.action(serde_json::json!({"type":"invoke","command":"redo_workspace"}));
+    assert_eq!(f.host.session.state().workspace.layout, baseline);
 }
 
 #[test]
@@ -593,6 +678,27 @@ fn interrupted_capture_migration_retries_the_same_operation_once() {
         revision.timestamp_ms = 1000;
     }
     assert_eq!(stored.entity.capture().unwrap(), expected);
+    drop(deliveries);
+    pollster::block_on(async {
+        manager.delete_item(&id, None, 1_003).await.unwrap();
+        restarted
+            .migrate_legacy_capture("interrupted", expected, 1_004)
+            .await
+            .unwrap();
+        restarted.refresh().await.unwrap();
+        assert_eq!(restarted.items().len(), 1);
+        assert!(
+            restarted
+                .load(&id)
+                .await
+                .unwrap()
+                .entity
+                .metadata
+                .deleted_at_ms
+                .is_some(),
+            "Deleted legacy workspaces must not be imported again"
+        );
+    });
 }
 
 #[test]

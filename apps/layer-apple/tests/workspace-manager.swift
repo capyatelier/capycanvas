@@ -102,7 +102,7 @@ import SwiftUI
             let restored = try await library.read(["type": "load", "id": inking])
             precondition(restored["entity"]["metadata"]["name"].string == "Inking")
             manager.back()
-            try await form(manager, ["type": "reset", "value": original])
+            try await startingLayoutPreview(editor)
             precondition(editor.state["brush"]["diameter"].number == 67)
             try await liveHistory(editor, platform: platform)
             let beforeReset = try await captureSession(editor)
@@ -283,6 +283,48 @@ import SwiftUI
         precondition(undone["capture"]["history"]["current"].string == current)
         manager.back()
     }
+    @MainActor static func startingLayoutPreview(_ editor: EditorStore) async throws {
+        let library = editor.workspaceLibrary!, manager = editor.workspaceManager
+        let id = library.status["active_id"].string
+        let before = try await captureSession(editor)
+        let original = editor.state["workspace"]["layout"].stableKey
+        let layers = editor.state["layers"].stableKey
+        let item = try await library.read(["type": "load", "id": id])
+        let baseline = item["entity"]["content"]["baseline"]
+        precondition(!baseline.isNull && baseline.stableKey != original)
+        for response in ["cancel", "dismiss", "restore"] {
+            manager.presented = false
+            let task = Task { @MainActor in try await manager.run(JSON(["type": "reset", "value": id])) }
+            try await wait("starting layout confirmation") { manager.prompt != nil }
+            precondition(library.previewingLayout && library.busy)
+            precondition(manager.prompt?["confirm"].string == "Restore")
+            precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey,
+                "The starting layout must be visible before its confirmation")
+            let preview = try await captureSession(editor)
+            precondition(SnapshotProjection.equal(preview["capture"].raw, before["capture"].raw),
+                "Starting-layout preview must not enter persistence or history")
+            precondition(editor.state["layers"].stableKey == layers)
+            if response == "dismiss" { manager.presented = false; manager.dismissed() }
+            else { manager.answer(confirm: response == "restore") }
+            try await task.value
+            precondition(!library.previewingLayout && !library.busy && !manager.presented)
+            if response != "restore" {
+                precondition(editor.state["workspace"]["layout"].stableKey == original)
+                let canceled = try await captureSession(editor)
+                precondition(SnapshotProjection.equal(canceled["capture"].raw, before["capture"].raw))
+            }
+        }
+        let restored = try await captureSession(editor)
+        precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey)
+        precondition(restored["capture"]["history"]["undo"].array.count == before["capture"]["history"]["undo"].array.count + 1)
+        precondition(SnapshotProjection.equal(restored["capture"]["working"].raw, before["capture"]["working"].raw))
+        try await edit(editor, ["type": "invoke", "command": "undo_workspace"])
+        precondition(editor.state["workspace"]["layout"].stableKey == original)
+        try await edit(editor, ["type": "invoke", "command": "redo_workspace"])
+        precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey)
+        precondition(editor.state["layers"].stableKey == layers)
+    }
+
     @MainActor static func captureSession(_ store: EditorStore) async throws -> JSON {
         try await withCheckedThrowingContinuation { continuation in
             store.native!.workspaceSession(JSON(["type": "capture"])) { value, error in

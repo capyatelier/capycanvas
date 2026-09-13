@@ -47,7 +47,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
   const directory=process.env.LAYER_TEST_ARTIFACTS || '/tmp/capy-workspace-evidence/web'; await mkdir(directory,{recursive:true});
   const shot=async name=>{const s=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(s.data,'base64'));};
   await evaluate(`window.workspaceTestEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{workspaceTestEvents.push({type,target:e.target.outerHTML.slice(0,150),x:e.clientX,y:e.clientY,prevented:e.defaultPrevented,active:document.activeElement?.outerHTML.slice(0,80)});if(workspaceTestEvents.length>40)workspaceTestEvents.shift();},{capture:true});`);
-  await idle(); const original = (await view()).id, originalCapture = await capture(); let created;
+  await idle(); const original = (await view()).id, originalCapture = await capture(), originalLayout = await evaluate('layerApp.state().workspace.layout'); let created;
   try {
     console.log('Workspace UI: opening manager'); await menu('Manage Workspaces…');
     assert.equal(await evaluate('document.querySelector(".workspace-manager input[type=search]")'),null);
@@ -111,7 +111,24 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await menu('Reset All Brushes…'); await shot('reset-brushes'); await click('.workspace-form .suggested-action'); await idle();
     const expectedReset=structuredClone(beforeReset); expectedReset.working.tools.overrides={};
     assert.deepEqual(normalized(await capture()),normalized(expectedReset),'Brush reset preserves selection, colors and layout history');
-    await menu('Restore Starting Layout…'); await click('.workspace-form .suggested-action'); await idle();
+    const beforeLayoutReset=await capture(), beforeLayoutResetView=await evaluate('layerApp.state().workspace.layout');
+    assert.notDeepEqual(beforeLayoutReset.history.revisions[beforeLayoutReset.history.current].layout,originalCapture.history.revisions[originalCapture.history.current].layout);
+    for(const confirm of [false,true]) {
+      await menu('Restore Starting Layout…');
+      assert.match(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),/arrangement shown behind this dialog.*Window → Undo Workspace/);
+      assert.deepEqual(await evaluate('layerApp.state().workspace.layout'),originalLayout,'Opening Restore previews the starting layout');
+      assert.deepEqual(normalized(await capture()),normalized(beforeLayoutReset),'Preview leaves durable history and tool settings untouched');
+      await shot(confirm?'restore-starting-layout':'cancel-starting-layout');
+      await click(confirm?'.workspace-form .suggested-action':'.workspace-form footer button');await idle();
+      if(!confirm) {
+        assert.deepEqual(normalized(await capture()),normalized(beforeLayoutReset));
+        assert.deepEqual(await evaluate('layerApp.state().workspace.layout'),beforeLayoutResetView,'Cancel restores the layout on screen');
+      }
+    }
+    assert.equal((await capture()).history.undo.length,beforeLayoutReset.history.undo.length+1);
+    await send({type:'invoke',command:'undo_workspace'});
+    assert.deepEqual(await evaluate('layerApp.state().workspace.layout'),beforeLayoutResetView,'One Undo Workspace reverses restoration');
+    await send({type:'invoke',command:'redo_workspace'});
     assert.deepEqual((await capture()).working,expectedReset.working);
     await reload(); await wait('window.layerApp?.startupTimes.complete != null'); await idle();
     assert.equal((await view()).id,created); assert.deepEqual((await capture()).working,expectedReset.working);
@@ -142,7 +159,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await click('.workspace-manager footer button');
     if(original!==illustrator){await click(`.workspace-switcher button[data-workspace-id="${original}"]`);await idle();}
     console.log('PASS: real Web menu/dialog input, search-free manager/history, New, Rename, preview/cancel, explicit switch, default pill, tools, history, undo, restart, starting layout, brush reset and active deletion/cancel/reload');
-  } catch (error) { console.error("Workspace acceptance failed", error, await view()); await writeFile(`${directory}/input-events.json`,JSON.stringify(await evaluate('workspaceTestEvents'),null,2)); await shot("failure"); throw error; } finally {
+  } catch (error) { console.error("Workspace acceptance failed", error, await view()); await writeFile(`${directory}/input-events.json`,JSON.stringify(await evaluate('window.workspaceTestEvents || []'),null,2)); await shot("failure"); throw error; } finally {
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');
     if (created) {

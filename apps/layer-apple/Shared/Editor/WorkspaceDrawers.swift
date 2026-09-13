@@ -41,7 +41,8 @@ private struct WorkspaceCollapsedColumn: View {
             Button {
                 store.customize(["type": "set_column_collapsed", "group": column["id"].raw, "collapsed": false])
             } label: {
-                Text("»").fontWeight(.bold).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                Text(base.rect.midX < store.snapshot["layout"]["work_area"].rect.midX ? "»" : "«")
+                    .fontWeight(.bold).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle()).accessibilityLabel("Expand column").help("Expand column")
                 .placed(column["expand"].relative(to: base)).accessibilityIdentifier("expand-column-\(column["id"].uint)")
             ScrollView(.vertical) {
@@ -49,18 +50,28 @@ private struct WorkspaceCollapsedColumn: View {
                 ZStack(alignment: .topLeading) {
                     ForEach(column["groups"].array.indices, id: \.self) { index in
                         let group = column["groups"][index]
+                        Rectangle().fill(palette["text"].opacity(0.3))
+                            .placed(JSON(group["divider"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
+                            .allowsHitTesting(false).accessibilityHidden(true)
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
                             let panel = store.panel(icon["panel"].string)
-                            IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: group["active"].string == panel["id"].string) {
+                            let selected = store.state["customization"]["column_drawers"].array.contains {
+                                $0["anchor"]["column"].uint == column["id"].uint && $0["anchor"]["origin"].string == panel["id"].string
+                            }
+                            IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected) {
+                                guard !store.workspace.input.contact.consumeClick() else { return }
                                 store.customize(["type": "toggle_column_drawer", "group": group["group"].raw, "panel": panel["id"].raw])
-                            }.modifier(WorkspaceContext(store: store, target: JSON(["kind": "panel", "panel": panel["id"].raw])))
+                            }.modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
+                                surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw])))
                                 .placed(JSON(icon["bounds"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
                                 .accessibilityIdentifier("column-icon-" + panel["id"].string)
+                                .accessibilityAddTraits(selected ? .isSelected : [])
                         }
                     }
                 }.frame(width: clip.rect.width, height: max(clip.rect.height, bottom - clip.rect.minY + offset), alignment: .topLeading)
-            }.scrollIndicators(.hidden).placed(clip.relative(to: base))
+            }.environment(\.workspaceClip, clip.rect)
+                .scrollIndicators(.hidden).placed(clip.relative(to: base))
                 .onScrollGeometryChange(for: CGFloat.self) { max(0, $0.contentOffset.y + $0.contentInsets.top) } action: { _, next in
                     if abs(next - offset) > 0.5 { store.dispatch(["type": "measure_column_scroll", "column": column["id"].raw, "offset": next]) }
                 }

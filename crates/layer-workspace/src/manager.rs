@@ -363,24 +363,49 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             })
             .or(prior_workspace)
             .unwrap_or_else(|| DEFAULT_WORKSPACES[1].0.into());
-        match self.prepare_switch(&id, now).await {
-            Ok(entity) => Ok(entity),
-            Err(error) if error.kind == ErrorKind::OwnedElsewhere => {
-                let source = self.load(&id).await?.entity.capture()?;
-                let baseline = source.history.layout().clone();
-                let capture = WorkspaceCapture {
-                    history: layer_ui::LayoutHistory::new(&baseline),
-                    working: source.working,
-                };
-                return self
-                    .create_and_bind(
-                        Entity::workspace("My Workspace", capture, baseline, None, now),
-                        NamePolicy::Unique,
-                    )
-                    .await;
+        self.prepare_startup(&id, now).await
+    }
+
+    /// After catalog initialization, resume this window's workspace or reuse an
+    /// available one. Explicit user switches must still use `prepare_switch`.
+    pub async fn prepare_startup(&self, preferred: &str, now: u64) -> Result<StoredEntity> {
+        self.refresh().await?;
+        let mut candidates = self.items();
+        candidates.retain(|item| {
+            item.metadata.kind == ItemKind::Workspace && item.metadata.deleted_at_ms.is_none()
+        });
+        candidates.sort_by_key(|item| {
+            let priority = if item.id == preferred {
+                0
+            } else {
+                [1, 0, 2]
+                    .iter()
+                    .position(|&index| item.id == DEFAULT_WORKSPACES[index].0)
+                    .map_or(4, |index| index + 1)
+            };
+            (
+                priority,
+                std::cmp::Reverse(item.metadata.last_used_ms),
+                item.id.clone(),
+            )
+        });
+        for candidate in &candidates {
+            match self.prepare_switch(&candidate.id, now).await {
+                Ok(incoming) => return Ok(incoming),
+                // Claims, rather than the catalog's lease snapshot, decide
+                // availability when several windows open at the same time.
+                Err(error) if error.kind == ErrorKind::OwnedElsewhere => continue,
+                Err(error) => return Err(error),
             }
-            Err(error) => Err(error),
         }
+        // Every existing workspace is in use. Another window needs its own
+        // editable copy so its autosaves cannot overwrite another window's work.
+        let source = candidates
+            .first()
+            .ok_or_else(|| StoreError::invalid("No workspaces are available."))?;
+        let source = self.load(&source.id).await?.entity;
+        let name = format!("{} Copy", source.metadata.name);
+        self.create_from_snapshot(source, &name, true, now).await
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {

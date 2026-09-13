@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct NativeReorderInput: UIViewRepresentable {
-    let model: WorkspaceRowInteraction
+    let model: any NativeReorderModel
     func makeUIView(context: Context) -> ReorderInputView { ReorderInputView() }
     func updateUIView(_ view: ReorderInputView, context: Context) { view.model = model; view.validate() }
     static func dismantleUIView(_ view: ReorderInputView, coordinator: ()) {
@@ -13,11 +13,13 @@ struct NativeReorderInput: UIViewRepresentable {
 /// Recognizers stay on the containing window while SwiftUI rows scroll/update.
 /// The transparent marker supplies the list's local coordinate system only.
 final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
-    weak var model: WorkspaceRowInteraction?
+    weak var model: (any NativeReorderModel)?
     private weak var attached: UIWindow?
     private weak var touch: UITouch?
     private var touchStart: TimeInterval = -1
     private var cancelling = false
+    private weak var contactScroll: UIScrollView?
+    private var lastPoint: CGPoint?
     private var pan: UIPanGestureRecognizer!
     private var press: UILongPressGestureRecognizer!
     private var secondary: UITapGestureRecognizer!
@@ -67,6 +69,20 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         while let view = node { if let scroll = view as? UIScrollView { return scroll }; node = view.superview }
         return nil
     }
+    private func scrollAt(_ point: CGPoint) -> UIScrollView? {
+        var node = window?.hitTest(convert(point, to: window), with: nil)
+        while let view = node {
+            if let scroll = view as? UIScrollView { return scroll }
+            node = view.superview
+        }
+        return nil
+    }
+    @discardableResult private func move(_ point: CGPoint, force: Bool = false) -> Bool {
+        guard let model else { return false }
+        if !force && model.contact.dragging && point == lastPoint { return true }
+        lastPoint = point
+        return model.contact.move(to: point)
+    }
     private func updateViewport() {
         model?.viewport = scroll.map { convert($0.bounds, from: $0) } ?? bounds
     }
@@ -75,7 +91,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         if gestureRecognizer === secondary {
             updateViewport()
             let point = incoming.location(in: self)
-            return model.enabled && model.viewport.contains(point) && model.frames.values.contains(where: { $0.row.contains(point) })
+            return model.acceptsContext(at: point)
         }
         if touch !== incoming || touchStart != incoming.timestamp {
             guard touch == nil || touch?.phase == .ended || touch?.phase == .cancelled || model.contact.target == nil else { cancel(); return false }
@@ -84,6 +100,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
             guard let target = model.source(at: point) else { return false }
             let device: ReorderDevice = incoming.type == .pencil ? .pen : incoming.type == .indirectPointer ? .mouse : .touch
             model.contact.prepare(target, device: device, origin: point); touch = incoming; touchStart = incoming.timestamp
+            contactScroll = scroll ?? scrollAt(point); lastPoint = nil
         }
         return gestureRecognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
     }
@@ -109,12 +126,12 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         // A grip or mouse row gets the first chance at movement. Touch/pen row
         // bodies still fail early pans so the list can scroll before a hold.
-        recognizer === pan && other === scroll?.panGestureRecognizer
+        recognizer === pan && other === contactScroll?.panGestureRecognizer
             && model?.contact.target != nil && (model?.contact.requiresHold == false || model?.contact.held == true)
     }
     @objc private func pressed(_ recognizer: UILongPressGestureRecognizer) {
         switch recognizer.state {
-        case .began: model?.contact.recognizeHold()
+        case .began: model?.recognizeHold()
         case .ended: finish()
         case .cancelled: cancel()
         default: break
@@ -123,7 +140,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
-            if model?.contact.move(to: recognizer.location(in: self)) == true && link == nil {
+            if move(recognizer.location(in: self)) && link == nil {
                 let link = CADisplayLink(target: self, selector: #selector(track)); link.add(to: .main, forMode: .common); self.link = link
             }
         case .ended: finish()
@@ -139,15 +156,20 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         guard let model, model.contact.dragging else { link?.invalidate(); link = nil; return }
         updateViewport()
         let point = pan.location(in: self)
-        if let scroll, model.viewport.contains(point) {
-            let delta: CGFloat = point.y < model.viewport.minY + 28 ? -8 : point.y > model.viewport.maxY - 28 ? 8 : 0
+        var scrolled = false
+        if let scroll = scroll ?? scrollAt(point) {
+            let viewport = convert(scroll.bounds, from: scroll)
+            guard viewport.contains(point) else { _ = move(point); return }
+            let delta: CGFloat = point.y < viewport.minY + 28 ? -8 : point.y > viewport.maxY - 28 ? 8 : 0
             if delta != 0 {
                 let top = -scroll.adjustedContentInset.top
                 let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+                let previous = scroll.contentOffset
                 scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: max(top, min(bottom, scroll.contentOffset.y + delta))), animated: false)
+                scrolled = previous != scroll.contentOffset
                 updateViewport()
             }
         }
-        _ = model.contact.move(to: pan.location(in: self))
+        _ = move(pan.location(in: self), force: scrolled)
     }
 }

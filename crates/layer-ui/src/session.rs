@@ -215,6 +215,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         workspace.layout.measurements.clear();
         workspace.layout.column_scroll.clear();
         workspace.layout.titlebar_insets = [0.0; 3];
+        workspace.layout.bottom_inset = 0.0;
         workspace.zen_mode = self
             .workspace_preview
             .as_ref()
@@ -1701,6 +1702,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
+                    | UiAction::MeasureWorkspaceBottom { .. }
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::WindowFullscreen { .. }
                     | UiAction::Invoke {
@@ -1737,6 +1739,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | UiAction::SystemThemeChanged { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
+                    | UiAction::MeasureWorkspaceBottom { .. }
                     | UiAction::WindowFullscreen { .. }
             )
         {
@@ -1934,6 +1937,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_action(action)?;
                 self.refresh_document();
                 (DOCUMENT | BRUSH, true)
+            }
+            UiAction::MeasureWorkspaceBottom { inset } => {
+                if !inset.is_finite() || !(0.0..1_000_000.0).contains(&inset) {
+                    return Err("Invalid workspace bottom clearance".into());
+                }
+                if self.state.workspace.layout.bottom_inset == inset {
+                    (0, false)
+                } else {
+                    self.state.workspace.layout.bottom_inset = inset;
+                    (LAYOUT, false)
+                }
             }
             UiAction::MeasureTitlebar { insets } => {
                 if !insets
@@ -2179,6 +2193,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace.validate()?;
                 workspace.layout.collapse_empty_toolbar_groups();
                 workspace.layout.titlebar_insets = self.state.workspace.layout.titlebar_insets;
+                workspace.layout.bottom_inset = self.state.workspace.layout.bottom_inset;
                 self.state.workspace = workspace;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.column_panel_drag = None;
@@ -3118,6 +3133,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .column_scroll
                             .clone_from(&self.state.workspace.layout.column_scroll);
                         restored.titlebar_insets = self.state.workspace.layout.titlebar_insets;
+                        restored.bottom_inset = self.state.workspace.layout.bottom_inset;
                         self.state.workspace.layout = restored;
                         drag.phase = ResizeDragPhase::Expand {
                             columns,
@@ -4043,6 +4059,81 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn workspace_bottom_clearance_is_runtime_state_across_history_and_switching() {
+        let mut app = session();
+        let initial = app.capture_workspace().unwrap();
+        let viewport = [1000., 1000.];
+        let original = app.layout(viewport);
+        let change = app
+            .dispatch(UiAction::MeasureWorkspaceBottom { inset: 36. })
+            .unwrap();
+        assert_ne!(change.regions & regions::LAYOUT, 0);
+        assert_eq!(app.capture_workspace().unwrap(), initial);
+        assert_eq!(app.state.camera.viewport, [1000, 1000]);
+        assert_eq!(app.layout(viewport).viewport, viewport);
+        assert_eq!(app.layout(viewport).status.y, original.status.y - 36.);
+        assert_eq!(
+            app.dispatch(UiAction::MeasureWorkspaceBottom { inset: 36. })
+                .unwrap()
+                .regions,
+            0
+        );
+        for inset in [-1., f32::NAN, f32::INFINITY, 1_000_000.] {
+            assert!(
+                app.dispatch(UiAction::MeasureWorkspaceBottom { inset })
+                    .is_err()
+            );
+            assert_eq!(app.state.workspace.layout.bottom_inset, 36.);
+        }
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Layers,
+            target: DockTarget::Float {
+                position: [420., 180.],
+            },
+            viewport,
+        })
+        .unwrap();
+        invoke(&mut app, CommandId::UndoWorkspace);
+        invoke(&mut app, CommandId::RedoWorkspace);
+        assert_eq!(app.state.workspace.layout.bottom_inset, 36.);
+        let saved = app.capture_workspace().unwrap();
+        for revision in saved.history.revisions.values() {
+            assert_eq!(revision.layout.bottom_inset, 0.);
+        }
+        app.begin_workspace_transition().unwrap();
+        app.begin_workspace_layout_preview().unwrap();
+        app.preview_workspace_layout(initial.history.layout())
+            .unwrap();
+        assert_eq!(app.state.workspace.layout.bottom_inset, 36.);
+        // A window can change its native clearance during a library preview.
+        app.dispatch(UiAction::MeasureWorkspaceBottom { inset: 48. })
+            .unwrap();
+        app.cancel_workspace_layout_preview();
+        app.end_workspace_transition();
+        assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        app.restore_workspace_layout(initial.history.layout().clone(), "Restore test")
+            .unwrap();
+        assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        app.adopt_workspace(PreparedWorkspace::new(saved).unwrap())
+            .unwrap();
+        assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        app.dispatch(UiAction::RestoreWorkspace {
+            workspace: WorkspaceState::default(),
+        })
+        .unwrap();
+        assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
+        let encoded = serde_json::to_value(&app.state.workspace).unwrap();
+        assert!(encoded["layout"].get("bottom_inset").is_none());
+        assert_eq!(app.durable_workspace().layout.bottom_inset, 0.);
+        app.dispatch(UiAction::MeasureWorkspaceBottom { inset: 0. })
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(app.layout(viewport)).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ struct WorkspaceRowMeasurement: ViewModifier {
 
 /// Native contact ownership and measured list geometry. A drop sends one shared
 /// preference edit; no layout history or workspace capture is changed here.
-@MainActor final class WorkspaceRowInteraction: ObservableObject {
+@MainActor final class WorkspaceRowInteraction: ObservableObject, NativeReorderModel {
     struct Drag { let id: String; let origin: CGPoint; let bounds: CGRect; var point: CGPoint }
     struct Hint { let before: String?; let y: CGFloat }
     let contact = ReorderContact()
@@ -63,14 +63,8 @@ struct WorkspaceRowMeasurement: ViewModifier {
         contact.cancel()
         if drag != nil { drag = nil }; if hint != nil { hint = nil }; closeMenu()
     }
-    func nativeInputDetached() {
-        // Representable destruction can run while SwiftUI exclusively owns its
-        // graph. Native recognizers are already detached; publish retirement
-        // afterwards, and never cancel a newly mounted contact.
-        let generation = contact.generation
-        DispatchQueue.main.async { [self] in
-            if contact.generation == generation { cancel() }
-        }
+    func acceptsContext(at point: CGPoint) -> Bool {
+        enabled && viewport.contains(point) && frames.values.contains { $0.row.contains(point) }
     }
     func source(at point: CGPoint) -> ReorderTarget? {
         guard enabled, viewport.contains(point) else { closeMenu(); return nil }

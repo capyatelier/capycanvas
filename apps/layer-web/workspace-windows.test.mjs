@@ -25,6 +25,10 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     await call('Runtime.enable',{},sessionId); await call('Page.enable',{},sessionId);
     await call('Page.navigate',{url:await evaluate('location.href')},sessionId); await wait(other,ready);
     assert.notEqual((await view(other)).id,original,'Live windows start with independent workspaces');
+    const defaults=['builtin:workspace:painter','builtin:workspace:illustrator','builtin:workspace:photographer'];
+    assert.ok(defaults.includes(original));
+    assert.ok(defaults.includes((await view(other)).id),'A second window reuses an available default');
+    assert.deepEqual([...(await view(other)).order].sort(),[...defaults].sort(),'Opening a second window does not create a workspace');
     await evaluate('layerApp.dispatch({type:"set_brush_size",value:53});null');
     await other('layerApp.dispatch({type:"set_brush_size",value:87});null');
     await new Promise(r=>setTimeout(r,700)); await wait(evaluate,ready); await wait(other,ready);
@@ -32,6 +36,7 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.notDeepEqual(ownCapture.working,otherCapture.working);
     await call('Page.reload',{},sessionId); await new Promise(r=>setTimeout(r,1000)); await wait(other,ready);
     assert.equal((await view(other)).id,otherId);
+    assert.deepEqual([...(await view(other)).order].sort(),[...defaults].sort(),'Reloading does not create a workspace');
     assert.deepEqual((await capture(other)).working,otherCapture.working);
     await input(evaluate,{type:'suspend'}); await wait(evaluate,'!JSON.parse(layerApp.app.workspace_view()).busy');
     await input(other,{type:'switch',id:original}); await wait(other,ready);
@@ -42,8 +47,9 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     await wait(evaluate,`[...document.querySelectorAll('dialog')].some(d=>d.getAttribute('aria-label')==='Workspace could not be saved'&&d.open)`);
     await evaluate('[...document.querySelectorAll("dialog[open] button")].find(b=>b.textContent==="Save as New Workspace…").click()');
     await wait(evaluate,'JSON.parse(layerApp.app.workspace_view()).form?.kind === "recover"');
+    await wait(evaluate,'!!document.querySelector(".workspace-form[open] input") && document.querySelector(".workspace-form[open] .suggested-action")?.disabled === false');
     await evaluate('document.querySelector(".workspace-form[open] input").value="Recovered browser window";document.querySelector(".workspace-form[open] .suggested-action").click()');
-    await wait(evaluate,ready);
+    await wait(evaluate,`${ready} && JSON.parse(layerApp.app.workspace_view()).name === "Recovered browser window"`);
     assert.notEqual((await view(evaluate)).id,original);
     assert.deepEqual((await capture(evaluate)).working,ownCapture.working);
     assert.notDeepEqual((await capture(other)).working,ownCapture.working,'Recovery never overwrites the new owner');

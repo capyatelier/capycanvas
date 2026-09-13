@@ -193,11 +193,21 @@ impl NativeWorkspaces {
             A::Reset(id) => {
                 let stored = self.selected(&id).await?;
                 let prompt = layer_workspace::reset_prompt(&stored.entity)?;
+                let preview = history::Preview::begin(w).await?;
+                let change = w
+                    .gpu
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .session
+                    .preview_workspace_layout(stored.entity.starting_layout()?)
+                    .map_err(StoreError::invalid)?;
+                w.changed(Ok(change));
                 if !dialog::confirm(w, &prompt.title, &prompt.message, prompt.confirm, false).await
                 {
                     return Ok(());
                 }
-                let _operation = self.begin_operation(w).await?;
+                let _operation = preview.finish();
                 let result = manager.change_layout(&id, None, now_ms()).await;
                 match result {
                     Ok(incoming) if manager.active_id().as_deref() == Some(&id) => {

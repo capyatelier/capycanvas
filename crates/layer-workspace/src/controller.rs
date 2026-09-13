@@ -255,7 +255,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .await?;
             Ok(Outcome::adopt(
                 if let StoreResponse::Binding(Some(id)) = resume {
-                    m.prepare_switch(&id, now).await?
+                    m.prepare_startup(&id, now).await?
                 } else {
                     m.initialize(now).await?
                 },
@@ -632,6 +632,25 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     WorkspaceInput::Form { kind, id } => {
                         self.start_transition(session)?;
                         change = self.stop_preview(session);
+                        let reset = if kind == "reset" {
+                            let entity = self
+                                .manager
+                                .current()
+                                .ok_or_else(|| StoreError::invalid("Open a workspace first."))?;
+                            let prompt = reset_prompt(&entity)?;
+                            session
+                                .begin_workspace_layout_preview()
+                                .map_err(StoreError::invalid)?;
+                            self.preview_open = true;
+                            let preview = session
+                                .preview_workspace_layout(entity.starting_layout()?)
+                                .map_err(StoreError::invalid)?;
+                            change.regions |= preview.regions;
+                            change.revision = preview.revision;
+                            Some(prompt)
+                        } else {
+                            None
+                        };
                         let name = if kind == "new" {
                             "New Workspace".into()
                         } else if kind == "recover" {
@@ -648,7 +667,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             "new" => "New Workspace",
                             "rename" => "Rename",
                             "delete" => "Delete",
-                            "reset" => "Restore Starting Layout",
+                            "reset" => reset.as_ref().unwrap().title.as_str(),
                             "reset_brushes" => "Reset All Brushes?",
                             _ => "Save as New Workspace",
                         }
@@ -658,10 +677,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                 "reset_brushes" => "Restore every brush’s settings in this workspace to their defaults.".into(),
                                 "new" => "Copy your current tool settings and layout into a new workspace.".into(),
                                 "delete" => format!("Delete “{name}”? This is permanent."),
-                                "reset" => format!("Restore “{}” to its starting layout?", self.view.name),
+                                "reset" => reset.as_ref().unwrap().message.clone(),
                                 _ => String::new(),
                             },
-                            confirm: match kind.as_str() { "reset_brushes" => "Reset Brushes".into(), "new" => "Create and Switch".into(), _ => title.clone() },
+                            confirm: match kind.as_str() { "reset" => reset.as_ref().unwrap().confirm.into(), "reset_brushes" => "Reset Brushes".into(), "new" => "Create and Switch".into(), _ => title.clone() },
                             kind,
                             title,
                             name,

@@ -46,6 +46,13 @@ the existing default arrangement and tool selection.
 - Seed exactly three default workspaces with stable IDs:
   `builtin:workspace:painter`, `builtin:workspace:illustrator`, and
   `builtin:workspace:photographer`. Fresh installations open Illustrator.
+- Startup resumes the saved workspace when available. If another window owns it,
+  reuse an available built-in (Illustrator, Painter, then Photographer), then an
+  existing user workspace. Only when every workspace is in use does another
+  window create a copy, named after its source. Deleting the active workspace
+  also reuses an available built-in; it never creates a replacement workspace.
+  Legacy imports preserve existing settings once, including a previously saved
+  "My Workspace". Deleting an imported workspace does not import it again.
 - All three save edits normally and may be renamed. They cannot be deleted.
   The header initially shows these three, follows workspace identities, and
   displays their current names. Its entries can be changed in Manage Workspaces.
