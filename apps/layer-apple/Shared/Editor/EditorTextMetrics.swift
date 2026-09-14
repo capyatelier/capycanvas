@@ -11,18 +11,22 @@ import UIKit
 /// across a menu row. The text still uses the ordinary native system font.
 @MainActor enum EditorTextMetrics {
     enum Weight { case bold, medium, regular }
-    private struct Key: Hashable { let text: String; let size: Double; let weight: Weight }
-    private struct FontKey: Hashable { let size: Double; let weight: Weight }
+    private struct Key: Hashable { let text: String; let size: Double; let weight: Weight; let monospacedDigits: Bool }
+    private struct FontKey: Hashable { let size: Double; let weight: Weight; let monospacedDigits: Bool }
     private static var widths: [Key: CGFloat] = [:]
     private static var fonts: [FontKey: CTFont] = [:]
     static func font(size: Double, weight: Weight) -> Font { Font(nativeFont(size: size, weight: weight)) }
-    private static func nativeFont(size: Double, weight: Weight) -> CTFont {
-        let key = FontKey(size: size, weight: weight)
+    private static func nativeFont(size: Double, weight: Weight, monospacedDigits: Bool = false) -> CTFont {
+        let key = FontKey(size: size, weight: weight, monospacedDigits: monospacedDigits)
         if let font = fonts[key] { return font }
         #if canImport(AppKit)
-        let base = NSFont.systemFont(ofSize: size, weight: weight == .bold ? .bold : weight == .medium ? .medium : .regular)
+        let nativeWeight: NSFont.Weight = weight == .bold ? .bold : weight == .medium ? .medium : .regular
+        let base = monospacedDigits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: nativeWeight)
+            : NSFont.systemFont(ofSize: size, weight: nativeWeight)
         #else
-        let base = UIFont.systemFont(ofSize: size, weight: weight == .bold ? .bold : weight == .medium ? .medium : .regular)
+        let nativeWeight: UIFont.Weight = weight == .bold ? .bold : weight == .medium ? .medium : .regular
+        let base = monospacedDigits ? UIFont.monospacedDigitSystemFont(ofSize: size, weight: nativeWeight)
+            : UIFont.systemFont(ofSize: size, weight: nativeWeight)
         #endif
         var font: CTFont = base
         // The system's named Medium instance uses weight 510. The shared web
@@ -40,10 +44,10 @@ import UIKit
         fonts[key] = font
         return font
     }
-    static func width(_ text: String, size: Double, weight: Weight) -> CGFloat {
-        let key = Key(text: text, size: size, weight: weight)
+    static func width(_ text: String, size: Double, weight: Weight, monospacedDigits: Bool = false) -> CGFloat {
+        let key = Key(text: text, size: size, weight: weight, monospacedDigits: monospacedDigits)
         if let width = widths[key] { return width }
-        let font = nativeFont(size: size, weight: weight)
+        let font = nativeFont(size: size, weight: weight, monospacedDigits: monospacedDigits)
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
         // Workspace names can change throughout a long editing session.

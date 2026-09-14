@@ -10,6 +10,80 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Shared title bar milestone
+
+This milestone integrates shared main through `1c83a95`, following `9d67041`
+(Files completion and raster integration). All ten recovery stashes are retained.
+The final pulls change Android header rendering, Android/Windows validation
+and documentation; the Apple and shared Rust source validated against
+`ba77f9b` is unaffected.
+
+Apple now uses the same typed title-bar model and native drag protocol introduced
+by the Android port. Rust owns projection, geometry, overflow, frozen drag,
+validation and history. AppKit/UIKit own timing, slop and contact capture. Apple
+resolves and applies each release action together on its serial render owner.
+The fixed header, retired Zen-button fallback, separate clock-visibility view,
+unused switcher sizing mode and duplicate Main Menu assembly are removed.
+Mac preserves OS application menus and portable saved arrangements. Fresh Sketch
+uses individual header tools without supporting toolbar bands; the existing
+untouched-default update policy preserves working values and edited histories.
+
+The editor includes all three sizes, footer choice, keyboard selection/movement,
+drag-only bank components, shared tool-picker destinations, editable hidden-item
+overflow and drawer anchors. Native testing found and fixed two product defects:
+clock measurement must match its monospaced digits so minute ticks cannot cancel
+a drag, and nested popup sources must preserve child requests under an inactive
+context-menu wrapper. Native fullscreen observation also uses scene/display
+geometry so the iPad's full-display scene exposes Clock/Battery correctly.
+
+After integration, 483 Apple/core/host/UI tests pass with one existing host
+benchmark ignored; the workspace default-update test also passes on both Apple
+presets. Pixel tests wait for shared asynchronous raster restoration before exact
+comparisons, retaining individual frames for active-input checks. Web Wasm
+checking passes. Native AppKit fixture iteration 9 passes both presets at all
+sizes: inert bank clicks/holds, immediate mouse/pen pickup, held context,
+same-contact movement, detach/re-entry, minute changes, cancellation, keyboard
+movement, one-step history and actual narrow overflow popup drags. Six managed
+persistence cases pass switching, unfinished-preview close/restart and persisted
+Undo/Redo. These AppKit contacts do not establish physical Pencil coverage.
+
+Both signed iteration-65 builds pass. Native iteration 64 passes Metal,
+customization and fullscreen status on each host, including iPad Main Menu →
+File → Recovered Drawings and Main Menu → Window → Customize Title Bar.
+Iteration 65 corrects the new drawer test's stale button names and passes fresh
+Sketch Color/Brush/Layers switching and toggling on both hosts. The iPad review
+namespace is restored and the artist app descriptor is unchanged. Files remains
+free of authentication prompts.
+
+Capture review caught the Mac brush cursor remaining beneath transparent title
+bar controls. The unchanged failure repeats in iteration 66; an isolated full
+SwiftUI editor capture is clean. Mac now checks the native hit target before
+forwarding idle hover, preserving active-contact completion. Signed build 68 and
+its drawer workflow pass; reviewed captures retain the textured cursor over the
+canvas and clear it over Layers. Native iteration 69 then passes Mac Metal
+launch, mouse drawing and exact document Undo/Redo with no failures or skips.
+
+The visual matrix contains 144 native and 144 Web captures. Each native item
+matches shared allocation within 0.5 logical pixels. Matching menu-label spacing
+fixes premature Apple compaction, and removing Web's obsolete narrow switcher
+rule eliminates mismatched overflow. The comparison has no unmatched items and
+a largest geometry difference of 4.14 logical pixels (clock padding/measurement).
+Native contrast, selected backgrounds and live paint icons were inspected at
+normal size. Web retains solid tile backgrounds while GTK/Apple use transparent
+controls: this is diagnostic evidence, not full visual acceptance. Web menu and
+workspace-switcher interaction checks pass. Native capture iteration 6 has
+identical header geometry and PNG bytes across all 144 fixtures after the shared
+API/default integration; Sketch now has no fallback toolbar bands or footer.
+
+Evidence and failed iterations stay ignored under `artifacts/apple-titlebar-v1/`.
+Integration snapshots remain under `artifacts/apple-main-integration-6ddfb38/`,
+`artifacts/apple-main-integration-23bc780/` and
+`artifacts/apple-main-integration-ba77f9b/`. Remaining goal work includes the full
+feature/menu/panel inventory, Apple column stacks, retained renderer replacement
+and durable lifecycle recovery, provider/interruption checks, physical Pencil
+and keyboard input, full-editor visual review and sustained Mac 90 Hz/iPad
+120 Hz workloads with current encoded-sRGB8 raster baselines.
+
 ## Native Files and raster integration
 
 Local main includes `39a772c`: shared title-bar editing, per-workspace kernel
@@ -55,7 +129,7 @@ failures or skips. The current iPad review app and runner are installed, its
 review namespace is restored and the artist descriptor is unchanged. Evidence
 is under the matching main-integration folders and `apple-native-files-v1/`.
 
-The shared title-bar editor still needs an Apple projection. Full feature,
+The shared title-bar projection is now in progress as recorded above. Full feature,
 provider/interruption, visual, physical-input and sustained-performance acceptance
 remains incomplete. The new encoded-sRGB8 raster format also requires current
 visual and performance baselines; older linear8 filter evidence is historical.

@@ -365,6 +365,18 @@ final class NativeOwner: @unchecked Sendable {
             completion(failure)
         }
     }
+    /// Resolve and apply the shared placement action on the same serial owner.
+    func headerAction(_ value: JSON, completion: @escaping @Sendable () -> Void) {
+        queue.async { [self] in
+            defer { completion() }
+            do {
+                if let action = try request(2, JSON(["type":"header", "request":value.raw])), !action.isNull {
+                    _ = try request(0, action)
+                    try publish()
+                }
+            } catch { receive(nil, error.localizedDescription) }
+        }
+    }
     func attach(_ layer: CAMetalLayer, width: UInt32, height: UInt32, scale: Float) {
         let lease = MetalLayerLease(layer)
         perform { [self] in

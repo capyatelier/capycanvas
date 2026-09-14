@@ -19,7 +19,7 @@ private struct MacEditorScene: View {
     @StateObject private var store: EditorStore
     init(scene: String) { _store = StateObject(wrappedValue: EditorStore(platform: 1, scene: scene)) }
     var body: some View {
-        EditorView(store: store, showsApplicationMenus: false) { MacMetalCanvas(store: store) }
+        EditorView(store: store) { MacMetalCanvas(store: store) }
             .frame(minWidth: 700, minHeight: 500)
             .focusedSceneValue(\.editorStore, store)
     }

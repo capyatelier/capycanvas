@@ -146,7 +146,11 @@ impl NativeHost {
                 press,
                 grab,
             } => {
-                self.header_drag = editing
+                let available = match source {
+                    HeaderDragSource::Component(item) => item.available_on(state.platform),
+                    _ => true,
+                };
+                self.header_drag = (editing && available)
                     .then(|| {
                         HeaderDrag::new(
                             &model,

@@ -81,7 +81,11 @@ pub enum HeaderItem {
 impl HeaderItem {
     /// Native hosts retain their OS/menu fullscreen actions, not a title-bar tile.
     pub fn available_on(self, platform: Platform) -> bool {
-        self != Self::Fullscreen || platform == Platform::Web
+        match self {
+            Self::Fullscreen => platform == Platform::Web,
+            Self::Menu | Self::MenuLabels => platform != Platform::Mac,
+            _ => true,
+        }
     }
 
     pub const COMPONENTS: [Self; 10] = [
@@ -175,7 +179,7 @@ impl HeaderLayout {
             self.add(HeaderZone::Right, settings, &[HeaderItem::Fullscreen])
                 .unwrap();
         }
-        self
+        self.projected_for(platform)
     }
 
     pub fn context_menu(&self, id: Option<u32>, editing: bool) -> Result<ContextMenu, String> {

@@ -36,7 +36,7 @@ impl WorkspacePreset {
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         self.layout_with_header_tools(
             platform,
-            matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android),
+            crate::CommandId::CustomizeWorkspaceUi.available_on(platform),
         )
     }
 
@@ -300,9 +300,15 @@ mod tests {
                 );
                 assert_eq!(items.contains(&HeaderItem::Clock), !minimal);
                 assert_eq!(items.contains(&HeaderItem::Battery), !minimal);
-                assert_eq!(items.contains(&HeaderItem::MenuLabels), !minimal);
-                assert_eq!(items.contains(&HeaderItem::Menu), minimal);
-                let native = preset.layout(Platform::Gtk).header;
+                assert_eq!(
+                    items.contains(&HeaderItem::MenuLabels),
+                    !minimal && platform != Platform::Mac
+                );
+                assert_eq!(
+                    items.contains(&HeaderItem::Menu),
+                    minimal && platform != Platform::Mac
+                );
+                let native = preset.layout(Platform::Gtk).header.projected_for(platform);
                 for zone in HeaderZone::ALL {
                     assert_eq!(
                         layout.header.zones[zone.index()]
@@ -374,7 +380,7 @@ mod tests {
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
         // Hosts without the new header projection keep their existing controls.
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Ios);
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Generic);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -410,7 +416,13 @@ mod tests {
 
     #[test]
     fn projected_sketch_has_only_individual_header_tools() {
-        for platform in [crate::Platform::Gtk, crate::Platform::Web, crate::Platform::Android] {
+        for platform in [
+            crate::Platform::Gtk,
+            crate::Platform::Web,
+            crate::Platform::Android,
+            crate::Platform::Ios,
+            crate::Platform::Mac,
+        ] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.bands.is_empty() && layout.floating.is_empty());
             assert_eq!(

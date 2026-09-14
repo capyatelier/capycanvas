@@ -9,7 +9,7 @@ import SwiftUI
         window.isReleasedWhenClosed = false; defer { window.contentView = nil; window.close() }
         let oldAppearance = NSApp.appearance; defer { NSApp.appearance = oldAppearance }
         NSApp.appearance = NSAppearance(named: .aqua)
-        let host = NSHostingController(rootView: EditorView(store: store, showsApplicationMenus: false) { Color.clear })
+        let host = NSHostingController(rootView: EditorView(store: store) { Color.clear })
         window.contentViewController = host; window.makeKeyAndOrderFront(nil)
         func awaitTheme(_ expected: String) async throws {
             let deadline = Date().addingTimeInterval(10)

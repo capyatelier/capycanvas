@@ -31,6 +31,7 @@ extension View {
 struct SharedIcon: View {
     let name: String
     var size: CGFloat = 16
+    var halo: Color?
     var body: some View {
         let key = Self.assetKey(name)
         Group {
@@ -43,7 +44,7 @@ struct SharedIcon: View {
             } else {
                 glyph("icon-" + key, template: true)
             }
-        }.accessibilityHidden(true)
+        }.modifier(EditorInkHalo(color: halo)).accessibilityHidden(true)
     }
     static func assetKey(_ name: String) -> String {
         var key = name
@@ -69,12 +70,26 @@ struct IconTile: View {
     var selected = false
     var enabled = true
     var size: CGFloat = 16
+    var active = false
+    var joinedBottom = false
+    var halo: Color?
     let action: () -> Void
     var body: some View {
-        Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected))
+        Button(action: action) { SharedIcon(name: icon, size: size, halo: halo).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedBottom: joinedBottom))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
+    }
+}
+
+/// Contrasting ink stays legible over artwork without changing control fills.
+struct EditorInkHalo: ViewModifier {
+    let color: Color?
+    func body(content: Content) -> some View {
+        if let color {
+            content.shadow(color: color, radius: 0, x: 1).shadow(color: color, radius: 0, x: -1)
+                .shadow(color: color, radius: 0, y: 1).shadow(color: color, radius: 0, y: -1)
+        } else { content }
     }
 }
 
@@ -82,12 +97,18 @@ struct IconTile: View {
 /// control, including its selection. PlainButtonStyle would dim the glyph again.
 struct EditorControlButtonStyle: ButtonStyle {
     var selected = false
+    var active = false
+    var joinedBottom = false
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: joinedBottom ? 0 : 6,
+            bottomTrailingRadius: joinedBottom ? 0 : 6, topTrailingRadius: 6)
+    }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.background {
-            if configuration.isPressed {
-                RoundedRectangle(cornerRadius: 6).fill(.foreground).opacity(0.16)
-            } else if selected {
-                RoundedRectangle(cornerRadius: 6).fill(EditorPalette.sharedAccent.opacity(0.22))
+            if selected {
+                shape.fill(EditorPalette.sharedAccent.opacity(0.22))
+            } else if configuration.isPressed || active {
+                shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
             }
         }
     }

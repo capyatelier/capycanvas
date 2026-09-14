@@ -19,7 +19,7 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                 );
                 app.draw_frame();
                 app.stroke();
-                app.draw_frame();
+                app.draw_until_idle();
                 let baseline = app.pixels();
                 app.action(json!({"type":"select_brush","id":brush as u32}));
                 app.action(json!({"type":"set_color","rgba":[0.8,0.15,0.2,1]}));
@@ -76,6 +76,7 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                     send(&final_sample, &[1, 0], 1);
                     app.draw_frame();
                 }
+                app.draw_until_idle();
                 let ink = app.pixels();
                 assert_ne!(
                     ink, baseline,
@@ -90,10 +91,10 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                 let samples =
                     raster_samples(document.target_raster(document.active_target()).unwrap());
                 app.invoke("undo");
-                app.draw_frame();
+                app.draw_until_idle();
                 assert_eq!(app.pixels(), baseline);
                 app.invoke("redo");
-                app.draw_frame();
+                app.draw_until_idle();
                 assert_eq!(app.pixels(), ink);
                 final_sample[2] = 0.1;
                 send(&final_sample, &[1, 0], 1);

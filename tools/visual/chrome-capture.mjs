@@ -75,6 +75,12 @@ try {
   await call('Runtime.enable'); await call('Page.enable');
   await call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor:scale, mobile:false});
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion', value:'reduce'}]});
+  if (scenario === 'header-controls') {
+    await call('Page.addScriptToEvaluateOnNewDocument', {source: `
+      Object.defineProperty(navigator,'getBattery',{configurable:true,value:async()=>
+        Object.assign(new EventTarget(),{level:0.85,charging:false})});
+    `});
+  }
   const component = ['toolbar-tiles', 'control-colors', 'tool-actions', 'number-controls', 'color-panel', 'icons', 'choices', 'inline-numbers'].includes(scenario);
   await call('Page.navigate', {url:`http://127.0.0.1:${server.address().port}${component?'/workspace-chrome.js':''}`});
   if (component) {

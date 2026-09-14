@@ -1,36 +1,5 @@
 import SwiftUI
 
-struct SystemStatusView: View {
-    let dark: Bool
-    @ObservedObject var status = SystemStatus.shared
-    var spacing: CGFloat = 6
-    @Environment(\.scenePhase) private var phase
-    @State private var subscription: UUID?
-
-    var body: some View {
-        HStack(spacing: spacing) {
-            Text(status.time).monospacedDigit().lineLimit(1).fixedSize()
-                .padding(.horizontal, 6).frame(height: 36)
-                .accessibilityIdentifier("system-clock")
-                .modifier(HeaderControlMeasurement(id: "system-clock"))
-            if let battery = status.battery {
-                BatteryIndicator(battery: battery, dark: dark).frame(width: 36, height: 36)
-            }
-        }
-            .onAppear { subscribe() }
-            .onChange(of: phase) { _, _ in subscribe() }
-            .onDisappear { unsubscribe() }
-    }
-    private func subscribe() {
-        if phase == .background { unsubscribe() }
-        else if subscription == nil { subscription = status.acquire() }
-    }
-    private func unsubscribe() {
-        if let subscription { status.release(subscription) }
-        subscription = nil
-    }
-}
-
 /// The browser/Android battery shape, percentage and palette, in logical points.
 struct BatteryIndicator: View {
     let battery: DeviceBattery
