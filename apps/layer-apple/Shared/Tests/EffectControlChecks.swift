@@ -96,17 +96,32 @@ extension XCTestCase {
         let curved = changed(from: blue)
         XCTAssertGreaterThan(curved[0], blue[0])
         XCTAssertEqual(curved[1], blue[1]); XCTAssertEqual(curved[2], blue[2])
+        let nearPoint = point.withOffset(CGVector(dx: 5, dy: 5))
+        #if os(macOS)
+        nearPoint.click()
+        #else
+        nearPoint.tap()
+        #endif
+        expectPixels(curved)
         history(before: blue, after: curved)
-        attachEditor(in: app, name: "filter-red-curve-artwork")
+        attachEditor(in: app, name: "filter-red-curve-selection")
         let destination = curve.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.4))
         let destinationPoint = CGPoint(x: curve.frame.minX + curve.frame.width * 0.65,
             y: curve.frame.minY + curve.frame.height * 0.4)
         XCTAssertTrue(app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch.frame.contains(destinationPoint))
-        point.press(forDuration: 0.05, thenDragTo: destination, withVelocity: .slow, thenHoldForDuration: 0.1)
+        nearPoint.press(forDuration: 0.05, thenDragTo: destination.withOffset(CGVector(dx: 5, dy: 5)),
+            withVelocity: .slow, thenHoldForDuration: 0.1)
         let moved = changed(from: curved)
         XCTAssertLessThan(moved[0], curved[0]); XCTAssertEqual(moved[1], curved[1]); XCTAssertEqual(moved[2], curved[2])
         XCTAssertEqual(curve.label, "Red, 3 points", "Dragging an existing point must not insert another")
-        history(before: curved, after: moved)
+        editorHistory("Undo", in: app); expectPixels(curved)
+        #if os(macOS)
+        nearPoint.click()
+        #else
+        nearPoint.tap()
+        #endif
+        expectPixels(curved)
+        editorHistory("Redo", in: app); expectPixels(moved)
         attachEditor(in: app, name: "filter-red-curve-drag")
         #if os(iOS)
         // A touch on the plot edits its curve. Scroll from the noninteractive
@@ -155,7 +170,38 @@ extension XCTestCase {
         XCTAssertGreaterThan(red[0], gray[0]); XCTAssertEqual(red[1], gray[1]); XCTAssertEqual(red[2], gray[2])
         history(before: gray, after: red)
         attachEditor(in: app, name: "filter-gradient-color-artwork")
-        removeFilter(red)
+        workspaceActivate(color)
+        let gradient = app.descendants(matching: .any)["effect-gradient"].firstMatch
+        reveal(gradient)
+        let middle = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 43.0 / 52))
+        #if os(macOS)
+        middle.click()
+        #else
+        middle.tap()
+        #endif
+        expectation(for: NSPredicate(format: "label ENDSWITH %@", ", 3 stops"), evaluatedWith: gradient)
+        waitForExpectations(timeout: 10); expectPixels(red)
+        let nearMiddle = middle.withOffset(CGVector(dx: 3, dy: 0))
+        #if os(macOS)
+        nearMiddle.click()
+        #else
+        nearMiddle.tap()
+        #endif
+        expectPixels(red); expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
+        let stopDestination = gradient.coordinate(withNormalizedOffset:
+            CGVector(dx: (6 + (gradient.frame.width - 12) * 0.7) / gradient.frame.width, dy: 43.0 / 52))
+        middle.press(forDuration: 0.05, thenDragTo: stopDestination, withVelocity: .slow, thenHoldForDuration: 0.1)
+        let shifted = changed(from: red)
+        XCTAssertEqual(shifted[0], red[0]); XCTAssertLessThan(shifted[1], red[1]); XCTAssertLessThan(shifted[2], red[2])
+        XCTAssertTrue(gradient.label.hasSuffix(", 3 stops"), "Dragging a stop must not insert another")
+        history(before: red, after: shifted)
+        attachEditor(in: app, name: "filter-gradient-stop-drag")
+        reveal(app.buttons["gradient-remove"]); workspaceActivate(app.buttons["gradient-remove"])
+        expectPixels(red); history(before: shifted, after: red)
+        editorHistory("Undo", in: app); expectPixels(shifted)
+        workspaceActivate(app.buttons["gradient-reset"])
+        expectPixels(gray); history(before: shifted, after: gray)
+        removeFilter(gray)
         XCTAssertEqual(viewport.frame, originalFrame)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }

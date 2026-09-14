@@ -1537,15 +1537,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.gradient_fill(start, p, radial, transparent)?;
                         }
                     }
-                    if self.layer_interaction.tool == LayerCanvasTool::Select {
-                        let selection = Selection::polygon(self.layer_interaction.path.clone())
-                            .map_err(error)?;
-                        self.layer_edit(Edit::SetSelection(Some(selection)))?;
-                    }
-                    if self.layer_interaction.tool == LayerCanvasTool::LassoFill {
-                        let selection = Selection::polygon(self.layer_interaction.path.clone())
-                            .map_err(error)?;
-                        self.fill_selection(selection)?;
+                    if matches!(
+                        self.layer_interaction.tool,
+                        LayerCanvasTool::Select | LayerCanvasTool::LassoFill
+                    ) {
+                        let mut points = std::mem::take(&mut self.layer_interaction.path);
+                        points.dedup();
+                        // A click (including repeated stationary samples) does
+                        // not enclose an area or replace the current selection.
+                        if points.len() >= 3 {
+                            let selection = Selection::polygon(points).map_err(error)?;
+                            if self.layer_interaction.tool == LayerCanvasTool::Select {
+                                self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                            } else {
+                                self.fill_selection(selection)?;
+                            }
+                        }
                     }
                     self.layer_interaction.path.clear();
                     self.layer_interaction.original = None;
