@@ -15,8 +15,12 @@ The previously reviewed Release application and both packages contain `35131be`,
 shared header surfaces, native layer keyboard actions and upstream contact-brush
 mask painting. Portable assembly and extracted runtime checks pass; unsigned MSIX
 assembly and archive guards pass. Both packages use the clean published source.
-The current native Release also includes the Preferences accessibility changes
+The current native Release (`ae0cf85`) also includes the Preferences accessibility changes
 described below. Those changes have not yet been incorporated into the packages.
+
+The integrated release passes 398 shared UI and 110 Windows tests; 11 hardware/manual
+tests remain ignored. Its full native Preferences fixture and actual Narrator
+journey also pass after merging the upstream effect-history changes.
 
 The layer change (`483ad16`) passes the complete native layer journey: native
 Toggle states, Space activation, alpha-lock Undo/Redo, Menu and Shift+F10 on names,
