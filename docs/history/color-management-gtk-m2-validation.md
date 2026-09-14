@@ -1527,3 +1527,126 @@ logs. Changed Rust formatting and `git diff --check` pass. No other platform
 host was integrated. The existing raster worker still needs explicit native
 entry descriptors and status-before-backing publication; viewport residency,
 complete precision editing and the GTK SDR journeys remain outstanding.
+
+## Native raster capture through the existing backing worker (in progress)
+
+Parent: `7fc143d`. The common capture path now carries each tile's explicit
+pixel descriptor into compression. Native RGBA8Uint/RGBA16Uint and the existing
+sRGB8/coverage8 captures share staging, queue ordering, worker backpressure,
+compression and failure tickets. The browser side of this shared Rust transport
+receives the same descriptor field; no browser or other platform host mode was
+activated or qualified. Document-mode, raster-index and cache integration remain
+pending.
+
+A capture can include a copied eight-byte native encoding status. The worker
+accepts this status before publishing any of that capture's tile backing. Its
+copy is queue-ordered with the pixels, so resetting the live GPU status for the
+next publication cannot hide an earlier failure. Descriptor/texture consistency,
+unique unpublished tickets, counts and the actual rounded staging allocation
+are validated before recording copies. The staging limit remains 256 MiB per
+capture; it is not raised for integer16.
+
+New physical tests cover 37 mixed native/coverage tiles crossing two chunks,
+exact bytes after compression despite later GPU overwrites, ProPhoto16 GPU
+writeback into 33 captured tiles, a nonfinite last pixel rejecting all backing,
+status reset before worker completion, retry and abandonment. A 252.5 MiB mixed
+payload requiring 256.5 MiB of rounded staging is rejected before allocation.
+Four targeted tests pass after the cache correction below; log
+`native-capture-pooled-tests.log`. Current capture metadata still uses the
+existing sRGB8 raster index for exposed documents; these tests do not establish
+complete native integer16 document editing or saving.
+
+The initial worker benchmark exposed a pre-existing staging-cache defect. Four
+16 MiB startup spares filled its 64 MiB cache. Its eviction rule only removed
+buffers smaller than a newly returned buffer, so a small capture (and the new
+status buffer) could never enter that full cache. Repeated captures therefore
+allocated pinned buffers repeatedly. The cache now preserves recent size usage,
+evicts the oldest unused buffer when necessary, and caps cached status buffers
+at sixteen. The total cache ceiling stays 64 MiB. A resource-identity test
+verifies that small tile/status buffers really are reused after large prefill.
+
+The ignored `raster::native_tests::native_capture_workloads` test runs actual
+queue copies and submits the ticket to the existing backing worker. It covers
+integer8/integer16, structured/noise bytes and one/sixteen/64 tiles, with 20 warm
+and 50 measured captures per case. Submission includes capture metadata,
+allocation/copy recording, queue submit/map setup and worker enqueue. The
+host-backed timer also includes mapping, compression and worker completion;
+no input owner waits in the application path. GPU quantization and display are
+separate work, excluded here. Each case uses repeated tile contents to isolate
+transport/compression, not a full photographic editing workload.
+
+Before the cache correction, warm submission p95 was approximately 7–13 ms.
+With reuse, the first corrected run's maximum is 0.197 ms; integer16's maximum
+is 0.170 ms. Host-backed p95 for 64 integer16 tiles is 12.90–13.56 ms, which must
+remain background work. A first small capture still takes 9.52 ms to submit in
+that run because its sizes were not prepared: mode preparation must establish
+needed size classes before exposing interactive native editing. These results
+are not a pass for cold interaction. Logs: `native-capture-first-bench.log` and
+`native-capture-pooled-bench.log`.
+
+The corrected run's process high-water is 514,968 KiB versus 437,120 KiB in the
+first run, despite the same 64 MiB application staging-cache ceiling. This
+increase is retained as an unresolved process-memory observation; the faster
+allocation/reuse cadence and driver/allocator behavior have not been separated.
+Repeat process measurements and complete frame comparisons are pending. The
+64-tile integer16 case uses 32 MiB plus eight bytes of pending capture staging;
+parallel CPU mapping/compression scratch retains its existing bounded worker
+contract. Peak process memory cannot be inferred from native pixel payload alone.
+
+The repeated old/pooled/pooled/old worker sequence retains the submission
+improvement. Process high-water is 452,144 / 459,788 / 461,204 / 443,076 KiB;
+end-of-run RSS is 345,672 / 459,788 / 461,204 / 331,256 KiB. The earlier corrected
+514,968 KiB high-water remains the observed maximum. Reuse changes resident
+memory behavior as well as timing; the driver/allocator contribution is still
+unattributed, and these results are not a complete photo-memory qualification.
+All per-case results and binary hashes are in
+`native-capture-worker-measurements.json`; raw repeats are
+`native-capture-memory-{0-old,1-pooled,2-pooled,3-old}.log`.
+
+Fresh fixed (`e46f271`), parent (`7fc143d`), current, current, parent drawing runs
+cover all 25 scenarios, three repetitions each: **54,600 measured frames**.
+No Move or Pen-up sample exceeds 8.33 ms. All 25 PNGs are byte-identical across
+all five arms. Maximum CPU Move p95/p99 across scenarios is 2.168/2.864 ms fixed,
+2.055/2.869 and 2.011/2.890 ms parent, and 2.236/2.822 and 2.114/2.892 ms current.
+Reported peak capture allocated/reserved storage is 184.2 MiB fixed,
+192.2/184.2 MiB parent and 168.5/176.5 MiB current. This counter includes pending
+reservations and CPU scratch, so it is not a distinct-buffer VRAM measurement.
+
+The short runs trigger wet-watercolor completed Pen-up p99: parent
+3.140/3.196 ms, current 3.434/3.475 ms, fixed 3.180 ms. A longer
+parent/current/current/parent comparison uses twenty repetitions per arm,
+**11,680 additional frames**. Current completed Pen-up p99 is 3.575/3.550 ms,
+within the parent range 3.451/3.750 ms; CPU Pen-up p99 is 2.388/2.251 ms current
+versus 2.186/2.520 ms parent. Move CPU p95 is 2.039/2.033 ms current versus
+1.951/1.927 ms parent, and completed p95 is 3.282/3.261 versus 3.170/3.142 ms.
+The longer comparison clears the relative trigger. Every measured frame meets
+the absolute limit. Other short-run triggers do not reproduce across the two
+parent/current arms. Earlier outstanding transform/prediction limits remain
+unchanged; these drawing runs do not substitute for their final qualification.
+
+Reproduction: build `layer-bench --bin gpu-bench` in fresh archives of the named
+commits, copy each successful executable, then run with `LAYER_GPU_INDEX=0`,
+`--scenario all --repeats 3` in fixed/parent/current/current/parent order. Use
+`--scenario wet_watercolor --repeats 20` for the longer paired check. Reports
+are `native-capture-frame-{0-fixed,1-parent,2-current,3-current,4-parent}.md` and
+`native-capture-watercolor-{0-parent,1-current,2-current,3-parent}.md`; image and
+binary hashes and full-suite values are in `native-capture-frame-summary.json`.
+Builds and other GPU workloads do not overlap these measurements. The public
+frame benchmark waits for GPU completion and accounts for deferred capture
+capacity, but does not measure native input-to-present latency.
+
+The phase-profiling script now instruments the shared copy helper as `CM2_COPY`
+while retaining full-frame `capture_us` around index/capture publication. Its
+old-function instrumentation remains usable for parent comparisons; stale
+whitespace anchors were corrected. Fresh parent/current probe builds and a
+one-repetition ink smoke test produce the expected frame/capture/copy records.
+These instrumented executables are diagnostic only, excluded from qualification.
+
+Final stage checks: **147 GPU tests / 23 hardware benchmarks ignored**, four
+project round trips, isolated GTK file workflows and injected GPU failure/recovery
+all pass. Logs: `native-capture-native-build.log`,
+`native-capture-full-gpu-tests.log`, `native-capture-project-run.log`, and
+`native-capture-gtk-{files,recovery}` logs. The recovery test's intentional wgpu
+panic is handled successfully. Changed Rust formatting, Python parsing and
+`git diff --check` pass. Native document/raster format adoption, source/composite
+residency, cold preparation and the complete GTK SDR journeys remain pending.

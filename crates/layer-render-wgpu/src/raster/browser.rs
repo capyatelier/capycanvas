@@ -99,6 +99,12 @@ impl Drop for CaptureWorker {
 impl RasterCapture {
     async fn finish_browser(mut self, encoder: &BrowserRasterEncoder) -> Result<(), String> {
         let result: Result<(), String> = async {
+            if let Some(validation) = &mut self.validation {
+                (&mut validation.ready)
+                    .await
+                    .map_err(|_| "Raster validation mapping was abandoned")??;
+                self.accept_validation()?;
+            }
             for chunk in &mut self.chunks {
                 (&mut chunk.ready)
                     .await
@@ -121,17 +127,13 @@ impl RasterCapture {
                 }
                 self.pool.working.fetch_add(size, Ordering::Release);
                 let _scratch = Scratch(self.pool.clone(), size);
-                let descriptors = chunk
-                    .entries
-                    .iter()
-                    .map(|e| e.key.plane.descriptor())
-                    .collect();
+                let descriptors = chunk.entries.iter().map(|e| e.descriptor).collect();
                 let blobs = encoder(bytes, descriptors).await?;
                 if blobs.len() != chunk.entries.len() {
                     return Err("Raster worker returned the wrong tile count".into());
                 }
                 for (entry, blob) in chunk.entries.iter().zip(blobs) {
-                    if blob.descriptor != entry.key.plane.descriptor() {
+                    if blob.descriptor != entry.descriptor {
                         return Err("Raster worker changed the pixel representation".into());
                     }
                     entry.tile.publish(Ok(blob))?;
