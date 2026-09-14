@@ -2757,3 +2757,11 @@ MSIX archive inventory, MakeAppx extraction, activation manifest, repeated logos
 normalization, ZIP32, signed-package refusal and invalid-input checks pass. No
 signing, installation, update/uninstall, clean-machine test or UAC retry occurred.
 The payload is unchanged by this subsequent fixture/documentation-only update.
+
+The subsequent integration through upstream ba77f9b brings Android titlebar
+projection and the shared native HeaderRequest transport. Windows retains its
+existing header and Sketch tools pending its own projection. Host/UI/Windows/
+workspace suites pass again (26/367/103/85); unchanged core/engine coverage brings
+the ordinary total to 675. Strict Clippy, normal Release, and complete native
+editor/manager/restart checks pass. The packaged production milestone remains
+110a434; the later shared-header integration is not included in those archives.
