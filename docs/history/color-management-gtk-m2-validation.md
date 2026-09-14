@@ -116,7 +116,8 @@ p95/p99 is 2.536/3.034 ms. The first implementation run passes another 10,920
 frames, with maximum CPU p95/p99 2.004/2.663 ms and no Move/Pen-up deadline misses.
 No per-scenario CPU p95/p99 exceeds the larger fresh baseline plus the declared
 investigation threshold. Seven native pacing workloads pass 5,055 frames. Worker
-render p95/p99 (ms), measured separately from main-thread frame creation:
+render-plus-present wall elapsed p95/p99 (ms), measured separately from
+main-thread frame creation and from worker thread CPU time:
 
 | Workload | Baseline | First stage |
 | --- | --- | --- |
@@ -150,3 +151,61 @@ Reproduction uses `stage1-*` local artifacts and `working-formats.md` under
 The runner sets `GDK_DEBUG=no-portals` because the file test drives GTK's in-process
 fallback chooser; its initial missing-chooser failure was a runner configuration
 error. Production retains its normal portal selection.
+
+## Second implementation stage: bounded source upload
+
+Image initialization no longer retains a full-size immutable GPU source. It
+packs one 256² encoded tile, uploads through at most 64 mapped COPY_SRC buffers,
+and performs the existing GPU decode/premultiply operation into paint pages.
+Native upload chunks wait on the render owner for their exact queue submission;
+GTK input does not wait. Upload buffers plus CPU/GPU source scratch peak at
+16.50 MiB. A 2049² test crosses the 64-tile boundary and partial image edges,
+checking every exported code and source Arc sharing. All 129 GPU library tests,
+three project tests, native GTK files and fault/recovery workflows pass.
+
+The 24/45/60 MP and two-document workloads retain exact archive, undo/redo and
+export checksums (`8356e7bd`, `86475ef0`, `50c21c68`). Repeated current cold
+source-generation/device/initial-submission observations are 761.54/617.44 ms,
+902.55/807.90 ms and 1067.20/1095.61 ms, respectively. Initial host backing is
+845.24/700.93, 1028.23/935.27 and 1237.19/1274.03 ms. These single observations
+include device setup and cannot isolate decoder or upload latency.
+
+The old renderer residency counter omitted the immutable source. The workload
+now also reports wgpu's allocator live/reserved totals, including tracked
+staging but excluding driver-private allocations. Rebuild `e46f271` in an
+isolated archive with only this reporting addition to reproduce the comparison:
+
+| Workload | Baseline live / reserved MiB | Tile upload live / reserved MiB |
+| --- | --- | --- |
+| 24 MP | 352.85 / 704 | 259.01 / 640 |
+| 45 MP | 589.56 / 896 | 417.38 / 640 |
+| 60 MP | 765.61 / 1280 | 533.38 / 1024 |
+| Each of two 24 MP documents | 352.85 / 704 | 259.01 / 640 |
+
+The instrumented baseline's cumulative process high-water is 1,654,028 KiB;
+two current runs reach 1,615,064 and 1,606,540 KiB. Final two-document RSS falls
+from 1,305,656 to 1,248,916/1,249,556 KiB. CPU source bytes, eager paint pages,
+full composites and image-boundary filters remain; this stage does not qualify
+the complete photo residency requirement. Browser queue draining is also still
+unqualified; no other host controls are enabled.
+
+Both complete 25-scenario current runs pass 10,920 frames each with no completed
+Move/Pen-up sample over 8.33 ms. Initial p95/p99 investigation triggers required
+a paired rebuild of parent `5114481` and alternating isolated repeats. Parent
+and current full-suite maxima are 2.229/2.999 and 2.387/2.958 ms CPU p95/p99.
+The remaining three Move CPU triggers do not reproduce consistently in
+current/parent/parent/current order, five repetitions per invocation:
+
+| Workload | Parent p95 range / p99 range ms | Current p95 range / p99 range ms |
+| --- | --- | --- |
+| Wet Round Oklab | 1.534–1.573 / 2.019–2.110 | 1.522–1.534 / 2.007–2.140 |
+| Opaque Gouache | 2.045–2.100 / 2.841–3.008 | 2.086–2.133 / 2.596–2.727 |
+| Wet Watercolor | 2.147–2.198 / 2.884–3.144 | 2.109–2.257 / 2.856–3.031 |
+
+Initialization runs only on reset, and these brush workloads have no imported
+source. Both revisions show tail variation; the isolated Move distributions
+overlap and no consistent added cost was found. Pen-up tails have fewer samples
+and vary too (Wet Round parent 1.734–1.882 versus current 1.637–2.243 ms); do not
+treat a short-run p99 as a stable estimate. Final native input/presentation and
+sustained pen-up qualification must still be repeated after later pipeline work.
+Artifacts: `source-tiles*`, `baseline-allocator*`, `paired-*`, `isolated-*`.

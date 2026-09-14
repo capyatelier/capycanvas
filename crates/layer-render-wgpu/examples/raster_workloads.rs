@@ -215,6 +215,20 @@ impl Canvas {
         Ok(())
     }
     fn memory(&self) -> Result<()> {
+        let metrics = self.engine.backend().metrics();
+        println!(
+            "source upload staging/scratch peak {:.2} MiB; bounded upload submissions {}",
+            metrics.source_upload_peak_bytes as f64 / 1048576.,
+            metrics.source_upload_submissions,
+        );
+        match self.engine.backend().device().generate_allocator_report() {
+            Some(report) => println!(
+                "GPU allocator live {:.2} MiB; reserved {:.2} MiB (includes staging; excludes driver-private allocations)",
+                report.total_allocated_bytes as f64 / 1048576.,
+                report.total_reserved_bytes as f64 / 1048576.,
+            ),
+            None => println!("GPU allocator report unavailable on this backend"),
+        }
         let backed: usize = self
             .engine
             .document()

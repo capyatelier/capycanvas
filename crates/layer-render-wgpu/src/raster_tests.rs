@@ -81,6 +81,35 @@ fn failed_restore_keeps_live_pages_after_staging_a_replacement() {
 }
 
 #[test]
+fn source_tiles_preserve_opaque_codes_across_upload_chunks_and_partial_edges() {
+    use layer_core::{AssetId, ProjectAsset, ProjectAssetFormat};
+    let extent = [2049, 2049]; // 81 physical pages: crosses the 64-page upload cap.
+    let source = ProjectAsset {
+        extent,
+        format: ProjectAssetFormat::Rgba8Srgb,
+        bytes: (0..extent[0] * extent[1]).flat_map(|i| {
+            let x = i % extent[0];
+            let y = i / extent[0];
+            [x as u8, y as u8, (x ^ y) as u8, 255]
+        }).collect(),
+    };
+    let id = AssetId::from("test:source-tile-edges");
+    let mut layer = Layer::paint(LayerId(1), "source");
+    layer.asset = Some(id.clone());
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.prepare_owned_asset(&id, &source).unwrap();
+    r.submit(FramePacket {
+        view: view(), document_extent: extent, layers: &[layer],
+        dabs: &[], dab_batches: &[], restore_rasters: &[],
+        time_seconds: 0., reset_layers: true, composite_all: true,
+    }).unwrap();
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), source.bytes.as_ref());
+    assert_eq!(r.metrics.source_upload_submissions, 2);
+    assert_eq!(r.metrics.source_upload_peak_bytes, 66 * PAGE_BYTES);
+    assert!(std::sync::Arc::ptr_eq(&source.bytes, &r.source_asset(&id).unwrap().bytes));
+}
+
+#[test]
 fn raster_capture_undo_redo_and_continued_paint_are_exact() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let layers = [Layer::paint(LayerId(1), "ink")];

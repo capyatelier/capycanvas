@@ -189,6 +189,10 @@ pub struct GpuRasterMetrics {
     pub paint_state_storage_bytes: u64,
     pub composite_storage_bytes: u64,
     pub raster_backing_reserved_bytes: u64,
+    /// Native import upload buffers plus the source tile and CPU packing tile.
+    /// Excludes retained source bytes, uniforms, paint pages and driver overhead.
+    pub source_upload_peak_bytes: u64,
+    pub source_upload_submissions: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -682,7 +686,6 @@ pub struct WgpuRasterizer {
     last_style_base: usize,
     last_time_seconds: f32,
     filter_source_epoch: u64,
-    images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
     image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
@@ -1005,7 +1008,6 @@ impl WgpuRasterizer {
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
-            images: Default::default(),
             image_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
             raster: None,
@@ -3947,36 +3949,8 @@ impl CanvasRenderer for WgpuRasterizer {
             return Err(GpuRasterError::InvalidImage);
         }
         if source.format == PixelFormat::Rgba8Srgb {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                // Preserve encoded bytes; scene initialization performs the
-                // shared sRGB-to-linear conversion once on the GPU.
-                label: Some("immutable encoded sRGB image"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            self.queue.write_texture(
-                texture.as_image_copy(),
-                &source.bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: stride,
-                    rows_per_image: Some(height),
-                },
-                texture.size(),
-            );
-            self.images.insert(
-                asset.clone(),
-                (texture.create_view(&Default::default()), [width, height]),
-            );
+            // Keep the immutable source shared with save snapshots. Initial
+            // rasterization uploads bounded tiles; no full GPU source is kept.
             self.image_sources.insert(asset.clone(), source.clone());
         } else {
             self.upload_mask_source(asset, source);
@@ -3997,7 +3971,6 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn release_asset(&mut self, asset: &AssetId) {
-        self.images.remove(asset);
         self.image_sources.remove(asset);
         self.masks.retain(|stored| stored.id != *asset);
         self.texture_sets.clear();
@@ -4280,11 +4253,11 @@ impl CanvasRenderer for WgpuRasterizer {
             };
             if reset
                 && !self.has_raster_source(layer.id)
-                && let Some((_, extent)) = layer.asset.as_ref().and_then(|a| self.images.get(a))
+                && let Some(source) = layer.asset.as_ref().and_then(|a| self.image_sources.get(a))
             {
                 for c in page_coordinates(PixelRect::full([
-                    extent[0].min(packet.document_extent[0]),
-                    extent[1].min(packet.document_extent[1]),
+                    source.extent[0].min(packet.document_extent[0]),
+                    source.extent[1].min(packet.document_extent[1]),
                 ])) {
                     if !self.paint_layers[index]
                         .pages
