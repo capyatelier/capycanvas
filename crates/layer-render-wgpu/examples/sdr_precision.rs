@@ -33,7 +33,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("No adapter")?;
     println!("Adapter: {:?}", adapter.get_info());
     let features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        | wgpu::Features::FLOAT32_BLENDABLE;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: features,
@@ -59,8 +60,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let a = texture(&device, working);
         let b = texture(&device, working);
         for (space_id, space) in RgbSpace::ALL.into_iter().enumerate() {
-            for operation in ["identity", "exposure_chain", "low_alpha_over", "resampling"] {
-                let low_alpha = operation == "low_alpha_over";
+            let mut blend_reference = None::<Vec<u8>>;
+            for operation in [
+                "identity",
+                "exposure_chain",
+                "low_alpha_over",
+                "fixed_blend_over",
+                "fixed_blend_batched",
+                "resampling",
+            ] {
+                let fixed_blend = operation.starts_with("fixed_blend");
+                let batched = operation == "fixed_blend_batched";
+                let low_alpha = operation == "low_alpha_over" || fixed_blend;
                 let source: Vec<[u16; 4]> = (0..COUNT)
                     .map(|i| {
                         if operation == "identity" || operation == "exposure_chain" {
@@ -97,6 +108,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let decode = pipeline(
                     &device,
                     working,
+                    None,
                     &format!(
                         "{SHARED}\n{VERTEX}\n@fragment fn fragment(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32> {{\nlet v=textureLoad(source,vec2<i32>(p.xy),0); return vec4<f32>(sdr_decode(v.rgb,{space_id}u)*v.a,v.a); }}"
                     ),
@@ -107,6 +119,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "low_alpha_over" => {
                         "let a=1.0/65535.0; return vec4<f32>(vec3<f32>(0.25,0.5,0.75)*a+v.rgb*(1.0-a),a+v.a*(1.0-a));"
                     }
+                    "fixed_blend_over" | "fixed_blend_batched" => {
+                        "let a=1.0/65535.0; return vec4<f32>(vec3<f32>(0.25,0.5,0.75)*a,a);"
+                    }
                     "resampling" => {
                         "let right=textureLoad(source,vec2<i32>((i.x+1)%256,i.y),0); return mix(v,right,0.375);"
                     }
@@ -115,6 +130,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let edit = pipeline(
                     &device,
                     working,
+                    fixed_blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     &format!(
                         "{VERTEX}\n@fragment fn fragment(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32> {{let i=vec2<i32>(p.xy);let v=textureLoad(source,i,0);{edit_body}}}"
                     ),
@@ -122,6 +138,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let encode = pipeline(
                     &device,
                     wgpu::TextureFormat::Rgba16Unorm,
+                    None,
                     &format!(
                         "{SHARED}\n{VERTEX}\n@fragment fn fragment(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32> {{let v=textureLoad(source,vec2<i32>(p.xy),0);let straight=v.rgb/max(v.a,1e-20); return vec4<f32>(sdr_encode(straight,{space_id}u),v.a);}}"
                     ),
@@ -138,7 +155,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let start = Instant::now();
                     let mut encoder = device.create_command_encoder(&Default::default());
                     draw(&device, &mut encoder, &decode, &encoded, &a);
-                    for pass in 0..n {
+                    if batched {
+                        draw_with_load(
+                            &device,
+                            &mut encoder,
+                            &edit,
+                            &encoded,
+                            &a,
+                            wgpu::LoadOp::Load,
+                            n as u32,
+                        );
+                    }
+                    for pass in 0..if batched { 0 } else { n } {
+                        if fixed_blend {
+                            draw_with_load(
+                                &device,
+                                &mut encoder,
+                                &edit,
+                                &encoded,
+                                &a,
+                                wgpu::LoadOp::Load,
+                                1,
+                            );
+                            continue;
+                        }
                         draw(
                             &device,
                             &mut encoder,
@@ -151,7 +191,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &device,
                         &mut encoder,
                         &encode,
-                        if n % 2 == 0 { &a } else { &b },
+                        if fixed_blend || n % 2 == 0 { &a } else { &b },
                         &output,
                     );
                     let submitted = queue.submit([encoder.finish()]);
@@ -188,6 +228,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let mut max_alpha = 0i32;
                 let mut sum = 0f64;
                 let mut changed = 0;
+                let mut blend_difference = 0;
                 for (i, pixel) in mapped.chunks_exact(8).enumerate() {
                     let mut expected = source[i].map(|v| f64::from(v) / 65535.);
                     let alpha = expected[3];
@@ -215,6 +256,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     for (c, code) in pixel.chunks_exact(2).enumerate() {
                         let actual = i32::from(u16::from_le_bytes([code[0], code[1]]));
+                        if fixed_blend && let Some(reference) = &blend_reference {
+                            let offset = i * 8 + c * 2;
+                            let reference = i32::from(u16::from_le_bytes([
+                                reference[offset],
+                                reference[offset + 1],
+                            ]));
+                            blend_difference = blend_difference.max((actual - reference).abs());
+                        }
                         let reference = (expected[c].clamp(0., 1.) * 65535.).round() as i32;
                         let error = (actual - reference).abs();
                         if c < 3 {
@@ -225,6 +274,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             max_alpha = max_alpha.max(error);
                         }
                     }
+                }
+                if working == wgpu::TextureFormat::Rgba32Float && operation == "low_alpha_over" {
+                    blend_reference = Some(mapped.to_vec());
                 }
                 drop(mapped);
                 staging.unmap();
@@ -239,6 +291,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(
                         "Float32 kernel exceeded declared 2 RGB / 1 alpha code tolerance".into(),
                     );
+                }
+                if fixed_blend && blend_reference.is_some() {
+                    println!(
+                        "Float32 {operation} vs manual physical passes: max code difference {blend_difference}"
+                    );
+                    if blend_difference > 1 {
+                        return Err(
+                            "Fixed/blended pass partition exceeded 1 code difference".into()
+                        );
+                    }
                 }
             }
         }
@@ -268,6 +330,7 @@ fn texture(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Texture 
 fn pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
     source: &str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -307,7 +370,7 @@ fn pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: None,
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -324,6 +387,25 @@ fn draw(
     pipeline: &wgpu::RenderPipeline,
     source: &wgpu::Texture,
     target: &wgpu::Texture,
+) {
+    draw_with_load(
+        device,
+        encoder,
+        pipeline,
+        source,
+        target,
+        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        1,
+    );
+}
+fn draw_with_load(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::RenderPipeline,
+    source: &wgpu::Texture,
+    target: &wgpu::Texture,
+    load: wgpu::LoadOp<wgpu::Color>,
+    instances: u32,
 ) {
     let view = target.create_view(&Default::default());
     let input = source.create_view(&Default::default());
@@ -342,7 +424,7 @@ fn draw(
             resolve_target: None,
             depth_slice: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                load,
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -353,5 +435,5 @@ fn draw(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, &binding, &[]);
-    pass.draw(0..3, 0..1);
+    pass.draw(0..3, 0..instances);
 }

@@ -759,3 +759,37 @@ are `region-parent-gpu-tests` and `region-reused-gpu-tests` under the artifact
 directory. Final logs: `region-reused-abba-*`. Intermediate investigation logs
 are `region-{source,batch,tail,phase,views,reuse,submit}*`. The source-backed mode
 remains disabled pending the complete editing, color and GTK integration.
+
+## Float32 blend and pass-boundary qualification
+
+The reference adapter also supports the optional
+[`FLOAT32_BLENDABLE` feature](https://docs.rs/wgpu/30.0.1/wgpu/struct.Features.html#associatedconstant.FLOAT32_BLENDABLE).
+The extended `sdr_precision` harness requests that feature and compares 64
+source-over blends in one instanced draw against 64 separate render passes and
+the existing manual Float32 blend kernel. Each case spans 65,536 RGB combinations,
+initial alpha 257/65535 and added coverage 1/65535 in all four built-in spaces.
+Readback and shader preparation remain outside the 100 timed submissions after
+10 warmups. The precision threshold remains 2 RGB / 1 alpha integer16 codes;
+the additional partition comparison allows at most one code difference.
+
+RGBA32Float passes both physical blend paths with maximum **1 RGB code / 0 alpha
+codes** of error and RGB RMS 0.2149–0.2244 codes against Float64. Output codes are
+**identical** to the manual physical-pass kernel in every space and both
+partitions. FP16 fixed-function blending is more accurate in these cases than
+the earlier manual FP16 kernel, but still reaches 25–31 RGB codes of error;
+linear UNORM16 reaches 18,385–23,156. Neither narrower working format meets the
+declared integer16 contract.
+
+For this deliberately dense 256² tile, the 64 blended full-tile instances complete
+at p95 **0.246–0.248 ms** with Float32 versus 0.094–0.098 ms with FP16; Float32
+separate passes take 0.928–0.969 ms. The batched Float32 p99 is noisy at
+2.228–2.256 ms. These are isolated format/partition measurements, not brush-frame
+or input-to-present budgets. They establish a viable batched Float32 blend path
+on the reference adapter; they do not qualify whole-document residency or other
+GPUs. Hosts without this feature still need an explicitly measured full-precision
+fallback or a declared unsupported workload, never an implicit FP16 substitution.
+
+Reproduce: build and run `sdr_precision` as above, with `LAYER_GPU_INDEX=0`.
+Final logs are `sdr-blend-batch{,-build}.log`; the preceding split-pass-only run
+is `sdr-blend{,-build}.log`. Production document/paint formats remain unchanged
+until their complete commit, restore, editing and memory integration is ready.
