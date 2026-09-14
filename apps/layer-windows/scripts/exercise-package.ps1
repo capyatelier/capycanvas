@@ -31,7 +31,7 @@ foreach($file in $manifest.files){
     if((Get-Item -LiteralPath $path).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256){throw "Package file does not match its hash: $($file.path)"}
 }
 if($names.Count -ne $declared.Count+1){throw 'Archive has files absent from its manifest'}
-$environment=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_FILTERS_DIR','CAPY_FILTERS_MODE')
+$environment=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_FILTERS_DIR','CAPY_FILTERS_MODE','PATH')
 $previous=@{};foreach($name in $environment){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 function Model {
     try {
@@ -50,6 +50,8 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
 }
 try {
     foreach($name in $environment){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+    # A build shell adds SDK shader compilers to PATH; exercise the bundled runtime.
+    $env:PATH=(Join-Path $env:WINDIR 'System32')+[IO.Path]::PathSeparator+$env:WINDIR
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
     $stderr=Join-Path $run 'stderr.log'
