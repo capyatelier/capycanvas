@@ -14,7 +14,7 @@ use std::{
 };
 
 pub const TILE_SIZE: u32 = 256;
-pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 4) as usize;
+pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 8) as usize;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -108,18 +108,57 @@ impl std::fmt::Debug for TileBlob {
             .finish()
     }
 }
+fn shuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+    let bpp = descriptor
+        .bytes_per_pixel()
+        .expect("validated integer16 descriptor");
+    let pixels = bytes.len() / bpp;
+    let mut result = vec![0; bytes.len()];
+    for (pixel, source) in bytes.chunks_exact(bpp).enumerate() {
+        for (channel, byte) in source.iter().enumerate() {
+            result[channel * pixels + pixel] = *byte;
+        }
+    }
+    result
+}
+fn unshuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+    let bpp = descriptor
+        .bytes_per_pixel()
+        .expect("validated integer16 descriptor");
+    let pixels = bytes.len() / bpp;
+    let mut result = vec![0; bytes.len()];
+    for (pixel, destination) in result.chunks_exact_mut(bpp).enumerate() {
+        for (channel, byte) in destination.iter_mut().enumerate() {
+            *byte = bytes[channel * pixels + pixel];
+        }
+    }
+    result
+}
+
 impl TileBlob {
     pub fn encode(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
+        Self::encode_at_level(descriptor, bytes, -20)
+    }
+    /// Immutable imported samples are compressed on the file worker. Unlike
+    /// interactive capture, favor source residency over minimum commit latency.
+    pub fn encode_source(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
+        Self::encode_at_level(descriptor, bytes, 1)
+    }
+    fn encode_at_level(descriptor: PixelDescriptor, bytes: &[u8], level: i32) -> Result<Self, String> {
         let expected = descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
         if bytes.len() != expected {
             return Err("Invalid raster tile byte count".into());
         }
+        // Integer16 source channels benefit from byte planes: smooth high
+        // bytes no longer alternate with noisy low bytes. This is a reversible
+        // permutation, not a precision change; the digest covers original bytes.
+        let shuffled = (descriptor.bits_per_channel == 16).then(|| shuffle16(descriptor, bytes));
         Ok(Self {
             digest: Self::digest(descriptor, bytes),
             descriptor,
-            compressed: zstd::bulk::compress(bytes, -20)
+            compressed: zstd::bulk::compress(shuffled.as_deref().unwrap_or(bytes), level)
                 .map_err(|e| e.to_string())?
                 .into(),
         })
@@ -151,7 +190,10 @@ impl TileBlob {
         if frame_size != self.compressed.len() {
             return Err("Trailing compressed raster data".into());
         }
-        let bytes = zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
+        let mut bytes = zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
+        if bytes.len() == size && self.descriptor.bits_per_channel == 16 {
+            bytes = unshuffle16(self.descriptor, &bytes);
+        }
         if bytes.len() != size || Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
         }
@@ -440,7 +482,8 @@ mod tests {
     }
     #[test]
     fn exact_backing_reuses_unchanged_tiles_and_preserves_snapshot() {
-        let bytes: Vec<_> = (0..MAX_TILE_BYTES).map(|i| (i % 251) as u8).collect();
+        let size = PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap();
+        let bytes: Vec<_> = (0..size).map(|i| (i % 251) as u8).collect();
         let tile =
             RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap());
         let key = TileKey {

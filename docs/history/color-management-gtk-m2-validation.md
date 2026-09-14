@@ -209,3 +209,107 @@ and vary too (Wet Round parent 1.734–1.882 versus current 1.637–2.243 ms); d
 treat a short-run p99 as a stable estimate. Final native input/presentation and
 sustained pen-up qualification must still be repeated after later pipeline work.
 Artifacts: `source-tiles*`, `baseline-allocator*`, `paired-*`, `isolated-*`.
+
+## Third implementation stage: color and source services
+
+The new native `layer-color` library provides reusable Float32 Little CMS
+transforms, exact embedded profile ownership and depth-preserving source codecs.
+It is not yet wired to GTK Open, the document renderer or other hosts. Existing
+document mode remains sRGB8. Profile, integer depth and conversion intent/BPC
+have independent shared types. sRGB, Display P3, Adobe RGB (1998) and ProPhoto
+definitions use Float64 reference mathematics with unclipped matrix/Bradford
+conversion; every 16-bit code survives transfer decoding through a Float32
+storage boundary and re-encoding in the reference test. This is not yet a
+complete GPU integer16 precision qualification.
+
+Native transforms use `lcms2` 6.2.0 / `lcms2-sys` 4.0.7, dynamically linked here
+to Little CMS 2.16. The sys crate's static fallback is a different library version
+(2.19) and is unqualified. Transforms own their thread context, use Float32
+formatters with optimization/cache disabled, preserve linear alpha separately,
+and expose intent/BPC explicitly. RGB identity is a copy after validating a
+usable transform, preserving hidden RGB and every sample. Standard-space CMM
+results agree with the independent Float64 reference within 0.0003 encoded
+channel units for tested in-gamut interiors; ICC fixed-point matrix/TRC tags
+differ from analytic definitions. This tolerance is for profile conversion,
+not identity storage or future editing. Arbitrary device profiles, BPC numerical
+corpora, managed display and GPU conversion still need full qualification.
+
+The shared source representation holds immutable compressed 256² tiles. Reading
+or writing rows decodes one 256-row band. Source compression uses zstd level 1;
+interactive 8-bit raster capture retains its existing -20 setting. Integer16
+tile blobs reversibly separate component-byte planes before compression and
+restore the original little-endian bytes before digest validation. There is no
+sample quantization in this permutation. Snapshots share source tiles with Arc.
+Eight EXIF orientations normalize sample positions using at most four decoded
+input tiles and one output tile, while retaining the same profile/depth. During
+normalization both compressed source and output can coexist.
+
+PNG output streams rows with matching profile/depth and flush errors propagated.
+TIFF reads strips/tiles directly, preserving RGB/gray/CMYK channels and 8/16-bit
+codes before any CMM conversion; output streams strips with an embedded ICC and
+explicit straight alpha. JPEG RGB/gray decoding retains its 8-bit samples and
+profile. Untagged ordinary RGB/gray sources record the sRGB assumption. Profile
+channel mismatches and ambiguous untagged CMYK fail explicitly.
+
+Inspection of pinned codec source found two silent-fallback hazards. zune-jpeg's
+ICC accessor returns None for malformed chunk sequences; a bounded marker scan
+now distinguishes corruption from absence and supports all 255 ICC chunks.
+png 0.18.1 discards iCCP decompression errors; chunk preflight detects an unreadable
+declared profile. PNG follows cICP → iCCP → sRGB → cHRM/gAMA precedence, handles
+supported sRGB/P3 cICP values, and rejects unsupported/HDR transfer encodings.
+The PNG test writer must explicitly write cICP because that crate's Info encoder
+does not emit the field. References: [PNG3 color chunk precedence](https://www.w3.org/TR/png-3/#4Concepts.ColourSpaces),
+[ICC embedding rules](https://www.color.org/technotes/ICC-Technote-ProfileEmbedding.pdf),
+[zune-jpeg API](https://docs.rs/zune-jpeg/0.5.15/zune_jpeg/struct.JpegDecoder.html).
+
+The source tests cover exact 8/16-bit PNG/TIFF pixels and ICC bytes in all four
+working spaces, hidden RGB, partial tiles, row cache bounds, orientation,
+corrupt/conflicting profiles, metadata precedence, gamma-only PNGs, allocation
+limits and failed output. Existing 49 core, 49 engine, 129 GPU library and three
+GPU project tests pass; GTK checks successfully. ImageMagick-produced RGB16,
+gray16 and CMYK16 TIFFs, tiled ZIP and big-endian LZW TIFFs, and an RGB8 tagged
+JPEG round-trip through the source runner with exact decoded tile digests and
+embedded ICC bytes. ImageMagick reads the emitted depth and profile descriptions.
+This is codec interoperability evidence, not the final external-editor workflow.
+
+Reproduce source measurements with `cargo build --release -p layer-color
+--example photo_sources --offline`, then, with no concurrent build/test work:
+
+```sh
+target/release/examples/photo_sources generate 6000 4000 /tmp/source24.tiff
+target/release/examples/photo_sources generate 8192 5504 /tmp/source45.tiff
+target/release/examples/photo_sources generate 8192 7324 /tmp/source60.tiff
+```
+
+Repeat with `generate_noise` for independent random RGB16 samples (alpha includes
+0, 1, 257 and 65535). These are deterministic source stress fixtures, not a corpus
+of camera photographs. The smooth/ramp fixture is very compressible after byte
+shuffling; the random case guards against inferring a universal compression ratio.
+All numbers below use the final shuffle/level-1 representation:
+
+| Size | Ramp / random retained MiB | Decoded band MiB | Random generate / output / reopen+compare ms | Random process high-water KiB |
+| --- | --- | --- | --- | --- |
+| 24 MP | 3.41 / 137.58 | 12 | 394.25 / 294.13 / 285.82 | 299936 |
+| 45 MP | 6.67 / 258.36 | 16 | 704.47 / 535.50 / 503.63 | 552084 |
+| 60 MP | 8.87 / 343.78 | 16 | 951.47 / 723.10 / 672.87 | 727012 |
+
+Process high-water includes both retained source and reopened source for exact
+comparison. At 60 MP, RSS immediately after random source generation is 357820
+KiB. With the initial -20/interleaved representation, the ramp source alone was
+457.78 MiB; level 1 without shuffling reduced it to 321.93 MiB. Final source
+compression improves residency at a measured cold CPU cost; no interactive paint
+compression policy was changed. Artifacts: `source*-prophoto16*`, `source-codec*`,
+`color-foundation-*`, `external-*`, `handoff-*`. Final editing budgets still need
+to include GPU working/composite/filter residency, history, other documents and
+concurrent save/export rather than only these source components.
+
+Remaining codec work before GTK workflow qualification: JPEG delivery and CMYK
+JPEG/YCCK conversion; full metadata/DPI policy; grayscale-alpha and associated-alpha
+TIFF handling; multi-page selection; planar TIFF (the pinned chunk API documents
+an incomplete-plane bug); interlaced PNG above its explicit full-decoded-image
+limit; further HDR/ambiguous-profile recognition; cancellation/progress integration.
+Current default codec allocation limit is 128 MiB, retained compressed source
+limit 512 MiB and dimension limit 32768. These are implementation ceilings, not
+qualified whole-document memory budgets. Source-backed renderer composition,
+copy-on-write painting, native source persistence and all exposed color journeys
+remain outstanding.

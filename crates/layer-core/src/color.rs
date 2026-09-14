@@ -1,5 +1,10 @@
 //! Document interpretation and byte layout. GPU formats are a separate choice.
 use serde::{Deserialize, Serialize};
+pub mod rgb;
+pub use rgb::RgbSpace;
+mod profile;
+pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, RenderingIntent};
+pub mod source;
 
 /// IEC sRGB primaries, D65 white, SDR range, standard piecewise transfer.
 /// Versioned built-in definition; display state never changes this identity.
@@ -22,6 +27,8 @@ pub enum AlphaAssociation {
 pub enum TransferEncoding {
     Linear,
     Srgb,
+    /// Encoded channels interpreted by the source/document profile.
+    Profile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,9 +59,17 @@ impl PixelDescriptor {
     };
 
     pub fn bytes_per_pixel(self) -> Option<usize> {
-        [Self::SRGB8_STRAIGHT, Self::SRGB8_PAINT, Self::COVERAGE8]
-            .contains(&self)
-            .then_some(usize::from(self.channels))
+        if !matches!(self.bits_per_channel, 8 | 16) {
+            return None;
+        }
+        let valid_channels = match self.alpha {
+            AlphaAssociation::None => matches!(self.channels, 1 | 3 | 4),
+            AlphaAssociation::Straight | AlphaAssociation::PremultipliedLinear => {
+                matches!(self.channels, 2 | 4)
+            }
+        };
+        valid_channels
+            .then_some(usize::from(self.channels) * usize::from(self.bits_per_channel / 8))
     }
 
     pub fn byte_len(self, extent: [u32; 2]) -> Option<usize> {
@@ -138,7 +153,7 @@ mod tests {
         assert_eq!(PixelDescriptor::SRGB8_PAINT.byte_len([0, 1]), None);
         assert_eq!(
             PixelDescriptor {
-                bits_per_channel: 16,
+                bits_per_channel: 32,
                 ..PixelDescriptor::SRGB8_PAINT
             }
             .byte_len([1, 1]),

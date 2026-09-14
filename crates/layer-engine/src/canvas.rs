@@ -1992,7 +1992,7 @@ mod tests {
                         use layer_core::raster::*;
                         let blob = TileBlob::encode(
                             layer_core::color::PixelDescriptor::SRGB8_PAINT,
-                            &vec![1; MAX_TILE_BYTES],
+                            &vec![1; layer_core::color::PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap()],
                         )
                         .unwrap();
                         let mut data = RasterData::default();

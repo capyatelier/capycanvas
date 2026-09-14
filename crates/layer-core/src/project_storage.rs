@@ -327,7 +327,7 @@ mod tests {
         let tile = RasterTile::backed(
             TileBlob::encode(
                 color::PixelDescriptor::SRGB8_PAINT,
-                &(0..MAX_TILE_BYTES)
+                &(0..crate::color::PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap())
                     .map(|i| (i % 251) as u8)
                     .collect::<Vec<_>>(),
             )
@@ -393,7 +393,7 @@ mod tests {
             Project::read(
                 bytes.as_slice(),
                 ProjectLimits {
-                    raster_bytes: MAX_TILE_BYTES as u64,
+                    raster_bytes: crate::color::PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap() as u64,
                     ..Default::default()
                 }
             )

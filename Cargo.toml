@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/layer-core",
+    "crates/layer-color",
     "crates/layer-render",
     "crates/layer-engine",
     "crates/layer-render-wgpu",
