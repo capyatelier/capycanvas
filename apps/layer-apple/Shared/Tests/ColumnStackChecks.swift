@@ -1,6 +1,58 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func checkPaintDefaultColumns(in app: XCUIApplication) {
+        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
+        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}}]"#
+        func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
+        let scene = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-")).firstMatch
+        var previousScene: String?
+        for launch in 0..<2 {
+            app.launch()
+            let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+            XCTAssertTrue(paint.waitForExistence(timeout: 30))
+            XCTAssertTrue(scene.exists)
+            // AppKit can create a new scene after XCTest terminates the app.
+            // Existing scenes must restore their binding; new scenes can open
+            // the same saved workspace through the ordinary switcher.
+            if launch == 1 && scene.identifier != previousScene { workspaceActivate(paint) }
+            let strip = element("collapsed-column-4")
+            let color = element("workspace-group-14"), properties = element("workspace-group-15"), layers = element("workspace-group-16")
+            XCTAssertTrue(strip.waitForExistence(timeout: 30))
+            XCTAssertTrue(color.waitForExistence(timeout: 10))
+            XCTAssertTrue(properties.exists && layers.exists)
+            XCTAssertLessThan(strip.frame.maxX, color.frame.minX)
+            XCTAssertEqual(color.frame.minX, properties.frame.minX, accuracy: 1)
+            XCTAssertEqual(properties.frame.minX, layers.frame.minX, accuracy: 1)
+            XCTAssertLessThan(color.frame.maxY, properties.frame.minY)
+            XCTAssertLessThan(properties.frame.maxY, layers.frame.minY)
+            for panel in ["color", "stats", "properties", "adjustments", "layers"] {
+                XCTAssertTrue(app.buttons["panel-tab-" + panel].firstMatch.exists)
+            }
+            let brushes = app.buttons["column-icon-brushes"], tool = app.buttons["column-icon-tool_settings"], navigator = app.buttons["column-icon-navigator"]
+            XCTAssertLessThan(brushes.frame.minY, tool.frame.minY)
+            XCTAssertLessThan(tool.frame.minY, navigator.frame.minY)
+            XCTAssertFalse(element("workspace-group-6").exists)
+            workspaceActivate(brushes)
+            XCTAssertTrue(element("workspace-group-6").waitForExistence(timeout: 10))
+            XCTAssertTrue(color.exists && properties.exists && layers.exists)
+            workspaceActivate(brushes)
+            XCTAssertTrue(element("workspace-group-6").waitForNonExistence(timeout: 10))
+            XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+            #if os(macOS)
+            let shot = app.windows.firstMatch.screenshot()
+            #else
+            let shot = XCUIScreen.main.screenshot()
+            #endif
+            let capture = XCTAttachment(screenshot: shot)
+            capture.name = "paint-default-columns-\(launch)"; capture.lifetime = .keepAlways; add(capture)
+            previousScene = scene.identifier
+            app.terminate()
+            app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS")
+        }
+    }
+
     @MainActor func checkColumnStacks(in app: XCUIApplication, theme: String = "light") {
         let actions: [[String: Any]] = [
             ["type":"set_theme", "theme":theme],
@@ -55,9 +107,11 @@ extension XCTestCase {
             app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-toolbar-", name)).firstMatch
         }
         workspaceActivate(history("Undo Layout Change"))
-        XCTAssertEqual(layerGroup.frame.width, originalWidth, accuracy: 1)
+        expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - originalWidth) <= 1 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         workspaceActivate(history("Redo Layout Change"))
-        XCTAssertEqual(layerGroup.frame.width, resizedWidth, accuracy: 1)
+        expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - resizedWidth) <= 1 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         #if os(macOS)
         let capture = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         #else

@@ -27,6 +27,13 @@ import QuartzCore
         _ = await withCheckedContinuation { continuation in
             store.native!.submit(2, JSON(["type":"catalog"])) { continuation.resume(returning: $0) }
         }
+        // This owner has no display link. Prepare the same committed boundary
+        // used by lifecycle recovery so shared workspace startup can finish.
+        let ready = await withCheckedContinuation { continuation in
+            store.native!.flushPersistence { continuation.resume(returning: $0) }
+        }
+        precondition(ready, "Offscreen renderer preparation failed")
+        try await wait("Workspace startup did not finish") { store.workspaceLibrary?.ready == true }
         precondition(store.failure == nil, store.failure ?? "")
         return layer
     }
@@ -44,7 +51,26 @@ import QuartzCore
             let id = store!.state["layer_tools"]["editing_layer"]["id"].uint
             store!.layer(["op":"rename", "id":id, "name":"Recovery survivor"])
             try await wait("Rename not applied") { store!.state["layers"].array.contains { $0["label"].string == "Recovery survivor" } }
+            let brushDeadline = Date().addingTimeInterval(20)
+            repeat {
+                let prepared = await withCheckedContinuation { continuation in
+                    store!.native!.flushPersistence { continuation.resume(returning: $0) }
+                }
+                precondition(prepared && Date() < brushDeadline, "Drawing preparation did not finish")
+                if store!.snapshot["brush_ready"].bool { break }
+                try await Task.sleep(for: .milliseconds(10))
+            } while true
+            let beforeInk = store!.state["document_file"]["revision"].uint
+            let now = FrameTrace.now()
+            store!.native!.pointer(id: 7, tool: 0, button: 0, records: [
+                50,60,1,0,0,0,0,Double(now),1,
+                70,80,1,0,0,0,0,Double(now + 10_000_000),2,
+                90,95,1,0,0,0,0,Double(now + 20_000_000),3,
+            ], predicted: false, revision: store!.cameraRevision)
+            // No display link/frame follows this pen-up. The full lifecycle
+            // barrier must submit it and await the published recovery archive.
             let firstFlush = await flush(store!); precondition(firstFlush)
+            precondition(store!.state["document_file"]["revision"].uint > beforeInk, "Queued pen-up must reach committed recovery")
             print("Recovery first flush \(platform)"); fflush(stdout)
             let first = try await io { try files.list().records.first! }
             let firstBytes = try await io { try Data(contentsOf: files.archive(first)!) }
