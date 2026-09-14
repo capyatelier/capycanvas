@@ -81,3 +81,72 @@ remain local; subsequent sections retain qualification measurements here.
 
 GTK workflows, dense-photo budgets, integer16 accuracy, profiled interchange,
 managed-view tests and final regression qualification are still outstanding.
+
+## First implementation stage: restoration and averaged sampling
+
+Raster restoration now prepares GPU replacements before publication while
+decoding one tile at a time. A bad later tile leaves the entire live revision
+intact. This removes the additional full-document decoded CPU vector; it does
+**not** yet bound driver upload staging or eliminate the old/new GPU pages needed
+for atomic replacement. The dense workload's process peak does not improve
+materially because its source/export allocations dominate. Do not infer a total
+memory saving from the scratch change alone.
+
+GTK's eyedropper exposes Point, 3×3 average and 5×5 average alongside its existing
+visible/raw-layer selection. Samples use artwork before view overlays, clip the
+square to canvas bounds, average linear-premultiplied color and coverage, then
+unassociate. Alpha-zero RGB contributes nothing; a fully transparent sample
+retains the paint color. Sampling keeps brush opacity independent and does not
+dirty artwork. One reusable 128-byte buffer and one asynchronous request bound
+the GPU readback. Changing size cancels stale results. Other host controls are
+not enabled by this stage.
+
+Validation passes: 128 GPU tests (18 separate hardware workloads ignored), three
+GPU project integration tests, and 369 shared UI tests. Numerical area sampling
+matches an independent Float64 reference within `1e-6` in linear channels and
+coverage, including four-page boundaries, sparse missing pages, clipped canvas
+edges, hidden transparent RGB and buffer reuse. The new native GTK test activates
+each size button and samples a transparent/red source through the production
+worker, checking color, opacity and unchanged document revision. Existing native
+file and diagnostics/fault/restart workflows pass. Native RGB presentation of
+the sampled primary uses the same `1e-6` tolerance for Float32 transfer arithmetic.
+
+The fresh baseline repeat also passes 10,920 frames; maximum per-scenario CPU
+p95/p99 is 2.536/3.034 ms. The first implementation run passes another 10,920
+frames, with maximum CPU p95/p99 2.004/2.663 ms and no Move/Pen-up deadline misses.
+No per-scenario CPU p95/p99 exceeds the larger fresh baseline plus the declared
+investigation threshold. Seven native pacing workloads pass 5,055 frames. Worker
+render p95/p99 (ms), measured separately from main-thread frame creation:
+
+| Workload | Baseline | First stage |
+| --- | --- | --- |
+| G-Pen | 0.396 / 0.536 | 0.394 / 0.508 |
+| Natural Blender | 1.055 / 1.196 | 1.075 / 1.286 |
+| Wet Round | 0.830 / 0.936 | 0.827 / 0.968 |
+| Watercolor | 1.775 / 2.007 | 1.723 / 2.034 |
+| Pan | 0.283 / 0.309 | 0.278 / 0.300 |
+| Hand | 0.275 / 0.287 | 0.262 / 0.290 |
+| Transform | 1.723 / 2.285 | 1.678 / 1.800 |
+
+The 24/45/60 MP and two-document workloads pass exact tile-digest/archive and
+undo/export checksum comparisons. Baseline versus first-stage undo/redo times
+are 14.80/13.61 versus 14.76/13.58 ms (24 MP), 21.39/19.75 versus 21.22/19.66 ms
+(45 MP), and 20.80/18.98 versus 20.77/19.05 ms (60 MP). These are individual
+bulk-operation observations, not p99 distributions. Cumulative process high-water
+is 1,672,664 KiB before and 1,676,200 KiB after; large-image memory work remains.
+
+The clean repeated working-format experiment uses 50 warmups and 300 samples,
+16 passes/sample. At 4096², matched sample/source-over completed p95/p99 is
+1.829/1.898 ms for UNORM16, 1.838/1.987 ms for FP16, and 10.441/10.514 ms for
+Float32. This rules out assuming that full-image Float32 blending is inexpensive;
+it does not establish complete integer16 editing precision. An earlier kernel run
+overlapped compilation and is excluded from qualification.
+
+Reproduction uses `stage1-*` local artifacts and `working-formats.md` under
+`artifacts/color-m2`. Build native tests separately, then use
+`bash tools/performance/gtk-raster.sh TEST_BINARY TEST_FILTER REPORT_PREFIX` for
+`native_sdr_sampling_controls`, `native_document_files`,
+`native_diagnostics_and_gpu_failure_recovery` and `native_frame_pacing`.
+The runner sets `GDK_DEBUG=no-portals` because the file test drives GTK's in-process
+fallback chooser; its initial missing-chooser failure was a runner configuration
+error. Production retains its normal portal selection.

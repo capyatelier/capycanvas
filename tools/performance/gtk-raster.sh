@@ -20,6 +20,9 @@ export XDG_RUNTIME_DIR="$raster_run_dir/runtime"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 export WAYLAND_DISPLAY=capy-raster-validation
 export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=none
+# Native file tests drive the in-process GTK chooser. Portal dialogs live in a
+# different process and cannot be exercised by those widget signal assertions.
+export GDK_DEBUG=no-portals
 export LAYER_SETTINGS_FILE="$raster_run_dir/settings.json"
 export CAPY_WORKSPACE_DIR="$raster_run_dir/workspaces"
 export CAPY_RECOVERY_DIR="$raster_run_dir/recovery"

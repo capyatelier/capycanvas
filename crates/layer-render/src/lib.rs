@@ -214,12 +214,31 @@ pub enum ColorSampleSource {
     /// Raw paint color, before layer opacity, masks and clipping.
     Layer(LayerId),
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorSampleArea {
+    #[default]
+    Point,
+    Average3,
+    Average5,
+}
+impl ColorSampleArea {
+    pub fn width(self) -> u32 {
+        match self {
+            Self::Point => 1,
+            Self::Average3 => 3,
+            Self::Average5 => 5,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColorSampleRequest {
     pub request_id: u64,
     pub source: ColorSampleSource,
     /// Document coordinates for Composite, layer-local coordinates for Layer.
     pub position: [u32; 2],
+    /// Centered square, clipped to the document extent. Average premultiplied
+    /// linear RGB and coverage, then unassociate; transparent RGB has no weight.
+    pub area: ColorSampleArea,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ColorSample {

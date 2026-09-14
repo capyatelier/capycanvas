@@ -814,8 +814,15 @@ impl WgpuRasterizer {
         let mask = index.is_none();
         data.validate_index(self.document_extent, mask)
             .map_err(GpuRasterError::Effect)?;
-        // Decode every replacement before mutating live storage; corruption or
-        // failed capture cannot leave half a revision installed.
+        // Stage GPU pages before publishing the revision. Keep only one decoded
+        // tile on the CPU, rather than a second full decoded document. A failed
+        // tile still leaves every live page (including removed pages) intact.
+        enum Replacement {
+            Color(LayerPage),
+            Mask([u32; 2], layer_masks::MaskPage),
+            Wetness(CanvasMaterialPage),
+            Watercolor(WatercolorWetnessPage),
+        }
         let mut replacements = Vec::new();
         for (key, tile) in &data.tiles {
             if previous
@@ -832,7 +839,58 @@ impl WgpuRasterizer {
                 ));
             }
             let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
-            replacements.push((*key, bytes));
+            let (replacement, texture) = match key.plane {
+                RasterPlane::Color => {
+                    let mut page = self.create_page(key.coordinate, "restored raster tile");
+                    page.primary_needs_clear = false;
+                    let texture = page.primary.texture.clone();
+                    (Replacement::Color(page), texture)
+                }
+                RasterPlane::Mask => {
+                    let page = layer_masks::MaskPage::new(&self.device);
+                    let texture = page.texture.clone();
+                    (Replacement::Mask(key.coordinate, page), texture)
+                }
+                RasterPlane::Wetness => {
+                    let wetness = self.create_scalar_page_surface("restored wetness tile");
+                    let texture = wetness.texture.clone();
+                    (
+                        Replacement::Wetness(CanvasMaterialPage {
+                            coordinate: key.coordinate,
+                            wetness,
+                            needs_clear: false,
+                        }),
+                        texture,
+                    )
+                }
+                RasterPlane::WatercolorWetness => {
+                    let primary = self.create_scalar_page_surface("restored watercolor wetness");
+                    let secondary = self.create_scalar_page_surface("watercolor wetness companion");
+                    let texture = primary.texture.clone();
+                    (
+                        Replacement::Watercolor(WatercolorWetnessPage {
+                            coordinate: key.coordinate,
+                            primary,
+                            secondary,
+                            active_secondary: false,
+                            primary_needs_clear: false,
+                            secondary_needs_clear: true,
+                        }),
+                        texture,
+                    )
+                }
+            };
+            self.queue.write_texture(
+                texture.as_image_copy(),
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some((bytes.len() / PAGE_SIZE as usize) as u32),
+                    rows_per_image: Some(PAGE_SIZE),
+                },
+                texture.size(),
+            );
+            replacements.push(replacement);
         }
         if let Some(index) = index {
             let layer = &mut self.paint_layers[index];
@@ -869,68 +927,27 @@ impl WgpuRasterizer {
                     })
             });
         }
-        for (key, bytes) in replacements {
-            let texture = match key.plane {
-                RasterPlane::Color => {
-                    let mut page = self.create_page(key.coordinate, "restored raster tile");
-                    page.primary_needs_clear = false;
-                    let texture = page.primary.texture.clone();
+        for replacement in replacements {
+            match replacement {
+                Replacement::Color(page) => {
                     let pages = &mut self.paint_layers[index.unwrap()].pages;
-                    pages.retain(|p| p.coordinate != key.coordinate);
+                    pages.retain(|p| p.coordinate != page.coordinate);
                     pages.push(page);
-                    texture
                 }
-                RasterPlane::Mask => {
-                    let page = layer_masks::MaskPage::new(&self.device);
-                    let texture = page.texture.clone();
-                    self.layer_masks
-                        .pages
-                        .insert((target, key.coordinate), page);
-                    texture
+                Replacement::Mask(coordinate, page) => {
+                    self.layer_masks.pages.insert((target, coordinate), page);
                 }
-                RasterPlane::Wetness => {
-                    let wetness = self.create_scalar_page_surface("restored wetness tile");
-                    let texture = wetness.texture.clone();
+                Replacement::Wetness(page) => {
                     let pages = &mut self.paint_layers[index.unwrap()].material_pages;
-                    pages.retain(|p| p.coordinate != key.coordinate);
-                    pages.push(CanvasMaterialPage {
-                        coordinate: key.coordinate,
-                        wetness,
-                        needs_clear: false,
-                    });
-                    texture
+                    pages.retain(|p| p.coordinate != page.coordinate);
+                    pages.push(page);
                 }
-                RasterPlane::WatercolorWetness => {
-                    let primary = self.create_scalar_page_surface("restored watercolor wetness");
-                    let secondary = self.create_scalar_page_surface("watercolor wetness companion");
-                    let texture = primary.texture.clone();
+                Replacement::Watercolor(page) => {
                     let pages = &mut self.paint_layers[index.unwrap()].watercolor_wetness_pages;
-                    pages.retain(|p| p.coordinate != key.coordinate);
-                    pages.push(WatercolorWetnessPage {
-                        coordinate: key.coordinate,
-                        primary,
-                        secondary,
-                        active_secondary: false,
-                        primary_needs_clear: false,
-                        secondary_needs_clear: true,
-                    });
-                    texture
+                    pages.retain(|p| p.coordinate != page.coordinate);
+                    pages.push(page);
                 }
-            };
-            self.queue.write_texture(
-                texture.as_image_copy(),
-                &bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some((bytes.len() / PAGE_SIZE as usize) as u32),
-                    rows_per_image: Some(PAGE_SIZE),
-                },
-                wgpu::Extent3d {
-                    width: PAGE_SIZE,
-                    height: PAGE_SIZE,
-                    depth_or_array_layers: 1,
-                },
-            );
+            }
         }
         self.preview_pages.clear();
         self.preview_coverage_pages.clear();

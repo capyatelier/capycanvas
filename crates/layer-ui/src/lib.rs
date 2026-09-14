@@ -1003,6 +1003,9 @@ pub enum UiAction {
         id: String,
         value: f32,
     },
+    SetColorSampleSize {
+        width: u32,
+    },
     SelectLayer {
         id: u64,
     },

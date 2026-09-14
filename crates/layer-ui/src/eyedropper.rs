@@ -1,10 +1,11 @@
 //! Latest-point coalescing and color policy, shared by every host. One GPU
 //! sample can be in flight; neither pointer events nor frames wait for it.
-use layer_render::{CanvasRenderer, ColorSampleRequest, ColorSampleSource};
+use layer_render::{CanvasRenderer, ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 #[derive(Default)]
 pub(crate) struct Eyedropper {
     pub layer: bool,
+    pub area: ColorSampleArea,
     pub contact: bool,
     generation: u64,
     last: Option<(ColorSampleSource, [u32; 2])>,
@@ -28,6 +29,7 @@ impl Eyedropper {
             request_id: self.generation,
             source,
             position,
+            area: self.area,
         });
     }
     pub fn renderer_replaced(&mut self) {

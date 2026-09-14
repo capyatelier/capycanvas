@@ -2418,6 +2418,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.apply_brush()?;
                 (BRUSH, false)
             }
+            UiAction::SetColorSampleSize { width } => {
+                use layer_render::ColorSampleArea;
+                let area = match width {
+                    1 => ColorSampleArea::Point,
+                    3 => ColorSampleArea::Average3,
+                    5 => ColorSampleArea::Average5,
+                    _ => return Err("Choose Point, 3×3 or 5×5 sampling".into()),
+                };
+                self.eyedropper.cancel();
+                self.eyedropper.area = area;
+                self.refresh_tools();
+                (BRUSH, false)
+            }
             UiAction::SetToolSetting { id, value } => {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
@@ -3797,6 +3810,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
+        // GTK is the first SDR integration host. Other hosts retain their existing
+        // controls until their integration is explicitly authorized and tested.
+        if self.state.platform == Platform::Gtk && self.layer_interaction.tool.picks_color() {
+            self.state.tool_set.subtools.extend(
+                [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
+                    .into_iter()
+                    .map(|(label, width)| ToolSetItem {
+                        label,
+                        icon: "eyedropper",
+                        action: UiAction::SetColorSampleSize { width },
+                        selected: self.eyedropper.area.width() == width,
+                        preview: None,
+                    }),
+            );
+        }
         self.state.tool_settings = if self.operation.active() {
             self.transform_controls()
         } else if self.layer_interaction.tool == LayerCanvasTool::Paint {
@@ -6700,6 +6728,37 @@ mod tests {
             LayerCanvasTool::PickLayer,
             "remember source subtool"
         );
+    }
+
+    #[test]
+    fn gtk_sample_area_cancels_stale_results_and_keeps_document_and_opacity() {
+        use layer_render::{ColorSample, ColorSampleArea, ColorSampleSource};
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::Eyedropper);
+        let revision = s.engine.document().revision;
+        let opacity = s.state.brush.opacity;
+        s.eyedropper.queue(ColorSampleSource::Composite, [32, 32]);
+        s.frame(1, 1).unwrap();
+        let old = *s.renderer_mut().sample_requests.last().unwrap();
+        s.dispatch(UiAction::SetColorSampleSize { width: 5 }).unwrap();
+        assert!(s.state.tool_set.subtools.iter().any(|item| item.selected
+            && item.action == UiAction::SetColorSampleSize { width: 5 }));
+        assert!(s.dispatch(UiAction::SetColorSampleSize { width: 4 }).is_err());
+        let color = s.state.colors.rgba();
+        s.renderer_mut().sample_reply = Some(ColorSample { request_id: old.request_id, rgba: [1.; 4] });
+        s.eyedropper.queue(ColorSampleSource::Composite, [32, 32]);
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.state.colors.rgba(), color);
+        let next = *s.renderer_mut().sample_requests.last().unwrap();
+        assert_eq!(next.area, ColorSampleArea::Average5);
+        assert_ne!(next.request_id, old.request_id);
+        s.renderer_mut().sample_reply = Some(ColorSample { request_id: next.request_id, rgba: [0.25, 0.5, 0.75, 0.2] });
+        s.frame(3, 3).unwrap();
+        assert_ne!(s.state.colors.rgba(), color);
+        assert_eq!(s.state.colors.rgba()[3], 1.);
+        assert_eq!(s.state.brush.opacity, opacity);
+        assert_eq!(s.engine.document().revision, revision);
     }
 
     #[test]

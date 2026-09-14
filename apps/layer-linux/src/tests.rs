@@ -3,6 +3,8 @@
 //! Physical tablet/touch delivery remains a human test (not faked here).
 #[path = "color_panel_tests.rs"]
 mod color_panel;
+#[path = "color_management_tests.rs"]
+mod color_management;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_stack_tests.rs"]

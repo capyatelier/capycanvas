@@ -21,6 +21,66 @@ fn capture(
 }
 
 #[test]
+fn failed_restore_keeps_live_pages_after_staging_a_replacement() {
+    use layer_core::{
+        color::PixelDescriptor,
+        raster::{RasterPlane, RasterTile, TileBlob, TileKey},
+    };
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layers = [Layer::paint(LayerId(1), "ink")];
+    submit(
+        &mut r,
+        &layers,
+        &[dab([0.02, 0.1, 0.3, 0.5])],
+        &[batch(1)],
+        true,
+    );
+    let before = r.readback_srgb_rgba8().unwrap();
+    let (revision, ticket) = capture(&r, LayerId(1), &RasterData::default(), true);
+    ticket.unwrap().finish().unwrap();
+    let previous = revision.wait_data().unwrap();
+    let blob = || {
+        RasterTile::backed(
+            TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &vec![255; 256 * 256 * 4]).unwrap(),
+        )
+    };
+    // Color sorts before Wetness. The first replacement is valid and uploaded;
+    // the later scalar plane has a deliberately invalid pixel descriptor.
+    let invalid = RasterData {
+        tiles: [
+            (
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [0, 0],
+                },
+                blob(),
+            ),
+            (
+                TileKey {
+                    plane: RasterPlane::Wetness,
+                    coordinate: [0, 0],
+                },
+                blob(),
+            ),
+        ]
+        .into(),
+        watercolor: None,
+    };
+    assert!(r.restore_raster(LayerId(1), &previous, &invalid).is_err());
+    submit(&mut r, &layers, &[], &[], false);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
+    // Failure must also leave the renderer usable for the next real edit.
+    submit(
+        &mut r,
+        &layers,
+        &[dab([0.7, 0.1, 0.2, 0.5])],
+        &[batch(1)],
+        false,
+    );
+    assert_ne!(r.readback_srgb_rgba8().unwrap(), before);
+}
+
+#[test]
 fn raster_capture_undo_redo_and_continued_paint_are_exact() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let layers = [Layer::paint(LayerId(1), "ink")];

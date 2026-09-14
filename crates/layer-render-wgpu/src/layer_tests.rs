@@ -1810,6 +1810,7 @@ fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
             request_id: 77,
             source,
             position,
+            area: Default::default(),
         };
         assert!(r.request_color_sample(request).unwrap());
         assert!(
@@ -1893,6 +1894,49 @@ fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
         sample(&mut r, Source::Layer(LayerId(1)), [64, 64]),
         [0.0; 4],
     );
+}
+
+#[test]
+fn averaged_sampling_crosses_sparse_pages_and_ignores_transparent_rgb() {
+    use layer_core::{color::PixelDescriptor, raster::{RasterData, RasterPlane, RasterTile, TileBlob, TileKey}};
+    use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.ensure_document([512, 512], &[Layer::paint(LayerId(1), "sample")]).unwrap();
+    let mut data = RasterData::default();
+    for (coordinate, texel) in [
+        ([0, 0], [255, 0, 0, 255]),
+        ([1, 0], [0, 188, 0, 128]),
+        // Deliberately noncanonical hidden RGB must never tint an average.
+        ([0, 1], [0, 0, 255, 0]),
+    ] {
+        data.tiles.insert(
+            TileKey { plane: RasterPlane::Color, coordinate },
+            RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &texel.repeat(256 * 256)).unwrap()),
+        );
+    }
+    r.restore_raster(LayerId(1), &RasterData::default(), &data).unwrap();
+    let revision = r.composite_revision;
+    let mut sample = |position, area| {
+        assert!(r.request_color_sample(ColorSampleRequest {
+            request_id: 9, source: ColorSampleSource::Layer(LayerId(1)), position, area,
+        }).unwrap());
+        r.device.poll(wgpu::PollType::Wait {
+            submission_index: None, timeout: Some(Duration::from_secs(5)),
+        }).unwrap();
+        r.take_color_sample().unwrap().unwrap().rgba
+    };
+    let area = sample([255, 255], ColorSampleArea::Average5);
+    // Independent f64 reference: 9 opaque red, 6 half-covered green, 10 clear.
+    let alpha = 9. + 6. * 128. / 255.;
+    let green = ((188f64 / 255. + 0.055) / 1.055).powf(2.4);
+    let expected = [9. / alpha, 6. * green / alpha, 0., alpha / 25.];
+    for (actual, expected) in area.into_iter().zip(expected) {
+        assert!((f64::from(actual) - expected).abs() < 0.000001, "{area:?}");
+    }
+    assert_eq!(sample([0, 0], ColorSampleArea::Average3), [1., 0., 0., 1.]);
+    assert_eq!(sample([400, 400], ColorSampleArea::Average5), [0.; 4]);
+    assert_eq!(sample([u32::MAX, 0], ColorSampleArea::Point), [0.; 4]);
+    assert_eq!(r.composite_revision, revision, "inspection must not recompose");
 }
 
 #[test]
