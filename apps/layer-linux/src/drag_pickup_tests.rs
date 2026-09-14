@@ -74,6 +74,7 @@ fn native_drag_pickup_input() {
                         pump(220);
                     }
                     if source == "drawer-tile" {
+                        enable_individual_column_panels(&w, group);
                         w.dispatch(UiAction::Customize {
                             action: CustomizationAction::ToggleColumnDrawer {
                                 group,

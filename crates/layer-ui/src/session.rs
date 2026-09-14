@@ -1604,7 +1604,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let mut hint = if let DockItem::Column { column } = item {
+        let gtk_body = self.state.platform == Platform::Gtk;
+        let menubar = (gtk_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
+            .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
+        let mut hint = if let Some(hint) = menubar {
+            hint
+        } else if let DockItem::Column { column } = item {
             if docks_hidden {
                 return None;
             }
@@ -1631,7 +1636,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             (matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) && !docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
-                .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
+                .or_else(|| resolved.drop_hint_with_group_body(position[0], position[1], tabs, !docks_hidden, gtk_body))?
         };
         // The attached preview and the committed drop use the same frozen
         // switch points, including a release between pointer-motion events.
@@ -1641,6 +1646,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } = hint.target
             && let Some(drag) = self.workspace_tab_drag.as_ref()
             && drag.group == group
+            && (hint.bounds.width <= 3. || hint.bounds.height <= 3.)
             && let Some(preview) = self.tab_drag_preview(position)
         {
             hint.target = DockTarget::Tab {
@@ -2248,7 +2254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         | Platform::Ios
                         | Platform::Mac
                         | Platform::Windows
-                ) && layout.column_for_group(group).is_some()
+                ) && layout.collapsible_column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
                 } else {
@@ -9449,7 +9455,7 @@ mod tests {
                     .bounds;
                 let destination = [
                     neighbor.x + neighbor.width * 0.5,
-                    neighbor.y + TAB_BAR_HEIGHT + 3.0,
+                    if platform == Platform::Gtk { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
                 ];
                 drag(&mut app, ContactPhase::Move, destination);
                 drag(&mut app, ContactPhase::Up, destination);
@@ -10718,6 +10724,9 @@ mod tests {
     fn collapsed_drawer_pins_revealed_total_zen_but_explicit_zen_closes_it() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
+        for column in [4, 8] {
+            s.state.workspace.layout.column_stack_mut(column).drawers = true;
+        }
         let viewport = [1200., 900.];
         s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
             .unwrap();
@@ -11772,6 +11781,9 @@ mod tests {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
             let mut s = session();
             s.set_platform(platform);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             let viewport = [1200., 900.];
             s.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport })
                 .unwrap();
@@ -11831,6 +11843,9 @@ mod tests {
     fn collapsed_drawers_are_persistent_per_column_and_follow_tab_selection() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
+        for column in [4, 8] {
+            s.state.workspace.layout.column_stack_mut(column).drawers = true;
+        }
         let viewport = [1200., 900.];
         let collapse = |s: &mut UiSession<Recorder>, group| {
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
@@ -11919,6 +11934,9 @@ mod tests {
         {
             let mut s = session();
             s.set_platform(platform);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                 .unwrap();
             s.dispatch(UiAction::Customize {
@@ -12164,6 +12182,9 @@ mod tests {
         for platform in [Platform::Generic, Platform::Gtk, Platform::Windows] {
             let mut s = session();
             s.set_platform(platform);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             let viewport = [1200., 900.];
             let group = 8;
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
@@ -12248,6 +12269,9 @@ mod tests {
         for group in [5, 8] {
             let mut s = session();
             s.set_platform(Platform::Gtk);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             s.dispatch(UiAction::MovePanel {
                 panel: Panel::Toolbar,
                 target: DockTarget::Tab { group, index: None },
@@ -12660,7 +12684,7 @@ mod tests {
                         .target,
                     DockTarget::Tab {
                         group: target,
-                        index: None
+                        index: if platform == Platform::Gtk && point[1] < 830. { Some(0) } else { None }
                     }
                 );
             }
@@ -15804,5 +15828,9 @@ mod tests {
     mod column_stack_tests {
         use super::*;
         include!("column_stack_tests.rs");
+    }
+    mod layout_drop_tests {
+        use super::*;
+        include!("layout_drop_tests.rs");
     }
 }

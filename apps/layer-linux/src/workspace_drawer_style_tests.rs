@@ -328,6 +328,7 @@ fn check_theme(
                 "separator spacing preserves shared hit slots"
             );
         }
+        enable_individual_column_panels(&w, column.groups[0].group);
         let opener = w
             .columns
             .button(column.id, column.groups[0].icons[0].panel)

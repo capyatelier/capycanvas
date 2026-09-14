@@ -673,7 +673,7 @@ impl DockLayout {
         }) else {
             return Vec::new();
         };
-        if self.column_for_group(group).is_none()
+        if self.collapsible_column_for_group(group).is_none()
             && self.collapsed_column_for_group(group).is_none()
         {
             return Vec::new();

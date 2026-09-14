@@ -204,3 +204,10 @@ ordinary width/split resizing with retained widgets, mode switching and auto-hid
 The run directory contains both-theme captures and `resize-*.json` reports of
 painted group allocations against shared geometry. The previous `--column-groups`
 fixture and custom Group panel renderer are retired.
+
+For menu-bar prepend targets and the panel-body drop highlight, run
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/layout-drops/gtk" bash tools/performance/workspace-motion.sh gtk --native-test=native_layout_drop_input`.
+This checks panel, group, toolbar and column sources, both sides and themes,
+mouse/touch input, cancellation and one-step history. New column stacks open
+full columns by default; only top-level columns can collapse.
+The same run checks tab insertion from the upper body of first and lower groups.

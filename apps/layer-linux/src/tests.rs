@@ -7,6 +7,8 @@ mod color_panel;
 mod column_drop;
 #[path = "column_stack_tests.rs"]
 mod column_stack_tests;
+#[path = "workspace_layout_drop_tests.rs"]
+mod workspace_layout_drop;
 #[path = "drag_pickup_tests.rs"]
 mod drag_pickup;
 #[path = "icon_tests.rs"]
@@ -940,6 +942,7 @@ fn native_nested_tool_drawers() {
             command: CommandId::Pen,
         });
         w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+        enable_individual_column_panels(&w, group);
         w.dispatch(UiAction::Customize {
             action: CustomizationAction::ToggleColumnDrawer {
                 group,
@@ -1859,6 +1862,8 @@ fn native_collapsed_columns() {
             &format!("{output}/columns-collapsed-{theme:?}.png"),
             1.0,
         );
+        enable_individual_column_panels(&w, 5);
+        enable_individual_column_panels(&w, 8);
         press("column-icon-Brushes");
         press("column-icon-Layers");
         assert_eq!(state(&w).customization.column_drawers.len(), 2);
@@ -11023,6 +11028,7 @@ fn native_window_drag_input() {
         pump(200);
         assert_eq!(saved(&w), before);
         w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
+        enable_individual_column_panels(&w, 8);
         w.dispatch(UiAction::Customize {
             action: CustomizationAction::ToggleColumnDrawer {
                 group: 8,
@@ -11149,6 +11155,7 @@ fn native_long_press_drag_input() {
                 group,
                 viewport: [w.surface.width() as f32, w.surface.height() as f32],
             });
+            enable_individual_column_panels(&w, group);
             w.dispatch(UiAction::Customize {
                 action: CustomizationAction::ToggleColumnDrawer {
                     group,
@@ -11664,6 +11671,7 @@ fn native_column_drawer_drag_input() {
             } else {
                 Panel::Brushes
             };
+            enable_individual_column_panels(&w, group);
             w.dispatch(UiAction::Customize {
                 action: CustomizationAction::ToggleColumnDrawer {
                     group,
@@ -11811,7 +11819,7 @@ fn native_column_drawer_drag_input() {
             assert_eq!(saved(&w), after);
         }
     }
-    // Open drawers accept normal tab insertion, body merging, and edge splits.
+    // Drawer tabs and the upper body insert precisely; middle drops prepend.
     for (target_group, whole, zone) in [(8, false, 0), (8, true, 1), (5, true, 0), (8, false, 2)] {
         let mut workspace = original.clone();
         if target_group == 8 && whole {
@@ -11839,6 +11847,7 @@ fn native_column_drawer_drag_input() {
         } else {
             Panel::Brushes
         };
+        enable_individual_column_panels(&w, target_group);
         w.dispatch(UiAction::Customize {
             action: CustomizationAction::ToggleColumnDrawer {
                 group: target_group,
@@ -11888,7 +11897,7 @@ fn native_column_drawer_drag_input() {
             0 => [bounds.x + 4., bounds.y + 18.],
             1 => center(bounds),
             _ => [
-                bounds.x + bounds.width * 0.5,
+                bounds.x + 4.,
                 bounds.y + TAB_BAR_HEIGHT + 4.,
             ],
         };
@@ -11900,32 +11909,20 @@ fn native_column_drawer_drag_input() {
             .borrow()
             .clone()
             .unwrap_or_else(|| panic!("open drawer drop indicator: target={target_group}, whole={whole}, zone={zone}, point={destination:?}, start={start:?}, drag={}, drawers={:?}, floating={}, direct={:?}", w.workspace_drag.borrow().is_some(), state(&w).customization.column_drawers, state(&w).workspace.layout.floating.len(), w.drop_at(destination[0], destination[1], item)));
-        let expected = match zone {
-            0 => DockTarget::Tab {
-                group: target_group,
-                index: Some(0),
-            },
-            1 => DockTarget::Tab {
-                group: target_group,
-                index: None,
-            },
-            _ => DockTarget::Split {
-                group: target_group,
-                edge: Edge::Top,
-            },
+        let expected = DockTarget::Tab {
+            group: target_group,
+            index: Some(0),
         };
         assert_eq!(hint.target, expected);
+        if zone == 2 {
+            assert_eq!(hint.bounds.y, bounds.y);
+            assert_eq!(hint.bounds.width, 3.);
+        }
         perform(serde_json::json!([{ "down": false }]));
         let layout = state(&w).workspace.layout;
         let destination_group = layout.panel_group(panel).unwrap();
-        if zone == 2 {
-            assert_ne!(destination_group, target_group);
-        } else {
-            assert_eq!(destination_group, target_group);
-            if zone == 0 {
-                assert_eq!(layout.group_panels(target_group).unwrap()[0], panel);
-            }
-        }
+        assert_eq!(destination_group, target_group);
+        assert_eq!(layout.group_panels(target_group).unwrap()[0], panel);
         assert!(
             layout
                 .collapsed_column_for_group(destination_group)
@@ -11951,6 +11948,7 @@ fn native_column_drawer_drag_input() {
         workspace: Box::new(original),
     });
     w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
+    enable_individual_column_panels(&w, 8);
     w.dispatch(UiAction::Customize {
         action: CustomizationAction::ToggleColumnDrawer {
             group: 8,
@@ -14571,4 +14569,12 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     second.window.close();
     pump(500);
     assert!(!first.window.is_visible() && !second.window.is_visible());
+}
+
+// Compact-drawer fixtures opt in; new stacks otherwise open full columns.
+fn enable_individual_column_panels(w: &Rc<Workspace>, group: u32) {
+    let column = state(w).workspace.layout.collapsed_column_for_group(group).unwrap();
+    w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetColumnDrawers { column, drawers: true },
+    });
 }

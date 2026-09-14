@@ -765,32 +765,22 @@ pub struct PanelMeasurement {
 #[path = "floating_drop_tests.rs"]
 mod floating_drop_tests;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DockLayout {
-    #[serde(default)]
     pub header: crate::HeaderLayout,
-    #[serde(default)]
     pub canvas_info: crate::CanvasInfoLayout,
     #[serde(skip)]
     pub header_presentation: crate::HeaderPresentation,
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
-    #[serde(
-        default = "PanelConfig::defaults",
-        deserialize_with = "read_panel_registry"
-    )]
     pub panels: Vec<PanelConfig>,
-    #[serde(default)]
     pub floating: Vec<FloatingGroup>,
     /// Collapsing preserves the underlying dock tree and its expanded width.
-    #[serde(default)]
     pub collapsed: Vec<CollapsedColumn>,
-    #[serde(default, alias = "column_settings")]
     pub column_stacks: Vec<ColumnStack>,
     #[serde(skip)]
     pub column_scroll: Vec<(u32, f32)>,
     /// Adding tabs opts a group into natural width; manual width resize opts out.
-    #[serde(default)]
     pub fit_tab_groups: Vec<u32>,
     #[serde(skip)]
     pub measurements: Vec<PanelMeasurement>,
@@ -800,10 +790,13 @@ pub struct DockLayout {
     /// Runtime native window-control clearance; the canvas viewport stays full size.
     #[serde(skip)]
     pub bottom_inset: f32,
-    #[serde(default = "initial_tile_id")]
     next_tile_id: u32,
     next_id: u32,
 }
+
+#[path = "layout_saved.rs"]
+mod saved;
+
 fn initial_tile_id() -> u32 {
     crate::TOOLBAR_CONTROLS.len() as u32 + 1
 }
@@ -2508,15 +2501,8 @@ impl DockLayout {
                 let id = next.allocate()?;
                 // A new stacked group belongs to the same collapsed column.
                 // Horizontal splits create a neighboring, independent column.
-                if edge.axis() == Axis::Vertical
-                    && let Some(column) = next.collapsed.iter_mut().find(|c| c.root == group)
-                {
-                    column.root = id;
-                    for s in &mut next.column_stacks {
-                        if s.column == group { s.column = id; }
-                        for member in &mut s.members { if *member == group { *member = id; } }
-                        if s.open_column == Some(group) { s.open_column = Some(id); }
-                    }
+                if edge.axis() == Axis::Vertical {
+                    next.replace_column_root(group, id);
                 }
                 let node = next
                     .node_mut(group)
@@ -3735,6 +3721,17 @@ impl ResolvedLayout {
         tabs: &[TabHit],
         docks_visible: bool,
     ) -> Option<DropHint> {
+        self.drop_hint_with_group_body(x, y, tabs, docks_visible, false)
+    }
+
+    pub(crate) fn drop_hint_with_group_body(
+        &self,
+        x: f32,
+        y: f32,
+        tabs: &[TabHit],
+        docks_visible: bool,
+        prepend_body: bool,
+    ) -> Option<DropHint> {
         let screen = Bounds {
             width: self.viewport[0],
             height: self.viewport[1],
@@ -3751,7 +3748,19 @@ impl ResolvedLayout {
             if !b.contains(x, y) {
                 continue;
             }
-            if group.tabs_visible && y < b.y + TAB_BAR_HEIGHT {
+            let body = if group.tabs_visible {
+                Bounds {
+                    y: b.y + TAB_BAR_HEIGHT,
+                    height: (b.height - TAB_BAR_HEIGHT).max(0.0),
+                    ..b
+                }
+            } else {
+                b
+            };
+            // GTK extends every tab strip into the former upper body split
+            // zone. The horizontal position still selects the exact tab slot.
+            let tab_reach = if prepend_body { body.height * 0.2 } else { 0. };
+            if group.tabs_visible && y < body.y + tab_reach {
                 // Native geometry preferences may arrive in dictionary order.
                 // Resolve the first logical slot independently of that order.
                 let index = tabs
@@ -3772,7 +3781,21 @@ impl ResolvedLayout {
                     bounds: tab_insertion_line(group, tabs, index),
                 });
             }
+            let contents = Bounds {
+                y: b.y + if group.tabs_visible { TAB_BAR_HEIGHT } else { 0. },
+                height: (b.height - if group.tabs_visible { TAB_BAR_HEIGHT } else { 0. }
+                    - group.footer_grip.map_or(0., |grip| grip.height)).max(0.),
+                ..b
+            };
+            let body_hint = || DropHint {
+                target: DockTarget::Tab {
+                    group: group.id,
+                    index: Some(0),
+                },
+                bounds: contents,
+            };
             if group.floating {
+                if prepend_body { return Some(body_hint()); }
                 return Some(DropHint {
                     target: DockTarget::Tab {
                         group: group.id,
@@ -3781,15 +3804,6 @@ impl ResolvedLayout {
                     bounds: tab_insertion_line(group, tabs, group.panels.len()),
                 });
             }
-            let body = if group.tabs_visible {
-                Bounds {
-                    y: b.y + TAB_BAR_HEIGHT,
-                    height: (b.height - TAB_BAR_HEIGHT).max(0.0),
-                    ..b
-                }
-            } else {
-                b
-            };
             let narrow_center = !group.tabs_visible
                 && group.axis == Axis::Vertical
                 && body.width
@@ -3808,7 +3822,7 @@ impl ResolvedLayout {
                 Some(Edge::Left)
             } else if x > body.x + body.width - 18.0 {
                 Some(Edge::Right)
-            } else if y < body.y + body.height * 0.2 {
+            } else if y < body.y + body.height * 0.2 && !prepend_body {
                 Some(Edge::Top)
             } else if y > body.y + body.height * 0.8 {
                 Some(Edge::Bottom)
@@ -3823,6 +3837,8 @@ impl ResolvedLayout {
                     },
                     bounds: edge_line(b, edge),
                 }
+            } else if prepend_body {
+                body_hint()
             } else {
                 DropHint {
                     target: DockTarget::Tab {
