@@ -71,9 +71,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     pub fn binding(&self) -> Option<layer_ui::ManagedWorkspace> {
         let current = self.current()?;
-        let ItemContent::Workspace { baseline, .. } = current.content else {
-            return None;
-        };
+        let baseline = current.starting_layout(self.platform).ok()?;
         let mut items = self.items();
         items.retain(|i| {
             i.metadata.kind == ItemKind::Workspace && i.metadata.deleted_at_ms.is_none()
@@ -82,7 +80,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Some(layer_ui::ManagedWorkspace {
             id: current.id,
             name: current.metadata.name,
-            baseline: *baseline,
+            baseline,
             choices: items
                 .into_iter()
                 .map(|i| layer_ui::WorkspaceChoice {

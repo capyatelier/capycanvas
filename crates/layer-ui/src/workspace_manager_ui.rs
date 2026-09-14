@@ -28,6 +28,7 @@ pub struct WorkspaceChoice {
 pub struct ManagedWorkspace {
     pub id: String,
     pub name: String,
+    /// Restore target for this host: latest built-in default or saved custom baseline.
     pub baseline: DockLayout,
     pub choices: Vec<WorkspaceChoice>,
 }
