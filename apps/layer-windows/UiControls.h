@@ -145,14 +145,8 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const&
     if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     return result;
 }
-template<typename T=Button>
-inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
-    T result;result.Content(box_value(text));result.FontSize(data->textSize());
-    result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
-    result.FontWeight(Windows::UI::Text::FontWeights::Bold());
-    result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});
-    result.BorderThickness(Thickness{0});result.CornerRadius(CornerRadius{6,6,6,6});
-    result.Background(clear());AutomationProperties::SetName(result,text);
+template<typename T>
+inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result){
     auto ink=color(str(object(data->state,L"palette"),L"text"));
     auto hover=ink;hover.A=20;auto pressed=ink;pressed.A=41;auto disabled=ink;disabled.A=92;
     hstring prefix=std::is_same_v<T,Primitives::ToggleButton>?L"ToggleButton":L"Button";
@@ -163,6 +157,16 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     if constexpr(std::is_same_v<T,Primitives::ToggleButton>)
         for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
             result.Resources().Insert(box_value(role),selected());
+}
+template<typename T=Button>
+inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
+    T result;result.Content(box_value(text));result.FontSize(data->textSize());
+    result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
+    result.FontWeight(Windows::UI::Text::FontWeights::Bold());
+    result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});
+    result.BorderThickness(Thickness{0});result.CornerRadius(CornerRadius{6,6,6,6});
+    result.Background(clear());AutomationProperties::SetName(result,text);
+    buttonColors(data,result);
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
     return result;
 }

@@ -1005,6 +1005,8 @@ void CanvasWindow::RefreshWorkspaceSwitcher() {
 }
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
+    auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
+    if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
     if(!workspace->Apply(model))return;
     lastModel=model;
     auto suspended=flag(model,L"windows_rendering_suspended");
@@ -1047,7 +1049,8 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
             message=L"Importing image…";
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
-    root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+    auto nextTheme=theme==L"dark"?ElementTheme::Dark:ElementTheme::Light;
+    bool retheme=root.RequestedTheme()!=nextTheme;root.RequestedTheme(nextTheme);
     // Artwork also reaches the caption area; keep the OS buttons readable on it.
     auto captionBackground=color(str(object(state,L"palette"),L"bg",L"#333333"));
     window.AppWindow().TitleBar().ButtonBackgroundColor(captionBackground);
@@ -1058,4 +1061,10 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     auto tabs=array(state,L"tabs");
     if(tabs.Size())window.Title(str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
     header->Apply(model);ApplyDialogs();
+    // Workspace theme replacement must not take focus from retained Preferences.
+    if(retheme&&focus)dispatcher.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
+        [weak=weak_from_this(),target=make_weak(focus)]{
+            if(auto self=weak.lock();self&&!self->closing&&self->settings->IsOpen())
+                if(auto control=target.get();control&&control.IsLoaded())control.Focus(FocusState::Programmatic);
+        });
 }

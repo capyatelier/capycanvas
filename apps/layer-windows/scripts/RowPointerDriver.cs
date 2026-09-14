@@ -153,7 +153,12 @@ public static class CapyRowPointer {
   }
  }
  public static void Key(ushort key) {
-  Guard(last);
+  Guard(last);Key(owner,key);
+ }
+ // Standalone keyboard reviews do not need a synthetic pointer device.
+ public static void Key(uint process,ushort key) {
+  uint foreground;GetWindowThreadProcessId(GetForegroundWindow(),out foreground);
+  if(foreground!=process)throw new Exception("Review does not own foreground input.");
   var down=new Input{type=1,keyboard=new Keyboard{key=key}};
   var up=new Input{type=1,keyboard=new Keyboard{key=key,flags=2}};
   if(SendInput(2,new[]{down,up},40)!=2)throw new Win32Exception(Marshal.GetLastWin32Error());

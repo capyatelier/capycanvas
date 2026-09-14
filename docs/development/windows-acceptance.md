@@ -11,10 +11,12 @@ checkpoints; their earlier lists of missing features are not the current backlog
 
 ## Validated application and packages
 
-The reviewed Release application and both packages contain `35131be`, including
+The previously reviewed Release application and both packages contain `35131be`, including
 shared header surfaces, native layer keyboard actions and upstream contact-brush
 mask painting. Portable assembly and extracted runtime checks pass; unsigned MSIX
 assembly and archive guards pass. Both packages use the clean published source.
+The current native Release also includes the Preferences accessibility changes
+described below. Those changes have not yet been incorporated into the packages.
 
 The layer change (`483ad16`) passes the complete native layer journey: native
 Toggle states, Space activation, alpha-lock Undo/Redo, Menu and Shift+F10 on names,
@@ -49,7 +51,7 @@ rerun for this header change. None of these results establish painting performan
 | Workspace/header/docking | Shared title-bar customization, tools picker, drawers, floating panels, workspace history and persistence pass their native journeys. Collapsed columns have the corrected footer grip, blank-space menu, double-click/tap expansion and drag-out resize (`f99507a`); docking targets follow Web/Android (`d4877e3`). | Physical device acceptance and complete visual review remain open. The previously qualified synthetic cross-canvas capture failure is not a reason to change production capture without new evidence. |
 | Matched workspace design | Paint, Sketch and Photo each have twelve native/Web scene pairs: three widths, both themes, fitted and paper-under-header cameras. Camera values match. Sketch's measured header passes; Paint Tool Set/Layers and Photo Layers measurements pass. Disabled header contrast is corrected (`9529ec2`). At `f20611a`, eight fresh Photo pairs cover both themes, two widths and both cameras. Five sampled light header backgrounds match Web exactly: menu/title/settings RGB 219, switcher RGB 222. | Paint/Photo full comparisons still report a 21-physical-pixel header width difference and compact control-set differences. Full images are preserved; geometry passes do not mean whole-image identity. Color-wheel polish is closed under the imperceptible-difference/clean-code requirement. |
 | Tools and canvas editing | Seventeen-tool projection, expressions, retained drafts/controls, subtools and cancellation pass. On `f051e61`, mouse and injected pen each pass figure/lasso, move/scale/rotation preview and Cancel, applied move and one-step raster Undo/Redo: fourteen checks. | Applied native history checks cover translation; scale/rotation cover preview and Cancel. Raster checks sample three 16×16 artwork interiors, not every pixel or affine combination. |
-| Keyboard and text | Canvas shortcuts work after toolbar clicks; fields, sliders, menus, Tab and button activation retain native behavior (`509833e`). Actual Microsoft Japanese IME composition, conversion, Enter/Escape arbitration and layer-name Undo/Redo pass on `f051e61`. Native layer keyboard actions and exposed toggle states pass at `483ad16`. | UIA names, values, patterns and focus are exercised. A complete screen-reader review, other IMEs and candidate-popup geometry remain unverified. |
+| Keyboard and text | Canvas shortcuts work after toolbar clicks; fields, sliders, menus, Tab and button activation retain native behavior (`509833e`). Actual Microsoft Japanese IME composition, conversion, Enter/Escape arbitration and layer-name Undo/Redo pass on `f051e61`. Native layer keyboard actions and exposed toggle states pass at `483ad16`. | UIA names, values, patterns and focus are exercised. The bounded Narrator journey below passes, including theme focus and selected values. Complete screen-reader review, other IMEs and candidate-popup geometry remain unverified. |
 | Touch and pen routing | Eighteen native injected-contact checks pass on `f051e61`: pan/pinch/rotation anchoring, third-contact pause, contact replacement, cancellation/restart, single-finger Hand and a later pen stroke with independent Undo. | Physical pressure/history, tilt, eraser, hover, cancellation and comprehensive physical touch are still required. Synthetic input and renderer pressure/tilt tests do not establish digitizer behavior. |
 | Documents, storage and windows | Import/export, Unicode project paths, embedded assets, save/replacement/close decisions and two GPU reconstructions pass the document journey (`575345b`). Preference failure/retry and multiwindow isolation pass. Snap, minimize/restore, maximize/restore and painting history pass on the available 60 Hz display (`05cbdb5`). | Mixed-display/DPI and system suspend/resume remain unverified. Forced GPU reconstruction is separate from those transitions. |
 | Filters | The pinned `50e3acd` renderer matches independent pre-migration algorithms on the same Windows GPU: D3D12 within one byte, Vulkan exact, across 160 sampled cases. | The original Linux PNG reference still fails for both implementations. This qualifies the sampled migration comparison; it does not establish cross-platform perceptual equivalence or newly retest filters after brush integration. |
@@ -95,6 +97,10 @@ need further polish or larger fixture matrices without a new defect or relevant
 source change. The remaining visual differences need a whole-editor usability
 review before adding font/layout complexity just to satisfy a pixel comparator.
 
+The Windows Home host has no existing supported clean Windows environment.
+Windows Sandbox [does not support Home](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-overview).
+No feature installation, edition change or MSIX installation was attempted.
+
 Portable clean-machine acceptance comes before installed MSIX lifecycle. Real
 pen/touch, screen-reader, suspend/resume and mixed-display checks must retain
 their own evidence rather than inheriting a pass from automation of other routes.
@@ -107,3 +113,35 @@ and a sustained thermal run; retain p95/p99/max and missed-refresh counts.
 Measure actual presentation cadence separately from input-to-present latency,
 and keep readback/captures outside the measured gestures. Until then the 120 Hz
 requirement remains open.
+
+## Narrator check
+
+Actual Windows Narrator was exercised with OS-delivered keys in disposable
+profiles. On the `35131be` baseline it read tool names, numeric brush-size labels
+and values, Alpha lock off/on/Undo, other layer flags, F2 rename and its Undo,
+and content/mask keyboard menus. UIA enters a region and inspects state; this
+does not establish complete keyboard discoverability.
+
+Changing theme could move focus to Fit canvas, and a collapsed styled selector
+could omit its selected value. Preferences now retain native controls and
+accessibility identities while refreshing colors and icons. The window preserves
+its focused Preferences control across theme updates. Named native choice items
+expose the collapsed selected value.
+
+The final Release passes the complete Preferences fixture, extended with rapid
+keyboard Light/Dark/System selection, stable native identity, retained focus and
+readable selected values. Validation, field retention, icon selection, search,
+dependent controls, dialog reopening and shortcut editing also pass. Narrator
+reads Color theme with Light or System after selection; Tab reaches the next
+field and Close is readable and actionable. Both owned processes closed normally;
+app exit was zero and stderr was empty.
+
+To reproduce: open Preferences with Narrator running, focus Color theme, open it
+with Alt+Down or F4, select Light and press Enter. Check its spoken value and focus.
+Restore System, Tab to the next field, then focus and activate the dialog's Close.
+
+Speech evidence used Read item and Copy last spoken phrase, restoring the original
+clipboard. Initial UIA focus entry used Move Narrator cursor to system cursor.
+See the [official Narrator commands](https://support.microsoft.com/en-us/accessibility/windows/narrator/appendix-b-narrator-keyboard-commands-and-touch-gestures).
+This is scoped assistive-technology evidence, not full accessibility certification
+or physical input/performance acceptance.

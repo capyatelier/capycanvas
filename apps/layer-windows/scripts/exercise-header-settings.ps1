@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected a controlled CapyCanvas review process.'}
 $watch=[Diagnostics.Stopwatch]::StartNew()
@@ -81,12 +82,23 @@ if(Find-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem))
 Open-Preferences
 $originalTheme=(Read-Model).state.settings.theme
 $restoreTheme=if($originalTheme -eq 'dark'){'Dark'}elseif($originalTheme -eq 'light'){'Light'}else{'System'}
+$themeIdentity=(Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetRuntimeId() -join ':'
 foreach($choice in @('Light','Dark',$restoreTheme)){
-    (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    $script:settingsScope=$root
-    (Control $choice ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    [CapyRowPointer]::SetForegroundWindow($app.MainWindowHandle)|Out-Null
+    Focus-Control (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox))
+    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x73) # F4 opens the native selector.
+    Wait-Until {Find-Control $choice ([System.Windows.Automation.ControlType]::ListItem)} 'Theme choices did not open'
+    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x24) # Home: System.
+    $index=@('System','Light','Dark').IndexOf($choice)
+    for($i=0;$i -lt $index;$i++){[CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x28)}
+    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x0D)
     Wait-Until {(Read-Model).state.settings.theme -eq $(if($choice -eq 'System'){$null}else{$choice.ToLowerInvariant()})} 'Color theme preference did not update'
+    $script:settingsScope=$root
     $script:settingsScope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+    Wait-Until {(Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).Current.HasKeyboardFocus} 'Theme change moved focus out of its preference'
+    if(((Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetRuntimeId() -join ':') -ne $themeIdentity){throw 'Theme selection replaced its native control'}
+    $selected=(Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
+    if($selected.Count -ne 1 -or $selected[0].Current.Name -ne $choice){throw 'Collapsed theme selector has no readable selected value'}
 }
 $base=Read-Text 'Dark theme base color'
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
@@ -158,6 +170,8 @@ Close-Preferences
 [pscustomobject]@{
     view_menu_without_theme='passed'
     preferences_theme_roundtrip='passed'
+    preferences_theme_focus='passed'
+    preferences_theme_accessible_value='passed'
     settings_color_validation='passed'
     retained_settings_field='passed'
     exclusive_icon_tiles='passed'
@@ -166,5 +180,5 @@ Close-Preferences
     dialog_reopen_roundtrip='passed'
     shortcut_editor_cancel='passed'
     workspace_status_policy='passed'
-    input_method='native UI Automation; not OS pointer or keyboard delivery'
+    input_method='guarded OS keyboard for theme selection; native UI Automation for other controls'
 } | ConvertTo-Json
