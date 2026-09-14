@@ -1,7 +1,44 @@
 use super::*;
+
+#[test]
+fn gray_and_gray_alpha_delivery_preserve_samples_and_embed_matching_profiles() {
+    for space in RgbSpace::ALL {
+        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for channels in [SourceChannels::Gray, SourceChannels::GrayAlpha] {
+                let mut builder = SourceBuilder::new([513, 3], SourceInterpretation {
+                    channels, depth, profile: ColorProfile::Builtin(space), profile_assumed: false,
+                }, 8*1024*1024).unwrap();
+                let maximum = depth.maximum();
+                for y in 0..3 {
+                    let row: Vec<_> = (0..513).flat_map(|x| {
+                        (0..channels.count()).map(move |c| if c == 0 { (x*127 + y*257) & maximum } else { x%3 })
+                    }).flat_map(|v| (v as u16).to_le_bytes()[..depth.bytes()].to_vec()).collect();
+                    builder.push_row(&row).unwrap();
+                }
+                let source = builder.finish().unwrap();
+                for tiff in [false, true] {
+                    let mut file = std::io::Cursor::new(Vec::new());
+                    if tiff { write_tiff(&mut file, &source).unwrap(); } else { write_png(&mut file, &source).unwrap(); }
+                    file.set_position(0);
+                    let actual = read_photo(file, DecodeLimits::default()).unwrap();
+                    assert_eq!(actual.interpretation.channels, channels);
+                    assert_eq!(actual.interpretation.depth, depth);
+                    assert!(!actual.interpretation.profile_assumed);
+                    if let ColorProfile::Icc(_) = actual.interpretation.profile {
+                        assert_eq!(profile_channels(&actual.interpretation.profile).unwrap(), ProfileChannels::Gray);
+                        assert_eq!(actual.interpretation.profile, crate::gray_profile(space).unwrap());
+                    } else { assert_eq!(space, RgbSpace::Srgb); }
+                    for (key, expected) in &source.tiles {
+                        assert_eq!(actual.tiles[key].digest, expected.digest, "{space:?} {depth:?} {channels:?} TIFF={tiff}");
+                    }
+                }
+            }
+        }
+    }
+}
 use std::io::Cursor;
 
-fn fixture(depth: IntegerDepth, profile: ColorProfile) -> SourceImage {
+pub(super) fn fixture(depth: IntegerDepth, profile: ColorProfile) -> SourceImage {
     let mut builder = SourceBuilder::new(
         [257, 259],
         SourceInterpretation {
@@ -34,7 +71,7 @@ fn fixture(depth: IntegerDepth, profile: ColorProfile) -> SourceImage {
     builder.finish().unwrap()
 }
 
-fn exact_pixels(before: &SourceImage, after: &SourceImage) {
+pub(super) fn exact_pixels(before: &SourceImage, after: &SourceImage) {
     assert_eq!(before.extent, after.extent);
     assert_eq!(before.interpretation.depth, after.interpretation.depth);
     assert_eq!(

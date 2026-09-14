@@ -69,20 +69,7 @@ impl WorkingDecoder {
         options: ConversionOptions,
     ) -> Result<DecoderKind, String> {
         let input = open(context, &source.profile)?;
-        let xy = |[x, y]: [f64; 2]| CIExyY { x, y, Y: 1. };
-        let [red, green, blue] = destination.primaries().map(xy);
-        let linear = ToneCurve::new(1.);
-        let output = Profile::new_rgb_context(
-            context,
-            &xy(destination.white()),
-            &CIExyYTRIPLE {
-                Red: red,
-                Green: green,
-                Blue: blue,
-            },
-            &[&linear; 3],
-        )
-        .map_err(error)?;
+        let output = linear_profile(context, destination)?;
         // Go straight from source samples to linear destination coordinates.
         // An intermediate encoded/bounded sRGB image would lose wide-gamut RGB.
         match (channels(&input)?, source.channels) {

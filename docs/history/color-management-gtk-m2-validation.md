@@ -793,3 +793,89 @@ Reproduce: build and run `sdr_precision` as above, with `LAYER_GPU_INDEX=0`.
 Final logs are `sdr-blend-batch{,-build}.log`; the preceding split-pass-only run
 is `sdr-blend{,-build}.log`. Production document/paint formats remain unchanged
 until their complete commit, restore, editing and memory integration is ready.
+
+## Streaming profiled output foundation (2026-09-14)
+
+`WorkingEncoder` converts straight or premultiplied linear Float32 working rows
+to encoded integer8/integer16 RGB, gray or CMYK. Built-in RGB uses the independently
+checked Float64 matrix/transfer definitions at the final encoding boundary;
+ICC RGB/gray/CMYK uses worker-owned LCMS Float32 transforms with explicit intent
+and BPC. CMYK percentages are scaled independently of alpha. Opaque delivery
+requires an explicit linear matte when coverage is incomplete. Straight input
+retains hidden RGB; premultiplied zero coverage becomes transparent black.
+Non-finite data and channel/profile mismatches fail. Quantization/clamping happens
+at the output boundary, with counts of channels clipped by more than half a code.
+
+PNG/TIFF writers now consume a fallible sequential row producer. Original source
+output uses the same path without a color round trip. Converted output requires
+one working row and one encoded row, plus fixed 256-pixel CMM stack scratch;
+TIFF16 also reuses one native-integer row. No second full image is constructed.
+Cancellation stops further row requests; callers must publish temporary files
+only after successful completion. Matching stable gray ICC profiles replace
+invalid RGB-profile attachment to gray. TIFF gray-alpha now writes and recognizes
+the standard black-is-zero, straight-alpha layout; the pinned decoder reports
+this as `Multiband`, so acceptance checks its actual tags explicitly.
+
+The color suite passes **26 tests**, including the optional external CMYK case.
+Every native integer code round-trips exactly through straight working decode /
+encode in all four spaces and both depths. Premultiplied integer16 tests cover
+all 65,536 RGB codes at alpha 0, 1, 2, 17, 257, 32768 and 65535: maximum one RGB
+code error, exact alpha. Separate encoded-RGB CMM transforms agree within two
+integer16 codes for all 16 space pairs and four intents. External CMYK checks
+cover 729 colors, all four intents and both BPC settings, including K as color
+data, with the same two-code limit. The system LCMS 2.16 engine is common to
+these CMM comparisons; they are independent transform paths, not independent
+color engines. The licensed external fixture is not copied into the repository:
+`/usr/share/color/icc/krita/cmyk.icm`, SHA-256
+`156e7c14f244cfc4ed83a755ca4803d80e15dd249b40fae82cb127d3902e15c7`.
+
+ImageMagick reads the generated RGB, gray/alpha and CMYK TIFFs and RGB/gray-alpha
+PNGs with matching dimensions, depth, channels and ICC presence. Its raw
+ProPhoto TIFF16 output matches every straight RGBA sample, including hidden RGB
+and alpha 0/1/257. Our reopen/identity-output checks preserve tile digests and
+original ICC payloads. Logs: `output-complete-tests.log`, `output-handoff.log`.
+
+The independent `sdr_output` harness synthesizes one linear ProPhoto row at a
+time, converts and writes it. These single-run measurements include row creation,
+conversion, codec and buffered file writes, but exclude fsync, GPU capture, GTK,
+retained document/history memory and concurrent export. Same reference machine
+as the baseline; process high-water is **4,144–4,400 KiB** across these runs.
+Preparation takes 0.6–1.1 ms. At width 8192, the working row is 128 KiB, encoded
+RGBA16 row 64 KiB and test-only decode LUT 256 KiB.
+
+| Random RGB16 + varied alpha | 24 MP | 45 MP | 60 MP |
+| --- | ---: | ---: | ---: |
+| TIFF write ms | 1640.3 | 2801.4 | 3048.8 |
+| PNG default balanced write ms | 11931.2 | 23723.4 | 28846.4 |
+| PNG selected level 1 write ms | 2701.7 | 4507.0 | 4785.6 |
+| PNG balanced bytes | 171545324 | 322060642 | 428578210 |
+| PNG level 1 bytes | 172209129 | 323350592 | 430288295 |
+
+The codec's `Fast` setting was faster at 2193–3846 ms but produced 22% larger
+files on this data. Level 1 preserves almost the balanced size (0.4% increase)
+and reduces the long compression work substantially. The 24 MP ramp changes
+from 1971.3 ms / 1,673,957 bytes to 1439.8 ms / 3,547,526 bytes. The selected
+default uses level 1 with adaptive filtering; all choices are lossless. This
+tradeoff follows measurements of the pinned implementation, not its setting
+names. The [codec documentation](https://docs.rs/png/0.18.1/png/enum.DeflateCompression.html)
+also identifies the streaming size limitation of its fastest implementation.
+
+Reproduce with `cargo build --offline --release -p layer-color --examples`, then
+`target/release/examples/sdr_output 6000 4000 prophoto OUTPUT.png noise`.
+Use 8192×5504 and 8192×7324 for the other sizes, `ramp` for the smooth fixture,
+and `.tif` for TIFF. Use `gray` or `cmyk` instead of `prophoto` for handoff
+fixtures; CMYK requires `LAYER_TEST_CMYK_PROFILE` above. The optional test runs
+with that variable and `cargo test --offline --release -p layer-color --
+--include-ignored`. Logs are `output-{noise,fast,level1,ramp}-*`; saved comparison
+executables are `output-balanced-runner` and `output-fast-runner`.
+
+GPU correctness remains **135 passed / 18 benchmark tests ignored** after the
+shared profile-helper refactor (`output-gpu-tests.log`). This change does not
+alter frame construction or activate photo editing. JPEG delivery, dithering,
+metadata policy, managed GTK export/preview integration and the full concurrent
+workload gates remain outstanding.
+
+The final level-1 build also passes all 26 color tests, four GPU project tests,
+and the isolated native GTK file and diagnostics/GPU-recovery workflows. Logs:
+`output-final-{build,color-tests}.log`, `output-project-tests.log`, and
+`output-gtk-{files,recovery}.log`. No other host integration was changed.

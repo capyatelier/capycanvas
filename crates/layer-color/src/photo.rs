@@ -10,8 +10,8 @@ mod orientation;
 mod png_io;
 mod tiff_io;
 pub use jpeg_io::read_jpeg;
-pub use png_io::{read_png, write_png};
-pub use tiff_io::{read_tiff, write_tiff};
+pub use png_io::{read_png, write_png, write_png_rows};
+pub use tiff_io::{read_tiff, write_tiff, write_tiff_rows};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DecodeLimits {
@@ -97,6 +97,15 @@ fn check_channels(channels: SourceChannels, profile: &ColorProfile) -> Result<()
     }
 }
 
+fn output_row_bytes(
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+) -> Result<usize, String> {
+    DecodeLimits::default().extent(extent)?;
+    check_channels(interpretation.channels, &interpretation.profile)?;
+    Ok(extent[0] as usize * interpretation.pixel_bytes())
+}
+
 fn swap_u16(bytes: &mut [u8]) {
     for code in bytes.chunks_exact_mut(2) {
         code.swap(0, 1);
@@ -106,5 +115,7 @@ fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+#[cfg(test)]
+mod output_tests;
 #[cfg(test)]
 mod tests;

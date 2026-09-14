@@ -16,6 +16,8 @@ pub enum ProfileChannels {
 type FloatTransform<const N: usize> = Transform<[f32; N], [f32; 4], ThreadContext, DisallowCache>;
 mod working;
 pub use working::WorkingDecoder;
+mod output;
+pub use output::{OutputStatistics, WorkingEncoder};
 
 /// Straight encoded RGB in/out; linear coverage is copied verbatim. Construct
 /// once per operation and reuse for rows/tiles. Float32 formats avoid LCMS's
@@ -186,14 +188,21 @@ pub fn profile_bytes(profile: &ColorProfile) -> Result<Vec<u8>, String> {
     if let ColorProfile::Icc(bytes) = profile {
         return Ok(bytes.to_vec());
     }
-    let mut bytes = opened.icc().map_err(error)?;
+    stable_bytes(&context, &opened)
+}
+
+fn stable_bytes(
+    context: &ThreadContext,
+    profile: &Profile<ThreadContext>,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = profile.icc().map_err(error)?;
     for (field, value) in bytes[24..36]
         .chunks_exact_mut(2)
         .zip([2026u16, 1, 1, 0, 0, 0])
     {
         field.copy_from_slice(&value.to_be_bytes());
     }
-    let mut stable = Profile::new_icc_context(&context, &bytes).map_err(error)?;
+    let mut stable = Profile::new_icc_context(context, &bytes).map_err(error)?;
     stable.set_default_profile_id();
     stable.icc().map_err(error)
 }
@@ -259,14 +268,7 @@ fn validate_header(bytes: &[u8]) -> Result<(), String> {
 fn builtin(context: &ThreadContext, space: RgbSpace) -> Result<Profile<ThreadContext>, String> {
     let xy = |[x, y]: [f64; 2]| CIExyY { x, y, Y: 1. };
     let [red, green, blue] = space.primaries().map(xy);
-    let curve = match space {
-        RgbSpace::Srgb | RgbSpace::DisplayP3 => {
-            ToneCurve::new_parametric(4, &[2.4, 1. / 1.055, 0.055 / 1.055, 1. / 12.92, 0.04045])
-        }
-        RgbSpace::AdobeRgb => ToneCurve::new_parametric(1, &[563. / 256.]),
-        RgbSpace::ProPhoto => ToneCurve::new_parametric(4, &[1.8, 1., 0., 1. / 16., 1. / 32.]),
-    }
-    .map_err(error)?;
+    let curve = builtin_curve(space)?;
     let mut profile = Profile::new_rgb_context(
         context,
         &xy(space.white()),
@@ -278,16 +280,64 @@ fn builtin(context: &ThreadContext, space: RgbSpace) -> Result<Profile<ThreadCon
         &[&curve; 3],
     )
     .map_err(error)?;
+    describe(&mut profile, space.name())?;
+    Ok(profile)
+}
+
+fn builtin_curve(space: RgbSpace) -> Result<ToneCurve, String> {
+    match space {
+        RgbSpace::Srgb | RgbSpace::DisplayP3 => {
+            ToneCurve::new_parametric(4, &[2.4, 1. / 1.055, 0.055 / 1.055, 1. / 12.92, 0.04045])
+        }
+        RgbSpace::AdobeRgb => ToneCurve::new_parametric(1, &[563. / 256.]),
+        RgbSpace::ProPhoto => ToneCurve::new_parametric(4, &[1.8, 1., 0., 1. / 16., 1. / 32.]),
+    }
+    .map_err(error)
+}
+
+fn describe(profile: &mut Profile<ThreadContext>, name: &str) -> Result<(), String> {
     profile.set_version(4.3);
     let mut description = lcms2::MLU::new(1);
-    description.set_text(space.name(), lcms2::Locale::new("en_US"));
+    description.set_text(name, lcms2::Locale::new("en_US"));
     if !profile.write_tag(
         lcms2::TagSignature::ProfileDescriptionTag,
         lcms2::Tag::MLU(&description),
     ) {
         return Err("Cannot describe working profile".into());
     }
-    Ok(profile)
+    Ok(())
+}
+
+fn linear_profile(
+    context: &ThreadContext,
+    space: RgbSpace,
+) -> Result<Profile<ThreadContext>, String> {
+    let xy = |[x, y]: [f64; 2]| CIExyY { x, y, Y: 1. };
+    let [red, green, blue] = space.primaries().map(xy);
+    let linear = ToneCurve::new(1.);
+    Profile::new_rgb_context(
+        context,
+        &xy(space.white()),
+        &CIExyYTRIPLE {
+            Red: red,
+            Green: green,
+            Blue: blue,
+        },
+        &[&linear; 3],
+    )
+    .map_err(error)
+}
+
+/// A gray image needs a gray ICC profile, even when its tone curve comes from
+/// a familiar RGB space. Preserve the requested reference white and curve.
+pub fn gray_profile(space: RgbSpace) -> Result<ColorProfile, String> {
+    let context = ThreadContext::new();
+    let [x, y] = space.white();
+    let mut profile =
+        Profile::new_gray_context(&context, &CIExyY { x, y, Y: 1. }, &builtin_curve(space)?)
+            .map_err(error)?;
+    describe(&mut profile, &format!("{} tone curve (gray)", space.name()))?;
+    Ok(ColorProfile::Icc(stable_bytes(&context, &profile)?.into()))
 }
 
 /// PNG cHRM/gAMA describes a matrix/curve space even without an ICC payload.
@@ -330,7 +380,7 @@ pub(crate) fn matrix_profile(
         )
     }
     .map_err(error)?;
-    Ok(ColorProfile::Icc(profile.icc().map_err(error)?.into()))
+    Ok(ColorProfile::Icc(stable_bytes(&context, &profile)?.into()))
 }
 
 fn intent(value: RenderingIntent) -> Intent {

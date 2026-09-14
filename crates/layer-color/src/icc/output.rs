@@ -1,0 +1,236 @@
+//! Worker-owned encoding of bounded linear working rows for SDR delivery.
+use super::*;
+use layer_core::color::source::{SourceChannels, SourceInterpretation};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OutputStatistics {
+    /// Channels outside the integer destination by more than half a code.
+    pub clipped_channels: u64,
+}
+
+pub struct WorkingEncoder {
+    destination: SourceInterpretation,
+    kind: OutputKind,
+    // Transform handles must be dropped before their context.
+    _context: ThreadContext,
+}
+enum OutputKind {
+    Builtin {
+        space: RgbSpace,
+        matrix: layer_core::color::rgb::Matrix3,
+        identity: bool,
+    },
+    Rgb(FloatTransform<4>),
+    Gray(Transform<[f32; 4], [f32; 1], ThreadContext, DisallowCache>),
+    Cmyk(FloatTransform<4>),
+}
+impl WorkingEncoder {
+    pub fn new(
+        source: RgbSpace,
+        destination: &SourceInterpretation,
+        options: ConversionOptions,
+    ) -> Result<Self, String> {
+        let context = ThreadContext::new();
+        let mut destination = destination.clone();
+        destination.profile_assumed = false;
+        if matches!(
+            destination.channels,
+            SourceChannels::Gray | SourceChannels::GrayAlpha
+        ) && let ColorProfile::Builtin(space) = destination.profile
+        {
+            destination.profile = gray_profile(space)?;
+        }
+        let output = open(&context, &destination.profile)?;
+        let actual = channels(&output)?;
+        let valid = match destination.channels {
+            SourceChannels::Rgb | SourceChannels::Rgba => actual == ProfileChannels::Rgb,
+            SourceChannels::Gray | SourceChannels::GrayAlpha => actual == ProfileChannels::Gray,
+            SourceChannels::Cmyk => actual == ProfileChannels::Cmyk,
+        };
+        if !valid {
+            return Err("Output channels disagree with the destination profile".into());
+        }
+        let input = linear_profile(&context, source)?;
+        let kind = match &destination.profile {
+            ColorProfile::Builtin(space)
+                if options.intent != RenderingIntent::AbsoluteColorimetric
+                    || source.white() == space.white() =>
+            {
+                OutputKind::Builtin {
+                    space: *space,
+                    matrix: source.linear_transform(*space),
+                    identity: source == *space,
+                }
+            }
+            _ => match actual {
+                ProfileChannels::Rgb => OutputKind::Rgb(
+                    Transform::new_flags_context(
+                        &context,
+                        &input,
+                        PixelFormat::RGBA_FLT,
+                        &output,
+                        PixelFormat::RGBA_FLT,
+                        intent(options.intent),
+                        flags(options) | Flags::COPY_ALPHA,
+                    )
+                    .map_err(error)?,
+                ),
+                ProfileChannels::Gray => OutputKind::Gray(
+                    Transform::new_flags_context(
+                        &context,
+                        &input,
+                        PixelFormat::RGBA_FLT,
+                        &output,
+                        PixelFormat::GRAY_FLT,
+                        intent(options.intent),
+                        flags(options),
+                    )
+                    .map_err(error)?,
+                ),
+                ProfileChannels::Cmyk => OutputKind::Cmyk(
+                    Transform::new_flags_context(
+                        &context,
+                        &input,
+                        PixelFormat::RGBA_FLT,
+                        &output,
+                        PixelFormat::CMYK_FLT,
+                        intent(options.intent),
+                        flags(options),
+                    )
+                    .map_err(error)?,
+                ),
+            },
+        };
+        Ok(Self {
+            destination,
+            kind,
+            _context: context,
+        })
+    }
+
+    /// Use this interpretation for the written file, including any generated
+    /// gray ICC definition. Merely attaching an RGB profile to gray is invalid.
+    pub fn interpretation(&self) -> &SourceInterpretation {
+        &self.destination
+    }
+
+    /// Preserve straight hidden RGB if supplied. Opaque output with any coverage
+    /// below one requires an explicit matte in the linear working RGB space.
+    pub fn encode_straight(
+        &self,
+        input: &[[f32; 4]],
+        output: &mut [u8],
+        matte: Option<[f32; 3]>,
+    ) -> Result<OutputStatistics, String> {
+        self.encode(input, output, matte, false)
+    }
+    /// Linear premultiplied artwork; zero coverage becomes transparent black.
+    /// Matte compositing precedes nonlinear/profile conversion and quantization.
+    pub fn encode_premultiplied(
+        &self,
+        input: &[[f32; 4]],
+        output: &mut [u8],
+        matte: Option<[f32; 3]>,
+    ) -> Result<OutputStatistics, String> {
+        self.encode(input, output, matte, true)
+    }
+    fn encode(
+        &self,
+        input: &[[f32; 4]],
+        output: &mut [u8],
+        matte: Option<[f32; 3]>,
+        premultiplied: bool,
+    ) -> Result<OutputStatistics, String> {
+        let destination = &self.destination;
+        let bpp = destination.pixel_bytes();
+        if input.len().checked_mul(bpp) != Some(output.len()) {
+            return Err("Incomplete output row".into());
+        }
+        if input
+            .iter()
+            .any(|p| p.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&p[3]))
+            || matte.is_some_and(|m| m.iter().any(|v| !v.is_finite()))
+        {
+            return Err("Output requires finite linear RGB and valid coverage".into());
+        }
+        if matte.is_none() && !destination.channels.has_alpha() && input.iter().any(|p| p[3] < 1.) {
+            return Err("Opaque output requires an explicit matte for transparency".into());
+        }
+        let maximum = f64::from(destination.depth.maximum());
+        let step = destination.depth.bytes();
+        let mut statistics = OutputStatistics::default();
+        for (input, output) in input.chunks(256).zip(output.chunks_mut(256 * bpp)) {
+            let mut values = [[0f32; 4]; 256];
+            for (i, &p) in input.iter().enumerate() {
+                let rgb = if premultiplied {
+                    if p[3] > 0. {
+                        [p[0] / p[3], p[1] / p[3], p[2] / p[3]]
+                    } else {
+                        [0.; 3]
+                    }
+                } else {
+                    [p[0], p[1], p[2]]
+                };
+                let (rgb, alpha) = if let Some(matte) = matte {
+                    (
+                        std::array::from_fn(|c| rgb[c] * p[3] + matte[c] * (1. - p[3])),
+                        1.,
+                    )
+                } else {
+                    (rgb, p[3])
+                };
+                if rgb.iter().any(|v| !v.is_finite()) {
+                    return Err("Working RGB exceeds finite output precision".into());
+                }
+                values[i] = [rgb[0], rgb[1], rgb[2], alpha];
+            }
+            let mut converted = [[0.; 4]; 256];
+            let mut gray = [[0.; 1]; 256];
+            match &self.kind {
+                OutputKind::Builtin { .. } => (),
+                OutputKind::Rgb(transform) | OutputKind::Cmyk(transform) => transform
+                    .transform_pixels(&values[..input.len()], &mut converted[..input.len()]),
+                OutputKind::Gray(transform) => {
+                    transform.transform_pixels(&values[..input.len()], &mut gray[..input.len()])
+                }
+            }
+            for (i, pixel) in output.chunks_exact_mut(bpp).enumerate() {
+                let mut encoded = match &self.kind {
+                    OutputKind::Builtin {
+                        space,
+                        matrix,
+                        identity,
+                    } => {
+                        let linear = [values[i][0], values[i][1], values[i][2]].map(f64::from);
+                        let rgb = if *identity {
+                            linear
+                        } else {
+                            layer_core::color::rgb::apply(*matrix, linear)
+                        }
+                        .map(|v| space.encode(v));
+                        [rgb[0], rgb[1], rgb[2], 0.]
+                    }
+                    OutputKind::Rgb(_) => converted[i].map(f64::from),
+                    OutputKind::Gray(_) => [f64::from(gray[i][0]), 0., 0., 0.],
+                    OutputKind::Cmyk(_) => converted[i].map(|v| f64::from(v) / 100.),
+                };
+                if destination.channels.has_alpha() {
+                    encoded[destination.channels.count() - 1] = f64::from(values[i][3]);
+                }
+                for (code, &value) in pixel.chunks_exact_mut(step).zip(&encoded) {
+                    if !value.is_finite() {
+                        return Err("Destination profile produced non-finite output".into());
+                    }
+                    let unbounded = (value * maximum).round();
+                    statistics.clipped_channels += u64::from(unbounded < 0. || unbounded > maximum);
+                    let value = unbounded.clamp(0., maximum) as u16;
+                    code.copy_from_slice(&value.to_le_bytes()[..step]);
+                }
+            }
+        }
+        Ok(statistics)
+    }
+}
+
+#[cfg(test)]
+mod tests;

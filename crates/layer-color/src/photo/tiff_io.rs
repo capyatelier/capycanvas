@@ -42,6 +42,22 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
     let (channels, bits) = match decoder.colortype().map_err(err)? {
         ColorType::Gray(bits) => (SourceChannels::Gray, bits),
         ColorType::GrayA(bits) => (SourceChannels::GrayAlpha, bits),
+        // The pinned decoder reports gray alpha as Multiband. Only accept
+        // the standard black-is-zero layout with one explicitly straight alpha.
+        ColorType::Multiband {
+            bit_depth,
+            num_samples: 2,
+        } if decoder
+            .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)
+            .map_err(err)?
+            == Some(1)
+            && decoder
+                .find_tag_unsigned_vec::<u16>(Tag::ExtraSamples)
+                .map_err(err)?
+                == Some(vec![2]) =>
+        {
+            (SourceChannels::GrayAlpha, bit_depth)
+        }
         ColorType::RGB(bits) => (SourceChannels::Rgb, bits),
         ColorType::RGBA(bits) => (SourceChannels::Rgba, bits),
         ColorType::CMYK(bits) => (SourceChannels::Cmyk, bits),
@@ -121,48 +137,81 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
     super::orientation::normalize(builder.finish()?, orientation, limits.source_bytes)
 }
 
-pub fn write_tiff(mut output: impl Write + Seek, source: &SourceImage) -> Result<(), String> {
+// The pinned TIFF encoder exposes RGB alpha types but no gray-alpha types.
+// Describe the standard two-sample layout; ExtraSamples=2 is written below.
+macro_rules! gray_alpha {
+    ($name:ident, $sample:ty, $bits:literal) => {
+        struct $name;
+        impl colortype::ColorType for $name {
+            type Inner = $sample;
+            const TIFF_VALUE: tiff::tags::PhotometricInterpretation =
+                tiff::tags::PhotometricInterpretation::BlackIsZero;
+            const BITS_PER_SAMPLE: &'static [u16] = &[$bits, $bits];
+            const SAMPLE_FORMAT: &'static [tiff::tags::SampleFormat] =
+                &[tiff::tags::SampleFormat::Uint; 2];
+            fn horizontal_predict(row: &[$sample], result: &mut Vec<$sample>) {
+                result.extend(row.iter().enumerate().map(|(i, &value)| {
+                    if i < 2 {
+                        value
+                    } else {
+                        value.wrapping_sub(row[i - 2])
+                    }
+                }));
+            }
+        }
+    };
+}
+gray_alpha!(GrayAlpha8, u8, 8);
+gray_alpha!(GrayAlpha16, u16, 16);
+
+pub fn write_tiff(output: impl Write + Seek, source: &SourceImage) -> Result<(), String> {
     source.validate()?;
-    check_channels(
-        source.interpretation.channels,
-        &source.interpretation.profile,
-    )?;
+    let mut rows = source.rows();
+    write_tiff_rows(output, source.extent, &source.interpretation, |y, row| {
+        rows.read(y, row)
+    })
+}
+
+/// Stream top-to-bottom encoded rows, with little-endian integer16 samples.
+/// See `write_png_rows` for cancellation and temporary-file publication rules.
+pub fn write_tiff_rows(
+    mut output: impl Write + Seek,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    let row_bytes = output_row_bytes(extent, interpretation)?;
     let profile = if matches!(
-        source.interpretation.channels,
+        interpretation.channels,
         SourceChannels::Gray | SourceChannels::GrayAlpha
-    ) && source.interpretation.profile == ColorProfile::default()
+    ) && let ColorProfile::Builtin(space) = interpretation.profile
     {
-        crate::icc::matrix_profile(
-            RgbSpace::Srgb.white(),
-            RgbSpace::Srgb.primaries(),
-            None,
-            true,
-        )?
+        crate::gray_profile(space)?
     } else {
-        source.interpretation.profile.clone()
+        interpretation.profile.clone()
     };
     let icc = profile_bytes(&profile)?;
     let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(err)?;
+    let mut codes = Vec::<u16>::new();
     macro_rules! write {
         ($ty:ty, $u16:tt) => {{
             let mut image = encoder
-                .new_image::<$ty>(source.extent[0], source.extent[1])
+                .new_image::<$ty>(extent[0], extent[1])
                 .map_err(err)?;
             image
                 .encoder()
                 .write_tag(Tag::IccProfile, icc.as_slice())
                 .map_err(err)?;
-            if source.interpretation.channels.has_alpha() {
+            if interpretation.channels.has_alpha() {
                 image
                     .encoder()
                     .write_tag(Tag::ExtraSamples, &[2u16][..])
                     .map_err(err)?;
             }
             image.rows_per_strip(1).map_err(err)?;
-            let mut rows = source.rows();
-            let mut row = vec![0; source.row_bytes()];
-            for y in 0..source.extent[1] {
-                rows.read(y, &mut row)?;
+            let mut row = vec![0; row_bytes];
+            for y in 0..extent[1] {
+                read_row(y, &mut row)?;
                 write_tiff_row!(&mut image, &row, $u16);
             }
             image.finish().map_err(err)
@@ -173,23 +222,25 @@ pub fn write_tiff(mut output: impl Write + Seek, source: &SourceImage) -> Result
             $image.write_strip($row).map_err(err)?
         };
         ($image:expr, $row:expr, true) => {{
-            let codes: Vec<u16> = $row
-                .chunks_exact(2)
-                .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                .collect();
+            codes.clear();
+            codes.extend(
+                $row.chunks_exact(2)
+                    .map(|b| u16::from_le_bytes([b[0], b[1]])),
+            );
             $image.write_strip(&codes).map_err(err)?;
         }};
     }
-    let result = match (source.interpretation.channels, source.interpretation.depth) {
+    let result = match (interpretation.channels, interpretation.depth) {
         (SourceChannels::Gray, IntegerDepth::U8) => write!(colortype::Gray8, false),
         (SourceChannels::Gray, IntegerDepth::U16) => write!(colortype::Gray16, true),
+        (SourceChannels::GrayAlpha, IntegerDepth::U8) => write!(GrayAlpha8, false),
+        (SourceChannels::GrayAlpha, IntegerDepth::U16) => write!(GrayAlpha16, true),
         (SourceChannels::Rgb, IntegerDepth::U8) => write!(colortype::RGB8, false),
         (SourceChannels::Rgb, IntegerDepth::U16) => write!(colortype::RGB16, true),
         (SourceChannels::Rgba, IntegerDepth::U8) => write!(colortype::RGBA8, false),
         (SourceChannels::Rgba, IntegerDepth::U16) => write!(colortype::RGBA16, true),
         (SourceChannels::Cmyk, IntegerDepth::U8) => write!(colortype::CMYK8, false),
         (SourceChannels::Cmyk, IntegerDepth::U16) => write!(colortype::CMYK16, true),
-        _ => Err("Grayscale-alpha TIFF output is not yet supported".into()),
     };
     result?;
     drop(encoder);

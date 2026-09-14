@@ -175,11 +175,25 @@ fn interpretation_from_tags(info: &png::Info<'_>) -> Result<(ColorProfile, bool)
 
 /// Identity source delivery. Profile transforms/depth conversion create a
 /// separate row provider; this function cannot mutate the retained source.
-pub fn write_png(mut output: impl Write, source: &SourceImage) -> Result<(), String> {
+pub fn write_png(output: impl Write, source: &SourceImage) -> Result<(), String> {
     source.validate()?;
-    let interpretation = &source.interpretation;
-    check_channels(interpretation.channels, &interpretation.profile)?;
-    let mut info = png::Info::with_size(source.extent[0], source.extent[1]);
+    let mut rows = source.rows();
+    write_png_rows(output, source.extent, &source.interpretation, |y, row| {
+        rows.read(y, row)
+    })
+}
+
+/// Stream top-to-bottom encoded rows, with little-endian integer16 samples.
+/// The provider fills the entire row and may fail/cancel. Publish the temporary
+/// file only after success; an error can leave incomplete output.
+pub fn write_png_rows(
+    mut output: impl Write,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    let row_bytes = output_row_bytes(extent, interpretation)?;
+    let mut info = png::Info::with_size(extent[0], extent[1]);
     info.bit_depth = match interpretation.depth {
         IntegerDepth::U8 => png::BitDepth::Eight,
         IntegerDepth::U16 => png::BitDepth::Sixteen,
@@ -196,16 +210,25 @@ pub fn write_png(mut output: impl Write, source: &SourceImage) -> Result<(), Str
     if interpretation.profile == ColorProfile::default() {
         info.srgb = Some(png::SrgbRenderingIntent::RelativeColorimetric);
     } else {
-        info.icc_profile = Some(profile_bytes(&interpretation.profile)?.into());
+        let profile = if matches!(
+            interpretation.channels,
+            SourceChannels::Gray | SourceChannels::GrayAlpha
+        ) && let ColorProfile::Builtin(space) = interpretation.profile
+        {
+            crate::gray_profile(space)?
+        } else {
+            interpretation.profile.clone()
+        };
+        info.icc_profile = Some(profile_bytes(&profile)?.into());
     }
-    let encoder = png::Encoder::with_info(&mut output, info).map_err(err)?;
+    let mut encoder = png::Encoder::with_info(&mut output, info).map_err(err)?;
+    encoder.set_deflate_compression(png::DeflateCompression::Level(1));
     let mut writer = encoder.write_header().map_err(err)?;
     {
         let mut stream = writer.stream_writer().map_err(err)?;
-        let mut source_rows = source.rows();
-        let mut row = vec![0; source.row_bytes()];
-        for y in 0..source.extent[1] {
-            source_rows.read(y, &mut row)?;
+        let mut row = vec![0; row_bytes];
+        for y in 0..extent[1] {
+            read_row(y, &mut row)?;
             if interpretation.depth == IntegerDepth::U16 {
                 swap_u16(&mut row);
             }
