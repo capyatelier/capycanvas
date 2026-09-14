@@ -1,7 +1,7 @@
-//! Idle-time GPU previews: one source capture/probe per revision, one shared
-//! preview pipeline, bounded scratch and small asynchronous image readbacks.
-use super::*;
+//! Idle-time GPU previews: a chunked source probe per revision, shared source
+//! crops and pipelines, and small asynchronous image readbacks.
 use super::metadata::PreviewMetadata;
+use super::*;
 use layer_render::{FilterPreviewImage, FilterPreviewRequest};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -9,10 +9,16 @@ use wgpu::util::DeviceExt;
 type Image = (wgpu::Texture, wgpu::TextureView);
 enum Ready {
     Point(Result<u32, GpuRasterError>),
+    ProbeNext(Result<u32, GpuRasterError>),
     Pixels(Result<ReadbackImage, GpuRasterError>),
 }
 pub(crate) struct FilterPreviews {
     scene: Scene,
+    source_scene: Scene,
+    probe_next: u32,
+    probe_winner: Option<wgpu::Buffer>,
+    cancelled: bool,
+    capture_background: [f32; 4],
     programs: HashMap<Arc<str>, Layer>,
     probe: wgpu::ComputePipeline,
     mask: Image,
@@ -79,6 +85,11 @@ impl FilterPreviews {
         let (tx, rx) = mpsc::channel();
         Ok(Self {
             scene,
+            source_scene: Scene::new(r),
+            probe_next: 0,
+            probe_winner: None,
+            cancelled: false,
+            capture_background: [0.; 4],
             programs: HashMap::new(),
             probe,
             mask,
@@ -97,6 +108,20 @@ impl FilterPreviews {
             source_updates: 0,
             rendered_rows: 0,
         })
+    }
+    pub(crate) fn note_frame(&mut self, packet: FramePacket<'_>, epoch: u64) {
+        if self.request.is_some() {
+            self.cancelled |= self
+                .key
+                .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent)
+                || self.capture_background != packet.view.background_rgba_linear
+                || self.source_layers.len() != packet.layers.len()
+                || self
+                    .source_layers
+                    .iter()
+                    .zip(packet.layers)
+                    .any(|(old, layer)| *old != PreviewMetadata::new(layer));
+        }
     }
     fn start(
         &mut self,
@@ -130,6 +155,8 @@ impl FilterPreviews {
                 layer.effect = Some(effect.clone());
             }
         }
+        self.cancelled = false;
+        self.capture_background = request.view.background_rgba_linear;
         if let Some(paper) = request
             .layers
             .iter()
@@ -164,66 +191,104 @@ impl FilterPreviews {
             self.rows.clear();
             self.key = Some(key);
             self.point = None;
-            let request = self.request.as_ref().unwrap();
-            let mut encoder = crate::submission::CommandEncoder::new(
-                &r.device,
-                &wgpu::CommandEncoderDescriptor {
-                    label: Some("filter preview source"),
-                },
-            );
-            if self
-                .source
-                .as_ref()
-                .is_none_or(|s| [s.0.width(), s.0.height()] != request.extent)
-            {
-                self.source = Some(create_color_target(
-                    &r.device,
-                    request.extent,
-                    "filter insertion source",
-                ));
-            }
-            let mut scene = r.scene.take().unwrap_or_else(|| Scene::new(r));
-            scene.begin_frame();
-            scene.style_base = r.last_style_base;
-            let captured = scene.capture_filter_source(
-                r,
-                request,
-                &self.source.as_ref().unwrap().0,
-                &mut encoder,
-            );
-            r.scene = Some(scene);
-            captured?;
-            let uniform = r
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("preview paper"),
-                    contents: &request
-                        .view
-                        .background_rgba_linear
-                        .into_iter()
-                        .chain([request.size[0] as f32, request.size[1] as f32, 0., 0.])
-                        .flat_map(f32::to_le_bytes)
-                        .collect::<Vec<_>>(),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            let winner = r.device.create_buffer(&wgpu::BufferDescriptor {
+            self.probe_next = 0;
+            self.probe_winner = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("preview content coordinate"),
                 size: 8,
                 usage: wgpu::BufferUsages::STORAGE
                     | wgpu::BufferUsages::COPY_SRC
                     | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            });
-            encoder.clear_buffer(&winner, 0, None);
+            }));
+            self.probe_batch(r)?;
+            self.source_updates += 1;
+        } else if self
+            .request
+            .as_ref()
+            .unwrap()
+            .filters
+            .iter()
+            .any(|f| !self.rows.contains_key(&f.program.id))
+        {
+            self.render(r)?;
+        }
+        Ok(true)
+    }
+    /// Scan four source tiles per completion. Only one chunk can be in flight;
+    /// the retained source and spatial boundaries cover the tile plus its halo.
+    fn probe_batch(&mut self, r: &mut WgpuRasterizer) -> Result<(), GpuRasterError> {
+        let request = self.request.as_ref().unwrap();
+        let extent = request.extent;
+        let columns = extent[0].div_ceil(PAGE_SIZE);
+        let count = columns * extent[1].div_ceil(PAGE_SIZE);
+        let winner = self.probe_winner.as_ref().unwrap();
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &r.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("filter content probe chunk"),
+            },
+        );
+        if self.probe_next == 0 {
+            encoder.clear_buffer(winner, 0, None);
+        }
+        for _ in 0..4 {
+            if self.probe_next == count {
+                break;
+            }
+            let tile = [self.probe_next % columns, self.probe_next / columns];
+            let core = page_rect(tile).intersect(PixelRect::full(extent));
+            let region = PixelRect::new(
+                core.min_x().saturating_sub(request.size[0] / 2),
+                core.min_y().saturating_sub(request.size[1] / 2),
+                core.max_x()
+                    .saturating_add(request.size[0] / 2)
+                    .min(extent[0]),
+                core.max_y()
+                    .saturating_add(request.size[1] / 2)
+                    .min(extent[1]),
+            );
+            self.source = Some(create_color_target(
+                &r.device,
+                [region.width(), region.height()],
+                "filter probe window",
+            ));
+            let (texture, view) = self.source.as_ref().unwrap();
+            self.source_scene
+                .capture_filter_source(r, request, texture, region, &mut encoder)?;
+            let mut data = Vec::with_capacity(64);
+            for v in request.view.background_rgba_linear {
+                data.extend(v.to_le_bytes());
+            }
+            for v in [
+                request.size[0],
+                request.size[1],
+                extent[0],
+                extent[1],
+                region.min_x(),
+                region.min_y(),
+                core.min_x(),
+                core.min_y(),
+                core.width(),
+                core.height(),
+                0,
+                0,
+            ] {
+                data.extend(v.to_le_bytes());
+            }
+            let uniform = r
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("preview probe window"),
+                    contents: &data,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
             let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("preview probe"),
                 layout: &self.probe.get_bind_group_layout(0),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(
-                            &self.source.as_ref().unwrap().1,
-                        ),
+                        resource: wgpu::BindingResource::TextureView(view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -242,56 +307,57 @@ impl FilterPreviews {
                 });
                 pass.set_pipeline(&self.probe);
                 pass.set_bind_group(0, &binding, &[]);
-                pass.dispatch_workgroups(
-                    request.extent[0].div_ceil(16),
-                    request.extent[1].div_ceil(16),
-                    1,
-                );
+                pass.dispatch_workgroups(core.width().div_ceil(16), core.height().div_ceil(16), 1);
             }
-            let read = r.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("preview coordinate pair"),
-                size: 8,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            encoder.copy_buffer_to_buffer(&winner, 0, &read, 0, 8);
-            r.uploads.finish(&encoder);
-            encoder.submit(&r.queue);
-            let buffer = read.clone();
-            let tx = self.tx.clone();
-            read.slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    let result = result
-                        .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
-                        .and_then(|_| {
-                            let bytes = buffer
-                                .slice(..)
-                                .get_mapped_range()
-                                .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                            let preferred = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-                            let value = if preferred > 0 {
-                                preferred
-                            } else {
-                                u32::from_le_bytes(bytes[4..8].try_into().unwrap())
-                            };
-                            drop(bytes);
-                            buffer.unmap();
-                            Ok(value)
-                        });
-                    let _ = tx.send(Ready::Point(result));
-                });
-            self.source_updates += 1;
-        } else if self
-            .request
-            .as_ref()
-            .unwrap()
-            .filters
-            .iter()
-            .any(|f| !self.rows.contains_key(&f.program.id))
-        {
-            self.render(r)?;
+            let next = crate::submission::CommandEncoder::new(
+                &r.device,
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("next filter probe window"),
+                },
+            );
+            let encoded = std::mem::replace(&mut encoder, next);
+            r.uploads.finish(&encoded);
+            encoded.submit(&r.queue);
+            self.probe_next += 1;
         }
-        Ok(true)
+        let last = self.probe_next == count;
+        let read = r.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("preview coordinate pair"),
+            size: 8,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(winner, 0, &read, 0, 8);
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        let buffer = read.clone();
+        let tx = self.tx.clone();
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let result = result
+                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
+                    .and_then(|_| {
+                        let bytes = buffer
+                            .slice(..)
+                            .get_mapped_range()
+                            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+                        let preferred = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                        let value = if preferred > 0 {
+                            preferred
+                        } else {
+                            u32::from_le_bytes(bytes[4..8].try_into().unwrap())
+                        };
+                        drop(bytes);
+                        buffer.unmap();
+                        Ok(value)
+                    });
+                let _ = tx.send(if last {
+                    Ready::Point(result)
+                } else {
+                    Ready::ProbeNext(result)
+                });
+            });
+        Ok(())
     }
     fn render(&mut self, r: &mut WgpuRasterizer) -> Result<(), GpuRasterError> {
         let request = self.request.as_ref().unwrap();
@@ -325,8 +391,8 @@ impl FilterPreviews {
                 .min(extent[i].saturating_sub(request.size[i]))
         });
         let fallback;
-        let source = if self.point.is_some() {
-            self.source.as_ref().unwrap().1.clone()
+        let fallback_source = if self.point.is_some() {
+            r.empty_view.clone()
         } else {
             fallback = create_color_target(&r.device, extent, "empty document filter sample");
             let mut data = [0.; 24];
@@ -347,6 +413,36 @@ impl FilterPreviews {
                 clip: None,
             });
             fallback.1.clone()
+        };
+        let pad = self.rendering.iter().try_fold(0u32, |pad, id| {
+            Some(pad.max(self.programs[id].effect.as_ref()?.damage_radius()?))
+        });
+        let source_bounds = pad.map_or(PixelRect::full(extent), |pad| {
+            PixelRect::new(
+                origin[0],
+                origin[1],
+                (origin[0] + width).min(extent[0]),
+                (origin[1] + height).min(extent[1]),
+            )
+            .expand(pad, extent)
+        });
+        let source = if self.point.is_some() {
+            self.source = Some(create_color_target(
+                &r.device,
+                [source_bounds.width(), source_bounds.height()],
+                "filter preview source crop",
+            ));
+            let (texture, view) = self.source.as_ref().unwrap();
+            self.source_scene.capture_filter_source(
+                r,
+                request,
+                texture,
+                source_bounds,
+                &mut encoder,
+            )?;
+            view.clone()
+        } else {
+            fallback_source
         };
         let atlas = create_color_target(
             &r.device,
@@ -384,7 +480,16 @@ impl FilterPreviews {
             let size = if whole {
                 extent
             } else {
-                [width + pad * 2, height + pad * 2]
+                // Declared support can cover the entire document. Replicated
+                // edge samples need no allocation beyond that input extent.
+                [
+                    width
+                        .saturating_add(pad.saturating_mul(2))
+                        .min(extent[0].max(width)),
+                    height
+                        .saturating_add(pad.saturating_mul(2))
+                        .min(extent[1].max(height)),
+                ]
             };
             let count = program.passes.len().max(1);
             if size[0] > self.scratch_size[0] || size[1] > self.scratch_size[1] {
@@ -421,7 +526,22 @@ impl FilterPreviews {
                     extent[0] as f32,
                     extent[1] as f32,
                 ]);
-                if stage > 0 {
+                if self.point.is_some() {
+                    data[20..24].copy_from_slice(&[
+                        source_bounds.min_x() as f32,
+                        source_bounds.min_y() as f32,
+                        source_bounds.width() as f32,
+                        source_bounds.height() as f32,
+                    ]);
+                }
+                if stage == 0 && self.point.is_some() {
+                    data[16..20].copy_from_slice(&[
+                        source_bounds.min_x() as f32,
+                        source_bounds.min_y() as f32,
+                        source_bounds.width() as f32,
+                        source_bounds.height() as f32,
+                    ]);
+                } else if stage > 0 {
                     data[16..20].copy_from_slice(&[
                         crop[0] as f32,
                         crop[1] as f32,
@@ -490,37 +610,49 @@ impl FilterPreviews {
     ) -> Option<Result<FilterPreviewImage, GpuRasterError>> {
         self.request.as_ref()?;
         while let Ok(ready) = self.rx.try_recv() {
-            let result = match ready {
-                Ready::Point(value) => value.and_then(|score| {
-                    if score != 0 {
-                        let rank = u32::MAX - score;
-                        let extent = self.request.as_ref().unwrap().extent;
-                        let decode = |v: u32| {
-                            if v & 1 == 0 {
-                                (v / 2) as i32
-                            } else {
-                                -((v / 2) as i32)
-                            }
-                        };
-                        self.point = Some(
-                            [
-                                (extent[0] / 2) as i32 + decode(rank & 65535),
-                                (extent[1] / 2) as i32 + decode(rank >> 16),
-                            ]
-                            .map(|v| v as u32),
-                        );
-                    }
-                    self.render(r)
-                }),
-                Ready::Pixels(image) => image.map(|image| {
-                    let row_bytes = (self.size[0] * self.size[1] * 4) as usize;
-                    for (id, bytes) in self.rendering.drain(..).zip(image.bytes.chunks(row_bytes)) {
-                        self.rows.insert(id, bytes.to_vec());
-                    }
-                }),
+            let result = if self.cancelled {
+                Err(GpuRasterError::Effect(
+                    "Filter preview cancelled because its source changed".into(),
+                ))
+            } else {
+                match ready {
+                    Ready::ProbeNext(result) => result.and_then(|_| self.probe_batch(r)),
+                    Ready::Point(value) => value.and_then(|score| {
+                        self.probe_winner = None;
+                        if score != 0 {
+                            let rank = u32::MAX - score;
+                            let extent = self.request.as_ref().unwrap().extent;
+                            let decode = |v: u32| {
+                                if v & 1 == 0 {
+                                    (v / 2) as i32
+                                } else {
+                                    -((v / 2) as i32)
+                                }
+                            };
+                            self.point = Some(
+                                [
+                                    (extent[0] / 2) as i32 + decode(rank & 65535),
+                                    (extent[1] / 2) as i32 + decode(rank >> 16),
+                                ]
+                                .map(|v| v as u32),
+                            );
+                        }
+                        self.render(r)
+                    }),
+                    Ready::Pixels(image) => image.map(|image| {
+                        let row_bytes = (self.size[0] * self.size[1] * 4) as usize;
+                        for (id, bytes) in
+                            self.rendering.drain(..).zip(image.bytes.chunks(row_bytes))
+                        {
+                            self.rows.insert(id, bytes.to_vec());
+                        }
+                    }),
+                }
             };
             if let Err(error) = result {
                 self.request = None;
+                self.probe_winner = None;
+                self.key = None;
                 return Some(Err(error));
             }
         }
@@ -561,6 +693,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         request: &FilterPreviewRequest,
         destination: &wgpu::Texture,
+        region: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let index = request
@@ -573,45 +706,70 @@ impl Scene {
             && !request.layers[..index]
                 .iter()
                 .any(|l| l.visible && l.properties.parent.is_none())
-            && !request
-                .layers
-                .iter()
-                .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area))
+            && !request.layers.iter().any(|l| {
+                l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area)
+                    || l.effect.as_ref().is_some_and(|e| e.animated())
+            })
             && let Some(composite) = &r.composite_texture
         {
             encoder.copy_texture_to_texture(
-                composite.as_image_copy(),
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d {
+                        x: region.min_x(),
+                        y: region.min_y(),
+                        z: 0,
+                    },
+                    ..composite.as_image_copy()
+                },
                 destination.as_image_copy(),
                 destination.size(),
             );
             return Ok(());
         }
-        self.stop_before = request.layers[..index]
+        // Keep only the insertion scope and its ancestors. An excluded global
+        // effect above the target must not force a full-document dependency.
+        let mut ancestors = Vec::new();
+        let mut ancestor = parent;
+        while let Some(id) = ancestor {
+            ancestors.push(id);
+            ancestor = request
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .and_then(|l| l.properties.parent);
+        }
+        let layers: Vec<_> = request
+            .layers
             .iter()
-            .rposition(|l| l.properties.parent == parent)
-            .map(|i| (i, false));
+            .enumerate()
+            .filter_map(|(i, layer)| {
+                if ancestors.contains(&layer.id) {
+                    let mut ancestor = layer.clone();
+                    ancestor.effect = None;
+                    return Some(ancestor);
+                }
+                let mut root = i;
+                while request.layers[root].properties.parent != parent {
+                    let id = request.layers[root].properties.parent?;
+                    root = request.layers.iter().position(|l| l.id == id)?;
+                }
+                (root >= index).then(|| layer.clone())
+            })
+            .collect();
         self.jobs.clear();
         self.used.fill(false);
         let packet = FramePacket {
             time_seconds: 0.,
             view: request.view,
             document_extent: request.extent,
-            layers: &request.layers,
+            layers: &layers,
             dabs: &[],
             dab_batches: &[],
             restore_rasters: &[],
             reset_layers: false,
             composite_all: false,
         };
-        let result = (|| {
-            for tile in page_coordinates(PixelRect::full(request.extent)) {
-                let input = self.group(r, packet, parent, tile)?;
-                self.copy_tile(input, destination, tile, request.extent);
-            }
-            self.encode_jobs(r, encoder)
-        })();
-        self.stop_before = None;
-        result
+        self.capture_region(r, packet, destination, region, parent, encoder)
     }
 }
 impl WgpuRasterizer {
@@ -661,6 +819,8 @@ impl FilterPreviews {
             + bytes(&self.mask)
             + self.scratch.iter().map(bytes).sum::<u64>()
             + self.scene.scratch_bytes()
+            + self.source_scene.scratch_bytes()
+            + self.probe_winner.as_ref().map_or(0, wgpu::Buffer::size)
     }
 }
 
@@ -682,6 +842,139 @@ mod tests {
             }
         }
         panic!("preview did not complete");
+    }
+    #[test]
+    fn filter_probe_chunks_bound_sources_and_cancel_changed_documents() {
+        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+            space: RgbSpace::ProPhoto,
+            depth: IntegerDepth::U16,
+        })
+        .unwrap();
+        let extent = [2049, 513]; // 27 tiles, including partial right/bottom edges.
+        let mut pattern = Layer::paint(LayerId(1), "source");
+        let mut program = (*fixture("exposure").program()).clone();
+        program.kind = layer_core::EffectKind::Generator;
+        program.entry = "pattern".into();
+        program.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(p.x/fx_extent().x,p.y/fx_extent().y,.2,1.);}".into();
+        pattern.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
+        pattern.kind = LayerKind::Effect;
+        let mut blur = Layer::paint(LayerId(2), "spatial source");
+        let mut program = (*fixture("exposure").program()).clone();
+        program.entry = "blur".into();
+        program.wgsl = "fn blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (fx_sample(p+vec2<f32>(3.,0.))+c+fx_sample(p-vec2<f32>(3.,0.)))/3.;}".into();
+        program.passes = vec![layer_core::EffectPass {
+            entry: "blur".into(),
+            sampling: layer_core::EffectSampling::Neighborhood { radius: 3 },
+        }]
+        .into();
+        blur.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
+        blur.kind = LayerKind::Effect;
+        let mut upper = Layer::paint(LayerId(3), "excluded upper correction");
+        upper.kind = LayerKind::Effect;
+        upper.effect = Some(Arc::new(fixture("black_white").preview().unwrap()));
+        Arc::make_mut(&mut Arc::make_mut(upper.effect.as_mut().unwrap()).program).passes =
+            vec![layer_core::EffectPass {
+                entry: upper.effect.as_ref().unwrap().program.entry.clone(),
+                sampling: layer_core::EffectSampling::Document,
+            }]
+            .into();
+        let mut layers = vec![upper, blur, pattern];
+        let view = layer_render::ViewState {
+            width_px: extent[0],
+            height_px: extent[1],
+            background_rgba_linear: [0.; 4],
+            document_to_surface: [1., 0., 0., 1., 0., 0.],
+        };
+        let frame = |r: &mut WgpuRasterizer, layers: &[Layer]| {
+            r.submit(FramePacket {
+                time_seconds: 0.,
+                view,
+                document_extent: extent,
+                layers,
+                dabs: &[],
+                dab_batches: &[],
+                restore_rasters: &[],
+                reset_layers: false,
+                composite_all: true,
+            })
+            .unwrap()
+        };
+        frame(&mut r, &layers);
+        let request = |layers: &[Layer], id| FilterPreviewRequest {
+            request_id: id,
+            target: LayerId(2),
+            size: [200, 40],
+            extent,
+            view,
+            layers: layers.iter().map(Layer::composite_snapshot).collect(),
+            filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
+        };
+        r.request_filter_previews(request(&layers, 1)).unwrap();
+        let p = r.filter_previews.as_ref().unwrap();
+        assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
+        assert!(p.request.is_some());
+        let mut callbacks = 0;
+        loop {
+            r.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .unwrap();
+            let result = r.take_filter_previews();
+            let p = r.filter_previews.as_ref().unwrap();
+            let (texture, _) = p.source.as_ref().unwrap();
+            assert!(texture.width() <= PAGE_SIZE + 200 && texture.height() <= PAGE_SIZE + 40);
+            assert!(
+                p.source_scene.image_cache_bytes()
+                    <= 3 * (PAGE_SIZE + 206) as u64 * (PAGE_SIZE + 46) as u64 * 16
+            );
+            callbacks += 1;
+            if let Some(result) = result {
+                assert_eq!(result.unwrap().image.request_id, 1);
+                break;
+            }
+            assert!(callbacks < 50);
+        }
+        let p = r.filter_previews.as_ref().unwrap();
+        assert_eq!(p.probe_next, 27);
+        assert_eq!(p.point, Some([1024, 256]));
+        assert!(callbacks >= 7);
+        assert!(p.probe_winner.is_none());
+        // A metadata edit between chunks cancels the old request after its
+        // in-flight callback. It cannot combine different document revisions.
+        r.filter_previews.as_mut().unwrap().key = None;
+        r.request_filter_previews(request(&layers, 2)).unwrap();
+        layers[1].opacity = 0.5;
+        frame(&mut r, &layers);
+        r.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(READBACK_TIMEOUT),
+            })
+            .unwrap();
+        assert!(r.take_filter_previews().unwrap().is_err());
+        assert!(!r.filter_previews_pending());
+        assert_eq!(r.filter_previews.as_ref().unwrap().probe_next, 4);
+        r.request_filter_previews(request(&layers, 3)).unwrap();
+        assert_eq!(finish(&mut r).image.request_id, 3);
+        // A valid conservative support declaration can exceed the adapter's
+        // texture dimension. Its actual dependency still ends at the document.
+        let mut wide = request(&layers, 4);
+        let mut program = (*fixture("exposure").program()).clone();
+        program.id = "test:wide-support".into();
+        program.passes = (0..3)
+            .map(|_| layer_core::EffectPass {
+                entry: program.entry.clone(),
+                sampling: layer_core::EffectSampling::Neighborhood { radius: 4096 },
+            })
+            .collect::<Vec<_>>()
+            .into();
+        wide.filters = vec![Arc::new(layer_core::EffectInstance::new(Arc::new(program)))];
+        r.request_filter_previews(wide).unwrap();
+        assert_eq!(finish(&mut r).image.request_id, 4);
+        assert_eq!(r.filter_previews.as_ref().unwrap().scratch_size, extent);
     }
     #[test]
     fn filter_previews_capture_insertion_pixels_and_cache_independently_of_view() {

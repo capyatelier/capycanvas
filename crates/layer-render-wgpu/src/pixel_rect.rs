@@ -91,6 +91,19 @@ impl PixelRect {
             self.max_y.saturating_add(radius).min(extent[1]),
         )
     }
+    /// Clip to an image window and express the result in its texture coordinates.
+    pub fn window_local(self, window: Self) -> Self {
+        let region = self.intersect(window);
+        if region.is_empty() {
+            return Self::EMPTY;
+        }
+        Self::new(
+            region.min_x - window.min_x,
+            region.min_y - window.min_y,
+            region.max_x - window.min_x,
+            region.max_y - window.min_y,
+        )
+    }
     /// Non-overlapping top, bottom, left and right regions of self - other.
     pub fn subtract(self, other: Self) -> [Self; 4] {
         let overlap = self.intersect(other);

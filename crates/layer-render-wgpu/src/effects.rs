@@ -537,6 +537,10 @@ fn fx_sample(p:vec2<f32>)->vec4<f32> {
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
+    if settings.backdrop.z>0. {
+        if FX_EXTENDED {return working_sample_float(back,point-settings.backdrop.xy);}
+        return textureSampleLevel(back,sampling,(point-settings.backdrop.xy)/settings.backdrop.zw,0.);
+    }
     if FX_EXTENDED {return working_sample_float(back,point);}
     return textureSampleLevel(back,sampling,point/fx_extent(),0.);
 }
@@ -585,7 +589,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
         let last = stage + 1 >= p.passes.len();
         source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
         if last && p.kind == EffectKind::Adjustment {
-            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));");
+            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).r;}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));");
             if p.alpha == layer_core::EffectAlpha::Filter {
                 source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
             }

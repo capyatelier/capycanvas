@@ -143,9 +143,22 @@ order or scope of the layer operations.
 Filters that sample neighboring pixels need a different path. The
 [image-stage implementation](../../crates/layer-render-wgpu/src/scene_images.rs)
 retains reusable GPU images, tracks input changes and reuses compatible preceding
-results where possible. Some of these images are full resolution. Sparse layer
-storage therefore helps with mostly empty artwork, but does not remove the memory
-cost of large filters or densely painted documents.
+results where possible. Each image has document-coordinate bounds independent of
+its texture size. Region capture expands its window by the accumulated declared
+filter support, and applies the existing group, clipping, mask and effect logic
+inside that window. Shaders keep document coordinates for their calculations;
+current-pass and original-input sampling each carry their own texture origin.
+Native one-to-one image reads use fragment positions directly, avoiding a
+window-size-dependent interpolation error from reconstructed UV coordinates.
+
+Filter previews scan four source tiles per asynchronous completion, including
+the probe's corner-sampling halo. Preview rows then share a source crop expanded
+by their required support. A document edit cancels an unfinished scan after its
+in-flight completion; no result may combine source revisions. Global samplers
+retain their full declared input. Their scheduling and allocation limits still
+need qualification. Live composition also still uses full-document image stages
+and a full composite. Sparse storage and cropped previews therefore do not yet
+bound the total cost of large filters or densely painted documents.
 
 ## GPU resources and unified memory
 

@@ -23,6 +23,17 @@ fn scene_sample(image:texture_2d<f32>,uv:vec2<f32>)->vec4<f32> {
     if WORKING_EXTENDED {return working_sample_float(image,uv*vec2<f32>(textureDimensions(image)));}
     return textureSampleLevel(image,sampling,uv,0.);
 }
+// A one-to-one copy has exact half-pixel coordinates. Reconstructing them
+// from interpolated UVs introduces a crop-size-dependent bilinear footprint.
+fn scene_read(image:texture_2d<f32>,v:Vertex)->vec4<f32> {
+    if WORKING_EXTENDED {
+        let local=v.position.xy-settings.rect.xy;
+        let dimensions=vec2<f32>(textureDimensions(image));
+        if all(dimensions==settings.rect.zw) {return working_sample_float(image,local);}
+        return working_sample_float(image,local*(dimensions/settings.rect.zw));
+    }
+    return textureSampleLevel(image,sampling,v.uv,0.);
+}
 fn luminance(c: vec3<f32>) -> f32 { return dot(c,vec3<f32>(.3,.59,.11)); }
 fn set_luminance(c: vec3<f32>, l: f32) -> vec3<f32> {
     var r = c + l - luminance(c);
@@ -117,7 +128,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     if op == 10u {
         let p=settings.color.xy+v.uv*settings.color.zw;
         let ink=scene_sample(front,p/vec2<f32>(textureDimensions(front)));
-        let mask=scene_sample(back,v.uv).a;
+        let mask=scene_read(back,v).a;
         return ink*mask;
     }
     if op == 8u {
@@ -128,7 +139,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
             encoded.rgb <= vec3<f32>(.04045));
         return vec4<f32>(linear * encoded.a, encoded.a);
     }
-    let raw = scene_sample(front,v.uv);
+    let raw = scene_read(front,v);
     if op == 6u || op == 11u {
         // Constant fills are the degenerate case (equal endpoint colors).
         let p = settings.extent.zw + v.uv * settings.rect.zw;
@@ -144,7 +155,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
             let last = vec4<f32>(settings.source_over.rgb * settings.source_over.a, settings.source_over.a);
             src = mix(first, last, t) * raw.r;
         }
-        let dst = scene_sample(back,v.uv);
+        let dst = scene_read(back,v);
         if op==11u && settings.options.y>=16. {
             return select(dst*(1.-src.a),dst,settings.options.w>.5);
         }
@@ -155,7 +166,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     }
     if op == 1u { return raw*settings.options.y; }
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
-    let dst = scene_sample(back,v.uv);
+    let dst = scene_read(back,v);
     if op == 7u {
         let m = select(settings.options.z, mix(dst.r,1.-dst.r,settings.options.w-2.), settings.options.w>=2.);
         return raw * m * settings.options.y;

@@ -1,18 +1,24 @@
-//! Cached full-resolution boundaries for neighborhood and time-aware WGSL.
-//! Tiled captures feed reusable full-image filter and composition operations.
-use super::*;
+//! Cached document-coordinate windows for neighborhood and time-aware WGSL.
+//! Tiled captures feed the same filter and composition operations at any origin.
 use super::metadata::{Metadata, mask_metadata};
+use super::*;
 use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
 struct Image {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    bounds: PixelRect,
 }
 impl Image {
-    fn new(r: &WgpuRasterizer, extent: [u32; 2], label: &'static str) -> Self {
-        let (texture, view) = create_color_target(&r.device, extent, label);
-        Self { texture, view }
+    fn new(r: &WgpuRasterizer, bounds: PixelRect, label: &'static str) -> Self {
+        let (texture, view) =
+            create_color_target(&r.device, [bounds.width(), bounds.height()], label);
+        Self {
+            texture,
+            view,
+            bounds,
+        }
     }
     fn bytes(&self) -> u64 {
         texture_bytes(&self.texture)
@@ -55,11 +61,11 @@ impl ImageComposition {
     fn new(
         scene: &Scene,
         r: &WgpuRasterizer,
-        extent: [u32; 2],
+        bounds: PixelRect,
         front: &Image,
         back: &Image,
     ) -> Self {
-        let output = Image::new(r, extent, "clipping composition cache");
+        let output = Image::new(r, bounds, "clipping composition cache");
         let inputs = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cached clipping composition inputs"),
             layout: &scene.layout,
@@ -79,7 +85,7 @@ impl ImageComposition {
             ],
         });
         let mut data = [0f32; 24];
-        let [w, h] = extent.map(|v| v as f32);
+        let [w, h] = [bounds.width(), bounds.height()].map(|v| v as f32);
         data[..6].copy_from_slice(&[0., 0., w, h, w, h]);
         data[8] = 4.;
         let uniform = r
@@ -130,6 +136,7 @@ impl ImageComposition {
         pass.set_pipeline(&scene.pipeline[0]);
         pass.set_bind_group(0, &self.binding, &[0]);
         pass.set_bind_group(1, &self.inputs, &[]);
+        let region = region.window_local(self.output.bounds);
         pass.set_scissor_rect(
             region.min_x(),
             region.min_y(),
@@ -143,6 +150,7 @@ impl ImageComposition {
 #[derive(Default)]
 pub(super) struct ImageStages {
     extent: [u32; 2],
+    pub(super) bounds: PixelRect,
     stages: Vec<CachedStage>,
     scratch: Vec<Image>,
     metadata: Vec<Metadata>,
@@ -237,6 +245,20 @@ fn visible(layers: &[Layer], layer: &Layer) -> bool {
         parent = l.properties.parent;
     }
     true
+}
+
+/// A conservative dependency closure across isolated groups and clipping
+/// stacks. Summing support may include unrelated branches but cannot omit a
+/// preceding filter's halo. Document samplers require the entire input.
+pub(super) fn capture_window(layers: &[Layer], region: PixelRect, extent: [u32; 2]) -> PixelRect {
+    layers
+        .iter()
+        .filter(|l| visible(layers, l))
+        .filter_map(|l| l.effect.as_ref())
+        .try_fold(region, |bounds, e| {
+            Some(bounds.expand(e.damage_radius()?, extent))
+        })
+        .unwrap_or(PixelRect::full(extent))
 }
 
 // Dependencies follow the same isolated group / clipping-stack boundaries as
@@ -339,22 +361,22 @@ impl Scene {
             .dependencies
             .iter()
             .fold(PixelRect::EMPTY, |r, &i| r.union(changes[i]));
-        let extent = packet.document_extent;
+        let bounds = self.images.bounds;
         let mut backdrop = self
             .images
             .backdrops
             .remove(&base.id)
             .unwrap_or_else(|| Backdrop {
-                image: Image::new(r, extent, "clipping backdrop cache"),
+                image: Image::new(r, bounds, "clipping backdrop cache"),
                 valid: false,
                 updated: false,
                 damage: PixelRect::EMPTY,
             });
         if !backdrop.updated {
             backdrop.damage = if !backdrop.valid {
-                PixelRect::full(extent)
+                bounds
             } else {
-                dirty
+                dirty.intersect(bounds)
             };
             if !backdrop.damage.is_empty() {
                 self.jobs.clear();
@@ -362,9 +384,8 @@ impl Scene {
                 self.stop_before = Some((base_index, false));
                 for tile in page_coordinates(backdrop.damage) {
                     let pixels = self.group(r, packet, base.properties.parent, tile)?;
-                    self.capture_tile(r, pixels, &backdrop.image, tile, extent);
-                    self.images.backdrop_pixels +=
-                        page_rect(tile).intersect(PixelRect::full(extent)).area();
+                    self.capture_tile(r, pixels, &backdrop.image, tile);
+                    self.images.backdrop_pixels += page_rect(tile).intersect(bounds).area();
                 }
                 self.stop_before = None;
                 self.encode_jobs(r, encoder)?;
@@ -378,7 +399,7 @@ impl Scene {
                 cached.composition = Some(ImageComposition::new(
                     self,
                     r,
-                    extent,
+                    bounds,
                     &cached.output,
                     &backdrop.image,
                 ));
@@ -386,9 +407,9 @@ impl Scene {
             }
             let composition = cached.composition.as_mut().unwrap();
             let damage = if !composition.valid {
-                PixelRect::full(extent)
+                bounds
             } else {
-                output_dirty.union(backdrop.damage)
+                output_dirty.union(backdrop.damage).intersect(bounds)
             };
             if !damage.is_empty() {
                 composition.encode(self, r, base, damage, encoder);
@@ -413,8 +434,9 @@ impl Scene {
         output: usize,
         destination: &Image,
         tile: [u32; 2],
-        extent: [u32; 2],
     ) {
+        let bounds = destination.bounds;
+        let extent = [bounds.width(), bounds.height()];
         let view = &self.pool[output].view;
         let start = self
             .jobs
@@ -428,7 +450,7 @@ impl Scene {
             let Job::Clear(_, color) = self.jobs[start] else {
                 unreachable!()
             };
-            let region = page_rect(tile).intersect(PixelRect::full(extent));
+            let region = page_rect(tile).window_local(bounds);
             let mut fill = [0.; 24];
             fill[..6].copy_from_slice(&[
                 region.min_x() as f32,
@@ -459,22 +481,22 @@ impl Scene {
                     unreachable!()
                 };
                 *target = destination.view.clone();
-                data[0] += region.min_x() as f32;
-                data[1] += region.min_y() as f32;
+                data[0] += (tile[0] * PAGE_SIZE) as f32 - bounds.min_x() as f32;
+                data[1] += (tile[1] * PAGE_SIZE) as f32 - bounds.min_y() as f32;
                 data[4] = extent[0] as f32;
                 data[5] = extent[1] as f32;
                 *clip = Some(region);
             }
             self.free(output);
         } else {
-            self.copy_tile(output, &destination.texture, tile, extent);
+            self.copy_window_tile(output, &destination.texture, tile, bounds);
         }
     }
     pub(super) fn image_tile(
         &mut self,
         r: &WgpuRasterizer,
         view: wgpu::TextureView,
-        extent: [u32; 2],
+        bounds: PixelRect,
         tile: [u32; 2],
     ) -> usize {
         let out = self.reserve(r);
@@ -484,31 +506,40 @@ impl Scene {
             view,
             None,
             [
-                -((tile[0] * PAGE_SIZE) as f32),
-                -((tile[1] * PAGE_SIZE) as f32),
-                extent[0] as f32,
-                extent[1] as f32,
+                bounds.min_x() as f32 - (tile[0] * PAGE_SIZE) as f32,
+                bounds.min_y() as f32 - (tile[1] * PAGE_SIZE) as f32,
+                bounds.width() as f32,
+                bounds.height() as f32,
             ],
             [1., 1., 0., 0.],
             false,
         );
         out
     }
-    pub(super) fn copy_tile(
+    pub(super) fn copy_window_tile(
         &mut self,
         output: usize,
         destination: &wgpu::Texture,
         tile: [u32; 2],
-        extent: [u32; 2],
+        bounds: PixelRect,
     ) {
-        let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
-        self.jobs.push(Job::Copy {
-            source: self.pool[output].texture.clone(),
-            destination: destination.clone(),
-            origin,
-            width: PAGE_SIZE.min(extent[0] - origin[0]),
-            height: PAGE_SIZE.min(extent[1] - origin[1]),
-        });
+        let region = page_rect(tile).intersect(bounds);
+        if !region.is_empty() {
+            self.jobs.push(Job::Copy {
+                source: self.pool[output].texture.clone(),
+                source_origin: [
+                    region.min_x() - tile[0] * PAGE_SIZE,
+                    region.min_y() - tile[1] * PAGE_SIZE,
+                ],
+                destination: destination.clone(),
+                origin: [
+                    region.min_x() - bounds.min_x(),
+                    region.min_y() - bounds.min_y(),
+                ],
+                width: region.width(),
+                height: region.height(),
+            });
+        }
         self.free(output);
     }
     pub(super) fn update_images(
@@ -519,6 +550,15 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PixelRect, GpuRasterError> {
         let extent = packet.document_extent;
+        let bounds = self.image_window.unwrap_or(PixelRect::full(extent));
+        if self.images.extent != extent || self.images.bounds != bounds {
+            self.images = ImageStages {
+                extent,
+                bounds,
+                ..Default::default()
+            };
+        }
+        let dirty = dirty.intersect(bounds);
         if self.images.stages.is_empty()
             && !packet.layers.iter().any(|l| {
                 l.visible
@@ -528,12 +568,6 @@ impl Scene {
             })
         {
             return Ok(dirty);
-        }
-        if self.images.extent != extent {
-            self.images = ImageStages {
-                extent,
-                ..Default::default()
-            };
         }
         self.images.stages.retain(|s| {
             packet.layers.iter().any(|l| {
@@ -634,7 +668,7 @@ impl Scene {
             .enumerate()
             .map(|(i, l)| {
                 if reset || changed[i] {
-                    PixelRect::full(extent)
+                    bounds
                 } else if painting
                     && (unidentified_paint
                         || self.images.preview_layer == Some(l.id)
@@ -704,11 +738,14 @@ impl Scene {
                         id: layer.id,
                         input: alias
                             .clone()
-                            .unwrap_or_else(|| Image::new(r, extent, "effect source cache")),
+                            .unwrap_or_else(|| Image::new(r, bounds, "effect source cache")),
                         input_owned: alias.is_none(),
-                        output: Image::new(r, extent, "effect result cache"),
+                        output: Image::new(r, bounds, "effect result cache"),
                         mask: None,
-                        mask_offset: layer_core::Point { x: f32::NAN, y: f32::NAN },
+                        mask_offset: layer_core::Point {
+                            x: f32::NAN,
+                            y: f32::NAN,
+                        },
                         time: f32::NAN,
                         valid: false,
                         composition: None,
@@ -718,7 +755,7 @@ impl Scene {
                 cached.input = input;
                 cached.input_owned = false;
             } else if !cached.input_owned {
-                cached.input = Image::new(r, extent, "effect source cache");
+                cached.input = Image::new(r, bounds, "effect source cache");
                 cached.input_owned = true;
                 cached.valid = false;
             }
@@ -728,24 +765,25 @@ impl Scene {
                     || old.effect.as_ref().map(|e| e.program.kind) != Some(effect.program.kind)
             });
             let input_dirty = if !cached.valid || reset || input_scope_changed {
-                PixelRect::full(extent)
+                bounds
             } else {
-                source_damage
+                source_damage.intersect(bounds)
             };
             let output_dirty = if !cached.valid || changed[index] || cached.time != time || reset {
-                PixelRect::full(extent)
+                bounds
             } else {
                 changes[index].union(effect.damage_radius().map_or_else(
                     || {
                         if input_dirty.is_empty() {
                             PixelRect::EMPTY
                         } else {
-                            PixelRect::full(extent)
+                            bounds
                         }
                     },
                     |radius| input_dirty.expand(radius, extent),
                 ))
-            };
+            }
+            .intersect(bounds);
             if cached.input_owned && !input_dirty.is_empty() {
                 self.jobs.clear();
                 self.used.fill(false);
@@ -758,7 +796,7 @@ impl Scene {
                 } else {
                     for tile in page_coordinates(input_dirty) {
                         let input = self.group(r, packet, layer.properties.parent, tile)?;
-                        self.capture_tile(r, input, &cached.input, tile, extent);
+                        self.capture_tile(r, input, &cached.input, tile);
                     }
                 }
                 self.stop_before = None;
@@ -780,7 +818,7 @@ impl Scene {
                             .get(index)
                             .is_none_or(|old| old.mask != mask_metadata(&layer.mask));
                     let mask_dirty = if mask_reset {
-                        PixelRect::full(extent)
+                        bounds
                     } else if unidentified_paint
                         || self.images.preview_layer == Some(mask.id)
                         || r.preview_layer_id == Some(mask.id)
@@ -788,21 +826,20 @@ impl Scene {
                         || packet.dab_batches.iter().any(|b| b.layer_id == mask.id)
                     {
                         dirty
-                    } else { PixelRect::EMPTY };
+                    } else {
+                        PixelRect::EMPTY
+                    };
                     let image = cached
                         .mask
-                        .get_or_insert_with(|| Image::new(r, extent, "effect mask cache"));
+                        .get_or_insert_with(|| Image::new(r, bounds, "effect mask cache"));
                     if !mask_dirty.is_empty() {
                         for tile in page_coordinates(mask_dirty) {
-                            let m = self.mask_tile(
-                                r,
-                                mask,
-                                mask_offset,
-                                tile,
-                            );
-                            self.copy_tile(m, &image.texture, tile, extent);
+                            let m = self.mask_tile(r, mask, mask_offset, tile);
+                            self.copy_window_tile(m, &image.texture, tile, bounds);
                             #[cfg(test)]
-                            { self.images.mask_pixels += u64::from(PAGE_SIZE).pow(2); }
+                            {
+                                self.images.mask_pixels += u64::from(PAGE_SIZE).pow(2);
+                            }
                         }
                         self.encode_jobs(r, encoder)?;
                     }
@@ -815,7 +852,7 @@ impl Scene {
                 while self.images.scratch.len() < count.saturating_sub(1).min(2) {
                     self.images
                         .scratch
-                        .push(Image::new(r, extent, "reusable effect intermediate"));
+                        .push(Image::new(r, bounds, "reusable effect intermediate"));
                 }
                 let mut previous = cached.input.view.clone();
                 for pass in 0..count {
@@ -835,17 +872,31 @@ impl Scene {
                         .try_fold(output_dirty, |rect, p| {
                             Some(rect.expand(p.sampling.radius(effect)?, extent))
                         })
-                        .unwrap_or(PixelRect::full(extent));
+                        .unwrap_or(bounds)
+                        .intersect(bounds);
+                    let local = region.window_local(bounds);
                     let mut data = [0.; 24];
                     data[..6].copy_from_slice(&[
-                        region.min_x() as f32,
-                        region.min_y() as f32,
-                        region.width() as f32,
-                        region.height() as f32,
+                        local.min_x() as f32,
+                        local.min_y() as f32,
+                        local.width() as f32,
+                        local.height() as f32,
+                        bounds.width() as f32,
+                        bounds.height() as f32,
+                    ]);
+                    data[12..16].copy_from_slice(&[
+                        bounds.min_x() as f32,
+                        bounds.min_y() as f32,
                         extent[0] as f32,
                         extent[1] as f32,
                     ]);
-                    data[14..16].copy_from_slice(&[extent[0] as f32, extent[1] as f32]);
+                    data[16..20].copy_from_slice(&[
+                        bounds.min_x() as f32,
+                        bounds.min_y() as f32,
+                        bounds.width() as f32,
+                        bounds.height() as f32,
+                    ]);
+                    data.copy_within(16..20, 20);
                     data[9] = f32::from(layer.properties.clipped);
                     let mut masks = Box::new(std::array::from_fn(|_| r.empty_view.clone()));
                     if last && let Some(mask) = &cached.mask {

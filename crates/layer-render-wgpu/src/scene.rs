@@ -43,6 +43,7 @@ enum Job {
     },
     Copy {
         source: wgpu::Texture,
+        source_origin: [u32; 2],
         destination: wgpu::Texture,
         origin: [u32; 2],
         width: u32,
@@ -68,6 +69,7 @@ pub(super) struct Scene {
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
     images: images::ImageStages,
+    image_window: Option<PixelRect>,
     stop_before: Option<(usize, bool)>,
     #[cfg(test)]
     tiled_composition: bool,
@@ -325,6 +327,7 @@ impl Scene {
             effects,
             effect_passes: 0,
             images: images::ImageStages::default(),
+            image_window: None,
             stop_before: None,
             #[cfg(test)]
             tiled_composition: false,
@@ -499,7 +502,7 @@ impl Scene {
                 .images
                 .output(layer.id)
                 .ok_or_else(|| GpuRasterError::Effect("Missing image effect stage".into()))?;
-            let out = self.image_tile(r, view, packet.document_extent, tile);
+            let out = self.image_tile(r, view, self.images.bounds, tile);
             self.free(input);
             return Ok(out);
         }
@@ -881,10 +884,10 @@ impl Scene {
             self.free(output);
             self.jobs.pop(); // Discard the unused initial clear as well.
             let (pixels, pending_stack) = self.images.checkpoint(i, l).unwrap();
-            output = self.image_tile(r, pixels, packet.document_extent, tile);
+            output = self.image_tile(r, pixels, self.images.bounds, tile);
             stack = pending_stack.map(|(pixels, base)| {
                 (
-                    self.image_tile(r, pixels, packet.document_extent, tile),
+                    self.image_tile(r, pixels, self.images.bounds, tile),
                     base,
                 )
             });
@@ -1185,6 +1188,7 @@ impl Scene {
             }
             self.jobs.push(Job::Copy {
                 source: self.pool[out].texture.clone(),
+                source_origin: [0; 2],
                 destination,
                 origin: [0, 0],
                 width: 256,
@@ -1226,17 +1230,44 @@ impl Scene {
         destination: &wgpu::Texture,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        self.capture_region(r, packet, destination, PixelRect::full(packet.document_extent), None, encoder)
+    }
+
+    /// Capture a document-coordinate crop. Neighborhood dependencies share one
+    /// conservative window expanded by every visible spatial pass. A global
+    /// dependency retains its full input; it must never silently sample a crop.
+    pub(super) fn capture_region(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>,
+        destination: &wgpu::Texture,
+        region: PixelRect,
+        parent: Option<LayerId>,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        if region.is_empty() || region.intersect(PixelRect::full(packet.document_extent)) != region
+            || [destination.width(), destination.height()] != [region.width(), region.height()]
+        {
+            return Err(GpuRasterError::InvalidExtent);
+        }
+        let window = images::capture_window(packet.layers, region, packet.document_extent);
         self.begin_frame();
+        self.image_window = Some(window);
         self.style_base = r.last_style_base;
         self.effects.retain(packet.layers);
-        self.update_images(r, packet, PixelRect::full(packet.document_extent), encoder)?;
-        self.jobs.clear();
-        self.used.fill(false);
-        for tile in page_coordinates(PixelRect::full(packet.document_extent)) {
-            let output = self.group(r, packet, None, tile)?;
-            self.copy_tile(output, destination, tile, packet.document_extent);
-        }
-        self.encode_jobs(r, encoder)
+        let result = (|| {
+            self.update_images(r, packet, window, encoder)?;
+            self.jobs.clear();
+            self.used.fill(false);
+            self.stop_before = None;
+            for tile in page_coordinates(region) {
+                let output = self.group(r, packet, parent, tile)?;
+                self.copy_window_tile(output, destination, tile, region);
+            }
+            self.encode_jobs(r, encoder)
+        })();
+        self.stop_before = None;
+        result
     }
 
     pub fn compose(
@@ -1248,6 +1279,7 @@ impl Scene {
         overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
+        self.image_window = None;
         self.effects.retain(packet.layers);
         let dirty = self.update_images(r, packet, dirty, encoder)?;
         if dirty.is_empty() {
@@ -1355,6 +1387,7 @@ impl Scene {
             }
             self.jobs.push(Job::Copy {
                 source: self.pool[output].texture.clone(),
+                source_origin: [0; 2],
                 destination: r.composite_texture.as_ref().unwrap().clone(),
                 origin,
                 width: PAGE_SIZE.min(packet.document_extent[0] - origin[0]),
@@ -1457,12 +1490,16 @@ impl Scene {
                 }
                 Job::Copy {
                     source,
+                    source_origin,
                     destination,
                     origin,
                     width,
                     height,
                 } => encoder.copy_texture_to_texture(
-                    source.as_image_copy(),
+                    wgpu::TexelCopyTextureInfo {
+                        origin: wgpu::Origin3d { x: source_origin[0], y: source_origin[1], z: 0 },
+                        ..source.as_image_copy()
+                    },
                     wgpu::TexelCopyTextureInfo {
                         texture: destination,
                         origin: wgpu::Origin3d {

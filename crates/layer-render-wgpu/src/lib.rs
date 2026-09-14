@@ -4831,6 +4831,9 @@ impl CanvasRenderer for WgpuRasterizer {
         if self.transform_damage.iter().any(|(_, b)| !b.is_empty()) {
             self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
         }
+        if let Some(previews) = &mut self.filter_previews {
+            previews.note_frame(packet, self.filter_source_epoch);
+        }
         if packet.composite_all || reset {
             dirty = PixelRect::full(packet.document_extent);
         }
@@ -6867,6 +6870,7 @@ mod tests {
         layer_core::bundled_effect_catalog().get(id).unwrap()
     }
     mod adjustments;
+    mod image_windows;
     mod filter_library;
     mod material;
     #[cfg(not(target_arch = "wasm32"))]

@@ -10,6 +10,8 @@ primitives are implemented, but the complete GTK SDR/photo workflows are **not
 enabled or qualified**. Native document edit publication is now connected and
 qualified in the headless paint/history fixtures below. Native photo-adjustment
 and material references pass, and document-to-view color conversion is explicit.
+Document-coordinate region capture and chunked filter-preview sources now have
+connected correctness coverage, including spatial support and cancellation.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
 mips, managed GTK viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
@@ -2602,3 +2604,97 @@ the full GPU correctness run. The stricter focused and project suites ran serial
 Real private-Mutter GTK document file checks pass (12.84 s), as do diagnostics
 and forced GPU-failure recovery (1.96 s), on the current explicit sRGB surface.
 Runtime logs/session records use `working-color-files` and `working-color-recovery`.
+
+
+## Document-coordinate windows and bounded preview capture (2026-09-14)
+
+The image-stage compositor now accepts a document-coordinate window. Input,
+output, mask, clipping backdrop/composition and intermediate textures allocate
+that window's dimensions. Capture conservatively expands the requested crop by
+the sum of the visible spatial passes' declared support; document samplers retain
+their full dependency. Groups, masks, clipping and pass execution still use the
+ordinary compositor. Dirty regions and effect positions remain in document
+coordinates, while copies/scissors and sampling translate into texture-local
+coordinates. Current-pass and original-input sampling have separate origins.
+Changing a window invalidates its image caches. Ordinary live composition resets
+the window to the full document.
+
+The first connected consumer is the filter picker. It scans four tiles per
+asynchronous completion, with the corner-probe halo, then captures one shared
+source crop for the requested rows. Each tile submission precedes reuse of its
+scene uniforms, and only one four-tile chunk is in flight. Source metadata,
+extent, paper or paint changes cancel an unfinished request after its callback;
+a fresh request can then restart without consuming an old callback. The capture
+projection excludes layers above the insertion scope, so an excluded global
+filter cannot force a full-document input. Oversized declared neighborhood
+support stops at the document extent instead of allocating a padded texture
+larger than that input. Global input/intermediate allocation remains explicit
+and still needs a scheduled, budgeted route.
+
+The first Float32 crop oracle failed at 0.07194069 versus 0.07194312, beyond the
+unchanged absolute 2e-6 tolerance. Reconstructing one-to-one pixel coordinates
+from interpolated UVs changed the bilinear footprint with texture size. Native
+image reads now use fragment position minus the draw origin directly when image
+and draw dimensions agree. This fixes the discrepancy at the original tolerance;
+no precision downgrade or relaxed acceptance bound was used. WGSL's fragment
+position and interpolation definitions are the relevant primary contract:
+[WGSL position builtin](https://www.w3.org/TR/WGSL/#position-builtin-value).
+
+New connected correctness fixtures cover:
+
+- Forty crop comparisons: four crops × unclipped/clipped nested groups × the
+  exposed sRGB8 path and native integer16 sRGB/P3/Adobe RGB/ProPhoto. Two ordered
+  spatial adjustments, translated polygon masks, non-unit opacity, non-page
+  origins and partial document edges are exercised. Native premultiplied
+  channels meet absolute 2e-6; exposed sRGB8 differs by at most one code. Returning
+  the same scene to a full capture reproduces its prior pixels exactly. Cropped
+  image-cache allocations are less than one twentieth of the corresponding full
+  capture in these fixtures.
+- A document-remapping stage after a neighborhood pass retains the complete
+  input; its cropped output equals the corresponding full pixels exactly.
+- A native ProPhoto 2049×513 source scans all 27 tiles across completions, finds
+  the expected center, bounds retained source/image dimensions, cancels an edit
+  after the first four tiles, and completes a fresh request. The excluded upper
+  correction declares a global dependency. A separate three-pass 4096-pixel
+  support declaration verifies that preview scratch stops at document dimensions.
+- Existing preview insertion, empty-document sample and complete bundled-filter
+  crop-versus-canvas comparisons remain in the focused preview suite.
+
+These are correctness and GPU resource-size assertions, not peak-RSS/VRAM or
+frame-latency qualification. The live full composite, live full image stages,
+mutable raster residency, dense history capture, global scheduling, standalone
+source-backed region preparation and mip selection are still incomplete. Region
+capture currently uses the live renderer's prepared paint and mask pages. It does
+not yet replace full-document preparation, export or exact inspection. GTK native
+document activation and the remaining color/photo UI, managed display and profiled
+interchange journeys also remain open. Benchmarking and optimization are deferred
+to the final phase as requested; previously recorded breaches are not closed here.
+
+Reproduction uses the serial release GPU library suite and the isolated GTK
+Mutter harness. Initial precision failure artifacts are `image-windows-tests`,
+`image-windows-build.{json,log}` and `image-windows-focused.log`; the corrected
+two-test oracle passes in `image-windows-exact-focused.log` (15.55 s).
+`bounded-previews-tests` passes all four non-benchmark preview tests (9.92 s).
+`bounded-previews-verified-tests` passes the full library suite: **180 passed,
+26 ignored**, 165.07 s, in `bounded-previews-full-gpu.log`. That full-suite build
+precedes only the oversized-support clamp and insertion-scope pruning; those
+final changes are checked with the focused preview/window suite and GTK runtime
+below. Compilation overlapped parts of the GPU correctness run; these elapsed
+test durations are not performance evidence.
+
+The final executable `bounded-previews-scope-tests` passes the four preview tests
+(8.76 s; one benchmark ignored) and both window oracles (11.71 s). Logs are
+`bounded-previews-scope-focused.log` and `bounded-previews-scope-windows.log`.
+Run them with `scene::previews::tests --test-threads=1` and
+`image_windows --test-threads=1`, respectively. The final GTK executable is
+`bounded-previews-scope-gtk-tests`; release Cargo JSON/build logs use
+`bounded-previews-scope-build` and `bounded-previews-scope-gtk-build`.
+
+Actual GTK `native_runtime_filter_packages` (6.77 s), `native_document_files`
+(9.93 s), and `native_diagnostics_and_gpu_failure_recovery` (1.93 s) pass with
+fatal GTK criticals under the isolated 1600×1000@120 Hz Mutter harness. Saved
+logs/session records use `bounded-previews-filters`, `bounded-previews-files`, and
+`bounded-previews-recovery`. Reproduce with `bash tools/performance/gtk-raster.sh
+ABSOLUTE_TEST_BINARY TEST_FILTER REPORT_PREFIX`. The final runs were serial;
+release compilation overlapped the focused preview run. Hashes, parent revision,
+source hashes and build/result mappings are in `bounded-previews-provenance.json`.
