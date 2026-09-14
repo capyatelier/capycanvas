@@ -8,9 +8,10 @@ user's approval after GTK qualification.
 Current delivery status: retained source/ICC/output and native tile precision
 primitives are implemented, but the complete GTK SDR/photo workflows are **not
 enabled or qualified**. Native document edit publication is now connected and
-qualified in the headless paint/history fixtures below. Extended tool/effect
-precision, bounded mutable/composite/filter residency and mips, managed GTK
-viewing, color/photo controls and remaining interchange are still required.
+qualified in the headless paint/history fixtures below. Native photo-adjustment
+and material references pass, and document-to-view color conversion is explicit.
+Remaining tool/effect precision, bounded mutable/composite/filter residency and
+mips, managed GTK viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
 diagnostics and GPU recovery continue to receive regression checks; these do not
 substitute for qualification of the new workflows. The implementation sections
@@ -2507,3 +2508,97 @@ and the final test additions; the exercised GTK surface remains Rgba8Unorm.
 Final view-color validation: **173 GPU tests pass, 26 remain ignored** (138.36 s);
 all four focused fixtures pass (15.86 s). These are correctness run durations,
 not frame-creation performance measurements.
+
+
+## Shared native material color and faint-pigment transport (2026-09-14)
+
+A shared working-color shader now supplies unassociation, Float32 interpolation
+and Oklab conversion to material, scene and effect shaders. This deletes the
+separate material Oklab implementation and effect-only interpolation helpers.
+Document RGB converts to linear sRGB/D65 before the published Oklab equations and
+back to document primaries afterward, including D50 adaptation for ProPhoto.
+Signed cube roots remain; native output no longer clamps negative RGB. Perceptual
+mix endpoints retain the selected value. Primary reference:
+[Ottosson's Oklab definition and updated matrices](https://bottosson.github.io/posts/oklab/).
+
+Normal composition and existing channel blend formulas keep their linear-document
+RGB domain across both depths. Explicit Add/Subtract bounds remain artistic
+operations; no global clamp is added. Native scene sampling now uses the same
+four-load Float32 interpolation as image effects. Unassociation preserves all
+positive coverage, including locked-alpha paint and wet reservoirs. Scalar uniform
+coverage ratios no longer apply an epsilon floor in the native path. Region
+comparison uses encoded document RGB weighted by alpha. Existing exposed sRGB8
+factories retain their current arithmetic while common native adoption is pending.
+The [rendering contract](../internals/rendering.md#native-sdr-working-color) records
+these choices separately from this implementation history.
+
+Native watercolor edge/transport work preserves extended RGB while constraining
+coverage. A connected fixed-water-field test exposed an additional defect: the
+kernel used `MIN_WETNESS` (2/255) to reject faint **pigment**, although water and
+pigment have independent coverage. Native pigment presence now tests positive
+coverage separately. The water activation threshold remains a material parameter.
+The recorded pre-fix test fails faint-front scale consistency; the corrected
+kernel passes that same 3e-6 relative scale bound. This is a correctness fix,
+not a change to the water model or performance tuning.
+
+Four connected native fixtures cover:
+
+- **384 brush cases:** four spaces × two depths × eight brush blend modes ×
+  coverage 0, 8e-8 and 1/65535 × unlocked/locked alpha. Real uniform-material brush
+  dispatch is compared to Float64 source-over/channel-formula arithmetic, including
+  negative and greater-than-one working RGB. Straight RGB tolerance is 2e-6.
+- **24 wet/Oklab cases:** four spaces × two depths × mixing weights 0, 0.37 and 1,
+  evaluated against Float64 primary conversion and Oklab equations. Straight RGB
+  tolerance is 5e-6; the fixture includes negative/out-of-range working values.
+- Sub-epsilon wet/watercolor deposition in all four spaces, plus actual transport
+  on a constant extended-color interior. Nonzero pigment must survive; straight
+  RGB meets 2e-6, with negative RGB and RGB greater than alpha retained.
+- A real capillary front in all four spaces with identical water coverage but
+  pigment coverage 0.5 versus 1/65535. Faint transported coverage scales within
+  3e-6 relative error; its straight RGB meets 2e-6. The pre-fix failure is retained
+  in `working-color-front-before.log` and its saved executable/build records.
+
+Final material acceptance strengthens alpha comparison from the initial absolute
+2e-7 check to **3e-7 relative**, requiring exact zero at zero alpha. The stricter
+focused build changes only that assertion; implementation code is identical to
+the full-suite build. The RGB and front-scaling thresholds remain unchanged.
+These are Float32 in-progress brush fixtures, not a claim that sub-code pigment
+survives an intentional native integer commit or every sensor/texture/selection
+combination is qualified. Native backing/save/recovery tests run in the full suite.
+
+A broader `cargo check --offline -p layer-render-wgpu --tests` also found two stale
+integration-test calls to the raster validator left by document-color metadata
+adoption. They now pass the fixture's declared sRGB8 document color. This closes a
+previously missed test-build prerequisite; the project integration suite is run
+explicitly below. GTK development checks and the release GTK test build pass.
+
+Reproduce the GPU library suite with `cargo test --offline --release -p
+layer-render-wgpu --lib -- --test-threads=1`, project integration with `--test
+project -- --test-threads=1`, and the GTK file/recovery filters using the isolated
+Mutter harness. `working-color-final-tests` is the full-suite executable;
+`working-color-strict-tests` strengthens only the material alpha assertion.
+Project and GTK executables are `working-color-project-tests` and
+`working-color-gtk-tests`. Cargo JSON/build logs use `working-color-final-build`,
+`working-color-strict-build` and `working-color-final-gtk-build`; final hashes and
+results are in `working-color-provenance.json`.
+
+Remaining functional work includes document-aware CPU brush dynamics, explicit
+extended/default behavior for nonlinear tone controls, complete source/rasterize/
+conversion/depth actions and GTK color/photo UI, bounded dense-photo operations,
+managed wide-gamut/monitor/picker behavior and connected profiled interchange.
+The transitional exposed sRGB8 path still needs coordinated replacement/cleanup.
+All previously reported memory/latency failures remain open for the final phase;
+no new benchmarks or performance optimization were performed here.
+
+The final implementation passes **177 GPU library tests (26 ignored)**, all
+**four project integration tests**, and the four material fixtures with the
+stricter relative-alpha assertion. Saved logs are
+`working-color-final-full-gpu.log` (156.57 s), `working-color-project.log`
+(7.94 s), and `working-color-strict-focused.log` (24.21 s). GTK/source test build
+checks pass (`working-color-gtk-check.log`, `working-color-final-check.log`).
+Elapsed test durations are not performance evidence; some compilation overlapped
+the full GPU correctness run. The stricter focused and project suites ran serially.
+
+Real private-Mutter GTK document file checks pass (12.84 s), as do diagnostics
+and forced GPU-failure recovery (1.96 s), on the current explicit sRGB surface.
+Runtime logs/session records use `working-color-files` and `working-color-recovery`.

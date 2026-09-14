@@ -202,18 +202,18 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     let outside_density = select(
         outside_source.a * outer_band * edge_strength * 0.13,
         0.0,
-        center.a > 0.000001,
+        working_has_color(center.a),
     );
     density = clamp(max(density, outside_density), 0.0, 1.0);
-    if density <= 0.000001 {
+    if !working_has_color(density) {
         return vec4<f32>(0.0);
     }
 
-    let source = select(outside_source, center, center.a > 0.000001);
-    if source.a <= 0.000001 {
+    let source = select(outside_source, center, working_has_color(center.a));
+    if !working_has_color(source.a) {
         return center * style.canvas_opacity.z;
     }
-    let straight = source.rgb / max(source.a, 0.000001);
+    let straight = working_unassociate(source);
     let darken = clamp(
         rim * (edge_strength * 0.16 + clamp(style.edges.y, 0.0, 1.0) * 0.62),
         0.0,

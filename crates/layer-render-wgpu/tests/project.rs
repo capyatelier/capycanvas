@@ -480,7 +480,7 @@ fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
     );
     let (mut live, _) = engine(&project);
     let before = live.document().layers[0].raster.wait_data().unwrap();
-    before.validate([768, 256], false).unwrap();
+    before.validate([768, 256], false, Default::default()).unwrap();
     let mut coverage = LayerMask::reveal_all(LayerId(99), Point::default());
     coverage.default_coverage = 0.;
     coverage.initial = Some(
@@ -505,7 +505,7 @@ fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
     .unwrap();
     live.render_frame().unwrap();
     let after = live.document().layers[0].raster.wait_data().unwrap();
-    after.validate([768, 256], false).unwrap();
+    after.validate([768, 256], false, Default::default()).unwrap();
     for x in 0..3 {
         let key = TileKey {
             plane: RasterPlane::Color,

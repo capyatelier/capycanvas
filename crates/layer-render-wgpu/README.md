@@ -50,7 +50,8 @@ This checks replay correctness and submission capacity, not a frame-time budget.
 | --- | --- |
 | [lib.rs](src/lib.rs) | `WgpuRasterizer`, paint resources, brush submission and the renderer implementation. |
 | [scene.rs](src/scene.rs) and [scene_images.rs](src/scene_images.rs) | Layer composition, effect dependencies and cached image stages. |
-| [present.rs](src/present.rs) | The shared viewport presenter. |
+| [present.rs](src/present.rs), [view_color.rs](src/view_color.rs) | The shared viewport and explicit surface-color contract. |
+| [working_color.rs](src/working_color.rs) and [working_color.wgsl](src/working_color.wgsl) | Document-primary, alpha, interpolation and perceptual shader helpers. |
 | [startup.rs](src/startup.rs) | Dependency ordering for staged GPU preparation. |
 | [submission.rs](src/submission.rs) | Ordered, bounded render/compute submission chunks. |
 | [effects.rs](src/effects.rs) | Runtime filter validation and GPU preparation. |

@@ -46,7 +46,7 @@ impl SdrSurfaceColor {
     }
 }
 
-fn transform(name: &str, source: RgbSpace, destination: RgbSpace) -> String {
+pub(crate) fn transform(name: &str, source: RgbSpace, destination: RgbSpace) -> String {
     if source == destination {
         return format!("fn {name}(rgb:vec3<f32>)->vec3<f32>{{return rgb;}}\n");
     }

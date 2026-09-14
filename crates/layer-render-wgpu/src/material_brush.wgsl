@@ -238,42 +238,15 @@ fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
     return clamp(dot(world - previous_center, dab.motion) / motion_squared, 0.0, 1.0);
 }
 
-// Oklab conversions adapted from Björn Ottosson's MIT-licensed reference:
-// https://bottosson.github.io/posts/oklab/ — see THIRD_PARTY_NOTICES.md.
-// Adaptations: WGSL vectors, signed cube roots, and nonnegative RGB output.
-fn linear_to_oklab(color: vec3<f32>) -> vec3<f32> {
-    let lms = vec3<f32>(
-        0.4122214708 * color.r + 0.5363325363 * color.g + 0.0514459929 * color.b,
-        0.2119034982 * color.r + 0.6806995451 * color.g + 0.1073969566 * color.b,
-        0.0883024619 * color.r + 0.2817188376 * color.g + 0.6299787005 * color.b,
-    );
-    let root = sign(lms) * pow(abs(lms), vec3<f32>(1.0 / 3.0));
-    return vec3<f32>(
-        0.2104542553 * root.x + 0.7936177850 * root.y - 0.0040720468 * root.z,
-        1.9779984951 * root.x - 2.4285922050 * root.y + 0.4505937099 * root.z,
-        0.0259040371 * root.x + 0.7827717662 * root.y - 0.8086757660 * root.z,
-    );
-}
-
-fn oklab_to_linear(color: vec3<f32>) -> vec3<f32> {
-    let root = vec3<f32>(
-        color.x + 0.3963377774 * color.y + 0.2158037573 * color.z,
-        color.x - 0.1055613458 * color.y - 0.0638541728 * color.z,
-        color.x - 0.0894841775 * color.y - 1.2914855480 * color.z,
-    );
-    let lms = root * root * root;
-    return max(vec3<f32>(
-        4.0767416621 * lms.x - 3.3077115913 * lms.y + 0.2309699292 * lms.z,
-       -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
-       -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.7076147010 * lms.z,
-    ), vec3<f32>(0.0));
-}
-
 fn mix_color(a: vec3<f32>, b: vec3<f32>, amount: f32) -> vec3<f32> {
-    if style.render_mode.z > 0.5 {
-        return oklab_to_linear(mix(linear_to_oklab(a), linear_to_oklab(b), amount));
+    if WORKING_EXTENDED {
+        if amount==0. || all(a==b) {return a;}
+        if amount==1. {return b;}
     }
-    return mix(a, b, amount);
+    if style.render_mode.z > 0.5 {
+        return working_from_oklab(mix(working_to_oklab(a), working_to_oklab(b), amount));
+    }
+    return working_mix(a, b, amount);
 }
 
 fn blend_color(backdrop: vec3<f32>, source: vec3<f32>, mode: f32) -> vec3<f32> {
@@ -293,7 +266,7 @@ fn blend_color(backdrop: vec3<f32>, source: vec3<f32>, mode: f32) -> vec3<f32> {
 
 fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f32) -> vec4<f32> {
     let da = destination.a;
-    let backdrop = destination.rgb / max(da, 0.000001);
+    let backdrop = working_unassociate(destination);
     let blended = blend_color(backdrop, source_color, style.render_mode.x);
     if style.color.a > 0.5 {
         return vec4<f32>(mix(destination.rgb, blended * da, source_alpha), da);
@@ -394,14 +367,14 @@ fn mix_smudged_material(original: vec4<f32>, dragged: vec4<f32>, influence: f32)
     // material already on the layer. Empty source contributes no replacement
     // color; dragged paint can still expand into an empty destination.
     let original_color = select(
-        dragged.rgb / max(dragged.a, 0.000001),
-        original.rgb / max(original.a, 0.000001),
-        original.a > 0.000001,
+        working_unassociate(dragged),
+        working_unassociate(original),
+        working_has_color(original.a),
     );
     let dragged_color = select(
         original_color,
-        dragged.rgb / max(dragged.a, 0.000001),
-        dragged.a > 0.000001,
+        working_unassociate(dragged),
+        working_has_color(dragged.a),
     );
     let alpha = max(original.a, dragged.a * influence);
     let color = mix(original_color, dragged_color, influence * dragged.a);
@@ -486,19 +459,19 @@ fn watercolor_fragment(
     let deposited_wetness = prior_wetness
         + (1.0 - prior_wetness) * water_charge;
     let coverage_increment = clamp(
-        (stroke_coverage - prior_coverage) / max(1.0 - prior_coverage, 0.000001),
+        working_ratio(stroke_coverage - prior_coverage, 1.0 - prior_coverage),
         0.0,
         1.0,
     );
     var result = original;
-    if coverage_increment > 0.000001 && style.operation.w == 0u {
+    if working_has_color(coverage_increment) && style.operation.w == 0u {
         // The paint layer itself is the always-wet watercolor field. One
         // motion-directed backtrace samples only that layer. Its exchange
         // strength is independent of the radial tip value: multiplying color
         // transfer by each contact silhouette exposes circular dab bands.
         let dragged = watercolor_canvas_sample(trace_coordinate, style.material_b.z);
         let mixing = clamp(style.material_a.w * coverage_increment, 0.0, 1.0);
-        if original.a > 0.000001 && dragged.a > 0.000001 && mixing > 0.000001 {
+        if working_has_color(original.a) && working_has_color(dragged.a) && working_has_color(mixing) {
             // Exchange wet pigment only as new stroke coverage arrives. Doing
             // this for every overlapping contact would reveal microbatch
             // boundaries as concentric color bands even though alpha is
@@ -521,7 +494,7 @@ fn watercolor_fragment(
         let prior_pigment = prior_coverage * paint_load;
         let next_pigment = stroke_coverage * paint_load;
         let pigment = clamp(
-            (next_pigment - prior_pigment) / max(1.0 - prior_pigment, 0.000001),
+            working_ratio(next_pigment - prior_pigment, 1.0 - prior_pigment),
             0.0,
             1.0,
         );
@@ -615,11 +588,11 @@ fn wet_fragment(
             world - dab.motion * pull,
             style.material_b.z,
         );
-        let empty_color = select(dab.color.rgb, carried.rgb, carried.a > 0.000001);
+        let empty_color = select(dab.color.rgb, carried.rgb, working_has_color(carried.a));
         let pickup_color = select(
             empty_color,
-            pickup.rgb / max(pickup.a, 0.000001),
-            pickup.a > 0.000001,
+            working_unassociate(pickup),
+            working_has_color(pickup.a),
         );
         let carried_weight = carried.a * (1.0 - style.material_a.w);
         let paint_color = mix_color(pickup_color, carried.rgb, carried_weight);
@@ -640,7 +613,7 @@ fn wet_fragment(
         if style.render_mode.y > 0.5 {
             let next_coverage = max(stroke_coverage, source_alpha);
             source_alpha = clamp(
-                (next_coverage - stroke_coverage) / max(1.0 - stroke_coverage, 0.000001),
+                working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
                 0.0,
                 1.0,
             );
@@ -654,7 +627,7 @@ fn wet_fragment(
     var result = original;
     if style.operation.w != 0u {
         result *= 1.0 - batch_alpha;
-    } else if batch_alpha > 0.000001 {
+    } else if working_has_color(batch_alpha) {
         result = source_over(original, batch_color / batch_alpha, batch_alpha);
     }
     return MaterialOutput(
@@ -719,7 +692,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         if style.render_mode.y > 0.5 {
             let next_coverage = max(stroke_coverage, requested_alpha);
             source_alpha = clamp(
-                (next_coverage - stroke_coverage) / max(1.0 - stroke_coverage, 0.000001),
+                working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
                 0.0,
                 1.0,
             );
@@ -744,7 +717,7 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOut
         let original = canvas_load(world);
         if style.operation.w != 0u { result.color = original; }
         else {
-            result.color = vec4<f32>(result.color.rgb / max(result.color.a, 0.000001) * original.a, original.a);
+            result.color = vec4<f32>(working_unassociate(result.color) * original.a, original.a);
         }
         result.wetness *= select(0.0, 1.0, original.a > 0.0);
     }
@@ -777,7 +750,7 @@ fn reservoir_fragment(@builtin(position) fragment_position: vec4<f32>) -> @locat
         if coverage <= 0.0 { continue; }
         let pull = clamp(dab.material.y, 0.0, 1.0);
         let pickup = blurred_canvas_load(world - dab.motion * pull, style.material_b.z);
-        if pickup.a <= 0.000001 { continue; }
+        if !working_has_color(pickup.a) { continue; }
         let exchange = reservoir_exchange_amount(dab, coverage);
         let alpha_exchange = exchange * (1.0 - style.material_a.w * 0.5);
         carried = vec4<f32>(

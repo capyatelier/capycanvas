@@ -35,6 +35,41 @@ host can reconstruct its GPU while retaining the shared document session. Upload
 continue to reuse the staging belt and never wait for GPU completion on the UI
 thread.
 
+## Native SDR working color
+
+The headless native-document factory is currently a qualification route. GTK's
+exposed factory remains sRGB8 until the complete color/photo workflows and memory/
+latency gates pass. Native integer8/integer16 documents use their selected RGB
+primaries, Float32 color working attachments and Float32 scalar coverage. Native
+commit publication quantizes affected pages into the declared backing depth;
+view transformations do not change those pages.
+
+[`working_color.wgsl`](../../crates/layer-render-wgpu/src/working_color.wgsl) shares
+unassociation, interpolation and perceptual conversion across scene composition,
+effects and materials. Positive alpha is divided directly; only zero coverage
+returns black. Native scene/image interpolation uses explicit Float32 texel loads.
+Ordinary source-over and the existing channel blend formulas operate in **linear
+document RGB**, independently of bit depth. Explicit Add/Subtract bounds remain
+part of their artistic formulas. Native Oklab material mixing converts through
+linear sRGB/D65 (including document-white adaptation), uses signed cube roots,
+then returns to document primaries without a blanket negative-RGB clamp. Oklab
+endpoints retain the selected operand. Region tolerance uses encoded document RGB
+weighted by coverage, independent of display/checker colors.
+
+Watercolor keeps its water activation threshold as a material-model parameter.
+That threshold no longer rejects faint native pigment. Native transport constrains
+coverage while retaining extended RGB between commits; it does not clamp RGB to
+alpha. These helpers are not a claim that all brush dynamics and nonlinear tone
+controls are fully qualified. Active workload limits and remaining workflow gaps
+are in the [GTK milestone record](../history/color-management-gtk-m2-validation.md).
+
+[`view_color.rs`](../../crates/layer-render-wgpu/src/view_color.rs) converts the
+composition to explicitly declared sRGB, Display P3 or extended-linear sRGB view
+coordinates. Surface format controls output transfer encoding. Application colors
+in viewport overlays retain their sRGB definitions. Export/Navigator thumbnail
+readbacks are explicitly sRGB8; exact color samples retain document RGB. Native
+profiled delivery is a separate output conversion and is still being integrated.
+
 ## Incremental composition
 
 The *compositor* combines paint and image layers, groups, masks, clipping and

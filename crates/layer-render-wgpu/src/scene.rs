@@ -1627,7 +1627,7 @@ impl Pipelines {
             move || {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("layer scene"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), include_str!("scene.wgsl")])),
                 })
             }
         });

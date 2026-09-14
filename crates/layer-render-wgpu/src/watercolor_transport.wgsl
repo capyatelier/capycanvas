@@ -298,13 +298,12 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
         0.62 / max(relaxation_weight, 0.000001),
         relaxation_weight > 0.62,
     );
-    let relaxed_pigment = clamp(
-        center + pigment_relaxation * relaxation_stability,
-        vec4<f32>(0.0),
-        vec4<f32>(1.0),
-    );
+    let relaxed_pigment = working_clamp(center + pigment_relaxation * relaxation_stability);
     var combined_pigment = relaxed_pigment;
-    if best_wetness > decayed_wetness + MIN_WETNESS && best_pigment.a > MIN_WETNESS {
+    // Water activation is a material-model threshold. Native pigment coverage
+    // has its own precision; a faint wash must travel with the same wet front.
+    let pigment_present=select(best_pigment.a>MIN_WETNESS,working_has_color(best_pigment.a),WORKING_EXTENDED);
+    if best_wetness > decayed_wetness + MIN_WETNESS && pigment_present {
         let arrival = clamp(
             sqrt(
                 (best_wetness - decayed_wetness)
@@ -314,10 +313,10 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
             1.0,
         );
         let alpha = max(relaxed_pigment.a, best_pigment.a);
-        let center_color = relaxed_pigment.rgb / max(relaxed_pigment.a, 0.000001);
-        let arriving_color = best_pigment.rgb / max(best_pigment.a, 0.000001);
+        let center_color = working_unassociate(relaxed_pigment);
+        let arriving_color = working_unassociate(best_pigment);
         let color_weight = arrival * clamp(
-            best_pigment.a / max(alpha, 0.000001),
+            working_ratio(best_pigment.a, alpha),
             0.0,
             1.0,
         );
@@ -326,13 +325,14 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
             alpha,
         );
     }
-    let unclamped_pigment = clamp(combined_pigment, vec4<f32>(0.0), vec4<f32>(1.0));
+    let unclamped_pigment = working_clamp(combined_pigment);
     var next_pigment = vec4<f32>(
         min(unclamped_pigment.rgb, vec3<f32>(unclamped_pigment.a)),
         unclamped_pigment.a,
     );
+    if WORKING_EXTENDED {next_pigment = unclamped_pigment;}
     if style.color.a > 0.5 {
-        next_pigment = vec4<f32>(next_pigment.rgb / max(next_pigment.a, 0.000001) * center.a, center.a);
+        next_pigment = vec4<f32>(working_unassociate(next_pigment) * center.a, center.a);
     }
     return TransportOutput(
         mix(center, next_pigment, clip),

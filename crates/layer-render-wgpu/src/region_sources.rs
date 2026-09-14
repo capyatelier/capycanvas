@@ -39,6 +39,7 @@ impl RawRegions {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tiled region classification"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                &working_color::shader(device),
                 include_str!("region_sources.wgsl"),
                 include_str!("region_color.wgsl"),
                 &bindings,

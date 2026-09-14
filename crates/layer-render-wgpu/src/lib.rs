@@ -31,6 +31,7 @@ mod color_sample;
 mod source_access;
 mod export_readback;
 mod view_color;
+mod working_color;
 pub use view_color::SdrSurfaceColor;
 mod raster;
 pub use export_readback::ExportReadback;
@@ -6051,6 +6052,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer destination brush shader"),
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    &working_color::shader(&device),
                     include_str!("material_brush.wgsl"),
                     include_str!("brush_coverage.wgsl"),
                     include_str!("selection_clip.wgsl"),
@@ -6064,6 +6066,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer post-stroke edge shader"),
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    &working_color::shader(&device),
                     include_str!("stroke_edge.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),
@@ -6075,7 +6078,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         Deferred::new(move || {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer live watercolor composite shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("watercolor_composite.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), include_str!("watercolor_composite.wgsl")])),
             })
         })
     };
@@ -6085,6 +6088,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer watercolor capillary transport shader"),
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    &working_color::shader(&device),
                     include_str!("watercolor_transport.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),
@@ -6874,6 +6878,8 @@ mod tests {
     mod native_effects;
     #[cfg(not(target_arch = "wasm32"))]
     mod view_color;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod native_material;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

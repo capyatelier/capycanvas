@@ -7,11 +7,12 @@ The project-owned capybara mark is a separate exception under [BRANDING.md](BRAN
 
 ## Oklab color conversion — MIT
 
-The `linear_to_oklab` and `oklab_to_linear` functions in
-`crates/layer-render-wgpu/src/material_brush.wgsl` adapt Björn Ottosson's
+The `working_to_oklab` and `working_from_oklab` functions in
+`crates/layer-render-wgpu/src/working_color.wgsl` adapt Björn Ottosson's
 [reference implementation](https://bottosson.github.io/posts/oklab/).
-The local implementation uses WGSL vectors, signed cube roots, and clamps
-negative RGB output. We use the author's MIT license option and preserve the
+The local implementation uses WGSL vectors, signed cube roots and document-primary
+transforms. Native Float32 output preserves extended RGB. We use the author's
+MIT license option and preserve the
 [original notice](https://bottosson.github.io/misc/License.txt) below.
 
 ```text

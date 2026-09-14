@@ -44,7 +44,8 @@ pub struct Dab {
     pub rotation: [f32; 2],
     /// Document-space movement since the preceding primary contact.
     pub motion: [f32; 2],
-    /// Resolved straight linear color; alpha includes per-contact opacity.
+    /// Resolved straight linear document RGB; alpha includes per-contact opacity.
+    /// RGB coordinates use `CanvasRenderer::document_color().space`.
     pub color_rgba_linear: [f32; 4],
     pub flow: f32,
     pub hardness: f32,
@@ -63,6 +64,7 @@ pub struct ViewState {
     pub height_px: u32,
     /// Affine document-to-surface transform `[a, b, c, d, tx, ty]`.
     pub document_to_surface: [f32; 6],
+    /// Straight linear document RGB and coverage for the canvas background.
     pub background_rgba_linear: [f32; 4],
 }
 

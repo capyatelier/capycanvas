@@ -19,6 +19,10 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     o.position = vec4<f32>(p.x/settings.extent.x*2.-1.,1.-p.y/settings.extent.y*2.,0.,1.);
     o.uv = uv; return o;
 }
+fn scene_sample(image:texture_2d<f32>,uv:vec2<f32>)->vec4<f32> {
+    if WORKING_EXTENDED {return working_sample_float(image,uv*vec2<f32>(textureDimensions(image)));}
+    return textureSampleLevel(image,sampling,uv,0.);
+}
 fn luminance(c: vec3<f32>) -> f32 { return dot(c,vec3<f32>(.3,.59,.11)); }
 fn set_luminance(c: vec3<f32>, l: f32) -> vec3<f32> {
     var r = c + l - luminance(c);
@@ -34,7 +38,7 @@ fn blend(s: vec3<f32>, d: vec3<f32>, mode: u32) -> vec3<f32> {
         case 3u: { return min(s+d,vec3<f32>(1.)); }
         case 4u: { return select(2.*s*d,1.-2.*(1.-s)*(1.-d),d>vec3<f32>(.5)); }
         case 5u: {
-            let curve = select(((16.*d-12.)*d+4.)*d,sqrt(d),d>vec3<f32>(.25));
+            let curve = select(((16.*d-12.)*d+4.)*d,sqrt(max(d,vec3<f32>(0.))),d>vec3<f32>(.25));
             return select(d-(1.-2.*s)*d*(1.-d),d+(2.*s-1.)*(curve-d),s>vec3<f32>(.5));
         }
         case 6u: { return set_luminance(s,luminance(d)); }
@@ -112,8 +116,8 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     }
     if op == 10u {
         let p=settings.color.xy+v.uv*settings.color.zw;
-        let ink=textureSampleLevel(front,sampling,p/vec2<f32>(textureDimensions(front)),0.);
-        let mask=textureSampleLevel(back,sampling,v.uv,0.).a;
+        let ink=scene_sample(front,p/vec2<f32>(textureDimensions(front)));
+        let mask=scene_sample(back,v.uv).a;
         return ink*mask;
     }
     if op == 8u {
@@ -124,7 +128,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
             encoded.rgb <= vec3<f32>(.04045));
         return vec4<f32>(linear * encoded.a, encoded.a);
     }
-    let raw = textureSample(front,sampling,v.uv);
+    let raw = scene_sample(front,v.uv);
     if op == 6u || op == 11u {
         // Constant fills are the degenerate case (equal endpoint colors).
         let p = settings.extent.zw + v.uv * settings.rect.zw;
@@ -140,7 +144,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
             let last = vec4<f32>(settings.source_over.rgb * settings.source_over.a, settings.source_over.a);
             src = mix(first, last, t) * raw.r;
         }
-        let dst = textureSample(back, sampling, v.uv);
+        let dst = scene_sample(back,v.uv);
         if op==11u && settings.options.y>=16. {
             return select(dst*(1.-src.a),dst,settings.options.w>.5);
         }
@@ -151,7 +155,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     }
     if op == 1u { return raw*settings.options.y; }
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
-    let dst = textureSample(back,sampling,v.uv);
+    let dst = scene_sample(back,v.uv);
     if op == 7u {
         let m = select(settings.options.z, mix(dst.r,1.-dst.r,settings.options.w-2.), settings.options.w>=2.);
         return raw * m * settings.options.y;
@@ -159,7 +163,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     if op == 3u { return raw*dst.r; }
     if op == 5u { let a = (1.-raw.r)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
     let src = raw*settings.options.y;
-    let s = src.rgb/max(src.a,.000001); let d = dst.rgb/max(dst.a,.000001);
+    let s = working_unassociate(src); let d = working_unassociate(dst);
     let b = blend(s,d,u32(settings.options.z));
     if settings.options.w > .5 {
         return vec4<f32>(mix(dst.rgb,b*dst.a,src.a),dst.a);

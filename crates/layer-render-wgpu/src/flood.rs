@@ -45,6 +45,7 @@ impl Flood {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("connected region"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                &working_color::shader(device),
                 include_str!("flood.wgsl"),
                 include_str!("region_color.wgsl"),
                 include_str!("region_refine.wgsl"),

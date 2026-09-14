@@ -96,7 +96,7 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> @location(0
     let band = clamp(center - outside, 0.0, 1.0);
     let added_alpha = style.edges.x * band * (1.0 - color.a) * 0.45;
     let alpha = clamp(color.a + added_alpha, 0.0, 1.0);
-    let straight = color.rgb / max(color.a, 0.000001);
+    let straight = working_unassociate(color);
     let darken = clamp((style.edges.x * 0.18 + style.edges.y * 0.62) * band, 0.0, 0.8);
     let edge_color = straight * (1.0 - darken);
     return mix(color, vec4<f32>(mix(straight, edge_color, band) * alpha, alpha), brush_selection_at(world));

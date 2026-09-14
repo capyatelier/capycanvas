@@ -502,14 +502,14 @@ fn shader_source(
     extended: bool,
     space: layer_core::color::RgbSpace,
 ) -> Result<String, GpuRasterError> {
-    let mut source = include_str!("scene.wgsl").to_string();
+    let mut source = working_color::source(extended, space);
+    source.push_str(include_str!("scene.wgsl"));
     let space_id = layer_core::color::RgbSpace::ALL
         .iter()
         .position(|s| *s == space)
         .unwrap();
     let y = space.to_xyz()[1];
     source.push_str(&format!("\nconst FX_EXTENDED:bool={extended};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
-    source.push_str(include_str!("sdr_color.wgsl"));
     source.push_str(include_str!("effects_color.wgsl"));
     for i in 0..MASK_SLOTS {
         source.push_str(&format!(
@@ -529,15 +529,15 @@ fn fx_extent()->vec2<f32> { return settings.color.zw; }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
     if settings.source_over.z>0. {
-        if FX_EXTENDED {return fx_sample_float(front,point-settings.source_over.xy);}
+        if FX_EXTENDED {return working_sample_float(front,point-settings.source_over.xy);}
         return textureSampleLevel(front,sampling,(point-settings.source_over.xy)/settings.source_over.zw,0.);
     }
-    if FX_EXTENDED {return fx_sample_float(front,point);}
+    if FX_EXTENDED {return working_sample_float(front,point);}
     return textureSampleLevel(front,sampling,point/fx_extent(),0.);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if FX_EXTENDED {return fx_sample_float(back,point);}
+    if FX_EXTENDED {return working_sample_float(back,point);}
     return textureSampleLevel(back,sampling,point/fx_extent(),0.);
 }
 fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
