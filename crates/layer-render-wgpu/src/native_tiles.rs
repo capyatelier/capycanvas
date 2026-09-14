@@ -3,6 +3,7 @@
 //! any captured tiles and retains the previous revision if the batch failed.
 use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, IntegerDepth, PixelDescriptor, TransferEncoding};
+pub mod promote;
 pub mod scalar;
 pub(crate) mod transfer;
 pub use transfer::NativeTransfer;
@@ -285,8 +286,18 @@ impl NativeTileEncoder {
                 "Too many native tiles in one batch".into(),
             ));
         }
-        for request in requests {
+        for (i, request) in requests.iter().enumerate() {
             validate(request)?;
+            if requests[..i].iter().any(|old| {
+                old.encoded == request.encoded
+                    || old.canonical == request.canonical
+                    || old.working == request.canonical
+                    || old.canonical == request.working
+            }) {
+                return Err(GpuRasterError::Color(
+                    "Aliased native color publication candidates".into(),
+                ));
+            }
         }
         if requests.is_empty() {
             return Ok(NativeTileBatch {

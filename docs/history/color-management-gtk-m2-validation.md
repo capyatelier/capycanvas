@@ -2104,3 +2104,130 @@ A future integration must first inspect actual WSI/compositor capabilities and
 protocol ownership: independently installing a second surface-color object may
 conflict with Vulkan WSI's own object. No profile/fallback/monitor behavior is
 claimed from this source audit alone, and no display code is changed here.
+
+
+## Canonical working-value adoption (parent `0ec14e8`)
+
+`native_tiles::promote` adds the GPU step that copies canonical native-decoded
+values back into existing RGBA32Float/R32Float working attachments. It reads the
+shared validation result after all color/scalar compute batches. If any batch
+failed, every promotion discards its fragment output and leaves its destination
+unchanged. CPU backing capture checks the same result independently. This
+primitive does not itself restore a failed provisional stroke or publish a
+document revision; the existing edit/recovery owner must perform that integration.
+
+Color writeback preflight now also rejects duplicate encoded/canonical outputs
+and input/output aliases between requests, matching scalar validation. Its
+sixteen-tile mixed-depth fixture uses private canonical destinations and adds
+four cross-request alias failures. Repeated read-only working inputs remain
+valid. This closes a missing check before the primitives are used by a live
+publication owner.
+
+The shader uses a physical render-pass boundary and WGSL's defined
+[discard semantics](https://www.w3.org/TR/WGSL/#discard-statement), which suppress
+fragment output. It requires no extra storage usage on working attachments, no
+new pixel payload allocation, no filtering/conversion and no input-owner readback.
+Each prepared batch validates at most sixteen distinct input/output pairs, shape,
+format, usage and region before recording any writes. Callers must retain unique
+candidate ownership across the entire publication and delay every promotion
+until all encoding batches have completed in queue order. Empty regions produce
+no render pass. Existing live document/host modes are unchanged.
+
+Three physical tests pass: 1,310,720 fixture texels verify exact Float32 bytes
+through full/odd/last-row/last-column/empty regions at both attachment formats,
+with invalid status preserving every pixel. The corpus includes fractional
+values that would be narrowed by Float16 and finite extended-range values; it is
+not a claim to test every IEEE bit pattern. A mixed native integer16 test encodes
+either bad color or bad scalar last in separate compute passes, then attempts
+both promotions and one shared native capture. Every destination remains exact
+and every backing ticket fails; resetting status permits a subsequent successful
+publication. Count/layout/region/cross-request alias failures are preflighted.
+
+The complete production GPU suite passes **162 tests, 26 ignored**, in 96.83
+seconds (`native-promotion-full-gpu-tests.log`). After the additional color
+ownership preflight, it passes again in 102.07 seconds
+(`native-promotion-owned-gpu-tests.log`, saved `native-promotion-owned-tests` and
+matching build JSON/log). The latter is a correctness run concurrent with
+compilation of isolated diagnostic probes; its elapsed time is not a latency
+comparison. Focused output is
+`native-promotion-focused-tests.log`; `native-promotion-final-tests` and its build
+JSON/log retain the successfully built executable. No new GTK host adoption is
+introduced by these primitives, so the document/storage GTK checks above remain
+the applicable host evidence, not native color-mode qualification.
+
+An ignored physical workload covers two formats × one/sixteen tiles × full/63×65
+regions × rebuilt/reused bindings, with twenty warm-up and one hundred measured
+batches per case, twice: **3,200 measured batches**. Timing includes preparation
+when rebuilding bindings, command encoding and queue submission; completed timing
+polls all submitted work. Pixel initialization is outside timing. These costs
+exclude native quantization, capture, history, composition and presentation.
+
+| Full-tile workload | CPU p95 ms | Completed p95 ms |
+| --- | ---: | ---: |
+| One RGBA32 tile, rebuilt bindings | 0.0191–0.0281 | 0.0478–0.0584 |
+| One RGBA32 tile, reused bindings | 0.0096–0.0097 | 0.0331–0.0334 |
+| Sixteen RGBA32 tiles, rebuilt bindings | 0.1220–0.1280 | 0.2402–0.2717 |
+| Sixteen RGBA32 tiles, reused bindings | 0.0682–0.0684 | 0.1388–0.1402 |
+| Sixteen R32 tiles, rebuilt bindings | 0.1170–0.1658 | 0.2337–0.2824 |
+| Sixteen R32 tiles, reused bindings | 0.0654–0.0734 | 0.1265–0.1311 |
+
+One-tile rebuilt RGBA32 CPU p99 reaches 0.6089–0.6103 ms; reused bindings reduce
+that tail to 0.0106–0.0118. The data therefore favors retaining bounded bindings
+when resource identities allow reuse. Sixteen-tile partial-region complete p95
+is 0.1252–0.1563 ms RGBA32 and 0.1234–0.1276 R32 with reused bindings. Pipeline
+construction takes 0.3992–0.4068 ms after the correctness run has warmed the driver
+cache; this is not a cold-cache qualification. First full sixteen-tile rebuilt
+RGBA32 batches complete in 0.5012–0.5122 ms.
+
+Fixture canonical plus working payload is 32 MiB for sixteen RGBA32 tiles or
+8 MiB for sixteen R32 tiles. Promotion adds the existing shared eight-byte status,
+at most sixteen bind groups/views per batch, and no parameter slab or pixel
+scratch. Process high-water marks are 138,908/135,880 KiB; these small fixtures
+do not qualify dense-photo memory. Reproduce with the saved test binary and
+`native_tiles::promote::tests::canonical_promotion_workloads --ignored
+--test-threads=1 --nocapture`; raw timing/process output is
+`native-promotion-workloads-{0,1}.log`. No compilation or other GPU test ran during
+these measurements. Full native edit publication, bounded large operations,
+precision across all active tools, managed viewing and GTK color/photo journeys
+remain required.
+
+
+The metadata-stage focused parent/current/fixed comparisons use sixty repetitions
+each for wet-round Oklab, palette knife and opaque gouache: **60,660 frames**,
+with matching output PNGs in every arm. Palette-knife and opaque-gouache relative
+triggers clear in these larger samples; all their frames meet 8.33 ms. Wet-round
+still fails: current Pen-up CPU/completed p99 is **2.766/3.806 ms**, versus
+**2.219/3.358 parent** and **2.512/3.592 fixed**. Current also has three completed
+Move misses, maximum **34.086 ms**, while those two baseline arms have none.
+Capture allocated/reserved peak is 120 MiB current versus 56/64 MiB. These samples
+remain in the results, and existing drawing performance is not declared fully
+qualified. Raw reports, executable hashes, counts and comparisons are
+`document-color-focused-*`, `document-color-focused-runs.json` and
+`document-color-focused-measurements.json`. The diagnostic helper now supports
+all-frame tracing and capture-worker poll/total backing time to investigate this
+specific sustained failure, rather than repeating the complete drawing suite.
+
+
+Native color ownership preflight is also measured in parent/current/parent
+writeback runs: 96 cases × 100 measured batches per arm, **28,800 batches**.
+Maximum sixteen-full-tile rebuilt-binding CPU p95/p99 is 0.1768/0.2654 ms
+current versus 0.1432/0.2923 and 0.1709/0.2911 parent; completed p95/p99 is
+0.3744/0.5421 versus 0.3476/0.5013 and 0.3690/0.4842. Reused-binding current
+maxima are 0.0471/0.0830 CPU and 0.1590/0.1852 completed. This comparison
+retains the ownership checks without a meaningful cost increase at this batch
+size. Logs are `native-promotion-ownership-{0-parent,1-current,2-parent}.log`,
+with parsed cases in `native-promotion-ownership-measurements.json`.
+
+The `ed0faad`/`0ec14e8` all-frame diagnostic probes run wet-round sixty times in
+parent/current/parent order (**8,100 measured frames**). All three diagnostic
+arms remain below 8.33 ms, so they do not reproduce the earlier 34.086 ms miss.
+Current Pen-up CPU p99 remains 2.394 ms versus 1.922/2.058 parent. Capture p99
+is 0.482 ms versus 0.463/0.540; copy finishing is 0.246 versus 0.241/0.253,
+with essentially no warm allocation. Current frame encoding p99 is 0.617 ms
+versus 0.477/0.467, and frame submission 1.091 versus 0.999/1.009. The shared
+capture copy is therefore not a sufficient explanation of the remaining tail.
+No code cause or fix is claimed from these traces. Worker poll/total timings,
+all frame records and slow-frame diagnostics are retained under
+`document-color-trace/`, including build provenance and
+`all-frames-measurements.json`. Traced timing is diagnostic evidence only;
+the production sustained failure remains open.

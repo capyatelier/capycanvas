@@ -6,7 +6,9 @@ encoding/submission and capture metadata/allocation/encoding/submission in us.
 Newer renderers report CM2_COPY for the validated copy helper; CM2_FRAME
 capture_us still includes the complete raster-index and capture work.
 Tracing includes setup and warm-up; use the benchmark's measured window when
-analyzing results. The probes are for diagnosis, not final latency qualification.
+analyzing results. CAPY_TRACE_ALL_FRAMES=1 additionally traces Move frames.
+Native capture probes report worker poll and total backing time. The probes
+are for diagnosis, not final latency qualification.
 """
 import argparse
 import io
@@ -21,7 +23,8 @@ def instrument(root):
     p=root/'crates/layer-render-wgpu/src/lib.rs';s=p.read_text()
     old='        let started = self.telemetry.enabled.then(web_time::Instant::now);'
     assert s.count(old)==1
-    s=s.replace(old,'''        let cm2_trace = packet.dab_batches.iter().any(|b| b.stroke_end)
+    s=s.replace(old,'''        let cm2_commit = packet.dab_batches.iter().any(|b| b.stroke_end);
+        let cm2_trace = (cm2_commit || std::env::var_os("CAPY_TRACE_ALL_FRAMES").is_some())
             && std::env::var_os("CAPY_TRACE_COMMIT_PHASES").is_some();
         let cm2_start = cm2_trace.then(std::time::Instant::now);
 '''+old)
@@ -42,7 +45,7 @@ def instrument(root):
     s=s.replace(old,'''        self.refresh_storage_metrics();
         if let Some(start) = cm2_start {
             let encoded=cm2_encoded.unwrap();let submitted=cm2_submitted.unwrap();let captured=cm2_captured.unwrap();
-            eprintln!("CM2_FRAME encode_us={} submit_us={} capture_us={} post_us={}",
+            eprintln!("CM2_FRAME commit={cm2_commit} encode_us={} submit_us={} capture_us={} post_us={}",
                 (encoded-start).as_micros(),(submitted-encoded).as_micros(),(captured-submitted).as_micros(),captured.elapsed().as_micros());
         }
         if let Some(started) = started {''')
@@ -80,6 +83,21 @@ def instrument(root):
 
 
 def instrument_native_capture(source):
+    old = '    pub fn finish(mut self) -> Result<(), String> {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, old + '''        let cm2_start = std::env::var_os("CAPY_TRACE_COMMIT_PHASES").is_some().then(std::time::Instant::now);
+        let mut cm2_polled = None;
+''')
+    old = '            if let Some(validation) = &self.validation {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '            cm2_polled = cm2_start.map(|_| std::time::Instant::now());\n' + old)
+    old = '        if let Err(error) = &result {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '''        if let Some(start) = cm2_start {
+            eprintln!("CM2_BACKING bytes={} poll_us={} total_us={}",self.staging_bytes,
+                cm2_polled.map_or(0, |t| (t-start).as_micros()),start.elapsed().as_micros());
+        }
+''' + old)
     begin = source.rfind('\n', 0, source.index(' fn capture_tiles(')) + 1
     end = source.index('    /// Restore changed pages', begin)
     body = source[begin:end]

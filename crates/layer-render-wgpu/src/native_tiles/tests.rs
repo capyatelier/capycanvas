@@ -337,7 +337,9 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
     let transfer = NativeTransfer::new(&r.device, RgbSpace::Srgb).unwrap();
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
-    let canonical = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let canonical: Vec<_> = (0..16)
+        .map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float))
+        .collect();
     let outputs: Vec<_> = (0..16)
         .map(|i| {
             texture(
@@ -356,7 +358,7 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
             .enumerate()
             .map(|(i, encoded)| NativeTileRequest {
                 working: &working,
-                canonical: &canonical,
+                canonical: &canonical[i],
                 encoded,
                 transfer: &transfer,
                 depth: if i % 2 == 0 {
@@ -427,7 +429,7 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
     invalid.push(extra);
     assert!(encoder.prepare(&r.device, &invalid, &status).is_err());
     let wrong = texture(&r, wgpu::TextureFormat::Rgba16Float);
-    for mode in 0..6 {
+    for mode in 0..10 {
         let mut invalid = make_requests();
         match mode {
             0 => invalid[15].region = [1, 0, u32::MAX, 1],
@@ -435,7 +437,14 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
             2 => invalid[15].working = &wrong,
             3 => invalid[15].depth = IntegerDepth::U8,
             4 => invalid[15].alpha = AlphaAssociation::None,
-            _ => invalid[15].canonical = &working,
+            5 => invalid[15].canonical = &working,
+            6 => invalid[15].canonical = &canonical[0],
+            7 => invalid[15].encoded = &outputs[1],
+            8 => invalid[15].working = &canonical[0],
+            _ => {
+                invalid[0].working = &canonical[15];
+                invalid[15].working = &canonical[1];
+            }
         }
         assert!(encoder.prepare(&r.device, &invalid, &status).is_err());
     }
