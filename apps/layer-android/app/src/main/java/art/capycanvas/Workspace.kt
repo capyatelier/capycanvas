@@ -27,6 +27,10 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.zIndex
@@ -321,10 +325,22 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val visible by remember(dock) { derivedStateOf { dock.hint != null } }
     if (!visible) return
     val density = LocalDensity.current.density
+    val accent = LocalPalette.current.accent
     Layout(content = {}, modifier = Modifier.offset {
         val b = dock.hint?.objectOrNull("bounds")
         IntOffset(((b?.number("x") ?: 0f) * density).roundToInt(), ((b?.number("y") ?: 0f) * density).roundToInt())
-    }.zIndex(Float.MAX_VALUE).background(LocalPalette.current.accent).testTag("workspace-drop-hint")) { _, _ ->
+    }.zIndex(Float.MAX_VALUE).drawBehind {
+        val hint = dock.hint
+        val b = hint?.objectOrNull("bounds")
+        val body = hint?.objectOrNull("target")?.optString("kind") == "tab" &&
+            (b?.number("width") ?: 0f) > 3f && (b?.number("height") ?: 0f) > 3f
+        if (body) {
+            drawRect(accent.copy(alpha = .25f))
+            val stroke = 2.dp.toPx()
+            drawRect(accent, Offset(stroke / 2, stroke / 2),
+                Size((size.width - stroke).coerceAtLeast(0f), (size.height - stroke).coerceAtLeast(0f)), style = Stroke(stroke))
+        } else drawRect(accent)
+    }.testTag("workspace-drop-hint")) { _, _ ->
         val b = dock.hint?.objectOrNull("bounds")
         layout(((b?.number("width") ?: 0f) * density).roundToInt().coerceAtLeast(0),
             ((b?.number("height") ?: 0f) * density).roundToInt().coerceAtLeast(0)) {}

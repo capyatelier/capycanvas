@@ -92,7 +92,7 @@ active connectors, fixed closed-stack width, stack preferences, panel/group/tool
 and held-icon drops, the trailing append target, cancellation and undo/redo.
 The existing `--column-drops` suite checks adjacent tile and divider boundaries.
 
-On GTK and Web, dropping a panel, toolbar, tab group or column in the menu/title bar
+On GTK, Web and Android, dropping a panel, toolbar, tab group or column in the menu/title bar
 prepends it to the side column directly below the pointer. An expanded column
 receives new groups; a collapsed stack receives a new first member. A column
 inserted among expanded groups keeps its tree and opens its contents. No panel
@@ -101,7 +101,7 @@ the upper 20% of each group's body extends its tab-strip target: the horizontal
 pointer position chooses a tab insertion slot, with the preview line in the
 tab strip. This applies to first and lower groups, floating groups and drawers.
 
-Dropping into a GTK or Web panel group's body prepends the incoming tabs and selects
+Dropping into a GTK, Web or Android panel group's body prepends the incoming tabs and selects
 the incoming content. A translucent filled rectangle with an outline covers
 the target's content area. Existing tabs stay in the group. Tab strips continue
 to offer precise insertion positions with a line preview.

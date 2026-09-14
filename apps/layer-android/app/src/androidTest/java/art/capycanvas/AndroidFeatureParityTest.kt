@@ -213,6 +213,7 @@ class AndroidFeatureParityTest {
         action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "tab", "group" to group), "viewport" to viewport()))
         action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to true)))
         val column = host.snapshot!!.getJSONObject("layout").array("collapsed").objects().first { c -> c.array("groups").objects().any { it.getInt("group") == group } }.getInt("id")
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_drawers", "column" to column, "drawers" to true)))
         shown("column-icon-toolbar")
         compose.onNodeWithTag("column-icon-toolbar").performTouchInput { click() }
         shown("column-drawer-$column")

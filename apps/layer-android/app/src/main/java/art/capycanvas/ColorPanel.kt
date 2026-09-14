@@ -205,7 +205,13 @@ private class ReadoutCorner(private val radius: Float) : Shape {
 @Composable private fun ColorWheel(view: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
     val shape = view.getString("shape")
     val hue = view.array("wheel_components").getDouble(0).toFloat()
-    val stops = remember(shape) { JSONArray(Native.colorHueStops(shape)).objects().map { it.number("offset") to it.array("color").color() }.toTypedArray() }
+    // ShaderBrush retains its native shader until the drawing size changes.
+    // Keep the brush across color picks and overlap redraws; rebuilding it in
+    // Canvas would also copy hundreds of stops and recreate the sweep shader.
+    val hueRing = remember(shape) {
+        val stops = JSONArray(Native.colorHueStops(shape)).objects().map { it.number("offset") to it.array("color").color() }.toTypedArray()
+        Brush.sweepGradient(*stops)
+    }
     val focused = LocalWindowInfo.current.isWindowFocused
     val pick by rememberUpdatedState(color)
     BoxWithConstraints(modifier) {
@@ -262,7 +268,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                 clipPath(outline) { drawImage(field, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low) }
             }
             rotate(view.number("wheel_hue_start_degrees"), center) {
-                drawCircle(Brush.sweepGradient(*stops, center = center), (inner + outer) / 2, center, style = Stroke(outer - inner))
+                drawCircle(hueRing, (inner + outer) / 2, center, style = Stroke(outer - inner))
             }
             val radius = (maxWidth.value * .04f).coerceIn(6f, 10f).dp.toPx()
             for ((key, fill) in listOf("wheel_hue_marker" to "wheel_hue_color", "wheel_marker" to "marker_color")) {

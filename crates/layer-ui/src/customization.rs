@@ -1876,6 +1876,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetColumnDrawers { column, drawers } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() { return Err("Unknown column".into()); }
                 let root = layout.column_stack(column).column;
                 let s = layout.column_stack_mut(column);
@@ -1886,6 +1889,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetColumnAutoHide { column, auto_hide } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() {
                     return Err("Unknown column".into());
                 }
@@ -1893,6 +1899,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ApplyColumnStack { column } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() { return Err("Unknown column".into()); }
                 let source = layout.column_stack(column);
                 for root in layout.column_roots() {

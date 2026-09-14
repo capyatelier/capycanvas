@@ -50,7 +50,14 @@ class AndroidHostTest {
             finally { Native.destroy(handle) }
         }
     }
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val workspaceRule = org.junit.rules.RuleChain.outerRule(object : org.junit.rules.ExternalResource() {
+        override fun before() {
+            CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir,
+                "host-tests/${java.util.UUID.randomUUID()}").absolutePath
+        }
+        override fun after() { CanvasHost.workspaceDirectoryForTest = null }
+    }).around(compose)
     private val host get() = compose.activity.host
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private var originalWorkspace: JSONObject? = null
@@ -58,6 +65,7 @@ class AndroidHostTest {
     @Before fun ready() {
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
         assertNull("GPU initialization", host.failure)
+        compose.waitUntil(60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
         originalWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         compose.runOnIdle {
@@ -143,6 +151,7 @@ class AndroidHostTest {
             action(obj("type" to "restore_workspace", "workspace" to fixture))
             if (drawer) {
                 customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
                 compose.onNodeWithTag("column-icon-brushes").performClick()
                 compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-grip-41").fetchSemanticsNodes().isNotEmpty() }
                 SystemClock.sleep(300); compose.waitForIdle()
@@ -355,6 +364,7 @@ class AndroidHostTest {
         action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(floated, saved())
         action(obj("type" to "restore_workspace", "workspace" to fixture))
         customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+        customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
         hover(bounds("column-grip-41").center, PointerIcon.TYPE_GRAB)
         compose.onNodeWithTag("column-icon-brushes").performTouchInput { click() }
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-header-41").fetchSemanticsNodes().isNotEmpty() }
@@ -424,6 +434,7 @@ class AndroidHostTest {
                     "target" to obj("kind" to "float", "position" to JSONArray(listOf(350, 240))), "viewport" to viewport()))
             } else if (placement == "drawer") {
                 customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
                 compose.onNodeWithTag("column-icon-brushes").performTouchInput { click() }
                 compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-header-41").fetchSemanticsNodes().isNotEmpty() }
             }
@@ -499,9 +510,9 @@ class AndroidHostTest {
             put("next_id", maxOf(44, getInt("next_id")))
         }
         fixture.put("zen_mode", false)
-        val root = compose.onNodeWithTag("workspace")
+        val root = compose.onNodeWithTag("workspace", useUnmergedTree = true)
         fun snapshot() = state().getJSONObject("workspace").toString()
-        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
+        fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
         fun panelGroup(panel: String): JSONObject {
             fun find(node: JSONObject): JSONObject? = if (node.getString("kind") == "tabs") {
                 node.takeIf { panel in it.array("panels").values() }
@@ -531,9 +542,10 @@ class AndroidHostTest {
             fun open() {
                 action(obj("type" to "restore_workspace", "workspace" to fixture))
                 customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
                 val point = bounds("column-icon-brushes").center
                 press(point); finishGesture()
-                compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-grip-41").fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-grip-41", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
                 settle()
             }
             fun away() = root.fetchSemanticsNode().boundsInRoot.let { androidx.compose.ui.geometry.Offset(it.width * .5f, it.height * .55f) }
@@ -566,7 +578,7 @@ class AndroidHostTest {
             open(); before = snapshot()
             press(bounds("drawer-tab-brushes").center); move(away()); finishGesture(true)
             assertEquals(before, snapshot())
-            compose.onNodeWithTag("column-drawer-41").assertIsDisplayed()
+            compose.onNodeWithTag("column-drawer-41", useUnmergedTree = true).assertIsDisplayed()
             // A mostly clipped tab must insert using its visible midpoint.
             val overflow = JSONObject(fixture.toString())
             overflow.getJSONObject("layout").array("bands").getJSONObject(0).getJSONObject("root").apply {
@@ -575,10 +587,11 @@ class AndroidHostTest {
             }
             action(obj("type" to "restore_workspace", "workspace" to overflow))
             customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
             press(bounds("column-icon-brushes").center); finishGesture(); settle()
             val gripBeforeScroll = bounds("column-drawer-grip-41")
             val scrollBy = bounds("drawer-tab-brushes").width + bounds("drawer-tab-sizes").width * .75f
-            compose.onNodeWithTag("column-drawer-tabs-41").performSemanticsAction(SemanticsActions.ScrollBy) { it(scrollBy, 0f) }
+            compose.onNodeWithTag("column-drawer-tabs-41", useUnmergedTree = true).performSemanticsAction(SemanticsActions.ScrollBy) { it(scrollBy, 0f) }
             settle()
             assertEquals(gripBeforeScroll, bounds("column-drawer-grip-41"))
             val clippedTab = bounds("drawer-tab-sizes")
@@ -595,16 +608,16 @@ class AndroidHostTest {
                 val header = bounds("column-drawer-header-41")
                 val destination = when (zone) {
                     "tab" -> androidx.compose.ui.geometry.Offset(box.left + 4f, header.center.y)
-                    "top" -> androidx.compose.ui.geometry.Offset(box.center.x, header.bottom + 4f)
+                    "top" -> androidx.compose.ui.geometry.Offset(box.left + 4f, header.bottom + 4f)
                     "bottom" -> androidx.compose.ui.geometry.Offset(box.center.x, box.bottom - 4f)
                     else -> box.center
                 }
                 move(destination)
-                compose.onNodeWithTag("workspace-drop-hint").assertExists()
+                compose.onNodeWithTag("workspace-drop-hint", useUnmergedTree = true).assertExists()
                 finishGesture()
                 val target = panelGroup("layers")
-                if (zone in listOf("top", "bottom")) assertNotEquals(41, target.getInt("id")) else assertEquals(41, target.getInt("id"))
-                if (zone == "tab") assertEquals("layers", target.array("panels").getString(0))
+                if (zone == "bottom") assertNotEquals(41, target.getInt("id")) else assertEquals(41, target.getInt("id"))
+                if (zone != "bottom") assertEquals("layers", target.array("panels").getString(0))
                 if (zone == "merge") assertEquals(6, target.array("panels").length())
                 assertEquals(0, state().getJSONObject("workspace").getJSONObject("layout").array("floating").length())
                 history(before)

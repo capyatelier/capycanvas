@@ -314,6 +314,14 @@ fn nested_columns_reject_collapse_and_saved_nested_stacks_reopen_as_groups() {
                 .is_none()
         );
     }
+    for action in [
+        CustomizationAction::SetColumnDrawers { column: nested, drawers: true },
+        CustomizationAction::SetColumnAutoHide { column: nested, auto_hide: true },
+        CustomizationAction::ApplyColumnStack { column: nested },
+    ] {
+        assert!(s.dispatch(UiAction::Customize { action }).is_err());
+        assert_eq!(s.state.workspace.layout, before);
+    }
     let layout = &mut s.state.workspace.layout;
     layout.collapsed.push(crate::CollapsedColumn {
         root: nested,

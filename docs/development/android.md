@@ -130,3 +130,30 @@ injection is supported. Neither substitutes for physical pen testing. When addin
 held-contact tests, use `runOnMainSync` and bounded condition polling: global idle
 waits can hang during a held gesture. Test focus loss with a real window and send
 keyboard events through system dispatch so Android leaves touch mode correctly.
+
+`AndroidInteractionTest#menuBodyAndExtendedTabDropsAcrossDevices` covers
+menu-bar insertion above expanded columns and collapsed stacks, body prepending,
+and enlarged tab targets in first and lower groups. It uses mouse/finger/stylus
+contacts, both column sides and themes, all supported payloads, cancellation and
+one-step undo/redo. Body-preview captures are in `validation/layout-drops`.
+Nested columns remain expanded; only top-level columns can collapse. New stacks
+open whole columns by default, so compact-drawer test fixtures opt in explicitly.
+
+The Color panel retains its native hue-ring brush by shape; its shader tracks
+physical drawing size. Color changes and overlapping panel motion reuse it. The
+color-field bitmap remains cached by shape, hue and size.
+`AndroidColorPanelTest` checks rendering and picking across shapes and sizes.
+For measured overlap motion, build the release-based benchmark variant and run:
+
+```bash
+(cd apps/layer-android && ./gradlew :app:assembleBenchmark :app:assembleBenchmarkAndroidTest "-PcapyAbi=$CAPY_TEST_ABI" -PcapyBenchmark)
+adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/benchmark/app-benchmark.apk
+adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/androidTest/benchmark/app-benchmark-androidTest.apk
+adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e workspaceBenchmark true -e class art.capycanvas.AndroidWorkspacePerformanceTest#colorPanelOverlapFrameTiming art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+adb -s "$CAPY_ANDROID_SERIAL" logcat -d -s CapyDragPerf:I
+```
+
+This uses the real display clock and Android `FrameMetrics`, with typed native
+mouse/touch input over a visible Color wheel. It asserts retained UI models and
+matching placement. The benchmark variant enables measurement without making
+the app debuggable. Reinstall the debug APK afterward for ordinary development.
