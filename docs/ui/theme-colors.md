@@ -23,7 +23,7 @@ in the table is transformed per channel using the same rule as a grey.
 | --- | --- | --- | --- |
 | Canvas surround, header button/title backgrounds, status numbers, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
 | Panel bodies, selected tabs and concave joins, tool ribbons, expanded drawers, popovers/menus | `#414141` = mix(B,W,14/204) | `#ededed` = mix(B,W,53/71) | Regenerate |
-| Inactive tab bar | `#2e2e2e` = mix(B,K,5/51) | `#dedede` = mix(B,W,38/71) | Regenerate |
+| Inactive tab bar, GTK/Web/Android workspace-switcher pill | `#2e2e2e` = mix(B,K,5/51) | `#dedede` = mix(B,W,38/71) | Regenerate |
 | Panel input backgrounds, inactive compact slider track | `#333333` = B | `#fafafa` = mix(B,W,66/71) | Regenerate |
 | Native GTK view background | `#2b2b2b` = mix(B,K,8/51) | `#e4e4e4` = mix(B,W,44/71) | Regenerate |
 | Preferences and web dialog background | `#333333` = B | `#fafafb`: white mix 66/71 for R,G, 67/71 for B | Regenerate |
@@ -58,6 +58,15 @@ their complete semantic palettes. New surface roles map to libadwaita's
 [documented CSS variables](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/css-variables.html),
 including inactive header/sidebar variants. GTK's native card and shade overlays
 continue to composite normally. Transparent areas remain transparent.
+
+GTK, Web and Android light-mode title-bar controls use the chosen base at 50%
+opacity. Each button retains its shape, while Menu Labels shares one rounded
+surface behind the full row with the existing label padding and hover shapes.
+Hover, press and selection feedback composite over this surface. Header text
+has no outline in light mode; workspace-switcher text has no outline in either
+mode. Web adds a 3px backdrop blur where supported. GTK's app-owned Wayland
+canvas and Android's SurfaceView are outside their UI render trees, so those
+hosts use the translucent fill without backdrop blur.
 
 ## Transformation
 

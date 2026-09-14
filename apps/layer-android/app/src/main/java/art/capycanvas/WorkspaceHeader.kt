@@ -237,7 +237,11 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
-        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.Center) {
+        // SurfaceView artwork is outside Compose's render tree, so these use
+        // the translucent fallback rather than a blur of the foreground text.
+        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()
+            .then(if (kind in listOf("document_title", "clock", "battery"))
+                Modifier.background(colors.headerSurface, RoundedCornerShape(6.dp)) else Modifier), contentAlignment = Alignment.Center) {
             val icon = when (kind) {
                 "capy" -> snapshot.getJSONObject("state").array("commands").objects().first { it.getString("id") == "zen_mode" }.getString("icon")
                 "settings" -> "settings"
@@ -245,13 +249,13 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize().background(colors.headerSurface, RoundedCornerShape(6.dp)), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
                             val menuId = application.getString("id")
                             HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
                                 Modifier.fillMaxHeight().testTag("application-menu-${application.getString("id")}"),
-                                fillWidth = false,
+                                fillWidth = false, surface = false,
                                 onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
                                 Text(application.getString("label"), Modifier.padding(horizontal = 6.dp), fontWeight = FontWeight.Bold, maxLines = 1)
                             }
@@ -284,14 +288,15 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
-    modifier: Modifier, fillWidth: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
+    modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val shape = drawerButtonShape(if (open) "bottom" else null)
     HoverTip(label, modifier) {
-    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape).background(when {
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
+        .background(if (surface) colors.headerSurface else Color.Transparent).background(when {
         selected -> colors.active
         enabled && pressed -> colors.text.copy(alpha = .16f)
         open || (enabled && hovered) -> colors.text.copy(alpha = .10f)

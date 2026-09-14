@@ -132,6 +132,7 @@ impl Header {
                 .build();
             b.set_widget_name(&format!("header-overflow-{i}"));
             b.add_css_class("flat");
+            b.add_css_class("chrome-control");
             root.add(&b);
             b
         });
@@ -141,6 +142,7 @@ impl Header {
             .build();
         recovery.set_widget_name("header-recovery");
         recovery.add_css_class("flat");
+        recovery.add_css_class("chrome-control");
         root.add(&recovery);
         let editor = editor::Editor::new();
         root.add(&editor.root);
@@ -643,6 +645,7 @@ impl Header {
             }
             HeaderItem::MenuLabels => {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                row.add_css_class("header-menu-labels");
                 for id in ApplicationMenu::ALL {
                     row.append(&w.chrome_menu(id));
                 }
@@ -701,6 +704,9 @@ impl Header {
             HeaderItem::DocumentTitle | HeaderItem::Clock | HeaderItem::Battery | HeaderItem::Space
         ) {
             let handle = gtk::WindowHandle::new();
+            if entry.item != HeaderItem::Space {
+                handle.add_css_class("header-readout");
+            }
             handle.set_child(Some(&content));
             handle.upcast::<gtk::Widget>()
         } else {

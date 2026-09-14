@@ -30,15 +30,18 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const paint = selector => evaluate(`(()=>{const b=document.querySelector(${JSON.stringify(selector)}),c=document.createElement('canvas');c.width=c.height=1;const x=c.getContext('2d',{willReadFrequently:true}),css=getComputedStyle(b).backgroundColor;x.fillStyle=css;x.fillRect(0,0,1,1);return{css,rgba:[...x.getImageData(0,0,1,1).data],selected:b.getAttribute('aria-pressed'),drawer:b.dataset.drawerFacing}})()`);
   const blue = async selector => {
     const value = await paint(selector), [r,g,b,a] = value.rgba;
-    assert.equal(value.selected,'true',`${device}: ${JSON.stringify(value)}`); assert.ok(b > g + 50 && g > r + 40,JSON.stringify(value));
-    assert.ok(Math.abs(a - 56) <= 1,`Selected tool uses GTK's 22% blue: ${JSON.stringify(value)}`);
+    const light = await evaluate("document.body.dataset.theme==='light'");
+    assert.equal(value.selected,'true',`${device}: ${JSON.stringify(value)}`); assert.ok(b > g + (light ? 18 : 50) && g > r + (light ? 14 : 40),JSON.stringify(value));
+    assert.ok(Math.abs(a - (light ? 156 : 56)) <= 1,`Selected tool uses 22% blue over the light-mode 50% surface: ${JSON.stringify(value)}`);
   };
   const grey = async (selector, alpha) => {
     const value = await paint(selector), [r,g,b,a] = value.rgba;
     // Unpremultiplying a 10% alpha pixel can spread one-byte rounding over
     // ten RGB values; the theme's neutral text also has a slight blue tint.
     assert.equal(value.selected,'false'); assert.ok(Math.max(r,g,b)-Math.min(r,g,b) <= 12,JSON.stringify(value));
-    assert.ok(Math.abs(a-alpha) <= 1,`${device}: Neutral feedback opacity: ${JSON.stringify(value)}`);
+    const light = await evaluate("document.body.dataset.theme==='light'");
+    const expectedAlpha = light ? 127.5 + alpha / 2 : alpha;
+    assert.ok(Math.abs(a-expectedAlpha) <= 1,`${device}: Neutral feedback over the header surface: ${JSON.stringify(value)}`);
   };
   const dir = process.env.LAYER_TEST_ARTIFACTS || 'artifacts/title-bar/feedback';
   await mkdir(dir,{recursive:true});
