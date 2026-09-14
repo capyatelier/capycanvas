@@ -473,6 +473,10 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     using VirtualKey=Windows::System::VirtualKey;
     auto key=e.Key();
     if(pressed&&key==VirtualKey::Escape&&workspace&&workspace->CancelGesture()){e.Handled(true);return;}
+    auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
+    // The preview route runs before a TextBox can cancel its draft. Let that
+    // native handler own Escape; key releases still clear shared held state.
+    if(pressed&&key==VirtualKey::Escape&&focused&&focused.try_as<TextBox>())return;
     std::wstring name;
     switch(key) {
     case VirtualKey::Shift:name=L"shift";break;
@@ -514,7 +518,6 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(name.empty())return;
     if(pressed)heldKeys.try_emplace(uint32_t(key),name);
     else heldKeys.erase(uint32_t(key));
-    auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
     bool canvas=focused&&focused==canvasFocus;
     // Native controls retain text, slider and focus-navigation keys. Releases
     // still reach shared state so moving focus cannot leave a pan key held.
