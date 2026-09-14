@@ -132,7 +132,7 @@ impl Scene {
         { [0; 2] }
     }
     pub fn scratch_bytes(&self) -> u64 {
-        let mut bytes = self.pool.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4
+        let mut bytes = self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
             + self.images.storage_bytes();
@@ -1629,7 +1629,7 @@ impl Pipelines {
                     &shader,
                     "fragment_main",
                     blend,
-                    COLOR_FORMAT,
+                    device.working_format(),
                     "tile layer composition",
                 )
             })

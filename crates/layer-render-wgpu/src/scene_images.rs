@@ -15,7 +15,7 @@ impl Image {
         Self { texture, view }
     }
     fn bytes(&self) -> u64 {
-        self.texture.width() as u64 * self.texture.height() as u64 * 4
+        texture_bytes(&self.texture)
     }
 }
 struct CachedStage {

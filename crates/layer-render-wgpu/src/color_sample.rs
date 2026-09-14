@@ -76,7 +76,7 @@ impl WgpuRasterizer {
         {
             16
         } else {
-            COLOR_FORMAT.block_copy_size(None).unwrap()
+            self.device.working_format().block_copy_size(None).unwrap()
         };
         let capacity = if stride == 16 { 512 } else { 128 };
         if self

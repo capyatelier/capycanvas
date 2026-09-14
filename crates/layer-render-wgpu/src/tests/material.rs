@@ -61,7 +61,7 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
         });
     let pipelines: [_; MaterialPipelineKind::COUNT] = std::array::from_fn(|kind| {
         let color = Some(wgpu::ColorTargetState {
-            format: COLOR_FORMAT,
+            format: SRGB8_FORMAT,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         });

@@ -25,7 +25,7 @@ struct FlatSource {
     background: f32,
 }
 pub struct TransformTarget<'a> {
-    /// Single-sample RGBA8Unorm (or R8Unorm for scalar mode) render attachment,
+    /// Single-sample attachment matching the prepared color/scalar working format,
     /// never aliasing the source.
     pub view: &'a wgpu::TextureView,
     /// Actual view extent and its origin in the same space as the source/matrix.
@@ -184,9 +184,9 @@ impl PixelTransform {
                     },
                     targets: &[Some(wgpu::ColorTargetState {
                         format: if scalar {
-                            wgpu::TextureFormat::R8Unorm
+                            device.scalar_format()
                         } else {
-                            super::COLOR_FORMAT
+                            device.working_format()
                         },
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
@@ -274,7 +274,7 @@ impl PixelTransform {
             || texture.depth_or_array_layers() != 1
             || texture.sample_count() != 1
             || if self.scalar {
-                texture.format() != wgpu::TextureFormat::R8Unorm
+                !matches!(texture.format(), wgpu::TextureFormat::R8Unorm | wgpu::TextureFormat::R32Float)
             } else {
                 !matches!(
                     texture.format(),

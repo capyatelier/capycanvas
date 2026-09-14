@@ -142,10 +142,11 @@ impl PreviewPages {
     fn storage_bytes(&self) -> u64 {
         self.paint
             .iter()
-            .map(|p| PAGE_BYTES * (1 + u64::from(p.secondary.is_some())))
+            .map(|p| p.primary.storage_bytes() + p.secondary.as_ref().map_or(0, PageSurface::storage_bytes))
             .sum::<u64>()
-            + SCALAR_PAGE_BYTES
-                * (self.material.len() + 2 * self.watercolor.len() + self.masks.len()) as u64
+            + self.material.iter().map(|p| p.wetness.storage_bytes()).sum::<u64>()
+            + self.watercolor.iter().map(|p| p.primary.storage_bytes() + p.secondary.storage_bytes()).sum::<u64>()
+            + self.masks.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>()
     }
 }
 impl ImageTransformState {

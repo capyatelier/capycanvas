@@ -24,7 +24,7 @@ impl RegionRequests {
             + self
                 .source
                 .as_ref()
-                .map_or(0, |(t, _)| u64::from(t.width()) * u64::from(t.height()) * 4)
+                .map_or(0, |(t, _)| texture_bytes(t))
             + self.scene.as_ref().map_or(0, |s| s.scratch_bytes())
             + self.readback.as_ref().map_or(0, |b| b.size())
             + self.pending.as_ref().map_or(0, |r| r.coverage.size())

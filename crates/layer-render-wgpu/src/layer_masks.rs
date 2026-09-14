@@ -1,4 +1,4 @@
-//! Sparse R8 visibility masks. Geometry and brush instances stay GPU-resident.
+//! Sparse working visibility masks. Geometry and brush instances stay GPU-resident.
 use super::*;
 use std::collections::BTreeMap;
 use wgpu::util::DeviceExt;
@@ -8,9 +8,9 @@ pub(super) struct MaskPage {
     pub view: wgpu::TextureView,
 }
 impl MaskPage {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &PipelineDevice) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("sparse layer mask R8 page"),
+            label: Some("sparse layer mask page"),
             size: wgpu::Extent3d {
                 width: PAGE_SIZE,
                 height: PAGE_SIZE,
@@ -19,7 +19,7 @@ impl MaskPage {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: device.scalar_format(),
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
@@ -97,8 +97,8 @@ impl MaskRenderer {
                         color: blend,
                         alpha: blend,
                     },
-                    wgpu::TextureFormat::R8Unorm,
-                    "mask brush R8",
+                    device.scalar_format(),
+                    "mask coverage brush",
                 )
             })
         });
@@ -154,7 +154,7 @@ impl MaskRenderer {
                     &init_shader,
                     "fragment_main",
                     None,
-                    wgpu::TextureFormat::R8Unorm,
+                    device.scalar_format(),
                     "antialiased mask selection",
                 )
             })
@@ -188,7 +188,7 @@ impl MaskRenderer {
     }
     pub fn prepare(
         &mut self,
-        device: &wgpu::Device,
+        device: &PipelineDevice,
         encoder: &mut crate::submission::CommandEncoder,
         inputs: (&[Layer], &[DabBatch]),
         extent: [u32; 2],

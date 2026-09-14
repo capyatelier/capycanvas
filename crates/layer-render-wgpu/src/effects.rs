@@ -264,7 +264,7 @@ impl Effects {
                 &module,
                 "effect_fragment",
                 None,
-                COLOR_FORMAT,
+                r.device().working_format(),
                 "pointwise effect chain",
             );
             self.pipelines.push((programs, stage, pipeline.clone()));

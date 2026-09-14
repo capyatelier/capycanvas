@@ -1,11 +1,11 @@
 //! Test-only CPU pixel oracle; production has no CPU transform/raster fallback.
 use super::*;
-use crate::{WgpuRasterizer, create_color_target};
+use crate::{WgpuRasterizer, create_target};
 use layer_core::Point;
 use wgpu::util::DeviceExt;
 
 fn upload(r: &WgpuRasterizer, size: [u32; 2], pixels: &[u8]) -> wgpu::Texture {
-    let (t, _) = create_color_target(r.device(), size, "transform fixture");
+    let (t, _) = create_target(r.device(), size, crate::SRGB8_FORMAT, "transform fixture");
     r.queue().write_texture(
         t.as_image_copy(),
         pixels,
@@ -317,7 +317,12 @@ fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
         })
         .collect();
     let source_texture = upload(&r, size, &pixels);
-    let (output, _) = create_color_target(r.device(), [35, 31], "transform result");
+    let (output, _) = create_target(
+        r.device(),
+        [35, 31],
+        crate::SRGB8_FORMAT,
+        "transform result",
+    );
     let output_origin = [250, 252];
     let pivot = Point { x: 265.5, y: 265.5 };
     for mode in 0..3 {
@@ -492,7 +497,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         ),
         interpolation: Interpolation::Linear,
     };
-    let (full, _) = create_color_target(r.device(), size, "whole transform");
+    let (full, _) = create_target(r.device(), size, crate::SRGB8_FORMAT, "whole transform");
     draw(&r, &mut p, &source, &full, [0, 0], transform);
     let expected = read(&r, &full);
     let tiles: Vec<_> = [
@@ -505,7 +510,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     ]
     .into_iter()
     .map(|(origin, size)| {
-        let (t, v) = create_color_target(r.device(), size, "transform tile");
+        let (t, v) = create_target(r.device(), size, crate::SRGB8_FORMAT, "transform tile");
         (origin, t, v)
     })
     .collect();
@@ -667,9 +672,22 @@ fn transform_latency() {
     let selected = p
         .source(r.device(), &texture, [0, 0], Some(&coverage))
         .unwrap();
-    let (_, full) = create_color_target(r.device(), size, "transform full output");
+    let (_, full) = create_target(
+        r.device(),
+        size,
+        crate::SRGB8_FORMAT,
+        "transform full output",
+    );
     let tile_views: Vec<_> = (0..48)
-        .map(|_| create_color_target(r.device(), [256, 256], "transform tile output").1)
+        .map(|_| {
+            create_target(
+                r.device(),
+                [256, 256],
+                crate::SRGB8_FORMAT,
+                "transform tile output",
+            )
+            .1
+        })
         .collect();
     let tile_targets: Vec<_> = tile_views
         .iter()

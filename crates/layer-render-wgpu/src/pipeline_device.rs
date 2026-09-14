@@ -26,6 +26,7 @@ impl Drop for CompileTrace<'_> {
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
     device: wgpu::Device,
+    working_format: wgpu::TextureFormat,
     #[cfg(not(target_arch = "wasm32"))]
     cache: Option<std::sync::Arc<super::shader_cache::Cache>>,
 }
@@ -33,6 +34,7 @@ impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
         Self {
             device,
+            working_format: super::SRGB8_FORMAT,
             #[cfg(not(target_arch = "wasm32"))]
             cache: None,
         }
@@ -45,6 +47,41 @@ impl std::ops::Deref for PipelineDevice {
     }
 }
 impl PipelineDevice {
+    /// A working attachment choice, independent of native integer backing and
+    /// document primaries. All deferred recipes retain this same choice.
+    pub fn working_format(&self) -> wgpu::TextureFormat {
+        self.working_format
+    }
+    pub fn scalar_format(&self) -> wgpu::TextureFormat {
+        if self.working_format == wgpu::TextureFormat::Rgba32Float {
+            wgpu::TextureFormat::R32Float
+        } else {
+            wgpu::TextureFormat::R8Unorm
+        }
+    }
+    pub fn with_working_format(
+        mut self,
+        format: wgpu::TextureFormat,
+    ) -> Result<Self, super::GpuRasterError> {
+        let required = match format {
+            wgpu::TextureFormat::Rgba8UnormSrgb => wgpu::Features::empty(),
+            wgpu::TextureFormat::Rgba32Float => {
+                wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
+            }
+            _ => {
+                return Err(super::GpuRasterError::Color(
+                    "Unsupported working texture format".into(),
+                ));
+            }
+        };
+        if !self.features().contains(required) {
+            return Err(super::GpuRasterError::Color(
+                "This device cannot sample and blend Float32 working tiles".into(),
+            ));
+        }
+        self.working_format = format;
+        Ok(self)
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn cached(
         device: wgpu::Device,
@@ -53,7 +90,11 @@ impl PipelineDevice {
     ) -> Self {
         let cache = super::shader_cache::Cache::open(&device, &adapter.get_info(), directory)
             .map(std::sync::Arc::new);
-        Self { device, cache }
+        Self {
+            device,
+            cache,
+            working_format: super::SRGB8_FORMAT,
+        }
     }
     pub fn create_render_pipeline(
         &self,

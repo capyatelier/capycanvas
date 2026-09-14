@@ -1802,3 +1802,87 @@ remains active; native document/raster adoption, the common Float32 tool pipelin
 bounded edited/composite/filter residency, managed GTK viewing and the complete
 SDR journeys still require implementation and qualification. No additional
 platform host integration is enabled by this stage.
+
+## Float32 working-target integration (parent `6f792db`)
+
+Working attachment selection now travels with the renderer's pipeline recipes,
+covering color pages, companions, brush reservoirs, scene tiles/images, effects,
+transforms and query intermediates. The new internal qualification constructor
+requests `FLOAT32_FILTERABLE` and `FLOAT32_BLENDABLE`, rejecting unsupported
+capabilities instead of selecting a narrower format. These requirements match
+[wgpu's Float32 feature definitions](https://docs.rs/wgpu/30.0.0/wgpu/struct.Features.html#associatedconstant.FLOAT32_BLENDABLE).
+The exposed constructors still select the current sRGB8 path. Native publication,
+document adoption and bounded photo residency must be integrated before enabling
+the Float32 path in GTK. UI/output textures keep their declared output formats.
+
+A measured prerequisite is **scalar working precision**, not only RGBA precision.
+The first Float32 color prototype retained R8 stroke coverage. Repeating 128
+uniform-accumulation dabs with requested alpha 1/65535 produced alpha
+**0.0019512624**, instead of **0.000015259022**: rounding the saved coverage to zero
+caused each frame to apply the same tiny coverage again. The failing physical test
+is retained in `float32-working-coverage-probe.log` and its executable. Mutable
+coverage, layer masks and wet state now use R32Float alongside RGBA32Float in the
+new working path; their blend and transform recipes use the same selection.
+Immutable byte brush-tip assets retain their explicitly eight-bit source samples.
+
+The corrected test preserves both flow accumulation (128 separate physical
+submissions, compared with the f64 source-over formula) and uniform accumulation
+with component error below 3e-8. Native integer16 source → scene composition →
+integer16 publication preserves every RGB code exactly at alpha codes
+1/2/17/32768/65535. No-op Dry/Smudge/Wet/Liquify/Watercolor material paths also
+preserve every opaque native RGB code, with checks on actual color/coverage/wet
+texture formats. These are preparation and identity checks; active-edit precision,
+resampling, extended effect behavior, capture and whole-workflow budgets are not
+yet qualified. In particular, existing filter wrappers/built-ins still contain
+SDR clipping that must be removed from the extended working path.
+
+Residency accounting now derives color, scalar, transform, mask and image-cache
+payloads from the actual formats instead of multiplying all color allocations by
+four and all scalar allocations by one. The two initial corrected tests pass in
+`float32-working-scalar-run.log`; all three working-target tests pass in
+`float32-working-material-run.log`. These logs are correctness evidence only.
+
+
+The fourth physical test applies 128 low-flow mask dabs and compares actual R32
+mask coverage with the f64 accumulation reference (absolute error below 3e-8).
+The successfully rebuilt production suite passes **155 tests, 24 ignored**, in
+96.51 seconds (`float32-working-full-gpu-tests.log`). The four focused tests and
+successful build provenance are retained in `float32-working-final-tests*`;
+these checks still do not establish active material-edit integer16 tolerances.
+
+Fresh parent/current/fixed all-scenario runs measure **32,760 frames**. Maximum
+CPU Move p95/p99 is **2.268/2.849 ms parent**, **2.190/2.843 ms current**, and
+**2.101/2.746 ms fixed**. All twenty-five scenario PNGs are byte-identical across
+those arms; no Move or Pen-up sample exceeds 8.33 ms. Production executable,
+run provenance and detailed metrics/hashes are `float32-working-frame`,
+`float32-working-frame-runs.json`, `float32-working-frame-measurements.json`
+and `float32-working-frame-{0-parent,1-current,2-fixed}.md`.
+
+Short-run relative triggers prompted twenty-repetition parent/current/parent
+runs of wet round Oklab, opaque gouache, loaded oil mixer, palette knife, wet
+watercolor and anchored grain chalk: **44,520 additional frames**, none above
+8.33 ms. Wet-round Move CPU p95/p99 becomes 1.416/1.731 ms current versus
+1.468/1.835 and 1.438/1.852 parent; completed p95/p99 is 2.300/2.666 versus
+2.415/2.820 and 2.494/2.807 ms. Loaded-oil Pen-up CPU p99 is 2.189 versus
+2.114/2.014 ms; gouache is 2.155 versus 1.931/2.068 ms, which does not reproduce
+the trigger against both parent arms. Wet-watercolor is 2.130 versus
+2.263/2.003 ms. Chalk CPU Move p99 is 0.366 versus 0.521/0.378 ms. Palette
+Pen-up CPU p99 remains 2.506 versus 2.271/2.172 ms, so it received another
+focused check. All raw arms are retained as `float32-working-repeat-*.md`,
+with run and measurement JSON files; the variable Pen-up values are not omitted.
+
+Sixty-repetition parent/current/fixed palette runs add **26,280 frames** and
+clear that trigger. Current Pen-up CPU p99 is **2.219 ms**, versus **2.562 ms
+parent** and **2.295 ms fixed**; completed Pen-up p99 is 3.512 versus 3.612/4.000
+ms. Move CPU p95/p99 is 1.448/1.866 current, 1.449/1.834 parent and 1.451/1.863
+fixed. Reports are `float32-working-palette-{0-parent,1-current,2-fixed}.md` and
+`float32-working-palette-runs.json`. No compilation ran during measurements.
+The stage totals **103,560 measured drawing frames**, all below the absolute
+limit. Longer samples distinguish the initial short-run tail variation from a
+repeatable change; earlier transform/prediction and photo limits remain open.
+
+This commit selects formats consistently through existing rendering recipes and
+corrects scalar precision/accounting. It does not enable Float32 document editing
+in exposed constructors. Native scalar backing, document/native publication,
+bounded photo residency, extended effects, GTK viewing and user journeys remain
+required before enabling the new mode. No other platform host is integrated.

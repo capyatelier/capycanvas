@@ -67,7 +67,7 @@ pub use present::{OverviewPlacement, ViewportPresenter};
 
 // RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear
 // premultiplied values. Alpha is ordinary, unencoded UNORM8 coverage.
-const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const SRGB8_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const INITIAL_DAB_BYTES: u64 = 4 * 1024 * 1024;
 const INITIAL_STYLE_RECORDS: usize = 128;
@@ -81,7 +81,6 @@ const SOURCE_SLOTS: usize = 16;
 const PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4;
 const SCALAR_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64;
 const RESERVOIR_SIZE: u32 = 64;
-const RESERVOIR_BYTES: u64 = RESERVOIR_SIZE as u64 * RESERVOIR_SIZE as u64 * 4 * 2;
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
 
@@ -582,6 +581,18 @@ struct PageSurface {
     texture_bind_group: wgpu::BindGroup,
 }
 
+fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    u64::from(texture.width())
+        * u64::from(texture.height())
+        * u64::from(texture.depth_or_array_layers())
+        * u64::from(texture.format().block_copy_size(None).unwrap())
+}
+impl PageSurface {
+    fn storage_bytes(&self) -> u64 {
+        texture_bytes(&self.texture)
+    }
+}
+
 impl LayerPage {
     fn surface(&self, secondary: bool) -> &PageSurface {
         if secondary {
@@ -784,6 +795,17 @@ impl WgpuRasterizer {
     }
 
     pub async fn new_headless_async() -> Result<Self, GpuRasterError> {
+        Self::headless_with_working_format(SRGB8_FORMAT).await
+    }
+
+    #[cfg(test)]
+    fn new_float32() -> Result<Self, GpuRasterError> {
+        pollster::block_on(Self::headless_with_working_format(
+            wgpu::TextureFormat::Rgba32Float,
+        ))
+    }
+
+    async fn headless_with_working_format(format: wgpu::TextureFormat) -> Result<Self, GpuRasterError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::PRIMARY;
         // Keep D3D12 shaders optimized even in a Rust debug build. DXC's -Od
@@ -820,10 +842,17 @@ impl WgpuRasterizer {
             }
         };
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+        let working_features = if format == wgpu::TextureFormat::Rgba32Float {
+            wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("layer canvas device"),
-                required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE),
+                required_features: (adapter.features()
+                    & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE))
+                    | working_features,
                 required_limits: limits,
                 ..Default::default()
             })
@@ -831,7 +860,12 @@ impl WgpuRasterizer {
             .map_err(|error| GpuRasterError::DeviceRequest(error.to_string()))?;
 
         // Headless tests/benchmarks explicitly need a fully warmed renderer.
-        Self::from_wgpu_inner(adapter, device.into(), queue, false)
+        Self::from_wgpu_inner(
+            adapter,
+            PipelineDevice::from(device).with_working_format(format)?,
+            queue,
+            false,
+        )
     }
 
     /// Legacy blocking constructor. Interactive presenters use the staged
@@ -948,7 +982,7 @@ impl WgpuRasterizer {
         let (empty_scalar_texture, empty_scalar_view) = create_target(
             &device,
             [1, 1],
-            wgpu::TextureFormat::R8Unorm,
+            device.scalar_format(),
             "layer zero missing paint state",
         );
         let reservoir = BrushReservoir {
@@ -957,7 +991,7 @@ impl WgpuRasterizer {
                 &texture_layout,
                 &sampler,
                 [RESERVOIR_SIZE, RESERVOIR_SIZE],
-                COLOR_FORMAT,
+                device.working_format(),
                 "layer brush reservoir A",
             ),
             secondary: create_page_surface(
@@ -965,7 +999,7 @@ impl WgpuRasterizer {
                 &texture_layout,
                 &sampler,
                 [RESERVOIR_SIZE, RESERVOIR_SIZE],
-                COLOR_FORMAT,
+                device.working_format(),
                 "layer brush reservoir B",
             ),
             active_secondary: false,
@@ -1504,7 +1538,7 @@ impl WgpuRasterizer {
             &self.texture_layout,
             &self.sampler,
             [PAGE_SIZE, PAGE_SIZE],
-            COLOR_FORMAT,
+            self.device.working_format(),
             label,
         )
     }
@@ -1515,7 +1549,7 @@ impl WgpuRasterizer {
             &self.texture_layout,
             &self.sampler,
             [PAGE_SIZE, PAGE_SIZE],
-            wgpu::TextureFormat::R8Unorm,
+            self.device.scalar_format(),
             label,
         )
     }
@@ -1867,6 +1901,9 @@ impl WgpuRasterizer {
     }
 
     fn refresh_storage_metrics(&mut self) {
+        let pixel_bytes = u64::from(self.device.working_format().block_copy_size(None).unwrap());
+        let page_bytes = u64::from(PAGE_SIZE * PAGE_SIZE) * pixel_bytes;
+        let scalar_bytes = u64::from(PAGE_SIZE * PAGE_SIZE) * u64::from(self.device.scalar_format().block_copy_size(None).unwrap());
         let paint_pages = self
             .paint_layers
             .iter()
@@ -1910,21 +1947,21 @@ impl WgpuRasterizer {
         self.metrics.destination_companion_pages = destination_companion_pages;
         self.metrics.coverage_pages = coverage_pages;
         self.metrics.material_pages = material_pages;
-        self.metrics.paint_storage_bytes = paint_pages.saturating_mul(PAGE_BYTES);
+        self.metrics.paint_storage_bytes = paint_pages.saturating_mul(page_bytes);
         self.metrics.preview_storage_bytes = preview_pages
-            .saturating_mul(PAGE_BYTES)
-            .saturating_add(preview_coverage_pages.saturating_mul(SCALAR_PAGE_BYTES * 2))
-            .saturating_add(preview_watercolor_wetness_pages.saturating_mul(SCALAR_PAGE_BYTES * 2));
+            .saturating_mul(page_bytes)
+            .saturating_add(preview_coverage_pages.saturating_mul(scalar_bytes * 2))
+            .saturating_add(preview_watercolor_wetness_pages.saturating_mul(scalar_bytes * 2));
         self.metrics.destination_storage_bytes =
-            destination_companion_pages.saturating_mul(PAGE_BYTES);
+            destination_companion_pages.saturating_mul(page_bytes);
         self.metrics.paint_state_storage_bytes = coverage_pages
-            .saturating_mul(SCALAR_PAGE_BYTES * 2)
-            .saturating_add(material_surface_pages.saturating_mul(SCALAR_PAGE_BYTES))
-            .saturating_add(RESERVOIR_BYTES)
+            .saturating_mul(scalar_bytes * 2)
+            .saturating_add(material_surface_pages.saturating_mul(scalar_bytes))
+            .saturating_add(u64::from(RESERVOIR_SIZE * RESERVOIR_SIZE) * pixel_bytes * 2)
             .saturating_add(self.selection_clip.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
-            self.document_extent[0] as u64 * self.document_extent[1] as u64 * 4;
+            self.document_extent[0] as u64 * self.document_extent[1] as u64 * pixel_bytes;
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -3848,7 +3885,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 .transforms
                 .as_ref()
                 .map_or(0, paint_transform::PaintTransforms::storage_bytes)
-            + self.layer_masks.pages.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64;
+            + self.layer_masks.pages.values().map(|p| texture_bytes(&p.texture)).sum::<u64>();
         if let Some(scene) = &self.scene {
             t.effect_passes = scene.effect_passes;
             t.compiled_effects = scene.effects.compilations;
@@ -5881,11 +5918,11 @@ fn create_transport_bind_group(
 }
 
 fn create_color_target(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     extent: [u32; 2],
     label: &'static str,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    create_target(device, extent, COLOR_FORMAT, label)
+    create_target(device, extent, device.working_format(), label)
 }
 
 fn create_target(
@@ -6225,22 +6262,22 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         },
     };
     let color_target = Some(wgpu::ColorTargetState {
-        format: COLOR_FORMAT,
+        format: device.working_format(),
         blend: None,
         write_mask: wgpu::ColorWrites::ALL,
     });
     let coverage_target = Some(wgpu::ColorTargetState {
-        format: wgpu::TextureFormat::R8Unorm,
+        format: device.scalar_format(),
         blend: None,
         write_mask: wgpu::ColorWrites::RED,
     });
     let wetness_target = Some(wgpu::ColorTargetState {
-        format: wgpu::TextureFormat::R8Unorm,
+        format: device.scalar_format(),
         blend: Some(max_blend),
         write_mask: wgpu::ColorWrites::RED,
     });
     let watercolor_wetness_target = Some(wgpu::ColorTargetState {
-        format: wgpu::TextureFormat::R8Unorm,
+        format: device.scalar_format(),
         // All microbatches in one submitted update write the same destination
         // surface while the source remains the immutable pre-update snapshot.
         blend: Some(max_blend),
@@ -6314,12 +6351,12 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 "fragment_main",
                 &[
                     Some(wgpu::ColorTargetState {
-                        format: COLOR_FORMAT,
+                        format: device.working_format(),
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::R8Unorm,
+                        format: device.scalar_format(),
                         blend: None,
                         write_mask: wgpu::ColorWrites::RED,
                     }),
@@ -6342,7 +6379,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 &shader,
                 "reservoir_fragment",
                 None,
-                COLOR_FORMAT,
+                device.working_format(),
                 "layer brush reservoir exchange",
             )
         })
@@ -6360,7 +6397,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 &shader,
                 "fragment_main",
                 None,
-                COLOR_FORMAT,
+                device.working_format(),
                 "layer post-stroke edge",
             )
         })
@@ -6371,7 +6408,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         &composite_shader,
         "background_fragment",
         None,
-        COLOR_FORMAT,
+        device.working_format(),
         "layer background",
     );
     let composite = fullscreen_pipeline(
@@ -6380,7 +6417,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         &composite_shader,
         "layer_fragment",
         Some(paint_blend),
-        COLOR_FORMAT,
+        device.working_format(),
         "layer composition",
     );
     let watercolor_composite = {
@@ -6396,7 +6433,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 &shader,
                 "fragment_main",
                 Some(paint_blend),
-                COLOR_FORMAT,
+                device.working_format(),
                 "layer live watercolor composition",
             )
         })
@@ -6444,7 +6481,7 @@ fn brush_pipeline(
         shader,
         fragment_entry,
         blend,
-        COLOR_FORMAT,
+        device.working_format(),
         label,
     )
 }
@@ -6812,6 +6849,7 @@ mod tests {
     mod source_tiles;
     #[cfg(not(target_arch = "wasm32"))]
     mod source_brushes;
+    mod working;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

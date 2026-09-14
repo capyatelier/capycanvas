@@ -60,9 +60,10 @@ impl FilterPreviews {
         let info = reader
             .next_frame(&mut pixels)
             .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
-        let mask = create_color_target(
+        let mask = create_target(
             &r.device,
             [info.width, info.height],
+            SRGB8_FORMAT,
             "G-Pen preview silhouette",
         );
         r.queue.write_texture(
@@ -655,7 +656,7 @@ impl WgpuRasterizer {
 
 impl FilterPreviews {
     pub(crate) fn storage_bytes(&self) -> u64 {
-        let bytes = |(texture, _): &Image| texture.width() as u64 * texture.height() as u64 * 4;
+        let bytes = |(texture, _): &Image| texture_bytes(texture);
         self.source.as_ref().map_or(0, bytes)
             + bytes(&self.mask)
             + self.scratch.iter().map(bytes).sum::<u64>()
