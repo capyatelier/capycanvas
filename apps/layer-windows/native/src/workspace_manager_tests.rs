@@ -637,9 +637,8 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
         .manager
         .current()
         .unwrap()
-        .starting_layout()
-        .unwrap()
-        .clone();
+        .starting_layout(layer_ui::Platform::Windows)
+        .unwrap();
     layout(&mut f, DockLayout::default());
     f.native
         .dispatch(UiAction::SetBrushSize { value: 73. })

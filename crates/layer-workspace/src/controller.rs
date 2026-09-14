@@ -643,7 +643,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                 .map_err(StoreError::invalid)?;
                             self.preview_open = true;
                             let preview = session
-                                .preview_workspace_layout(entity.starting_layout()?)
+                                .preview_workspace_layout(&entity.starting_layout(self.manager.platform)?)
                                 .map_err(StoreError::invalid)?;
                             change.regions |= preview.regions;
                             change.revision = preview.revision;

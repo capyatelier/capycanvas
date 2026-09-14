@@ -399,7 +399,31 @@ class AndroidTitleBarTest {
         shot("restart")
     }
     @Test fun paintDefaultColumnsAndResetSurviveRestart() {
-        // Restore the shipped baseline in this test's isolated Paint workspace.
+        // Model a customized built-in saved by an older app. Its starting
+        // layout differs from today's default and must not control Restore.
+        assertEquals("builtin:workspace:illustrator", view().getString("id"))
+        scenario.close()
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            File(checkNotNull(CanvasHost.workspaceDirectoryForTest), "workspaces.sqlite3").absolutePath,
+            null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use { database ->
+            val id = "builtin:workspace:illustrator"
+            val content = database.rawQuery("SELECT content FROM items WHERE id = ?", arrayOf(id)).use { cursor ->
+                assertTrue(cursor.moveToFirst()); JSONObject(cursor.getString(0))
+            }
+            // The current fixture has no panel bands. Using this retained
+            // revision also keeps the on-disk baseline free of measurements.
+            val history = content.getJSONObject("history")
+            val previous = history.getJSONObject("revisions").getJSONObject(history.getString("current")).getJSONObject("layout")
+            content.put("baseline", previous)
+            database.execSQL("UPDATE items SET content = ? WHERE id = ?", arrayOf(content.toString(), id))
+        }
+        launch()
+        val before = capture()
+        send(obj("type" to "form", "kind" to "reset"))
+        waitFor("latest default preview") { node("panel-body-color") != null && node("panel-body-layers") != null }
+        assertEquals("Preview is not saved", before, capture())
+        send(obj("type" to "cancel"))
+        assertEquals("Cancel retains the old customized layout", before, capture())
         send(obj("type" to "form", "kind" to "reset"))
         waitFor("starting layout confirmation") { node("workspace-submit") != null }
         tap("workspace-submit")
