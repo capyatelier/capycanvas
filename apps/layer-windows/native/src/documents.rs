@@ -1,5 +1,12 @@
 //! Document jobs transfer immutable state; the live canvas remains on its owner.
 //! One job and one completion are bounded. GPU/session destruction stays on the worker.
+//!
+//! M1 host migration pending: treating a drained input queue as a recoverable
+//! drawing is DEPRECATED. Project::read/write and capture_project_save already
+//! use the shared raster API; retain those calls. Private autosave still needs
+//! capture_project_recovery on the owner, backing/encoding on the file worker,
+//! and atomic publication without acknowledging a manual save. Follow the
+//! GTK/Web/Android pixel/hash and lifecycle tests before qualifying Windows.
 use crate::document_io::{Stream, atomic_write, check_cancelled, io_error, location};
 use layer_core::{Project, ProjectAsset, ProjectLimits};
 use layer_host::{NativeHost, Renderer};
@@ -1481,7 +1488,15 @@ mod gpu_tests {
         service.poll(host).unwrap();
     }
     pub(super) fn image(host: &mut NativeHost) -> layer_render::ReadbackImage {
-        host.session.frame(0, 0).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            host.session.frame(0, 0).unwrap();
+            if !host.session.engine().has_pending_document_edits() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "Raster frame did not complete");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         // Explicit functional-test readback; project saving never reads the GPU.
         let renderer = host.session.renderer_mut();
         renderer.request_readback(1).unwrap();

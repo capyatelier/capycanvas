@@ -155,6 +155,23 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
 ```
 
+[Stacked collapsed columns](../../docs/ui/stacked-columns.md) use shared Rust
+membership, drop targets, preferences, geometry and history. The ordinary dock
+views render an open member's panels and split dividers; existing drawer shapes
+connect its selected sidebar icons. Grip menus choose full-column opening,
+individual tabbed drawers and Auto-hide. Closed multi-member stacks have no
+resize affordance; an open member retains its own resizable width. Fresh Paint
+opens the right stack. Saved custom arrangements start closed while retaining
+their stack settings and ordinary panel layout.
+
+`tests/column-stacks.swift` checks AppKit mouse/tablet input on both presets,
+including held icons, immediate tabs/grips, target distinctions, cancellation and
+one-step history. `tests/column-stack-persistence.swift` uses real temporary
+workspace libraries for switching, relaunch and persisted Undo/Redo. Run these
+with `scripts/test-project-files.sh`. Both native UI targets provide
+`testColumnStacks` and `testColumnStacksDark`; physical Pencil validation remains
+part of the broader input gate.
+
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.
@@ -211,8 +228,9 @@ open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_p
 Release builds ignore this variable. The focused `testNumericToolControls` test
 uses a fresh light-theme editor on both platforms. It checks expression acceptance,
 invalid input, stepping and remembered brush settings across group changes.
-`testCompleteEditorCapture` captures only the settled default workspace and its
-logical dimensions for the Chrome `initial` comparison. Standalone edit-state
+`testCompleteEditorCapture` captures the settled Paint workspace with its
+default right stack open for the Chrome `paint-expanded` comparison. Its metadata
+records logical dimensions and any native window-control clearance. Standalone edit-state
 checks need no GUI automation:
 
 ```sh
@@ -231,7 +249,11 @@ captures plus measured wheel geometry for the shared
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
 The Color panel shares the Web layout, vector icons and readout spacing on both
-Apple targets. Its
+Apple targets. Docked wheels shrink to the available viewport height, retaining
+the shared 128-point minimum and scrolling below that size. The Paint and Photo default
+checks include visibility of the wheel and every corner control. Panel headers,
+vertical toolbar footers and collapsed-column footers use one grip drawing with
+the same orientation, opacity and inset as Web/Android. The Color
 [complete-panel fixture](../../tools/visual/README.md#complete-color-panels)
 compares 216 cases per host: both presets/themes, three shapes, two readouts,
 three paint slots and three widths. The same source has AppKit and UIKit capture
@@ -244,7 +266,7 @@ closed control to the longest option while keeping room for its row label.
 The layer blend control exposes its current value to accessibility.
 `testEditorControlLayout` checks all six Navigator hit targets, changes a blend
 mode through Properties, verifies the Layers value and undoes the change. It
-also attaches matching `initial` and `canvas-under-header` captures. The latter
+also attaches matching `paint-expanded` and `paint-canvas-under-header` captures. The latter
 uses four shared zoom-in steps so the paper is visible through empty header
 space; title, Zen and Settings retain their own background plates.
 
@@ -272,6 +294,10 @@ project format. Both targets support custom canvas dimensions and PNG export. GP
 readback and PNG encoding run on the file worker. Unsaved artwork also receives
 private recovery copies. Use **File → Recovered Drawings…** to open one; copies
 are offered after restart and retain unsaved status until you explicitly save.
+GPU failure preserves the editor's CPU session and offers **Restart Canvas** or
+**Save As…**. Restart reconstructs the document through the shared renderer API,
+retaining history and working settings. Recovery preparation handles queued
+pen-up without a drawable; lifecycle success waits for durable publication.
 See [PERSISTENCE.md](PERSISTENCE.md) for atomic generations, lifecycle handling,
 reproducible checks and remaining physical-device/performance acceptance.
 
@@ -404,22 +430,28 @@ expose orientation changes but no equivalent iPad window toggle. That shared
 command capability remains explicitly unavailable on iPad and open in the review.
 Full-screen editor layout/rendering remains an open acceptance item.
 
-Both Apple headers implement **Show battery and clock** from Appearance settings:
-Always, In fullscreen mode, or Never. The shared Swift component uses the editor
-palette and the browser/Android battery geometry. Desktops without an internal
-battery show only the clock; unavailable readings never become a fabricated
-percentage. Mac full-screen notifications and iPad scene geometry observations
-control the fullscreen-only policy. Observing an iPad scene does not add the
-still-unavailable full-screen toggle.
+Both Apple hosts project the shared [workspace title bar](../../docs/ui/window-bar.md).
+Window → Customize Title Bar… opens the inline editor. Whole items and bank
+chips use native slop with immediate mouse/touch/pen pickup; shared Rust owns
+placement, overflow, removal and the single Done history entry. Hidden overflow
+items remain editable. The existing multi-select tool picker handles Add Tools.
+Cancel restores the arrangement and footer, and closing an unfinished edit does
+not save its preview. Mac application menus remain in the OS menu bar.
 
-Menu labels, the title and clock use the shared six-point side padding. Compact
-iPad headers hide the title and preserve all menus in an overflow control when
-the workspace pill and status controls need the space. Mac keeps its OS menus,
-document title and window-control reservation. Workspace labels use natural
-widths with truncation, a 34-point capsule and the shared app accent. Clock and
-battery backgrounds stay transparent over the canvas. See the
-[complete header comparison](../../tools/visual/README.md#complete-header-components)
-for fast native/Chrome captures and explicit platform adaptations.
+Clock and Battery are workspace components, replacing the former Apple global
+visibility preference. They occupy space only in fullscreen and have editable
+placeholders while windowed or when battery data is unavailable. iPad observes
+[effective scene geometry](https://developer.apple.com/documentation/uikit/uiwindowscene/effectivegeometry)
+and compares its coordinate space with its display; Mac observes native window
+fullscreen notifications. Neither observation requests an iPad fullscreen change.
+
+Small, Medium and Large use shared tile/icon dimensions and six-point gaps.
+The selector retains its pill background and compacts to a menu when necessary.
+Title-bar controls, menu labels and status text use Web's rounded theme-gray
+backgrounds over artwork; gaps retain the live canvas. Color shows the live
+foreground/background paints. The retired text/icon halo renderer is removed. See the
+[header comparison](../../tools/visual/README.md#complete-header-components)
+for native/Web captures and recorded host differences.
 
 Visible headers share one native battery subscription and one minute-aligned
 clock timer. The last hidden/background header stops monitoring; minute and
@@ -436,9 +468,24 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
 /tmp/capy-system-status-tests
 ```
 
-`testSystemStatusSetting` exercises preference and Zen effects in the editor.
-Exact component rasterization and the complete full-screen/window-layout matrix
-remain part of visual acceptance; implementation is not a pixel-parity pass.
+`testTitleBarToolDrawers` exercises fresh Sketch Color/Brush/Layers switching and
+toggling. Mac captures verify that native hit testing retains the brush cursor
+on canvas and clears it beneath title-bar controls.
+`testTitleBarSystemStatus` exercises removal/Cancel and actual fullscreen status.
+`testTitleBarCustomization` exercises native bank dragging, multi-selection across
+searches, Done and nested picker cancellation. Mac also checks picker Escape;
+physical iPad Escape remains an input acceptance item. Focused native-owner checks:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/header-native-input.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/header-persistence.swift
+```
+
+The first uses owned AppKit windows for both presets and mouse/pen event streams,
+including a minute update during a held drag with stable monospaced clock geometry;
+the second uses temporary workspace libraries for switching, reopening and
+persisted history. Neither establishes physical Pencil coverage or full visual
+acceptance. Inspect current captures at normal viewing size.
 
 Launch a local Mac build with:
 

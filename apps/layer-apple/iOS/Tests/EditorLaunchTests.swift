@@ -166,9 +166,44 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarStylesAndActions(in: editorTestApplication())
     }
 
-    @MainActor func testSystemStatusSetting() {
+    @MainActor func testTitleBarCustomization() {
         XCUIDevice.shared.orientation = .landscapeLeft
-        checkSystemStatusSetting(in: editorTestApplication())
+        checkTitleBarCustomization(in: editorTestApplication())
+    }
+
+    @MainActor func testTitleBarToolDrawers() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkTitleBarToolDrawers(in: editorCaptureApplication())
+    }
+
+    @MainActor func testColumnStacks() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkColumnStacks(in: editorTestApplication())
+    }
+
+    @MainActor func testColumnStacksDark() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkColumnStacks(in: editorTestApplication(), theme: "dark")
+    }
+
+    @MainActor func testRendererRecovery() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkRendererRecovery(in: editorTestApplication())
+    }
+
+    @MainActor func testPaintDefaultColumns() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkDefaultWorkspaceColumns(in: editorTestApplication())
+    }
+
+    @MainActor func testPhotoDefaultColumns() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkDefaultWorkspaceColumns(in: editorTestApplication(), photo: true)
+    }
+
+    @MainActor func testTitleBarSystemStatus() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkTitleBarSystemStatus(in: editorTestApplication())
     }
 
     @MainActor func testIndependentEditorWindows() {
@@ -299,7 +334,17 @@ final class EditorLaunchTests: XCTestCase {
         let app = editorCaptureApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
+    }
+
+    @MainActor func testCompleteEditorDarkCapture() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
+        app.launch()
+        capturePaintEditor(in: app, theme: "dark")
+        for _ in 0..<4 { workspaceActivate(app.buttons["navigator-zoom_in"]) }
+        capturePaintEditor(in: app, scenario: "paint-canvas-under-header", theme: "dark")
     }
 
     @MainActor func testBlendChoices() {

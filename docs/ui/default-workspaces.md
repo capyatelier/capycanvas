@@ -35,19 +35,17 @@ using CapyCanvas theme colors, type, and compact spacing.
 | --- | --- | --- | --- |
 | Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color (plus Full Screen on Web) |
 | Paint | Tools toolbar and expanded Tool Set/Tool/Brush size/Color column | Commands toolbar | Open collapsed stack for Navigator/Diagnostics, Properties/Filters and Layers |
-| Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
+| Photo | Tools toolbar | Commands toolbar | Expanded Color/Diagnostics, Properties/Filters, Layers; inner collapsed strip for Tool Set, Tool/Brush size, Navigator |
 
 GTK/Web Sketch uses Medium window-bar icons, a transparent canvas overlay, no menu
 labels and no zoom/rotation bubble. Other hosts retain the earlier two-toolbar
 Painter arrangement until their window-bar projection is implemented.
-Photographer uses Small toolbar tiles. Painter starts with Brush
-selected and no docked content panels. Photographer starts with Operation selected,
-devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
-the illustration Tool Set/Brush size columns and Diagnostics. GTK/Web/Android Paint uses
-an open collapsed stack on the right, with its original width and split
-proportions. The left column stays expanded normally. Auto-hide and Open
-individual panels both start off. Other hosts retain Paint's expanded columns
-until full-column opening is ported.
+Photo uses Small toolbar tiles and starts with Operation selected. Sketch starts
+with Brush selected and no docked content panels. Photo uses a
+permanently expanded far-right column and an adjacent collapsed strip toward
+the canvas on all six hosts. The strip starts closed, with Auto-hide and Open
+individual panels off. Paint retains its original expanded left panels and
+initially open right stack.
 
 ## Workspace behavior
 
@@ -98,7 +96,13 @@ until full-column opening is ported.
 - New Workspace copies the current settings and arrangement, asks only for a
   name, and pins the new workspace. Manage Workspaces retains selection preview, explicit Switch to Workspace,
   and Cancel. Layout History remains a history of arrangements within a workspace.
-- Restore Starting Layout returns to that workspace's original arrangement.
+- Restore Starting Layout loads the latest shipped platform layout for the
+  built-in Sketch, Paint and Photo workspaces, including customized defaults
+  created by older versions. Custom workspaces and copies restore their saved
+  starting arrangement. The dialog previews exactly what Restore will apply;
+  Cancel keeps the current layout. Restore preserves working tool settings and
+  document edits, and adds one undoable workspace layout change. Restore remains
+  available when a built-in workspace still matches an older default.
   Reset All Brushes resets all brush-setting overrides in the current workspace,
   including inactive presets. It preserves color, selected tool, arrangement,
   document edits, and other workspaces. Resetting brushes creates no layout event.
@@ -108,9 +112,11 @@ until full-column opening is ported.
 - The first Photographer arrangement used Medium tiles. On switching to an
   untouched copy of that arrangement, update it and its starting layout to Small.
   Keep renamed workspaces and brush edits; leave customized layout histories alone.
-- Untouched GTK Paint workspaces upgrade from an expanded right column to the
-  collapsed stack. Loading or resetting the default opens that column;
-  ordinary open/close remains transient and adds no layout history entry.
+- Untouched older Photo workspaces upgrade to the two-column right arrangement.
+  Untouched Paint workspaces using that temporary arrangement return to Paint's
+  original default. Customized defaults retain their arrangement until the user
+  chooses Restore Starting Layout. Ordinary strip open/close remains transient
+  and adds no layout history entry.
 - Untouched GTK/Web Sketch workspaces upgrade from the shipped two-toolbar layout
   or the earlier title bar with Settings to the current title bar. Working
   brush/color values remain intact. Any edited history, custom baseline or

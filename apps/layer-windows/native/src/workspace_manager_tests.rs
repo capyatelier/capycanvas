@@ -127,7 +127,7 @@ fn included_workspace_preview_is_temporary_and_switch_restores_saved_edits() {
     input(&mut f, Input::Cancel);
     assert_eq!(f.native.session.capture_workspace().unwrap(), before);
     assert_eq!(
-        &f.native.session.state().workspace.layout,
+        &layer_ui::durable_layout(&f.native.session.state().workspace.layout),
         before.history.layout()
     );
     open(&mut f, Command::Switch { id: target.clone() });
@@ -187,7 +187,7 @@ fn late_selection_and_dismissal_cannot_resurrect_a_preview() {
     assert!(view(&f)["selected"].is_null());
     assert_eq!(view(&f)["can_apply"], false);
     assert_eq!(
-        &f.native.session.state().workspace.layout,
+        &layer_ui::durable_layout(&f.native.session.state().workspace.layout),
         before.history.layout()
     );
     input(
@@ -637,9 +637,8 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
         .manager
         .current()
         .unwrap()
-        .starting_layout()
-        .unwrap()
-        .clone();
+        .starting_layout(layer_ui::Platform::Windows)
+        .unwrap();
     layout(&mut f, DockLayout::default());
     f.native
         .dispatch(UiAction::SetBrushSize { value: 73. })
@@ -654,7 +653,7 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
     let saved = f.service.manager.current().unwrap();
     for confirm in [false, true] {
         open(&mut f, Command::ResetLayout);
-        assert_eq!(f.native.session.state().workspace.layout, baseline);
+        assert_eq!(layer_ui::durable_layout(&f.native.session.state().workspace.layout), baseline);
         assert_eq!(f.native.session.capture_workspace().unwrap(), before);
         assert!(!f.service.accepts_input(wall()));
         f.service
@@ -718,14 +717,14 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
             command: layer_ui::CommandId::RedoWorkspace,
         })
         .unwrap();
-    assert_eq!(f.native.session.state().workspace.layout, baseline);
+    assert_eq!(layer_ui::durable_layout(&f.native.session.state().workspace.layout), baseline);
     f.native
         .dispatch(UiAction::Invoke {
             command: layer_ui::CommandId::UndoWorkspace,
         })
         .unwrap();
     open(&mut f, Command::ResetLayout);
-    assert_eq!(f.native.session.state().workspace.layout, baseline);
+    assert_eq!(layer_ui::durable_layout(&f.native.session.state().workspace.layout), baseline);
     let id = f.service.manager.active_id().unwrap();
     f.close();
     assert!(view(&f).is_null());

@@ -389,6 +389,12 @@ pub trait CanvasRenderer {
     fn can_capture_raster(&self) -> bool {
         true
     }
+    /// A restore may depend on an earlier asynchronous capture. Returning false
+    /// retains this prepared frame for retry without consuming further input.
+    /// Failed dependencies return true so submit can report their concrete error.
+    fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
+        true
+    }
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

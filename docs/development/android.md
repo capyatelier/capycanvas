@@ -88,6 +88,10 @@ adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e class art.capycanvas.And
 ```
 
 Use `ClassName#methodName` in the fully qualified test selector for one regression.
+[`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt)
+covers the shared title-bar editor, compact menus, native input and keyboard
+focus, Sketch drawers, feedback and persistence. It isolates workspace and
+recovery stores and restores preferences; see its [tablet acceptance record](title-bar-android-acceptance.md).
 `AndroidInteractionTest#detachedPanelsKeepBodiesAndWiderResizeTargets` covers
 mouse/finger/stylus panel and group tear-off, fixed-size clipped native allocation,
 compact and scrolling release heights, squashed and usable sidebar heights,

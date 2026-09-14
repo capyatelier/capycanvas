@@ -602,7 +602,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             let before = native.session.state().revision;
             let change = native
                 .session
-                .preview_workspace_layout(current.starting_layout()?)
+                .preview_workspace_layout(&current.starting_layout(layer_ui::Platform::Windows)?)
                 .map_err(StoreError::invalid)?;
             native.apply_change(before, change);
         }

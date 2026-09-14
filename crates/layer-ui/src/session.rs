@@ -223,6 +223,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             .or(self.workspace_preview.as_ref())
             .unwrap_or(&self.state.workspace)
             .clone();
+        self.state
+            .customization
+            .committed_header(&mut workspace.layout);
         workspace.layout.measurements.clear();
         workspace.layout.column_scroll.clear();
         workspace.layout.titlebar_insets = [0.0; 3];
@@ -1604,7 +1607,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android);
+        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
         let mut hint = if let Some(hint) = menubar {
@@ -1631,9 +1634,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .flatten();
             group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
-            // GTK first: other hosts retain their existing group insertion
-            // until they adopt and validate the new stack-member destination.
-            (matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) && !docks_hidden)
+            (!docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
                 .or_else(|| resolved.drop_hint_with_group_body(position[0], position[1], tabs, !docks_hidden, group_body))?
@@ -2586,7 +2587,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down {
                         let divider = self.divider(id, viewport)?;
                         let mut drag = ResizeDrag::new(position, divider.bounds);
-                        if self.column_resize_enabled() && self.layout(viewport).open_column_at_divider(id).is_none() {
+                        if self.layout(viewport).open_column_at_divider(id).is_none() {
                             let columns = self
                                 .state
                                 .workspace
@@ -2815,13 +2816,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     DrawerAnchor::Column { group, origin, .. } => {
                         let layout = &self.state.workspace.layout;
                         let column = layout.collapsed_column_for_group(group)?;
-                        if self.state.platform.stacked_columns() && !layout.column_stack(column).drawers {
+                        if !layout.column_stack(column).drawers {
                             return None;
                         }
                         // These hosts draw the sidebar selection and connector at the visible tab.
                         let origin = if matches!(
                             self.state.platform,
-                            Platform::Gtk | Platform::Android | Platform::Web
+                            Platform::Gtk | Platform::Android | Platform::Web | Platform::Mac | Platform::Ios
                         ) {
                             self.state.workspace.layout.active_panel(origin)?
                         } else {
@@ -3139,19 +3140,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or_else(|| "Unknown divider".into())
     }
 
-    fn column_resize_enabled(&self) -> bool {
-        matches!(
-            self.state.platform,
-            Platform::Gtk
-                | Platform::Generic
-                | Platform::Android
-                | Platform::Web
-                | Platform::Ios
-                | Platform::Mac
-                | Platform::Windows
-        )
-    }
-
     fn resize_divider(
         &mut self,
         id: u32,
@@ -3264,15 +3252,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         }
-        let collapse = self
-            .column_resize_enabled()
-            .then(|| {
-                self.state
-                    .workspace
-                    .layout
-                    .collapse_at_divider(id, point, viewport)
-            })
-            .flatten();
+        let collapse = self.state.workspace.layout.collapse_at_divider(id, point, viewport);
         if let Some(collapse) = collapse {
             let root = collapse.root;
             let original_width = self.workspace_history.gesture_start().and_then(|s| {
@@ -3691,6 +3671,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    /// Retry the current preferences through the ordinary host request path.
+    /// Native close recovery can call this without changing a preference value.
+    pub fn retry_settings_save(&mut self) -> Result<(), String> {
+        self.request(HostRequestKind::SaveSettings {
+            settings: Box::new(self.state.settings.clone()),
+        })?;
+        self.changed(crate::regions::HOST, false);
+        Ok(())
+    }
+
     fn request(&mut self, kind: HostRequestKind) -> Result<(), String> {
         let id = self.next_request;
         self.next_request = id.checked_add(1).ok_or("Host request IDs exhausted")?;
@@ -3867,7 +3857,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .workspace
                             .layout
                             .collapsed_column_for_group(g)
-                            .is_none()
+                            .is_none_or(|column| {
+                                self.state.workspace.layout.column_stack(column).open_column
+                                    == Some(column)
+                            })
                     }))
                 || self
                     .state
@@ -4116,6 +4109,7 @@ mod tests {
     /// Protocol recorder only: no canvas storage or software rasterization.
     #[derive(Default)]
     struct Recorder {
+        telemetry_enabled: bool,
         pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
         last_style: Option<layer_render::DabStyle>,
         recorded_dabs: Vec<layer_render::Dab>,
@@ -4133,6 +4127,9 @@ mod tests {
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn set_telemetry_enabled(&mut self, enabled: bool) {
+            self.telemetry_enabled = enabled;
+        }
         fn set_transform_preview(
             &mut self,
             preview: Option<&layer_render::TransformPreview>,
@@ -4258,6 +4255,63 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn diagnostics_sample_in_open_columns_and_stop_when_hidden() {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
+            for drawers in [false, true] {
+                let mut s = session();
+                s.set_platform(platform);
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetPanelVisible {
+                        panel: Panel::Stats,
+                        visible: true,
+                    },
+                })
+                .unwrap();
+                let group = s.state.workspace.layout.panel_group(Panel::Stats).unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetColumnCollapsed {
+                        group,
+                        collapsed: true,
+                    },
+                })
+                .unwrap();
+                let column = s
+                    .state
+                    .workspace
+                    .layout
+                    .collapsed_column_for_group(group)
+                    .unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetColumnDrawers { column, drawers },
+                })
+                .unwrap();
+                assert!(!s.engine.backend().telemetry_enabled);
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::ToggleColumnDrawer {
+                        group,
+                        panel: Panel::Stats,
+                    },
+                })
+                .unwrap();
+                assert!(
+                    s.engine.backend().telemetry_enabled,
+                    "{platform:?}, drawers={drawers}"
+                );
+                s.replace_renderer(Recorder::default()).unwrap();
+                assert!(
+                    s.engine.backend().telemetry_enabled,
+                    "replacement retains sampling"
+                );
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::CloseColumn { column },
+                })
+                .unwrap();
+                assert!(!s.engine.backend().telemetry_enabled);
+            }
+        }
     }
 
     #[test]
@@ -9455,7 +9509,7 @@ mod tests {
                     .bounds;
                 let destination = [
                     neighbor.x + neighbor.width * 0.5,
-                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
+                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
                 ];
                 drag(&mut app, ContactPhase::Move, destination);
                 drag(&mut app, ContactPhase::Up, destination);
@@ -15842,6 +15896,11 @@ mod tests {
     mod layout_drop_web_tests {
         use super::*;
         const PLATFORM: Platform = Platform::Web;
+        include!("layout_drop_tests.rs");
+    }
+    mod layout_drop_windows_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Windows;
         include!("layout_drop_tests.rs");
     }
 }

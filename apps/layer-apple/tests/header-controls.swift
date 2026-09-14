@@ -49,22 +49,23 @@ import SwiftUI
                     store.native?.resize(width: UInt32(width), height: 870, scale: 1)
                     for theme in ["light", "dark"] {
                         try await action(["type": "set_theme", "theme": theme])
-                        for clock in [false, true] {
-                            try await action(["type": "preferences", "action": ["type": "edit", "id": "show_clock", "value": clock ? 1 : 2]])
+                        for size in ["small", "medium", "large"] {
+                            try await action(["type":"customize", "action":["type":"header", "action":["type":"set_size", "size":size]]])
+                            try await action(["type":"window_fullscreen", "fullscreen":true])
+                            let height = store.snapshot["header"]["sizes"].array.first { $0["id"].string == size }!["height"].number
                             for paper in [false, true] {
                                 let palette = EditorPalette(source: store.state["palette"])
                                 let geometry = HeaderGeometry()
                                 store.headerLeadingInset = platform == 1 ? 76 : 0
-                                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 48),
+                                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                                     styleMask: [.borderless], backing: .buffered, defer: false)
                                 window.isReleasedWhenClosed = false
                                 defer { window.contentView = nil; window.close() }
                                 window.appearance = NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
                                 let content = ZStack(alignment: .topLeading) {
                                     paper ? Color.white : palette["bg"]
-                                    EditorHeader(store: store, showsApplicationMenus: platform == 0, status: status)
-                                    EditorZenButton(store: store)
-                                }.frame(width: width, height: 48).coordinateSpace(name: "editor-workspace")
+                                    EditorHeader(store: store, status: status)
+                                }.frame(width: width, height: height).coordinateSpace(name: "editor-workspace")
                                     .environment(\.colorScheme, theme == "dark" ? .dark : .light)
                                     .environment(\.measureHeaderControls, true)
                                     .onPreferenceChange(HeaderControlFrames.self) { geometry.frames = $0 }
@@ -77,25 +78,32 @@ import SwiftUI
                                     try await Task.sleep(for: .milliseconds(5))
                                 }
                                 precondition(store.failure == nil, store.failure ?? "")
-                                precondition(!clock || status.battery?.percent == 85)
+                                precondition(status.battery?.percent == 85)
                                 guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw HostFailure(message: "No header bitmap") }
                                 window.appearance?.performAsCurrentDrawingAppearance { host.cacheDisplay(in: host.bounds, to: bitmap) }
-                                let name = "\(platform)-\(workspace["name"].string.lowercased())-\(Int(width))-\(theme)-\(clock ? "clock" : "no-clock")-\(paper ? "paper" : "surround")"
+                                let name = "\(platform)-\(workspace["name"].string.lowercased())-\(Int(width))-\(theme)-\(size)-\(paper ? "paper" : "surround")"
                                 try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent("native-\(name).png"))
                                 let elements = geometry.frames.mapValues { JSON($0).raw }
-                                precondition(elements["settings-button"] != nil && elements["zen-button"] != nil)
-                                precondition((elements["system-clock"] != nil) == clock && (elements["system-battery"] != nil) == clock)
-                                precondition((elements["document-title"] != nil) == (platform == 1 || width > 850))
-                                let menuCount = elements.keys.filter { $0.hasPrefix("menu-") }.count
-                                precondition(platform == 0 ? (menuCount == store.snapshot["application_menus"].array.count ||
-                                    menuCount == 0 && elements["application-menus"] != nil) : menuCount == 0)
-                                precondition(elements["workspace-switcher"] != nil && elements.keys.filter { $0.hasPrefix("workspace-switch-") }.count == 3)
+                                let expected = store.header.geometry["items"].array
+                                precondition(!expected.isEmpty)
+                                for item in expected {
+                                    guard let actual = geometry.frames["header-item-\(item["id"].uint)"] else {
+                                        throw HostFailure(message: "Missing visible header item \(item)")
+                                    }
+                                    let target = item["bounds"].rect
+                                    precondition(abs(actual.minX - target.minX) < 0.5 && abs(actual.minY - target.minY) < 0.5
+                                        && abs(actual.width - target.width) < 0.5 && abs(actual.height - target.height) < 0.5,
+                                        "Native allocation must follow shared geometry: \(actual)/\(target)")
+                                }
+                                precondition(platform != 1 || elements.keys.allSatisfy { !$0.hasPrefix("menu-") && $0 != "application-menus" },
+                                    "Mac menus belong in the OS menu bar")
                                 fixtures.append(JSON(["name": name, "platform": platform, "viewport": [width, 870],
-                                    "scale": Double(bitmap.pixelsWide) / width, "clip": ["x": 0, "y": 0, "width": width, "height": 48],
-                                    "theme": theme, "clock_visible": clock, "clock": status.time, "battery_percent": 85,
+                                    "scale": Double(bitmap.pixelsWide) / width, "clip": ["x": 0, "y": 0, "width": width, "height": height],
+                                    "theme": theme, "fullscreen": true, "size": size, "clock": status.time, "battery_percent": 85,
                                     "active_workspace": workspace["id"].raw,
                                     "surface": paper ? "#ffffff" : store.state["palette"]["bg"].string,
                                     "header_leading_inset": store.headerLeadingInset, "workspace": store.state["workspace"].raw,
+                                    "header": store.snapshot["header"].raw, "geometry": store.header.geometry.raw,
                                     "title": store.state["tabs"][0].raw, "elements": elements]))
                             }
                         }
@@ -103,9 +111,9 @@ import SwiftUI
                 }
             }
             try await library.close()
-            print("PASS: platform \(platform), 48 real header captures with three task workspaces, fixed clock/battery, narrow/wide geometry and two backgrounds/themes")
+            print("PASS: platform \(platform), 72 real header captures with three task workspaces, fixed clock/battery, narrow/wide geometry and two backgrounds/themes")
         }
-        try JSON(["schema": 1, "scope": "Complete shared header components; no Metal or UIKit pixels", "fixtures": fixtures.map(\.raw)])
+        try JSON(["schema": 2, "scope": "Complete shared header components; no Metal or UIKit pixels", "fixtures": fixtures.map(\.raw)])
             .encoded().write(to: directory.appendingPathComponent("fixtures.json"), atomically: true, encoding: .utf8)
     }
 }

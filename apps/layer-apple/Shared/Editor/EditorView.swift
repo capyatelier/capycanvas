@@ -2,7 +2,6 @@ import SwiftUI
 
 struct EditorView<Canvas: View>: View {
     @ObservedObject var store: EditorStore
-    var showsApplicationMenus = true
     @ViewBuilder let canvas: () -> Canvas
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openWindow) private var openWindow
@@ -24,30 +23,44 @@ struct EditorView<Canvas: View>: View {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }
             if !store.state.isNull {
-                if !store.snapshot["chrome_hidden"].bool { EditorHeader(store: store, showsApplicationMenus: showsApplicationMenus) }
+                if !store.snapshot["chrome_hidden"].bool { EditorHeader(store: store) }
                 WorkspacePanels(store: store, workspace: store.workspace)
-                if !store.snapshot["chrome_hidden"].bool {
+                if !store.snapshot["chrome_hidden"].bool && store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
                     HStack {
                         Spacer()
                         CameraStatus(camera: store.camera).padding(.horizontal, 8).padding(.vertical, 4)
                             .background(palette["bg"], in: Capsule())
                     }.placed(store.snapshot["layout"]["status"])
                 }
-                if !store.snapshot["chrome_hidden"].bool || store.snapshot["keep_zen_button"].bool {
-                    EditorZenButton(store: store)
-                }
             }
-            if let failure = store.failure {
+            if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Canvas error").font(.headline)
                     Text(failure).textSelection(.enabled)
-                    Button("Dismiss") { store.failure = nil }
+                    if !store.snapshot["gpu_ready"].bool {
+                        HStack {
+                            Button("Restart Canvas") { store.restartCanvas() }.disabled(store.restartingCanvas)
+                            Button("Save As…") { store.invoke("save_document_as") }
+                                .disabled(!store.command("save_document_as")["enabled"].bool)
+                        }
+                    } else {
+                        Button("Dismiss") { store.failure = nil }
+                    }
                 }.padding(24).frame(maxWidth: 500).background(palette["panel"], in: RoundedRectangle(cornerRadius: 12))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             #if DEBUG
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
                 PersistenceProbe(store: store)
+            }
+            if ProcessInfo.processInfo.environment["CAPY_GPU_RECOVERY_TEST"] == "1" {
+                HStack {
+                    Button("Lose test device") { store.native?.testGpuFault(validation: false) }
+                    Button("Validate test failure") { store.native?.testGpuFault(validation: true) }
+                    Text(store.snapshot["gpu_ready"].bool && store.snapshot["brush_ready"].bool ? "Renderer ready" : "Renderer stopped")
+                        .accessibilityIdentifier("renderer-test-status")
+                }.padding(6).background(palette["panel"])
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
             #endif
         }
@@ -121,69 +134,6 @@ struct EditorView<Canvas: View>: View {
     }
 }
 
-struct EditorZenButton: View {
-    @ObservedObject var store: EditorStore
-    var body: some View {
-        let zen = store.command("zen_mode")
-        IconTile(icon: zen["icon"].string, label: zen["tooltip"].string,
-            selected: zen["selected"].bool, size: CGFloat(store.catalog["zen_icon_size"].number)) { store.invoke("zen_mode") }
-            .frame(width: 36, height: 36).background(EditorPalette(source: store.state["palette"])["bg"], in: RoundedRectangle(cornerRadius: 6))
-            .accessibilityIdentifier("zen-button")
-            .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
-            .modifier(HeaderControlMeasurement(id: "zen-button"))
-            .offset(x: 6 + store.headerLeadingInset, y: 6)
-    }
-}
-
-struct EditorHeader: View {
-    @ObservedObject var store: EditorStore
-    var showsApplicationMenus = true
-    var status = SystemStatus.shared
-    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    // Mac has the space released by its OS menus; keep its document title there.
-    private var compact: Bool { showsApplicationMenus && store.snapshot["layout"]["viewport"][0].number <= 850 }
-    private var spacing: CGFloat { compact ? 0 : 6 }
-    var body: some View {
-        EditorHeaderLayout(spacing: spacing, titleVisible: !compact) {
-            HStack(spacing: spacing) {
-                Color.clear.frame(width: 36 + store.headerLeadingInset, height: 36)
-                if showsApplicationMenus {
-                    ApplicationMenus(store: store, palette: palette, compact: compact)
-                }
-            }
-            Group {
-                if compact { Color.clear }
-                else {
-                    let tab = store.state["tabs"][0]
-                    Text(verbatim: "\(tab["title"].string) · \(Int(tab["width"].number)) × \(Int(tab["height"].number))")
-                        .lineLimit(1).accessibilityIdentifier("document-title")
-                        .fontWeight(.semibold).padding(.horizontal, 6)
-                        .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36,
-                            alignment: store.state["fullscreen"].bool ? .trailing : .center)
-                        .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                        .modifier(HeaderControlMeasurement(id: "document-title"))
-                }
-            }
-            if let library = store.workspaceLibrary {
-                WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette,
-                    compact: store.snapshot["layout"]["viewport"][0].number <= 760,
-                    textSize: store.catalog["text_size_pt"].number * 4 / 3,
-                    maximumWidth: min(420, store.snapshot["layout"]["viewport"][0].number * 0.4))
-            }
-            HStack(spacing: spacing) {
-                if SystemStatus.visible(policy: store.state["settings"]["show_clock"].string, fullscreen: store.state["fullscreen"].bool) {
-                    SystemStatusView(dark: store.state["theme"].string == "dark", status: status, spacing: spacing)
-                }
-                IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
-                    .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                    .accessibilityIdentifier("settings-button")
-                    .modifier(HeaderControlMeasurement(id: "settings-button"))
-            }
-        }.padding(6).frame(height: 48)
-    }
-
-}
-
 private struct OptionalWorkspaceManager: ViewModifier {
     @ObservedObject var store: EditorStore
     func body(content: Content) -> some View {
@@ -244,40 +194,6 @@ struct MenuItems: View {
         if nativeTextMenuAction(action) { didInvoke(); return }
         #endif
         store.dispatch(action); didInvoke()
-    }
-}
-
-/// Fill the title's remaining slot between the shared controls.
-/// Narrow windows use the complete submenu list through ViewThatFits.
-private struct EditorHeaderLayout: Layout {
-    let spacing: CGFloat
-    let titleVisible: Bool
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        CGSize(width: proposal.width ?? 800, height: 36)
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard subviews.count == 3 || subviews.count == 4 else { return }
-        let hasSwitcher = subviews.count == 4
-        let gapCount = subviews.count - (titleVisible ? 1 : 2)
-        let trailingIndex = subviews.count - 1
-        let minimumLeading = subviews[0].sizeThatFits(ProposedViewSize(width: 0, height: 36))
-        let trailing = subviews[trailingIndex].sizeThatFits(.unspecified)
-        let switcher = hasSwitcher ? subviews[2].sizeThatFits(ProposedViewSize(
-            width: max(0, bounds.width - minimumLeading.width - trailing.width - spacing * CGFloat(gapCount)), height: 36)) : .zero
-        let available = max(0, bounds.width - trailing.width - switcher.width - spacing * CGFloat(gapCount))
-        let ideal = subviews[0].sizeThatFits(.unspecified)
-        let leading = ideal.width <= available ? ideal : subviews[0].sizeThatFits(ProposedViewSize(width: available, height: 36))
-        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(leading))
-        let remaining = max(0, bounds.width - leading.width - trailing.width - switcher.width - spacing * CGFloat(gapCount))
-        let titleWidth = titleVisible ? remaining : 0
-        let distributedGap = titleVisible ? spacing : spacing + remaining / CGFloat(gapCount)
-        subviews[1].place(at: CGPoint(x: bounds.minX + leading.width + spacing, y: bounds.minY),
-            proposal: ProposedViewSize(width: titleWidth, height: 36))
-        if hasSwitcher {
-            subviews[2].place(at: CGPoint(x: bounds.maxX - trailing.width - distributedGap - switcher.width,
-                y: bounds.midY - switcher.height / 2), proposal: ProposedViewSize(switcher))
-        }
-        subviews[trailingIndex].place(at: CGPoint(x: bounds.maxX - trailing.width, y: bounds.minY), proposal: ProposedViewSize(trailing))
     }
 }
 

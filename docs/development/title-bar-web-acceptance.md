@@ -212,3 +212,17 @@ Validation on 2026-09-13: release Wasm build and headed Chrome `--menu-labels`,
 The control regression covers all eight menus through expanded labels, the
 retained compact menu and genuine whole-item overflow, including Zoom In and
 focus restoration. Extreme-width overflow remains separately covered.
+
+
+## Compact workspace selector — September 13, 2026
+
+The compact selector and its whole-item overflow entry now show the same
+`switcher_display` choices as the pill, in configured order, with the current
+workspace checked. Selection dispatches the normal shared workspace command.
+The existing overflow SVG sizing was confirmed at 20/28/36 logical pixels.
+
+Release Wasm build and headed hardware-WebGPU Chrome tests `--compact-workspaces`
+and `--header-controls` pass. The focused test covers mouse/touch/pen selection,
+keyboard activation from overflow, both themes, every bar size, and 1×/2× scale.
+Captures are in `artifacts/title-bar/compact-workspaces`; isolated run logs are
+`/tmp/capy-workspace-motion.a7nrxV` and `/tmp/capy-workspace-motion.EzBUUL`.

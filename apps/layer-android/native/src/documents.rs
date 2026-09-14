@@ -41,6 +41,8 @@ struct Task {
     epoch: u64,
     revision: u64,
     request: u32,
+    recovered: bool,
+    gpu_generation: u64,
     payload: Payload,
 }
 unsafe fn task<'a>(handle: jlong) -> &'a mut Task {
@@ -60,7 +62,6 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
     let result = (|| {
         let a = unsafe { app(handle) };
         let session = &mut a.host.session;
-        session.require_document_idle()?;
         let request = session
             .state()
             .requests
@@ -77,6 +78,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 Payload::Save(Some(session.capture_project_save(id as u32, location)?))
             }
             DocumentRequest::Open | DocumentRequest::New => {
+                session.require_document_idle()?;
                 if session.state().document_file.epoch != epoch as u64
                     || session.engine().document().revision != revision as u64
                 {
@@ -106,6 +108,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             epoch: session.state().document_file.epoch,
             revision: session.engine().document().revision,
             request: id as u32,
+            recovered: false,
+            gpu_generation: a.gpu_generation,
             payload,
         })) as jlong)
     })();
@@ -260,21 +264,31 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         let Payload::Open { candidate, .. } = &mut t.payload else {
             return Err("Not an open request".into());
         };
+        if t.gpu_generation != a.gpu_generation {
+            return Err("The canvas changed while preparing this drawing; open it again".into());
+        }
         let next = candidate.take().ok_or("Project is not prepared")?;
-        match a
-            .host
-            .session
-            .adopt_project(next, t.epoch, t.revision, location)
-        {
+        let result = if t.recovered {
+            a.host
+                .session
+                .adopt_recovered_project(next, t.epoch, t.revision)
+        } else {
+            a.host
+                .session
+                .adopt_project(next, t.epoch, t.revision, location)
+        };
+        match result {
             Ok(retired) => t.payload = Payload::Retired { _session: retired },
             Err((error, next)) => {
                 *candidate = Some(next);
                 return Err(error);
             }
         }
-        a.host
-            .session
-            .complete_document_request(t.request, Ok(true))?;
+        if !t.recovered {
+            a.host
+                .session
+                .complete_document_request(t.request, Ok(true))?;
+        }
         a.host.document_adopted();
         a.project_adopted();
         Ok(())
@@ -373,6 +387,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             epoch,
             revision,
             request: id as u32,
+            recovered: false,
+            gpu_generation: a.gpu_generation,
             payload: Payload::Export(Some(readback)),
         })) as jlong)
     })();
@@ -383,4 +399,79 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             0
         }
     }
+}
+
+/// Capture on the render owner; recovery reads/writes and candidate preparation
+/// still belong to the file worker. No manual-save checkpoint is acknowledged.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    opening: jboolean,
+) -> jlong {
+    let result = (|| {
+        let a = unsafe { app(handle) };
+        let session = &a.host.session;
+        let payload = if opening != 0 {
+            session.require_document_idle()?;
+            if session.state().document_file.modified || session.state().document_file.busy {
+                return Err("Recovery requires an unchanged, idle drawing".to_string());
+            }
+            let gpu = session
+                .engine()
+                .backend()
+                .0
+                .as_ref()
+                .ok_or("Wait for the canvas")?;
+            Payload::Open {
+                environment: Some(Environment {
+                    adapter: gpu.adapter().clone(),
+                    device: gpu.device().clone(),
+                    queue: gpu.queue().clone(),
+                    viewport: session.state().camera.viewport,
+                    brush: session.engine().configured_brush().clone(),
+                    cache: a.cache_directory.clone(),
+                }),
+                candidate: None,
+            }
+        } else {
+            Payload::Save(Some(session.capture_project_recovery()?))
+        };
+        Ok(Box::into_raw(Box::new(Task {
+            epoch: session.state().document_file.epoch,
+            revision: session.engine().document().revision,
+            request: 0,
+            recovered: true,
+            gpu_generation: a.gpu_generation,
+            payload,
+        })) as jlong)
+    })();
+    match result {
+        Ok(task) => task,
+        Err(error) => {
+            fail(&mut env, Err(error));
+            0
+        }
+    }
+}
+
+/// File worker only. The shared Unix writer fsyncs the complete sibling file,
+/// renames it, then fsyncs the parent. Encoding failure retains the prior copy.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    path: JString,
+) {
+    let result = (|| {
+        let path = read(&mut env, &path)?;
+        let Payload::Save(project) = &mut unsafe { task(handle) }.payload else {
+            return Err("Not a recovery save".into());
+        };
+        let project = project.take().ok_or("Recovery already encoded")?.pruned()?;
+        layer_core::atomic_write(std::path::Path::new(&path), |output| project.write(output))
+    })();
+    fail(&mut env, result);
 }

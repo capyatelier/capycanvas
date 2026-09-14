@@ -135,8 +135,10 @@ not restore access to the original provider destination.
 Unsaved changes schedule a recovery attempt after two seconds. Each editor keeps
 one capture/write in flight and the latest desired document revision; edits during
 a write schedule a subsequent snapshot instead of queuing full document copies.
-Capture requires an idle committed document and waits while a stroke, transform
-or other canvas operation is active. Pruning, compression and disk operations use
+Capture retains the last committed raster boundary while a stroke is active;
+transforms and other non-capturable canvas operations still defer it. Queued
+pen-up work is prepared without a drawable, including raster reconstruction
+after renderer replacement. Pruning, compression and disk operations use
 the existing project worker. Recovery neither creates a manual Save request nor
 acknowledges its checkpoint. The full editable project format is reused, including
 embedded source assets, masks and effects; undo history is not stored.
@@ -162,8 +164,10 @@ mark it clean. A successful manual save restores ordinary checkpoint behavior.
 The source recovery remains until the new owner publishes its own durable copy
 or the user saves/discards. A cancelled replacement leaves both drawings intact.
 
-Lifecycle flushing drains accepted input without acquiring a drawable, then waits
-for preferences and the recovery barrier. This includes pen-up queued immediately
+Lifecycle flushing prepares a capturable committed snapshot without acquiring a
+drawable, then waits for preferences, workspace writes and the recovery worker's
+atomic manifest publication. Preparation alone never acknowledges durability.
+This includes pen-up queued immediately
 before a surface stops. Mac cleanup follows actual window close or final accepted
 application termination; iPad cleanup follows an authorized scene's view detachment.
 Cancelled termination does not consume recovery copies. Barriers retain the
@@ -171,6 +175,16 @@ coordinator if the UI owner disappears while its write completes. The iPad uses
 the OS background-task allowance; a kill or allowance expiration before durable
 publication can still leave only the previous completed copy. Full physical
 expiration/interruption and sustained storage overhead remain acceptance work.
+
+GPU loss and uncaptured validation errors suspend the shared session and retire
+the failed renderer on a worker. CPU document state, embedded sources, committed
+rasters, history and working settings remain owned by the editor. An unfinished
+contact is cancelled. The canvas error offers Restart Canvas and Save As; restart
+uses the shared renderer-replacement API to reconstruct the retained document.
+Callbacks from a retired device cannot stop its replacement. A nonblocking owner
+health check detects failures even after the display link becomes idle. Native
+thumbnail and filter-preview generations reset when renderer availability changes.
+Healthy native surface replacement retains the existing GPU.
 
 ## Ownership and files
 
@@ -225,6 +239,13 @@ coverage remains an acceptance requirement.
 
 ## Checks
 
+Editor construction waits for the resolved `SceneStorage` identifier. Creating
+an owner from an eager UUID could leave a restored Mac scene displaying one
+identity while opening a different workspace binding. The native Paint check
+requires automatic workspace restoration for the same scene; a new system scene
+can reopen the saved workspace through the ordinary switcher. The complete OS
+window/scene restoration matrix remains acceptance work.
+
 On an Apple Silicon development Mac, run from the repository root:
 
 ```sh
@@ -232,6 +253,7 @@ bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/recovery.swift
 cargo test -p layer-apple project_ --lib
+cargo test -p layer-apple renderer_failure_retains -- --test-threads=1
 cargo test -p layer-apple ui_actions_change_only_the_addressed_apple_session
 cargo test -p layer-host workspace_persistence --lib
 ```
@@ -255,11 +277,26 @@ Physical file-provider delivery remains unverified.
 The recovery checks use actual Swift owners and the Metal bridge for both platform
 policies. They verify private file modes, cancelled capture, newest-revision flush
 under queued edits, stale removal, malformed-record isolation, failed-write retry,
-owner loss/restart, migration and Save/Discard/Cancel protection. The Rust recovery
+owner loss/restart, migration and Save/Discard/Cancel protection. The Swift fixture
+also queues real ink and pen-up without a following drawable, then requires the
+complete store barrier to publish that revision. The Rust recovery
 check drains pen-up without a drawable, compares exact recovered GPU pixels and
 checks that only a durable manual save clears the recovered document's dirty state.
 Save-before-recovery checks preserve the selected archive through both Mac saves
 and iPad staged exports, without requesting another Open location.
+
+The hardware Rust renderer test covers explicit suspension, device destruction
+and an actual uncaptured validation error on both Apple presets. It verifies an
+unfinished contact is cancelled, retained sources and raster pixels reconstruct
+exactly, saving works while stopped, pending requests and working settings survive,
+and Undo/Redo and later painting remain correct. Faults affect only the isolated
+editor device. They do not reset the system GPU.
+
+The focused native `testRendererRecovery` exercises both device loss and
+validation errors through the visible restart control. It compares artwork
+pixels and Undo/Redo, and waits for visible layer thumbnails to regenerate.
+The retained catalog must complete each replacement GPU's staged startup;
+otherwise idle thumbnail work remains deferred indefinitely.
 
 The focused `testArtworkRecoveryAfterRestart` UI check passes on Mac and the
 connected iPad. It waits for a completed private copy, terminates and relaunches the

@@ -73,6 +73,7 @@ import androidx.compose.ui.window.PopupPositionProvider
 internal class Palette(val dark: Boolean, private val source: org.json.JSONObject) {
     private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
     val surround = role("bg")
+    val headerSurface = if (dark) Color.Transparent else surround.copy(alpha = .5f)
     val panel = role("panel")
     val tabs = role("tabbar")
     val sidebar = role("sidebar")

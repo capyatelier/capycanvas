@@ -321,6 +321,7 @@ class AndroidInteractionTest {
             tool=pointer; restore()
             if(kind.startsWith("drawer") || kind=="column") {
                 customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to true))
+                if(kind.startsWith("drawer")) customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
                 if(kind.startsWith("drawer")) { tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle() }
             }
             val tag=when(kind) { "tab"->"tab-sizes"; "ribbon"->"ribbon-grip-toolbar"; "group"->"group-grip-41"
@@ -554,7 +555,7 @@ class AndroidInteractionTest {
                     val b = bounds(if (zone == "stack-menu") "collapsed-column-41" else "group-$targetId")
                     val tabHeight = snapshot().getJSONObject("layout").number("tab_bar_height") * density
                     val destination = when {
-                        zone.endsWith("menu") -> Offset(b.center.x, bounds("header-settings").center.y)
+                        zone.endsWith("menu") -> Offset(b.center.x, bounds("title-bar").center.y)
                         zone.startsWith("tabs") -> bounds(if (zone == "tabs-lower") "tab-sizes" else "tab-brushes").let {
                             Offset(if (zone == "tabs-lower") it.right - 4 * density else it.left + 4 * density, b.top + tabHeight + 3 * density)
                         }
@@ -565,12 +566,13 @@ class AndroidInteractionTest {
                         "group" -> "group-grip-45"; else -> "tab-layers"
                     }).center
                     fun begin() {
+                        waitFor("workspace window focus") { owner.view.hasWindowFocus() }
                         event(MotionEvent.ACTION_DOWN, press)
                         event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
                         event(MotionEvent.ACTION_MOVE, destination); settle()
                     }
                     begin()
-                    val hint = host.workspaceGeometry?.hint ?: error("$label missing hint")
+                    val hint = host.workspaceGeometry?.hint ?: error("$label missing hint at $destination; dragging=${workspaceDragging()}")
                     val expected = when (zone) {
                         "menu" -> obj("kind" to "split", "group" to 42, "edge" to "top")
                         "stack-menu" -> obj("kind" to "stack_column", "column" to 41, "before" to true)
@@ -1199,7 +1201,7 @@ class AndroidInteractionTest {
                 customize(obj("type" to "set_column_drawers", "column" to 46, "drawers" to true))
                 assertEquals("First tile retains standard top padding", 6 * density,
                     bounds("column-icon-brushes").top - bounds("collapsed-column-46").top, 1f)
-                assertFalse(exists("column-divider-46-0"))
+                instrumentation.runOnMainSync { assertFalse(exists("column-divider-46-0")) }
                 assertEquals("Collapsed group spacing matches toolbar divider and gaps", 12 * density,
                     bounds("column-icon-sizes").top - bounds("column-icon-tool_settings").bottom, 1f)
                 fun line(tag: String, horizontal: Boolean, name: String, slotDp: Float = 8f) {

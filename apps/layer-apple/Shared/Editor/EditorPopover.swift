@@ -16,9 +16,11 @@ private struct EditorPopoverSource<Popup: View>: ViewModifier {
     @State private var id = UUID()
     func body(content: Content) -> some View {
         let presented = isPresented
-        return content.anchorPreference(key: EditorPopovers.self, value: .bounds) { anchor in
-            presented ? [EditorPopoverRequest(id: id, anchor: anchor, placement: placement,
-                content: AnyView(popup), dismiss: { isPresented = false })] : []
+        return content.transformAnchorPreference(key: EditorPopovers.self, value: .bounds) { requests, anchor in
+            if presented {
+                requests.append(EditorPopoverRequest(id: id, anchor: anchor, placement: placement,
+                    content: AnyView(popup), dismiss: { isPresented = false }))
+            }
         }
     }
 }

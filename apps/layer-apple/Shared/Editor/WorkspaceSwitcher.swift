@@ -6,17 +6,48 @@ struct WorkspaceSwitcher: View {
     @ObservedObject var library: WorkspaceLibrary
     @ObservedObject var manager: WorkspaceManager
     let palette: EditorPalette
-    var compact = false
     var textSize: Double = 44.0 / 3
     var maximumWidth: CGFloat = 420
     private var choices: [JSON] { library.status["switcher_display"].array }
     private var naturalWidth: CGFloat {
+        Self.naturalWidth(choices, textSize: textSize)
+    }
+    static func naturalWidth(_ choices: [JSON], textSize: Double) -> CGFloat {
         8 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
-            width + min(compact ? 80 : 110, EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium))
-                + (compact ? 10 : 20)
+            width + min(110, EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium))
+                + 20
         }
     }
     var body: some View {
+        Group {
+            if maximumWidth + 0.5 < naturalWidth {
+                EditorMenuButton(menu: {
+                    AppleContextMenu(Self.menu(library)) { manager.activate(JSON(["type":"switch", "value":$0["id"].raw])) }
+                }, identifier: "workspace-switcher-menu") {
+                    HStack(spacing: 8) {
+                        Text(choices.first(where: { $0["id"].string == library.status["active_id"].string })?["name"].string ?? "Workspaces")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 11))
+                    }.padding(.horizontal, 12).frame(width: maximumWidth, height: 34)
+                }.buttonStyle(.plain)
+            } else { segments }
+        }
+        .clipShape(Capsule())
+        .background {
+            ZStack { Capsule().fill(palette["bg"]); Capsule().fill(Color.black.opacity(0.2)) }
+        }
+        .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
+        .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
+        .modifier(HeaderControlMeasurement(id: "workspace-switcher"))
+    }
+    @MainActor static func menu(_ library: WorkspaceLibrary) -> JSON {
+        JSON(["sections":[library.status["switcher_display"].array.map { workspace in
+            ["label":workspace["name"].raw, "enabled":library.ready && !library.busy && !library.readOnly && !library.switcherBusy,
+                "selected":workspace["id"].string == library.status["active_id"].string,
+                "action":["type":"apple_workspace_switch", "id":workspace["id"].raw]]
+        }]])
+    }
+    private var segments: some View {
         WorkspaceNameWidth(natural: naturalWidth, maximum: maximumWidth) {
             ScrollViewReader { scroll in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -31,21 +62,14 @@ struct WorkspaceSwitcher: View {
                     }
             }
         }
-        .clipShape(Capsule())
-        .background {
-            ZStack { Capsule().fill(palette["bg"]); Capsule().fill(Color.black.opacity(0.2)) }
-        }
-        .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
-        .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
-        .modifier(HeaderControlMeasurement(id: "workspace-switcher"))
     }
     private func choice(_ workspace: JSON) -> some View {
         let selected = workspace["id"].string == library.status["active_id"].string
         return Button { manager.activate(JSON(["type": "switch", "value": workspace["id"].raw])) } label: {
             WorkspaceNameWidth(natural: EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium),
-                maximum: compact ? 80 : 110) {
+                maximum: 110) {
                 Text(workspace["name"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
-            }.padding(.horizontal, compact ? 5 : 10).frame(height: 26)
+            }.padding(.horizontal, 10).frame(height: 26)
                 .foregroundStyle(palette["text"])
                 .background {
                     if selected {

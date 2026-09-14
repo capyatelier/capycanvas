@@ -1,6 +1,6 @@
 # Stacked collapsed columns
 
-This replaces the former Group panel presentation. GTK, Web and Android implement this presentation;
+This replaces the former Group panel presentation. GTK, Web, Android, Windows, macOS and iPadOS implement this presentation;
 the workspace model, drop validation, geometry and history are shared Rust.
 
 A stack contains one or more collapsed columns. Each member retains its dock
@@ -15,7 +15,7 @@ top-level columns can collapse independently; a stack's members are the only
 collapsed children of its root. Saved nested collapsed columns and nested stacks
 reopen as ordinary groups, preserving their panels, selected tabs and split tree.
 
-On GTK, Web and Android, dropping an individual panel, a whole toolbar, or a tab group into a
+Dropping an individual panel, a whole toolbar, or a tab group into a
 member's empty lower area or footer grip creates a new collapsed column after
 that member. The gap between members is also an insertion target. The new
 column contains only the dropped content; a whole group retains its tab order,
@@ -27,7 +27,7 @@ line at the tile boundary. It includes the trailing gap above the footer grip,
 so compact members earlier in a stack have the same target as its last member.
 It only appears when the last group is scrolled into view and excludes the
 grip itself. The grip and spacing between members continue creating stack
-members. All three hosts use the shared target geometry.
+members. All hosts use the shared target geometry.
 
 “Open individual panels” and Auto-hide belong to the stack and both default to
 disabled for a new stack. Explicit saved preferences are retained. Enabling
@@ -66,11 +66,37 @@ Old Group panel settings migrate to “Open individual panels” disabled. The
 custom all-tabs renderer, per-panel height weights and dedicated resize actions
 are retired.
 
-Other hosts retain stack membership and preferences and use ordinary tabbed
-drawers until full-column opening is ported. The shared model does not serialize
-an open member. GTK/Web/Android's unchanged Paint default opens its right stack when loaded,
-previewed or reset, with Auto-hide and Open individual panels disabled. Other
-saved arrangements start with their stacks closed.
+The shared model does not serialize an open member. Photo has a permanently
+expanded far-right column: Color / Diagnostics at the top, Properties / Filters
+in the middle, and Layers at the bottom. Its collapsed strip immediately to the
+left contains Tool Set, Tool / Brush size, then Navigator, with Auto-hide and
+Open individual panels disabled. The strip starts closed on load, preview and
+reset. Paint retains its original expanded left panels and initially open
+right stack. Untouched older Photo defaults migrate to the new arrangement;
+untouched Paint defaults using it return to Paint's original arrangement.
+Customized workspaces retain their layouts until Restore Starting Layout is
+chosen. Other saved stacks start closed.
+
+Apple uses the ordinary SwiftUI dock groups, dividers and existing drawer
+connector shape for full-column opening. Column grips expose the shared stack
+preferences. Closed aggregate dividers have no native resize source. The former
+Apple drawer fallback and shared platform opt-in gates are removed.
+
+Run the Apple native input and actual-file persistence checks with:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/column-stacks.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/column-stack-persistence.swift
+```
+
+The AppKit input fixture uses real mouse/tablet events on both Apple presets.
+It checks immediate grips/tabs, held icons, member and trailing-group drops,
+switching, fixed closed widths, resizing, focus cancellation and exact Undo/Redo.
+The persistence fixture switches and restarts actual temporary workspace
+libraries, retaining membership, preferences, width, working tools and history
+while discarding transient opening. Native `testColumnStacks` and
+`testColumnStacksDark` exercise the editor on each host. Physical Pencil and
+complete visual/performance acceptance remain separate checks.
 
 Validate the additional GTK targets with
 `bash tools/performance/workspace-motion.sh gtk --native-test=native_stack_member_drop_input`.
@@ -124,6 +150,29 @@ active connectors, first/middle member append targets, stack targets, drawer
 tabs, held icons, cancellation and one-step undo/redo. Physical pen accuracy and
 hover remain separate hardware checks.
 
+`AndroidTitleBarTest#photoDefaultColumnsAndPaintRestorationSurviveRestart` checks
+Photo's primary panel geometry, secondary icon order, both themes, tab selection,
+mouse/finger/stylus opening, preview/Cancel/Restore and restart on
+the Wacom tablet. It also restores and checks Paint's original columns. The
+2026-09-13 run passed in 30.77 seconds; captures and logs are retained under
+ignored `artifacts/android/photo-default-2026-09-13/`. Shared UI, workspace and
+host tests (480 passed, one hardware-GPU test ignored) and Android debug
+builds/lint also pass. Old-baseline menu availability and latest-default
+restoration are covered by shared controller tests. The corrected Paint and Photo
+layouts were also restored through the native menus in the tablet app.
+
 Validation on the Wacom MovinkPad 14 used a separate test application ID and
 isolated workspace stores. The production app and its data were retained.
 Native screenshots are written to the test package’s `files/validation` directory.
+
+Validate the Windows port serially on an unlocked desktop with
+`./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device mouse`,
+then repeat with `-Device pen` and `-Device touch`. Each run owns an isolated
+profile and uses guarded OS input through the production pickup recognizers.
+The fixture checks shared and arranged native group/connector bounds, selected
+tiles, immediate handles and held icons, member insertion/switching, resize
+cancellation and retained tabs, one-step history, individual drawers, consumed
+auto-hide contacts, both themes, Zen and restart persistence. The pointer moves
+off the strip before the Zen assertion because hovering visible chrome reveals
+it by design. OS-injected pen/touch coverage does not establish physical device
+or 120 Hz painting acceptance.

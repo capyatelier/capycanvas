@@ -266,12 +266,12 @@ impl ImageTransformState {
         }
         let mut cut = layer_core::Rect {
             min: layer_core::Point {
-                x: source_bounds.min_x as f32,
-                y: source_bounds.min_y as f32,
+                x: source_bounds.min_x() as f32,
+                y: source_bounds.min_y() as f32,
             },
             max: layer_core::Point {
-                x: source_bounds.max_x as f32,
-                y: source_bounds.max_y as f32,
+                x: source_bounds.max_x() as f32,
+                y: source_bounds.max_y() as f32,
             },
         };
         if let Some(s) = selection {
@@ -349,16 +349,16 @@ impl ImageTransformState {
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         origin: wgpu::Origin3d {
-                            x: local.min_x,
-                            y: local.min_y,
+                            x: local.min_x(),
+                            y: local.min_y(),
                             z: 0,
                         },
                         ..source.as_image_copy()
                     },
                     wgpu::TexelCopyTextureInfo {
                         origin: wgpu::Origin3d {
-                            x: region.min_x - source_bounds.min_x,
-                            y: region.min_y - source_bounds.min_y,
+                            x: region.min_x() - source_bounds.min_x(),
+                            y: region.min_y() - source_bounds.min_y(),
                             z: 0,
                         },
                         ..capture.as_image_copy()
@@ -384,7 +384,7 @@ impl ImageTransformState {
                 pass.source(
                     &r.device,
                     capture,
-                    [source_bounds.min_x as i32, source_bounds.min_y as i32],
+                    [source_bounds.min_x() as i32, source_bounds.min_y() as i32],
                     selection.and(self.selection.as_ref()),
                 )
                 .map_err(GpuRasterError::InvalidTransform)?,
@@ -567,7 +567,7 @@ impl ImageTransformState {
                         view,
                         extent: [PAGE_SIZE; 2],
                         origin: c.map(|v| (v * PAGE_SIZE) as i32),
-                        region: [rect.min_x, rect.min_y, rect.width(), rect.height()],
+                        region: [rect.min_x(), rect.min_y(), rect.width(), rect.height()],
                     })
                 })
                 .collect();
@@ -708,12 +708,12 @@ impl ImageTransformState {
         self.source_bounds.map(|b| {
             let cut = layer_core::Rect {
                 min: layer_core::Point {
-                    x: (b.min_x as f32).max(self.cut.min.x),
-                    y: (b.min_y as f32).max(self.cut.min.y),
+                    x: (b.min_x() as f32).max(self.cut.min.x),
+                    y: (b.min_y() as f32).max(self.cut.min.y),
                 },
                 max: layer_core::Point {
-                    x: (b.max_x as f32).min(self.cut.max.x),
-                    y: (b.max_y as f32).min(self.cut.max.y),
+                    x: (b.max_x() as f32).min(self.cut.max.x),
+                    y: (b.max_y() as f32).min(self.cut.max.y),
                 },
             };
             transform

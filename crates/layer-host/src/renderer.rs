@@ -12,6 +12,11 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|gpu| gpu.raster_dependencies_ready(packet))
+    }
     fn can_capture_raster(&self) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.can_capture_raster())
     }

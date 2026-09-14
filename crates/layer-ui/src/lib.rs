@@ -494,8 +494,19 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::CustomizeWorkspaceUi => matches!(platform, Platform::Gtk | Platform::Web),
-            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac),
+            Self::CustomizeWorkspaceUi => matches!(
+                platform,
+                Platform::Gtk
+                    | Platform::Web
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
+                    | Platform::Windows
+            ),
+            Self::Fullscreen => matches!(
+                platform,
+                Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows
+            ),
             Self::NewDocument
             | Self::OpenDocument
             | Self::SaveDocument

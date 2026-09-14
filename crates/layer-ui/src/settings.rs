@@ -24,9 +24,6 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
-    pub fn stacked_columns(self) -> bool {
-        matches!(self, Self::Generic | Self::Gtk | Self::Web | Self::Android)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,7 +863,7 @@ impl Settings {
                 },
             )],
         });
-        if matches!(platform, Platform::Gtk | Platform::Web) {
+        if crate::CommandId::CustomizeWorkspaceUi.available_on(platform) {
             // Clock/battery visibility belongs to each workspace's window
             // bar. Keep the legacy preference for hosts with the older chrome.
             for group in &mut groups[0] {
@@ -1340,16 +1337,18 @@ mod copy_tests {
     fn clock_visibility_defaults_round_trips_and_resets() {
         let original: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
-        for platform in [Platform::Gtk, Platform::Web] {
-            assert!(original.field(PreferenceId::ShowClock, platform).is_err());
-        }
         for platform in [
-            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
             Platform::Android,
             Platform::Ios,
             Platform::Mac,
             Platform::Windows,
         ] {
+            assert!(original.field(PreferenceId::ShowClock, platform).is_err());
+        }
+        {
+            let platform = Platform::Generic;
             let mut settings = original.clone();
             let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
             assert_eq!(row.title, "Show battery and clock");

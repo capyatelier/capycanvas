@@ -1,9 +1,13 @@
 //! Portable, renderer-agnostic document model for Layer.
 //!
 //! This crate contains no window, graphics API, inference runtime, async
-//! executor, or platform types. Strokes use shared point storage so undo/redo
-//! moves handles; late sensor corrections replace that storage without changing
-//! already captured document snapshots.
+//! executor, or window types. Immutable raster revisions back committed edits,
+//! undo/redo and project snapshots. Live contacts retain bounded shared samples.
+
+#[cfg(unix)]
+mod atomic_file;
+#[cfg(unix)]
+pub use atomic_file::atomic_write;
 
 pub mod color;
 mod contact;
@@ -1583,6 +1587,21 @@ pub enum Edit {
 }
 
 impl Edit {
+    fn raster_roots<'a>(&'a self, out: &mut Vec<&'a raster::RasterRevision>) {
+        match self {
+            Self::SetRaster { revision, .. } => out.push(revision),
+            Self::Batch(edits) => edits.iter().for_each(|edit| edit.raster_roots(out)),
+            Self::ReplaceLayer(layer) => {
+                out.push(&layer.raster);
+                out.extend(layer.masks().map(|m| &m.raster));
+            }
+            Self::InsertLayer { layer, .. } => {
+                out.push(&layer.raster);
+                out.extend(layer.masks().map(|m| &m.raster));
+            }
+            _ => (),
+        }
+    }
     /// Navigation and selection are retained by a project snapshot, but do not
     /// themselves make artwork unsaved. Rulers and references are document edits.
     fn changes_project(&self) -> bool {
@@ -1734,19 +1753,6 @@ impl Editor {
             roots.push(&layer.raster);
             roots.extend(layer.mask.iter().map(|m| &m.raster));
         }
-        fn roots<'a>(edit: &'a Edit, out: &mut Vec<&'a raster::RasterRevision>) {
-            match edit {
-                Edit::SetRaster { revision, .. } => out.push(revision),
-                Edit::Batch(edits) => {
-                    for edit in edits {
-                        roots(edit, out);
-                    }
-                }
-                Edit::ReplaceLayer(layer) => layer_roots(layer, out),
-                Edit::InsertLayer { layer, .. } => layer_roots(layer, out),
-                _ => (),
-            }
-        }
         let mut seen_roots = std::collections::HashSet::new();
         let mut seen_tiles = std::collections::HashSet::new();
         let mut current = Vec::new();
@@ -1765,7 +1771,7 @@ impl Editor {
             for entry in history.iter().rev().take(ENTRY_BUDGET) {
                 bytes = bytes.saturating_add(entry.metadata_bytes);
                 let mut referenced = Vec::new();
-                roots(&entry.edit, &mut referenced);
+                entry.edit.raster_roots(&mut referenced);
                 for revision in referenced {
                     if !seen_roots.insert(revision.identity()) {
                         continue;
@@ -1828,6 +1834,58 @@ impl Editor {
     pub fn clear_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
+    }
+    /// Roll back the suffix whose raster producers failed. Run after the host
+    /// retires those producers; pending captures are not evidence of failure.
+    /// Validate a candidate first so a missing recovery boundary cannot partly
+    /// mutate the document. Earlier undo remains available; failed redo does not.
+    pub fn recover_failed_rasters(&mut self) -> Result<usize, DocumentError> {
+        fn failed(document: &Document) -> bool {
+            document.layers.iter().any(|layer| {
+                std::iter::once(&layer.raster)
+                    .chain(layer.masks().map(|m| &m.raster))
+                    .any(|r| r.failed())
+            })
+        }
+        if !failed(&self.document) {
+            self.prune_failed_raster_history();
+            return Ok(0);
+        }
+        let mut candidate = self.document.clone();
+        let mut count = 0;
+        let mut checkpoint = self.checkpoint;
+        for entry in self.undo.iter().rev() {
+            candidate.apply(entry.edit.clone())?;
+            count += 1;
+            checkpoint = entry.checkpoint;
+            if !failed(&candidate) {
+                break;
+            }
+        }
+        if failed(&candidate) {
+            return Err(DocumentError::InvalidLayerOperation(
+                "No intact raster checkpoint remains in history",
+            ));
+        }
+        self.document = candidate;
+        self.checkpoint = checkpoint;
+        self.undo.truncate(self.undo.len() - count);
+        self.redo.clear();
+        self.prune_failed_raster_history();
+        Ok(count)
+    }
+    fn prune_failed_raster_history(&mut self) {
+        // An undone capture can fail after Undo. Keep the reachable safe part
+        // of each branch, so recovery cannot expose failed pixels through Redo.
+        for history in [&mut self.undo, &mut self.redo] {
+            if let Some(index) = history.iter().rposition(|entry| {
+                let mut roots = Vec::new();
+                entry.edit.raster_roots(&mut roots);
+                roots.into_iter().any(|r| r.failed())
+            }) {
+                history.drain(..=index);
+            }
+        }
     }
     /// Raster operation recipes live only until their queue-ordered submission.
     /// Undo entries retain pixel revisions and pre-operation metadata.

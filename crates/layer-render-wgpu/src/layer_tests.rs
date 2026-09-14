@@ -916,6 +916,7 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
         for inverted in [false, true] {
             let mut selection = base.transformed(affine).unwrap();
             selection.inverted = inverted;
+            let generations = r.selection_clip.generations;
             let mut layer = Layer::paint(LayerId(1), "affine coverage");
             let mut mask = LayerMask::reveal_all(LayerId(2), Point::default());
             mask.default_coverage = f32::from(inverted);
@@ -967,7 +968,6 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
                     );
                 }
             }
-            let generations = r.selection_clip.generations;
             let storage = r.selection_clip.storage_bytes();
             layer.pending_operations.clear();
             let selected = DabBatch {
@@ -988,9 +988,9 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
             // values at a half-code boundary; RGB and coverage stay within one code.
             let actual = r.readback_srgb_rgba8().unwrap();
             assert!(actual.iter().zip(&filled).all(|(a, b)| a.abs_diff(*b) <= 1));
-            assert_eq!(
-                r.selection_clip.generations, generations,
-                "changing the consumer does not resample"
+            assert!(
+                r.selection_clip.generations - generations <= 1,
+                "all consumers share one preparation; empty fills may skip it entirely"
             );
             assert_eq!(r.selection_clip.storage_bytes(), storage);
             r.set_selection_outline(Some(&selection)).unwrap();

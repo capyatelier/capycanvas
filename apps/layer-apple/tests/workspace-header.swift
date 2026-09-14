@@ -34,7 +34,7 @@ import SwiftUI
                         defer { window.contentView = nil; window.close() }
                         // Simulate the measured Mac window-control reservation.
                         store.headerLeadingInset = platform == 1 ? 76 : 0
-                        let host = NSHostingView(rootView: EditorView(store: store, showsApplicationMenus: platform == 0) { Color.clear }
+                        let host = NSHostingView(rootView: EditorView(store: store) { Color.clear }
                             .environment(\.colorScheme, dark ? .dark : .light).frame(width: size.width, height: size.height))
                         window.contentView = host
                         for _ in 0..<60 {

@@ -1,6 +1,7 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
 mod renderer;
+mod header;
 mod snapshot;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -52,6 +53,7 @@ pub struct NativeHost {
     document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
     service_changes: u32,
+    header_drag: Option<layer_ui::HeaderDrag>,
 }
 
 impl NativeHost {
@@ -82,6 +84,7 @@ impl NativeHost {
             document_view_revision: 0,
             last_durable_workspace: None,
             service_changes: 0,
+            header_drag: None,
         })
     }
     /// Regions changed since the platform service last observed accepted input.
@@ -96,6 +99,7 @@ impl NativeHost {
     }
     /// Invalidate host input and snapshot caches after shared document adoption.
     pub fn document_adopted(&mut self) {
+        self.header_drag = None;
         self.deferred_contacts.clear();
         self.last_pen = None;
         self.last_snapshot = None;
@@ -107,7 +111,11 @@ impl NativeHost {
         if width == 0 || height == 0 || !density.is_finite() || density <= 0.0 {
             return Err("Invalid native surface dimensions".into());
         }
-        self.logical = [width as f32 / density, height as f32 / density];
+        let logical = [width as f32 / density, height as f32 / density];
+        if self.logical != logical {
+            self.header_drag = None;
+        }
+        self.logical = logical;
         self.session.set_viewport(self.logical, [width, height])?;
         self.dirty = true;
         Ok(())
@@ -184,6 +192,9 @@ impl NativeHost {
         Ok(())
     }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
+        if matches!(action, UiAction::RestoreWorkspace { .. }) {
+            self.header_drag = None;
+        }
         let previous = self.session.state().revision;
         let change = self.session.dispatch(action)?;
         self.apply_change(previous, change);
@@ -243,6 +254,9 @@ impl NativeHost {
         }
     }
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
+        if matches!(input, UiInput::Blur) {
+            self.header_drag = None;
+        }
         let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
@@ -565,6 +579,7 @@ impl NativeHost {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
+            Header { request: header::HeaderRequest },
             FilterPackageModules {
                 manifest: String,
             },
@@ -653,6 +668,7 @@ impl NativeHost {
             },
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
+            Query::Header { request } => self.header_request(request),
             Query::FilterPackageModules { manifest } => {
                 json!(layer_core::EffectPackage::parse(&manifest)?.module_names()?)
             }
@@ -988,7 +1004,6 @@ mod tests {
             .unwrap();
         app.dispatch(serde_json::from_value(json!({"type":"move_panel", "panel":"toolbar", "target":{"kind":"tab","group":group}, "viewport":app.logical})).unwrap()).unwrap();
         app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"set_column_collapsed","group":group,"collapsed":true}})).unwrap()).unwrap();
-        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
         let column = app
             .session
             .state()
@@ -996,6 +1011,8 @@ mod tests {
             .layout
             .collapsed_column_for_group(group)
             .unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"set_column_drawers","column":column,"drawers":true}})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
         let tile = app
             .session
             .state()

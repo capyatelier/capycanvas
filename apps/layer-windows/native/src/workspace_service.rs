@@ -476,6 +476,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
 pub(crate) enum WorkspaceAction {
     Manager { dialog: u64, command: ManagerInput },
     RefreshSwitcher,
+    PreferencesRetry,
+    PreferencesKeepOpen,
+    PreferencesDiscardClose,
     Retry,
     KeepOpen,
     DiscardClose,

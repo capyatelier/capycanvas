@@ -4,35 +4,36 @@ import SwiftUI
 /// complete menu array in EditorView would rebuild the workspace on pen down/up.
 struct ApplicationMenus: View {
     @ObservedObject var store: EditorStore
-    let palette: EditorPalette
-    var compact = false
+    var iconSize: CGFloat = 16
+    var tileSize: CGFloat = 36
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var textSize: Double {
-        compact ? 12 : store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
+        store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
     }
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: compact ? 0 : 6) {
+            HStack(spacing: 0) {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
                     ApplicationMenuButton(store: store, id: menu["id"].string) {
                         Text(menu["label"].string).fontWeight(.bold).fixedSize()
                             .frame(width: EditorTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
-                            .padding(.horizontal, 6).frame(height: 36)
-                            .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                    }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
+                            .padding(.horizontal, 8).frame(height: tileSize)
+                    }.buttonStyle(EditorControlButtonStyle(background: palette["bg"]))
+                        .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
             }.font(.system(size: textSize)).fixedSize()
             ApplicationMenuButton(store: store) {
-                SharedIcon(name: "menu").frame(width: 36, height: 36)
-                    .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-            }.buttonStyle(.plain).accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
+                SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)
+            }.buttonStyle(EditorControlButtonStyle(background: palette["bg"]))
+                .accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
                 .modifier(HeaderControlMeasurement(id: "application-menus"))
         }
     }
 }
 
-private struct ApplicationMenuButton<Label: View>: View {
+struct ApplicationMenuButton<Label: View>: View {
     @ObservedObject var store: EditorStore
     var id: String? = nil
     @ViewBuilder let label: () -> Label
@@ -57,7 +58,11 @@ private struct ApplicationMenuButton<Label: View>: View {
         } label: { label() }
         #endif
     }
-    private func catalog(_ id: String) -> JSON {
+    private var model: JSON { editorApplicationMenu(store, id: id) }
+}
+
+@MainActor func editorApplicationMenu(_ store: EditorStore, id: String? = nil) -> JSON {
+    func catalog(_ id: String) -> JSON {
         var value = store.applicationMenu(id)["model"]
         if id == "file" {
             value = value.replacing("sections", with: JSON(value["sections"].array.map(\.raw) + [[[
@@ -67,13 +72,14 @@ private struct ApplicationMenuButton<Label: View>: View {
         }
         return value
     }
-    private var model: JSON {
-        if let id { return catalog(id) }
-        return JSON(["sections": [store.snapshot["application_menus"].array.map { menu in
-            ["label": menu["label"].raw, "enabled": store.snapshot["preferences"].isNull,
-             "sections": catalog(menu["id"].string)["sections"].raw]
-        }]])
-    }
+    if let id { return catalog(id) }
+    let primary = store.snapshot["header"]["primary_menu"]
+    let fileLabel = store.snapshot["application_menus"].array.first { $0["id"].string == "file" }?["label"].string
+    return primary.replacing("sections", with: JSON(primary["sections"].array.map { section in
+        section.array.map { row in
+            (row["label"].string == fileLabel ? row.replacing("sections", with: catalog("file")["sections"]) : row).raw
+        }
+    }))
 }
 
 /// The in-app iPad menus and the Mac OS menu bar consume the same catalog/state.

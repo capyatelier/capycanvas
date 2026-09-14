@@ -134,6 +134,111 @@ fn submit(
 fn image(r: &mut WgpuRasterizer) -> Vec<u8> {
     r.readback_srgb_rgba8().unwrap()
 }
+
+#[test]
+fn large_transparent_effect_mask_brush_crosses_canvas_edges() {
+    let extent = [1537, 769]; // Partial edge tiles, including column five from the crash report.
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
+    let mut layers = vec![
+        Layer::paint(LayerId(3), "Top raster"),
+        Layer::paint(LayerId(1), "Bottom raster"),
+    ];
+    submit(
+        &mut r,
+        extent,
+        &layers,
+        0.,
+        true,
+        true,
+        Some(([950., 350.], 650.)),
+    );
+    layers.swap(0, 1);
+    let mut effect = filter(fixture("domain_warp"));
+    effect.mask = Some(layer_core::LayerMask::reveal_all(
+        LayerId(4),
+        Point::default(),
+    ));
+    layers.insert(0, effect);
+    submit(&mut r, extent, &layers, 0., false, true, None);
+    let original = image(&mut r);
+    let paint = |r: &mut WgpuRasterizer, center: [f32; 2]| {
+        let radius = 350.;
+        let mut dab = test_dab(center, [1.; 4], 0.7);
+        dab.radii = [radius; 2];
+        let mut style = test_style(BrushExecution::Dry);
+        style.mode = DabMode::Erase;
+        let batch = DabBatch {
+            material_update: 0,
+            stroke_id: StrokeId(99),
+            layer_id: LayerId(4),
+            kind: DabBatchKind::Persistent,
+            stroke_start: true,
+            stroke_end: true,
+            first_dab: 0,
+            dab_count: 1,
+            style,
+            damage: Rect {
+                min: Point {
+                    x: center[0] - radius - 1.,
+                    y: center[1] - radius - 1.,
+                },
+                max: Point {
+                    x: center[0] + radius + 1.,
+                    y: center[1] + radius + 1.,
+                },
+            },
+        };
+        r.submit(FramePacket {
+            view: ViewState {
+                width_px: extent[0],
+                height_px: extent[1],
+                background_rgba_linear: [0.; 4],
+                ..test_view()
+            },
+            document_extent: extent,
+            layers: &layers,
+            dabs: &[dab],
+            dab_batches: &[batch],
+            restore_rasters: &[],
+            reset_layers: false,
+            time_seconds: 0.,
+            composite_all: false,
+        })
+        .unwrap();
+    };
+    paint(&mut r, [1400., 100.]);
+    let erased = image(&mut r);
+    assert_ne!(
+        erased, original,
+        "transparency painting changes the effect mask"
+    );
+    let pages = r.layer_masks.pages.len();
+    for center in [
+        [1660., -360.],
+        [-360., 400.],
+        [1900., 400.],
+        [800., 1130.],
+        [-360., -360.],
+    ] {
+        paint(&mut r, center);
+        assert_eq!(
+            image(&mut r),
+            erased,
+            "outside-canvas brush must be a no-op: {center:?}"
+        );
+        assert_eq!(
+            r.layer_masks.pages.len(),
+            pages,
+            "empty damage must allocate no pages"
+        );
+    }
+    paint(&mut r, [1400., 100.]);
+    assert_ne!(
+        image(&mut r),
+        erased,
+        "painting remains usable after leaving the canvas"
+    );
+}
 fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
     let path = std::path::Path::new(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -178,6 +283,25 @@ fn imported_ramp_uses_the_srgb_transfer_curve() {
     assert_import_pixels(&bytes, &output);
 }
 
+#[test]
+#[should_panic(expected = "sRGB ramp")]
+fn import_oracle_rejects_encoded_pixels_treated_as_linear() {
+    let source = [16, 128, 240, 255];
+    let wrong = source.map(|v| scalar_stored_srgb_byte(f64::from(v) / 255.));
+    assert_import_pixels(&source, &wrong);
+}
+
+#[test]
+#[should_panic(expected = "sRGB ramp")]
+fn import_oracle_rejects_linear8_storage() {
+    let source = [16, 128, 240, 255];
+    let wrong = source.map(|v| {
+        let linear = scalar_srgb_decode(f64::from(v) / 255.);
+        scalar_stored_srgb_byte((linear * 255.).round() / 255.)
+    });
+    assert_import_pixels(&source, &wrong);
+}
+
 fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
     assert_eq!(bytes.len(), output.len());
     for (index, (source, pixel)) in bytes
@@ -198,16 +322,12 @@ fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
             // storage code. Propagate that interval through unassociation;
             // a uniform straight-RGB tolerance is incorrect near zero alpha.
             let stored = scalar_srgb_encode(linear * alpha) * 255.;
-            let export = |code: f64| {
-                let value = if alpha == 0. {
-                    0.
-                } else {
-                    scalar_srgb_decode(code / 255.) / alpha
-                };
+            let export = |sample: f64| {
+                let value = if alpha == 0. { 0. } else { sample / alpha };
                 (scalar_srgb_encode(value.clamp(0., 1.)) * 255.).round() as u8
             };
-            let low = export(stored.floor()).saturating_sub(1);
-            let high = export(stored.ceil()).saturating_add(1);
+            let low = export(scalar_srgb_sample_bounds(stored.floor())[0]).saturating_sub(1);
+            let high = export(scalar_srgb_sample_bounds(stored.ceil())[1]).saturating_add(1);
             assert!(
                 (low..=high).contains(&pixel[channel]),
                 "sRGB ramp at pixel {index}, channel {channel}: source={source:?}, actual={pixel:?}, permitted={low}..={high}"
@@ -230,6 +350,15 @@ fn scalar_srgb_encode(v: f64) -> f64 {
     } else {
         1.055 * v.powf(1. / 2.4) - 0.055
     }
+}
+
+// Fixed-function sRGB loads may differ by half a code on the encoded side
+// (D3D12_SRGB_TO_FLOAT_TOLERANCE_IN_ULP). Propagate that physical conversion
+// bound before unassociation; a constant straight-RGB allowance is insufficient
+// near zero alpha. The strict independent PNG comparison stays unchanged.
+// https://learn.microsoft.com/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-data-conversion
+fn scalar_srgb_sample_bounds(code: f64) -> [f64; 2] {
+    [code - 0.5, code + 0.5].map(|v| scalar_srgb_decode(v.clamp(0., 255.) / 255.))
 }
 
 fn scalar_paint_store(linear: f64) -> f64 {
@@ -299,8 +428,10 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                     scalar_srgb_decode(f64::from(source[channel]) / 255.) * alpha,
                 ) * 255.;
                 let mut permitted = Vec::new();
-                for input in [code.floor(), code.ceil()] {
-                    let stored = scalar_srgb_decode(input / 255.);
+                for stored in [
+                    scalar_srgb_sample_bounds(code.floor())[0],
+                    scalar_srgb_sample_bounds(code.ceil())[1],
+                ] {
                     let linear = if alpha == 0. { 0. } else { stored / alpha };
                     let adjusted = if id == "curves" {
                         let channel_value =
@@ -312,12 +443,11 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                         .powf(1. / f64::from(values[3][0]))
                     };
                     let code = scalar_srgb_encode(adjusted.clamp(0., 1.) * alpha) * 255.;
-                    for output in [code.floor(), code.ceil()] {
-                        let straight = if alpha == 0. {
-                            0.
-                        } else {
-                            scalar_srgb_decode(output / 255.) / alpha
-                        };
+                    for output in [
+                        scalar_srgb_sample_bounds(code.floor())[0],
+                        scalar_srgb_sample_bounds(code.ceil())[1],
+                    ] {
+                        let straight = if alpha == 0. { 0. } else { output / alpha };
                         permitted.push((scalar_srgb_encode(straight.clamp(0., 1.)) * 255.).round() as u8);
                     }
                 }
@@ -643,7 +773,8 @@ fn runtime_filter_pixel_reference() {
     }
     assert!(
         error <= 1,
-        "Filter output changed after validated import: maximum byte error {error}"
+        "Filter output changed after validated import: maximum byte error {error}; adapter={:?}",
+        r.adapter().get_info()
     );
 }
 
@@ -1280,12 +1411,12 @@ fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() 
             let local = image(&mut r);
             let after = r.scene.as_ref().unwrap().composition_work();
             assert_eq!(after[0] - work[0], 1, "refresh backdrop once per update");
-            let rect = PixelRect {
-                min_x: (point[0] - 9.).max(0.) as u32,
-                min_y: (point[1] - 9.).max(0.) as u32,
-                max_x: (point[0] + 9.) as u32,
-                max_y: (point[1] + 9.) as u32,
-            }
+            let rect = PixelRect::new(
+                (point[0] - 9.).max(0.) as u32,
+                (point[1] - 9.).max(0.) as u32,
+                (point[0] + 9.) as u32,
+                (point[1] + 9.) as u32,
+            )
             .intersect(PixelRect::full(EXTENT));
             let tile_pixels: u64 = page_coordinates(rect)
                 .map(|p| page_rect(p).intersect(PixelRect::full(EXTENT)).area())

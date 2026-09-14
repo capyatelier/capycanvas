@@ -381,7 +381,9 @@ if((Model).state.document_file.modified){throw 'Opened project is unexpectedly d
 Draw
 Fail-Gpu
 if($FailGpu){File-Command 'save_document_as';Picker 'Save As';Picker-Button '2';Idle}
-$script:scope=$root;Invoke-Control 'Preferences'
+$script:scope=$root
+& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
+(Control 'Preferences' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#223344')

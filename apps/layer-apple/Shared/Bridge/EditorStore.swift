@@ -10,6 +10,7 @@ import SwiftUI
     @Published var catalog = JSON()
     @Published var failure: String?
     @Published var canvasSubmitted = false
+    @Published private(set) var restartingCanvas = false
     @Published var storageFailure: String?
     @Published var storagePending = true
     @Published var canRetryStorage = false
@@ -29,6 +30,7 @@ import SwiftUI
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
+    lazy var header = HeaderPresentation(store: self)
     lazy var panelMeasurements = PanelMeasurements(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
@@ -74,8 +76,13 @@ import SwiftUI
                 storageFailure = next["persistence"]["error"].isNull ? nil : next["persistence"]["error"].string
                 return
             }
+            let hadRenderer = snapshot["gpu_ready"].bool
             switch ui.receive(next) {
             case .full:
+                if hadRenderer != snapshot["gpu_ready"].bool {
+                    layerThumbnails.reset(); filterPreviews.reset()
+                    if !snapshot["gpu_ready"].bool { canvasSubmitted = false }
+                }
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 projectFiles.receive(state.json)
@@ -100,6 +107,20 @@ import SwiftUI
             cameraRevision = state["camera"]["revision"].uint
         }
         wake?()
+    }
+    func restartCanvas() {
+        guard !restartingCanvas, let native else { return }
+        interruptInput?()
+        restartingCanvas = true
+        canvasSubmitted = false
+        native.restartCanvas { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.restartingCanvas = false
+                self.failure = error
+                self.wake?()
+            }
+        }
     }
     func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
         guard let native else { completion(false); return }
@@ -254,6 +275,11 @@ import SwiftUI
     func query(_ value: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
         guard let native else { completion(JSON()); return }
         native.submit(2, JSON(value)) { result in DispatchQueue.main.async { completion(result ?? JSON()) } }
+    }
+    func headerAction(_ value: [String: Any], completion: @escaping @MainActor () -> Void) {
+        guard let native else { completion(); return }
+        native.headerAction(JSON(value)) { DispatchQueue.main.async { completion() } }
+        wake?()
     }
     func numeric(_ control: JSON, value: Double, operation: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
         do { completion(try resolveNumber(control, value: value, operation: operation)) }

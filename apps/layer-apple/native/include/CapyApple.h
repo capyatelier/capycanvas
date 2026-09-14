@@ -35,7 +35,7 @@ int32_t capy_project_new(const CapyProjectTask *task, uint32_t width, uint32_t h
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
-int32_t capy_apple_recovery_flush_input(CapyApple *app, uint64_t now);
+int32_t capy_apple_prepare_recovery(CapyApple *app, uint64_t now); /* 0 capturable, 1 preparing, -1 error; not durable */
 int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_document_complete(CapyApple *app, uint32_t id, uint32_t succeeded);
 int32_t capy_apple_document_close(CapyApple *app, uint32_t id, uint32_t decision);
@@ -91,6 +91,9 @@ int32_t capy_apple_import_layer(CapyApple *app, const char *name, uint32_t width
                                uint32_t height, const uint8_t *rgba, size_t count);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_detach(CapyApple *app);
+int32_t capy_apple_suspend_renderer(CapyApple *app);
+int32_t capy_apple_poll_renderer(CapyApple *app); /* 0 available, 1 suspended, -1 error */
+int32_t capy_apple_test_gpu_fault(CapyApple *app, uint32_t validation); /* Debug builds only */
 /* Nine doubles per record: x/y physical pixels, pressure, tilt x/y radians,
    twist radians, distance, monotonic nanoseconds, phase (0 hover..4 cancel).
    tool: 0 pen, 1 mouse, 2 eraser, 3 touch; button: 0 primary, 1 pan, 2 other. */

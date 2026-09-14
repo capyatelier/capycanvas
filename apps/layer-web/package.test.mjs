@@ -75,11 +75,13 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
+    "raster-worker.js": 'import init from "./pkg/layer_web.js";',
+    "raster-worker-client.js": 'new Worker(new URL("./raster-worker.js", import.meta.url));',
     "workspace-store.js": "export const store = {};",
     "workspace-switcher.js": "export const switcher = {};",
     "workspace-manager.js": 'import {switcher} from "./workspace-switcher.js"; export const manager = {};',
     "workspace-worker.js": 'import init from "./pkg/layer_web.js"; import {store} from "./workspace-store.js";',
-    "app.js": 'import {store} from "./workspace-store.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nconst assetPaths = {};',
+    "app.js": 'import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-store.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nconst assetPaths = {};',
     "system-status.js": "export const status = true;",
     "header.js": "export const header = true;",
     "editor-panels.js": "export function createEditorPanels() {}",

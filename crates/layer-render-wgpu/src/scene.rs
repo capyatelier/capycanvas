@@ -998,8 +998,8 @@ impl Scene {
             && let Some(source) = self.images.scene_texture(top)
         {
             let origin = wgpu::Origin3d {
-                x: dirty.min_x,
-                y: dirty.min_y,
+                x: dirty.min_x(),
+                y: dirty.min_y(),
                 z: 0,
             };
             encoder.copy_texture_to_texture(
@@ -1237,7 +1237,12 @@ impl Scene {
                         };
                         let clip =
                             clip.unwrap_or(PixelRect::full([data[4] as u32, data[5] as u32]));
-                        pass.set_scissor_rect(clip.min_x, clip.min_y, clip.width(), clip.height());
+                        pass.set_scissor_rect(
+                            clip.min_x(),
+                            clip.min_y(),
+                            clip.width(),
+                            clip.height(),
+                        );
                         pass.draw(0..3, 0..1);
                     }
                     encoded_through = end;

@@ -7,6 +7,18 @@ pointer replay verifies drawing, undo/redo, and a painted document continuing
 behind titlebar controls. Full OS input, workspace parity, recovery and
 presentation acceptance remain open; this is not a release package.
 
+The workspace-owned native title bar and inline customization now use the shared
+Web/Android arrangement, tool picker and workspace history. See the current
+[title-bar acceptance record](../../docs/development/title-bar-windows-acceptance.md)
+for scope and reproduction commands; older header/clock notes below are historical.
+
+The sections below are chronological validation checkpoints. Earlier statements
+about missing docking, document windows, runtime filters or workspace management
+are superseded by the later implementation sections. Current acceptance still
+requires whole-editor visual review, the strict GPU filter reference, physical
+pen/touch, mixed-display/lifecycle, clean-machine and installed-package checks,
+and sustained 120 Hz painting.
+
 ## Milestone integration
 
 Windows implementation work lives on `ports/windows`. At each major milestone, merge
@@ -105,6 +117,22 @@ Canvas histories are bounded and ordered; UI commands never block the UI thread.
 A full command channel reports an explicit error and cancels active input.
 Wheel and canvas shortcuts use shared Rust navigation/keymap policy. Native
 widgets keep their own text, slider and focus-navigation keys.
+
+Ordinary workspace buttons retain application shortcuts after a mouse click:
+Ctrl+Z, Ctrl+Shift+Z/Ctrl+Y and tool-selection letters no longer require another
+click on the canvas. Text fields and sliders keep their native editing keys;
+Space/Enter still activate focused buttons, Tab traverses controls, and open
+menus retain keyboard navigation and Escape. Key releases still clear shared
+held state when focus moves. F11 keeps its existing window behavior.
+
+On an available desktop, run the focused shortcut journey in a clean isolated
+review launched with CAPY_SMOKE_TEST=1 and CAPY_TRACE_UI=1. It checks actual
+mouse clicks and guarded OS keyboard input, retained button focus, tool keys,
+text/slider editing, Space/Enter, Tab and nested-menu dismissal:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-shortcuts.ps1 -ProcessId <owned-review-pid> -StateFile artifacts/windows/Release/ui-state.json
+~~~
 
 Run allocation/order checks from a Visual Studio developer PowerShell:
 
@@ -211,7 +239,14 @@ Windows uses the shared settings schema and migration rules. Writes run on a
 dedicated worker and replace the previous file atomically after flushing. An
 unreadable file is preserved as `settings.recovery.*.json` when a later change
 is saved. Save failures appear in the window and Preferences; drawing continues.
-A final save failure does not yet offer a Retry/Keep Open shutdown dialog.
+Closing waits for accepted preference writes before releasing the workspace.
+If a write fails, the native recovery dialog offers Retry, Keep open, or Close
+without saving. Keep open retains the live preferences and workspace; Retry
+saves the retained values without requiring another edit. Explicit discard
+leaves the last saved preferences file unchanged. The settings-storage fixture
+covers failed writes, repeated retry, native recovery decisions and restart.
+Rust tests also cover delayed writes, storage worker failure and shared unsaved
+preferences across windows.
 
 `CAPY_SETTINGS_DIRECTORY` overrides the storage directory and must be absolute.
 Use an owned, disposable directory under ignored artifacts for native UI tests.
@@ -459,6 +494,7 @@ background saves do not restore the owner unnecessarily.
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-navigator.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-snap.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 cargo test --locked -p layer-ui --lib
 cargo test --locked -p layer-windows --lib
 cargo clippy --locked -p layer-windows --all-targets --no-deps -- -D warnings
@@ -471,6 +507,18 @@ retained controls, actual preview pixels after a controlled stroke and Undo,
 document aspect changes, resize, hide/reopen, theme colors and zero exit.
 The lifecycle fixture checks clean and dirty minimized close, visible decisions,
 Cancel preservation, maximized-state preservation and explicit Discard.
+The Snap fixture sends guarded Windows+Left/Right to its isolated foreground
+window and checks the actual DWM frame against the monitor work area. It retains
+a seeded drawing through left/right Snap, each minimize/restore cycle, maximize
+and restore. The camera viewport must match the native canvas exactly; the
+canvas fills the client area below the native one-pixel top border. Every state
+also receives OS-injected mouse and pen strokes: sampled interior pixels must
+appear, return exactly after one Undo, and reappear exactly after one Redo.
+The sample ends before the transient stroke-tip hover marker. Full client
+captures are retained without masks or pixel replacement. One final Undo removes
+the seed drawing, and clean close must exit successfully within five seconds.
+Use PowerShell 7 on an available desktop; this does not qualify physical pen
+hardware, mixed-display DPI, or painting cadence.
 Captures and profiles remain under ignored artifacts/windows.
 
 These are functional checks. Physical Navigator pointer gestures, full workspace
@@ -793,6 +841,21 @@ independent documents, drawing while another window is modal, cancelled close,
 closing the original first, and zero process exit within five seconds. Drawing
 uses controlled replay; this is not physical input or performance acceptance.
 
+Run the preference-save failure case with:
+
+~~~powershell
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailPreferences
+~~~
+
+This also passed on the native Release build. It locks the fixture's saved
+preferences against replacement, then verifies that closing recovery stays in
+its owning window and retains that workspace claim. The other window can still
+Undo/Redo. A failed Retry preserves the saved bytes; after removing the lock,
+Retry saves both windows' edits and closes only the requesting window. A new
+window inherits those preferences, and the final process exits normally within
+the existing five-second limit. Preferences and history use the Edit menu so the
+checks work with workspace layouts that omit their titlebar buttons.
+
 With CAPY_TRACE_UI enabled, windows-<process>.json records live window IDs/HWNDs
 and ui-state-<process>-<window>.json identifies each window's model. These local
 files can contain private state and stay ignored. The initial window also keeps
@@ -1089,11 +1152,60 @@ separate.
 
 ## Matched editor captures
 
+The zoom/rotation readout now keeps a rounded theme background when artwork
+fills the window, matching Web/Android's readable footer. Its native button
+also fits the canvas on click or tap, as on Android, and supports Space when
+focused. The caption buttons keep their native Windows behavior with a theme
+background so their glyphs remain visible over artwork in either theme.
+
+The Release check captures fitted and zoomed paper in both themes. Native
+mouse, pen and touch injection plus Space activation fit without modifying the
+drawing or replacing the retained readout. Hiding the footer and canceling the
+preview restores it correctly. Caption-button mouse checks cover maximize,
+restore, minimize and normal close with zero exit. The capture fixture uses the
+footer's Fit canvas action. Physical digitizer and timing acceptance stay separate.
+
+The current Paint review covers twelve native/Web pairs: 744, 960 and 1200 by
+660 logical pixels at scale 1.5, both themes, with fitted and zoomed paper beneath
+the title bar. Tool Set geometry differs by at most 0.50 physical pixels and
+Layers by 1.01; camera viewport, translation, zoom and work area agree exactly.
+Brush-preview rows now include the shared tool icon through the existing label
+component. Native checks cover all 17 tool projections, numeric drafts, retained
+controls and tool/layer context replacement; normal close exits successfully.
+
+The overall comparison still fails. Title-bar geometry differs by up to 21
+physical pixels, and the compact workspace presentation differs at 744 and 960.
+Windows follows Android's natural text widths and icon-sized compact selector;
+Web currently uses fixed title widths and a wider text selector. Full-image
+visual acceptance, including header/footer surfaces and native control styling,
+remains open. The image pairs are evidence, not a raster-parity pass.
+
+The fixture uses the same saved title-bar arrangement and supplies native caption
+reservations to the shared header geometry without shrinking the Web header.
+Each host measures its own controls and panels. Restoring the reference header
+reopens its previous transient columns through ordinary column icons. Native
+control IDs, UTF-8-independent zoom text and asynchronous viewport publication
+are handled explicitly. All pairs and mismatch reports are saved before the
+command returns failure; geometry tolerances and required control sets remain
+strict.
+
 The native capture fixture requires an isolated settings directory and
-CAPY_TRACE_UI=1. It uses actual Preferences, View and Navigator controls, then
-captures light/dark initial and zoomed paper-under-titlebar states. The drawing
-surface is sized to an exact logical viewport and scale; camera diagnostics
-include incremental updates and must agree with the native zoom readout.
+CAPY_TRACE_UI=1. Select Sketch, Paint or Photo in the owned editor before
+invoking it; the capture preserves that workspace. It uses Edit > Preferences
+and View commands, plus the footer Fit action when visible, to capture both
+themes with fitted and zoomed paper-under-titlebar states. The drawing surface
+is sized to an exact logical viewport and scale; camera diagnostics include
+incremental updates and must agree with the native zoom readout when shown.
+
+Tool Set, Layers previews and the footer must match the shared layout
+visibility, including their intentional absence in Sketch. Visible panels keep
+the same required controls and geometry tolerances. The header comparison
+identifies the standalone Main Menu separately from compact menu labels.
+
+Disabled titlebar buttons retain their themed background under the existing
+muted opacity, keeping them visible when white artwork reaches the header.
+Injected mouse, pen and touch taps leave the disabled Transform command inactive;
+a mouse stroke enables it and one Undo restores the disabled state.
 
 ~~~powershell
 $env:CAPY_SETTINGS_DIRECTORY=Join-Path (Get-Location) ('artifacts/windows/parity-profile/'+[Guid]::NewGuid().ToString('N'))
@@ -1226,3 +1338,46 @@ tests remain ignored. Whole-editor
 raster identity, configurable-switcher interactions, drag pickup, physical input,
 lifecycle/DPI/recovery, packaging and final presentation acceptance remain open.
 See the implementation history for detailed evidence and its scope.
+
+### Native column stacks
+
+Windows now projects complete open stack members with its existing native panel
+groups. Shared Rust supplies member geometry, connectors, drop targets, width
+limits and history. The icon strip retains its buttons, group dividers and
+connector paths; closed multi-member stacks expose no resize handle. Selecting
+a member opens its full column or its ordinary tabbed drawer according to
+the stack preference. Auto-hide consumes the outside canvas contact.
+
+Paint's shipped default opens its right column on adoption/reset. Stack
+membership, widths and preferences persist, while open columns remain transient.
+Sketch uses the shared workspace title bar and hides its docked panels.
+
+Blank strip space opens the shared column menu on secondary click or a pen/touch
+hold; a released hold retains the menu. Double-clicking or double-tapping that
+space expands the column. Resizable column edges show directional cursors and
+can drag out a closed single column. Footer grips match the Web/Android
+orientation and keep immediate pickup; icon tiles still require a hold.
+
+Windows uses the shared Web/Android docking targets: the upper part of a panel
+body offers tab insertion, its center highlights the body for tab docking,
+and the title-bar area above a column offers stacking before that column.
+Native previews distinguish the blue body highlight from thin insertion lines.
+The target checks drag Properties within the right column and verify cancel,
+commit and one-step Undo/Redo. They do not resolve the previously recorded
+synthetic pen/touch capture loss on direct cross-canvas tear-off.
+
+Run the isolated production-editor journey for each device, serially:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device mouse
+./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device pen
+./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device touch
+~~~
+
+Release journeys pass with mouse, pen and touch. The fixture checks blank-space
+menus and held release, double-click/tap expansion, closed-column drag-out
+resizing, geometry, connectors, selected icons, pickup policy, stack/member
+drops, cancellation and one-step history, retained resizing, individual drawers,
+auto-hide, themes, Zen and restart. These are guarded OS-delivered synthetic
+inputs. Physical pen/touch, complete visual acceptance, mixed displays and
+120 Hz painting still require their separate checks.

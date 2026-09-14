@@ -2,6 +2,7 @@
 #include "CollapsedColumns.h"
 #include "WorkspaceGeometry.h"
 #include <set>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyUi;
 namespace {
@@ -14,7 +15,9 @@ struct Column:std::enable_shared_from_this<Column>{
     uint32_t id=0;
     J geometry;
     std::map<std::wstring,Button> buttons;
-    hstring structure;
+    std::map<uint32_t,Border> dividers;
+    struct Connection {Shapes::Path path;hstring geometry;};
+    std::map<std::wstring,Connection> connections;
     double reported=0;
     bool applying=false;
     void init(){
@@ -32,8 +35,9 @@ struct Column:std::enable_shared_from_this<Column>{
             }
         }});
         frame.Children().Append(scroll);
-        grip.Background(clear());grip.Child(panelGrip(data->theme()));
+        grip.Background(clear());grip.Child(panelGrip(data->theme(),true));
         auto item=O({{L"kind",S(L"column")},{L"column",N(id)}});
+        gestures->Source(background,{},item,true);
         gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item);
         AutomationProperties::SetAutomationId(grip,L"column-grip-"+to_hstring(id));
         AutomationProperties::SetName(grip,L"Move column");frame.Children().Append(grip);workspace.Children().Append(background);
@@ -51,9 +55,23 @@ struct Column:std::enable_shared_from_this<Column>{
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
             auto pair=entry.GetArray();if(pair.Size()==2&&pair.GetNumberAt(0)==id)offset=pair.GetNumberAt(1);
         }
+        auto open=object(geometry,L"open");hstring origin;
+        for(auto value:array(object(data->state,L"customization"),L"column_drawers")){
+            auto anchor=object(value.GetObject(),L"anchor");
+            if(num(anchor,L"column") == id)origin=str(anchor,L"origin");
+        }
+        std::set<uint32_t> currentDividers;
         std::set<std::wstring> current;double bottom=num(content,L"height");
         for(auto value:array(geometry,L"groups")){
             auto group=value.GetObject();auto groupBounds=object(group,L"bounds");
+            auto separator=object(group,L"divider");
+            if(num(separator,L"height")>0){
+                auto key=uint32_t(num(group,L"group"));currentDividers.insert(key);
+                auto [line,added]=dividers.try_emplace(key);
+                if(added){line->second.Background(data->brush(L"tabbar"));line->second.IsHitTestVisible(false);icons.Children().Append(line->second);
+                    AutomationProperties::SetAutomationId(line->second,L"column-divider-"+to_hstring(key));}
+                place(line->second,local(separator,content,offset));
+            }
             bottom=std::max(bottom,num(groupBounds,L"y")+num(groupBounds,L"height")-num(content,L"y")+offset);
             for(auto iconValue:array(group,L"icons")){
                 auto tile=iconValue.GetObject();auto panelId=str(tile,L"panel");std::wstring key=panelId.c_str();current.insert(key);
@@ -78,11 +96,33 @@ struct Column:std::enable_shared_from_this<Column>{
                 }
                 auto pick=found->second;place(pick,local(object(tile,L"bounds"),content,offset));
                 AutomationProperties::SetName(pick,str(panel,L"title"));ToolTipService::SetToolTip(pick,box_value(str(panel,L"title")));
-                pick.Background(str(group,L"active")==panelId?selected():clear());
+                bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId;
+                pick.Background(active?selected():clear());
+                pick.CornerRadius(active&&open.Size()?(str(open,L"direction")==L"left"?CornerRadius{0,6,6,0}:CornerRadius{6,0,0,6}):CornerRadius{6,6,6,6});
+                AutomationProperties::SetItemStatus(pick,active?L"Selected":L"");
             }
         }
         for(auto it=buttons.begin();it!=buttons.end();)if(!current.contains(it->first)){
             uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=buttons.erase(it);
+        }else ++it;
+        for(auto it=dividers.begin();it!=dividers.end();)if(!currentDividers.contains(it->first)){
+            uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
+        }else ++it;
+        std::set<std::wstring> currentConnections;
+        for(auto value:array(open,L"connections")){
+            auto pair=value.GetArray();auto panel=pair.GetStringAt(0);auto link=pair.GetObjectAt(1);
+            std::wstring key(panel);currentConnections.insert(key);
+            auto [it,added]=connections.try_emplace(key);auto& connection=it->second;
+            if(added){
+                connection.path.Fill(data->brush(L"panel"));connection.path.IsHitTestVisible(false);
+                Canvas::SetZIndex(connection.path,159);workspace.Children().Append(connection.path);
+                AutomationProperties::SetAutomationId(connection.path,L"column-connection-"+to_hstring(id)+L"-"+panel);
+            }
+            auto encoded=link.Stringify();
+            if(encoded!=connection.geometry){connection.geometry=encoded;place(connection.path,object(link,L"bounds"));connection.path.Data(drawerBridge(link));}
+        }
+        for(auto it=connections.begin();it!=connections.end();)if(!currentConnections.contains(it->first)){
+            uint32_t index;if(workspace.Children().IndexOf(it->second.path,index))workspace.Children().RemoveAt(index);it=connections.erase(it);
         }else ++it;
         icons.Width(num(content,L"width"));icons.Height(bottom);
         reported=offset;
@@ -91,6 +131,7 @@ struct Column:std::enable_shared_from_this<Column>{
     }
     void remove(){
         uint32_t index;if(workspace.Children().IndexOf(background,index))workspace.Children().RemoveAt(index);
+        for(auto const& [key,connection]:connections)if(workspace.Children().IndexOf(connection.path,index))workspace.Children().RemoveAt(index);
     }
 };
 }

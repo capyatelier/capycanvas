@@ -6,7 +6,9 @@
 //! readbacks. Destination-aware brush stages can be added beside this
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
+mod pixel_rect;
 mod submission;
+use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
 
 use layer_core::{
     AssetId, BRISTLE_GRAIN_TEXTURE_ASSET, BrushAccumulation, BrushBlendMode, BrushExecution,
@@ -2214,8 +2216,8 @@ impl WgpuRasterizer {
             multiview_mask: None,
         });
         pass.set_scissor_rect(
-            scissor.min_x,
-            scissor.min_y,
+            scissor.min_x(),
+            scissor.min_y(),
             scissor.width(),
             scissor.height(),
         );
@@ -2728,7 +2730,7 @@ impl WgpuRasterizer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
+            pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
             let pipeline = self.pipelines.material(
                 plan.material,
                 plan.state.watercolor_wetness,
@@ -3020,7 +3022,7 @@ impl WgpuRasterizer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
+                pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
                 pass.set_pipeline(&self.pipelines.watercolor_transport[step as usize]);
                 pass.set_bind_group(
                     0,
@@ -3438,7 +3440,7 @@ impl WgpuRasterizer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
+            pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
             let pipeline = self.pipelines.material(
                 plan.material,
                 plan.state.watercolor_wetness,
@@ -3546,7 +3548,7 @@ impl WgpuRasterizer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
+            pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
             pass.set_pipeline(self.pipelines.material(plan.material, false, false, false));
             pass.set_bind_group(
                 0,
@@ -3755,6 +3757,9 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
+        self.raster_restore_ready(packet)
+    }
     fn can_capture_raster(&self) -> bool {
         self.raster_ready()
     }
@@ -4545,8 +4550,8 @@ impl CanvasRenderer for WgpuRasterizer {
                                 texture: &source.active().texture,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d {
-                                    x: local.min_x,
-                                    y: local.min_y,
+                                    x: local.min_x(),
+                                    y: local.min_y(),
                                     z: 0,
                                 },
                                 aspect: wgpu::TextureAspect::All,
@@ -4555,8 +4560,8 @@ impl CanvasRenderer for WgpuRasterizer {
                                 texture: &preview.primary.texture,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d {
-                                    x: local.min_x,
-                                    y: local.min_y,
+                                    x: local.min_x(),
+                                    y: local.min_y(),
                                     z: 0,
                                 },
                                 aspect: wgpu::TextureAspect::All,
@@ -4658,8 +4663,8 @@ impl CanvasRenderer for WgpuRasterizer {
                                 texture: &committed.active().texture,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d {
-                                    x: local.min_x,
-                                    y: local.min_y,
+                                    x: local.min_x(),
+                                    y: local.min_y(),
                                     z: 0,
                                 },
                                 aspect: wgpu::TextureAspect::All,
@@ -4668,8 +4673,8 @@ impl CanvasRenderer for WgpuRasterizer {
                                 texture: &preview_wetness.primary.texture,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d {
-                                    x: local.min_x,
-                                    y: local.min_y,
+                                    x: local.min_x(),
+                                    y: local.min_y(),
                                     z: 0,
                                 },
                                 aspect: wgpu::TextureAspect::All,
@@ -4732,12 +4737,12 @@ impl CanvasRenderer for WgpuRasterizer {
             dirty = dirty.union(pixel_rect(
                 layer_core::Rect {
                     min: layer_core::Point {
-                        x: bounds.min_x as f32 + offset.x,
-                        y: bounds.min_y as f32 + offset.y,
+                        x: bounds.min_x() as f32 + offset.x,
+                        y: bounds.min_y() as f32 + offset.y,
                     },
                     max: layer_core::Point {
-                        x: bounds.max_x as f32 + offset.x,
-                        y: bounds.max_y as f32 + offset.y,
+                        x: bounds.max_x() as f32 + offset.x,
+                        y: bounds.max_y() as f32 + offset.y,
                     },
                 },
                 packet.document_extent,
@@ -4862,7 +4867,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_scissor_rect(dirty.min_x, dirty.min_y, dirty.width(), dirty.height());
+            pass.set_scissor_rect(dirty.min_x(), dirty.min_y(), dirty.width(), dirty.height());
             pass.set_pipeline(&self.pipelines.background);
             pass.set_bind_group(
                 0,
@@ -4946,8 +4951,8 @@ impl CanvasRenderer for WgpuRasterizer {
                             .filter(|(_, clipped)| !clipped.is_empty())
                         {
                             pass.set_scissor_rect(
-                                clipped.min_x,
-                                clipped.min_y,
+                                clipped.min_x(),
+                                clipped.min_y(),
                                 clipped.width(),
                                 clipped.height(),
                             );
@@ -5010,8 +5015,8 @@ impl CanvasRenderer for WgpuRasterizer {
                         .filter(|(_, clipped)| !clipped.is_empty())
                     {
                         pass.set_scissor_rect(
-                            clipped.min_x,
-                            clipped.min_y,
+                            clipped.min_x(),
+                            clipped.min_y(),
                             clipped.width(),
                             clipped.height(),
                         );
@@ -5340,164 +5345,6 @@ fn liquify_mode_code(mode: LiquifyMode) -> f32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct PixelRect {
-    min_x: u32,
-    min_y: u32,
-    max_x: u32,
-    max_y: u32,
-}
-
-impl PixelRect {
-    const EMPTY: Self = Self {
-        min_x: u32::MAX,
-        min_y: u32::MAX,
-        max_x: 0,
-        max_y: 0,
-    };
-    fn full(extent: [u32; 2]) -> Self {
-        Self {
-            min_x: 0,
-            min_y: 0,
-            max_x: extent[0],
-            max_y: extent[1],
-        }
-    }
-    fn is_empty(self) -> bool {
-        self.min_x >= self.max_x || self.min_y >= self.max_y
-    }
-    fn width(self) -> u32 {
-        self.max_x - self.min_x
-    }
-    fn height(self) -> u32 {
-        self.max_y - self.min_y
-    }
-    fn area(self) -> u64 {
-        self.width() as u64 * self.height() as u64
-    }
-    fn union(self, other: Self) -> Self {
-        if self.is_empty() {
-            return other;
-        }
-        if other.is_empty() {
-            return self;
-        }
-        Self {
-            min_x: self.min_x.min(other.min_x),
-            min_y: self.min_y.min(other.min_y),
-            max_x: self.max_x.max(other.max_x),
-            max_y: self.max_y.max(other.max_y),
-        }
-    }
-
-    fn intersect(self, other: Self) -> Self {
-        let result = Self {
-            min_x: self.min_x.max(other.min_x),
-            min_y: self.min_y.max(other.min_y),
-            max_x: self.max_x.min(other.max_x),
-            max_y: self.max_y.min(other.max_y),
-        };
-        if result.is_empty() {
-            Self::EMPTY
-        } else {
-            result
-        }
-    }
-
-    fn expand(self, radius: u32, extent: [u32; 2]) -> Self {
-        if self.is_empty() {
-            return self;
-        }
-        Self {
-            min_x: self.min_x.saturating_sub(radius),
-            min_y: self.min_y.saturating_sub(radius),
-            max_x: self.max_x.saturating_add(radius).min(extent[0]),
-            max_y: self.max_y.saturating_add(radius).min(extent[1]),
-        }
-    }
-
-    /// Splits `self - other` into non-overlapping top, bottom, left, and right
-    /// rectangles. This keeps sparse preview composition exact without a mask
-    /// texture or a canvas-pixel operation on the host.
-    fn subtract(self, other: Self) -> [Self; 4] {
-        if self.is_empty() {
-            return [Self::EMPTY; 4];
-        }
-        let overlap = self.intersect(other);
-        if overlap.is_empty() {
-            return [self, Self::EMPTY, Self::EMPTY, Self::EMPTY];
-        }
-        [
-            Self {
-                min_x: self.min_x,
-                min_y: self.min_y,
-                max_x: self.max_x,
-                max_y: overlap.min_y,
-            },
-            Self {
-                min_x: self.min_x,
-                min_y: overlap.max_y,
-                max_x: self.max_x,
-                max_y: self.max_y,
-            },
-            Self {
-                min_x: self.min_x,
-                min_y: overlap.min_y,
-                max_x: overlap.min_x,
-                max_y: overlap.max_y,
-            },
-            Self {
-                min_x: overlap.max_x,
-                min_y: overlap.min_y,
-                max_x: self.max_x,
-                max_y: overlap.max_y,
-            },
-        ]
-    }
-
-    fn page_local(self, coordinate: [u32; 2]) -> Self {
-        let origin_x = coordinate[0] * PAGE_SIZE;
-        let origin_y = coordinate[1] * PAGE_SIZE;
-        Self {
-            min_x: self.min_x.saturating_sub(origin_x),
-            min_y: self.min_y.saturating_sub(origin_y),
-            max_x: self.max_x.saturating_sub(origin_x).min(PAGE_SIZE),
-            max_y: self.max_y.saturating_sub(origin_y).min(PAGE_SIZE),
-        }
-    }
-}
-
-fn page_rect(coordinate: [u32; 2]) -> PixelRect {
-    let min_x = coordinate[0] * PAGE_SIZE;
-    let min_y = coordinate[1] * PAGE_SIZE;
-    PixelRect {
-        min_x,
-        min_y,
-        max_x: min_x + PAGE_SIZE,
-        max_y: min_y + PAGE_SIZE,
-    }
-}
-
-fn page_coordinates(rect: PixelRect) -> impl Iterator<Item = [u32; 2]> {
-    let min_x = rect.min_x / PAGE_SIZE;
-    let min_y = rect.min_y / PAGE_SIZE;
-    let max_x = rect.max_x.saturating_sub(1) / PAGE_SIZE;
-    let max_y = rect.max_y.saturating_sub(1) / PAGE_SIZE;
-    (min_y..=max_y).flat_map(move |y| (min_x..=max_x).map(move |x| [x, y]))
-}
-
-fn pixel_rect(rect: layer_core::Rect, extent: [u32; 2]) -> PixelRect {
-    if rect.is_empty() {
-        return PixelRect::EMPTY;
-    }
-    PixelRect {
-        min_x: rect.min.x.floor().max(0.0).min(extent[0] as f32) as u32,
-        min_y: rect.min.y.floor().max(0.0).min(extent[1] as f32) as u32,
-        max_x: rect.max.x.ceil().max(0.0).min(extent[0] as f32) as u32,
-        max_y: rect.max.y.ceil().max(0.0).min(extent[1] as f32) as u32,
-    }
-}
-
 fn batch_pixel_rect(batch: &DabBatch, extent: [u32; 2]) -> PixelRect {
     let damage = pixel_rect(batch.damage, extent);
     let transport_radius = batch
@@ -5569,24 +5416,24 @@ fn dab_candidate_pixels(dab: Dab, extent: [u32; 2]) -> u64 {
     let [cos, sin] = dab.rotation;
     let extent_x = (dab.radii[0] * cos).hypot(dab.radii[1] * sin) + 1.0;
     let extent_y = (dab.radii[0] * sin).hypot(dab.radii[1] * cos) + 1.0;
-    let rect = PixelRect {
-        min_x: (dab.center.x - extent_x)
+    let rect = PixelRect::new(
+        (dab.center.x - extent_x)
             .floor()
             .max(0.0)
             .min(extent[0] as f32) as u32,
-        min_y: (dab.center.y - extent_y)
+        (dab.center.y - extent_y)
             .floor()
             .max(0.0)
             .min(extent[1] as f32) as u32,
-        max_x: (dab.center.x + extent_x)
+        (dab.center.x + extent_x)
             .ceil()
             .max(0.0)
             .min(extent[0] as f32) as u32,
-        max_y: (dab.center.y + extent_y)
+        (dab.center.y + extent_y)
             .ceil()
             .max(0.0)
             .min(extent[1] as f32) as u32,
-    };
+    );
     if rect.is_empty() { 0 } else { rect.area() }
 }
 
@@ -7433,15 +7280,7 @@ mod tests {
         let combined = watercolor_update_damages(&batches, 1, [128, 128])
             .into_iter()
             .fold(PixelRect::EMPTY, PixelRect::union);
-        assert_eq!(
-            combined,
-            PixelRect {
-                min_x: 4,
-                min_y: 14,
-                max_x: 106,
-                max_y: 96,
-            }
-        );
+        assert_eq!(combined, PixelRect::new(4, 14, 106, 96));
     }
 
     #[test]
@@ -8609,19 +8448,40 @@ mod tests {
     }
 
     #[test]
+    fn clipped_empty_damage_never_visits_a_page() {
+        for extent in [[1537, 769], [1536, 768]] {
+            for rect in [
+                Rect {
+                    min: Point { x: 1280., y: -900. },
+                    max: Point { x: 2000., y: -1. },
+                },
+                Rect {
+                    min: Point { x: -900., y: 270. },
+                    max: Point { x: -1., y: 700. },
+                },
+                Rect {
+                    min: Point { x: 2000., y: 270. },
+                    max: Point { x: 3000., y: 700. },
+                },
+                Rect {
+                    min: Point { x: 270., y: 1000. },
+                    max: Point { x: 700., y: 2000. },
+                },
+            ] {
+                let clipped = pixel_rect(rect, extent);
+                assert!(clipped.is_empty());
+                assert_eq!(page_coordinates(clipped).count(), 0, "{rect:?}, {extent:?}");
+                assert_eq!(clipped.area(), 0);
+                assert!(clipped.page_local([5, 0]).is_empty());
+            }
+        }
+        assert_eq!(PixelRect::EMPTY.area(), 0);
+    }
+
+    #[test]
     fn pixel_rect_subtraction_preserves_every_pixel_outside_the_overlap() {
-        let outer = PixelRect {
-            min_x: 10,
-            min_y: 20,
-            max_x: 90,
-            max_y: 100,
-        };
-        let overlap = PixelRect {
-            min_x: 30,
-            min_y: 40,
-            max_x: 70,
-            max_y: 80,
-        };
+        let outer = PixelRect::new(10, 20, 90, 100);
+        let overlap = PixelRect::new(30, 40, 70, 80);
         let pieces = outer.subtract(overlap);
         assert_eq!(
             pieces.iter().map(|piece| piece.area()).sum::<u64>(),

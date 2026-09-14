@@ -25,10 +25,24 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarStylesAndActions(in: app)
     }
 
-    @MainActor func testSystemStatusSetting() {
+    @MainActor func testTitleBarCustomization() { checkTitleBarCustomization(in: editorTestApplication()) }
+
+    @MainActor func testTitleBarToolDrawers() { checkTitleBarToolDrawers(in: editorCaptureApplication()) }
+
+    @MainActor func testColumnStacks() { checkColumnStacks(in: editorTestApplication()) }
+
+    @MainActor func testColumnStacksDark() { checkColumnStacks(in: editorTestApplication(), theme: "dark") }
+
+    @MainActor func testPaintDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication()) }
+
+    @MainActor func testPhotoDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication(), photo: true) }
+
+    @MainActor func testRendererRecovery() { checkRendererRecovery(in: editorTestApplication()) }
+
+    @MainActor func testTitleBarSystemStatus() {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        checkSystemStatusSetting(in: app)
+        checkTitleBarSystemStatus(in: app)
     }
 
     @MainActor func testIndependentEditorWindows() {
@@ -162,7 +176,17 @@ final class EditorLaunchTests: XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
+    }
+
+    @MainActor func testCompleteEditorDarkCapture() {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
+        app.launch()
+        capturePaintEditor(in: app, theme: "dark")
+        for _ in 0..<4 { workspaceActivate(app.buttons["navigator-zoom_in"]) }
+        capturePaintEditor(in: app, scenario: "paint-canvas-under-header", theme: "dark")
     }
 
     @MainActor func testBlendChoices() {

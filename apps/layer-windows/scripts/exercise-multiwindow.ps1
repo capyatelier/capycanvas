@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu)
+param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailPreferences)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -76,8 +76,12 @@ function Ready($Window){
     Wait-Until {(Model $Window).brush_ready -and (Model $Window).windows_workspace.ready} "Window $($Window.id) did not become ready" 45
 }
 function Preferences {Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)}
+function Invoke-Edit([string]$Name) {
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
+    (Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
 function Open-Preferences {
-    Invoke 'Preferences' -Name
+    Invoke-Edit 'Preferences'
     Wait-Until {$null -ne (Preferences)} 'Preferences did not open'
 }
 function Close-Preferences {
@@ -201,16 +205,59 @@ try {
         }
         foreach($window in @($first,$second)){
             Use-Window $window
-            Invoke 'Undo' -Name
+            Invoke-Edit 'Undo'
             Wait-Until {!(Model).state.document_file.modified} 'Undo after multiwindow recovery did not restore the clean document'
-            Invoke 'Redo' -Name
+            Invoke-Edit 'Redo'
             Wait-Until {(Recovery-Signature $window) -eq $before[$window.id]} 'Redo after multiwindow recovery did not restore its document'
         }
         Use-Window $first
     }
+    $expectedDark='#1c2c3c'
+    if($FailPreferences){
+        $settingsFile=Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'
+        function Saved-Preferences {try{Get-Content -LiteralPath $settingsFile -Raw|ConvertFrom-Json}catch{$null}}
+        Wait-Until {(Saved-Preferences).dark_base -eq $expectedDark -and (Saved-Preferences).light_base -eq '#dcecfb'} 'Shared preferences were not saved before the failure fixture'
+        $savedHash=(Get-FileHash -LiteralPath $settingsFile).Hash
+        # Deny replacement of this fixture's settings file, leaving the previous
+        # saved bytes readable. Each native window must keep its own close state.
+        $lockedPreferences=[IO.File]::Open($settingsFile,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
+        Open-Preferences
+        $expectedDark='#2d3e4f'
+        $entry=Control 'Dark theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)
+        $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($expectedDark)
+        (Control 'Light theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)).SetFocus()
+        Wait-Until {(Model $first).state.settings.dark_base -eq $expectedDark -and (Model $second).state.settings.dark_base -eq $expectedDark -and (Model $first).state.host_error} 'Denied preference write was not published while retaining shared values'
+        Close-Preferences
+    }
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$first.hwnd)
     Invoke 'Discard Changes' -Name -Within (Control 'document-dialog')
+    if($FailPreferences){
+        function Wait-PreferenceRecovery {
+            Wait-Until {
+                $state=(Model $first).windows_settings_close;$dialog=Find 'preferences-close-error'
+                $state.requested -and !$state.ready -and !$state.busy -and $state.error -and $dialog -and !$dialog.Current.IsOffscreen
+            } 'Closing preference failure did not remain in its owning window'
+        }
+        Wait-PreferenceRecovery
+        if((Model $first).windows_workspace.close_requested){throw 'Failed preferences close released the workspace before recovery'}
+        if((Get-FileHash -LiteralPath $settingsFile).Hash -ne $savedHash){throw 'Denied preference replacement changed saved bytes'}
+        Use-Window $second
+        if(Find 'preferences-close-error'){throw 'Preference recovery appeared in the other window'}
+        Invoke-Edit 'Undo'
+        Wait-Until {!(Model $second).state.document_file.modified} 'Other window could not undo while its peer awaited preference recovery'
+        Invoke-Edit 'Redo'
+        Wait-Until {(Model $second).state.document_file.modified} 'Other window could not redo while its peer awaited preference recovery'
+        Use-Window $first
+        $attempt=(Model $first).windows_settings_close.attempt
+        Invoke 'Retry' -Name -Within (Control 'preferences-close-error')
+        Wait-Until {(Model $first).windows_settings_close.attempt -gt $attempt} 'Failed preference retry did not start'
+        Wait-PreferenceRecovery
+        if((Get-FileHash -LiteralPath $settingsFile).Hash -ne $savedHash){throw 'Failed preference retry changed saved bytes'}
+        $lockedPreferences.Dispose();$lockedPreferences=$null
+        Invoke 'Retry' -Name -Within (Control 'preferences-close-error')
+    }
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$first.hwnd) -and @(Windows).Count -eq 1} 'Initial window did not close independently'
+    if($FailPreferences -and ((Saved-Preferences).dark_base -ne $expectedDark -or (Saved-Preferences).light_base -ne '#dcecfb')){throw 'Closing retry did not preserve both windows preference edits'}
     Use-Window $second
     (Control 'Drawing canvas' -Name).SetFocus()
     [CapyWindowTest]::SetForegroundWindow([IntPtr]$second.hwnd)|Out-Null
@@ -218,7 +265,7 @@ try {
     [CapyWindowTest]::NewWindow([uint32]$review.Id,[IntPtr]$second.hwnd)
     Wait-Until {@(Windows).Count -eq 2} 'Ctrl+Shift+N failed after the original window closed'
     $third=@(Windows|Where-Object id -ne $second.id)[0];Ready $third
-    if((Model $third).state.settings.dark_base -ne '#1c2c3c' -or (Model $third).state.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}
+    if((Model $third).state.settings.dark_base -ne $expectedDark -or (Model $third).state.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}
     Use-Window $second
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$second.hwnd)
     Invoke 'Discard Changes' -Name -Within (Control 'document-dialog')
@@ -227,10 +274,11 @@ try {
     if(!$review.WaitForExit(5000)){throw 'Final window process exit exceeded five seconds'}
     if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';preferences_close_recovery=if($FailPreferences){'owned recovery, peer Undo/Redo, failed retry, repaired save and new-window inheritance passed'}else{'not requested'};gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
+    if($lockedPreferences){$lockedPreferences.Dispose()}
     foreach($name in $names){
         if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
         else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}

@@ -97,6 +97,9 @@ records required Apple tile gating and whole-row pickup work. Earlier successful
 workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
+The explicit Customize Title Bar surface follows the shared editor exception:
+whole editable items and component-bank chips drag immediately after movement
+slop with every device; bank placement is drag-only.
 
 Editor menus remain vertical, anchored to their source, and permit a held
 finger/Pencil contact to transition directly into dragging. Horizontal edit
@@ -104,6 +107,241 @@ bars are not acceptable. The 2026-09-13 productivity review supersedes the
 blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
+
+## Editor fit, footer grips and gray title-bar backgrounds — 2026-09-13
+
+Apple now fits docked Color wheels to available height, retaining the shared
+128-point minimum and scroll behavior. One grip drawing matches Web/Android
+header and vertical-footer rotation, opacity and inset. The user chose Web's
+rounded gray title-bar backgrounds; the redundant text/icon halo renderer and
+parameters are removed. Mac keeps top-level menus in the OS menu bar.
+
+Integration through `59732aa` includes restored Paint defaults and Photo's
+reviewed right-column arrangement; final Windows-only updates do not alter the
+validated Apple/shared/Web source. All eleven recovery stashes remain. The
+integrated shared regression passes 528 tests, with one existing host benchmark
+ignored. Both signed version-5 builds pass. Four Mac and seven physical iPad
+workflows pass with no failures or skips: both-theme Paint captures, Navigator
+and blend Undo, Paint/Photo columns and relaunch; iPad additionally checks Color,
+title-bar customization and tool drawers. Mac's preceding version-4 title-bar
+checks also pass. Simulator Color, column, numeric and full-editor checks pass;
+its later header drag moved the OS window and a following drawer containment
+check failed. Those two windowed simulator cases remain unresolved.
+
+Eight current native/Web fit/zoomed full-editor comparisons retain all pixels.
+Normal-size review accepts the wheel fit, footer orientation and gray header
+backgrounds. Exact image equality is not claimed. The capture helper uses current
+managed Paint and visible Fit canvas, removing an obsolete Mac popup workaround.
+
+The physical review app/runner are updated, but the post-test local CoreDevice
+service timed out on status queries and direct review launch. Review-session
+restoration and post-test descriptor verification remain pending. Evidence and
+all failures are ignored under `artifacts/apple-editor-parity-v1/` and
+`artifacts/apple-color-fit-v1/`. Complete feature, visual-state, physical-input,
+provider/lifecycle and sustained Mac 90 Hz/iPad 120 Hz acceptance remain open.
+
+## Retained renderer and committed recovery — 2026-09-13
+
+This checkpoint follows `7d5d59b` and integrates shared main through `9c89f7a`,
+including Android header transparency and the revised Paint columns. All eleven
+recovery stashes remain intact.
+
+Apple now uses shared renderer suspension/replacement instead of direct GPU
+assignment. Failure callbacks belong to one device generation, and the serial
+owner also polls health while native drawing is idle. Rendering errors retain
+the CPU document, committed pixels, embedded assets, history and working values;
+unfinished input is cancelled. Restart Canvas reconstructs that session and
+Save As remains available. Native thumbnail/filter-preview generations reset.
+Retirement runs on a worker; ordinary surface replacement retains a healthy GPU.
+
+The retired input-only recovery barrier is replaced by preparation of a committed
+snapshot without a drawable. Active ink can retain the previous committed raster.
+The store reports lifecycle success only after preferences/workspace writes and
+the existing project worker's atomic recovery publication. Recovery no longer
+waits merely because a manual file request is pending. No second project codec,
+compatibility renderer or recovery writer is introduced.
+
+The integrated Apple/host/UI suite passes 442 tests, with one existing host
+benchmark ignored. Hardware renderer iteration 6 covers both presets with
+explicit suspension, actual device loss and uncaptured validation. It verifies
+cancelled active input, exact restored source/raster pixels, saving while stopped,
+pending requests, working settings/camera, stale callbacks and releases, document
+Undo/Redo and new painting. Real-owner persistence iteration 4 passes both presets,
+including pen-up followed by durable recovery without another drawable, cancelled
+publication, newest-revision coalescing, failure/retry and owner restart.
+
+Both signed iteration-3 builds pass. Native iteration 3 passes four workflows
+per host with no failures or skips: idle renderer loss/validation and visible
+restart with exact artwork samples and history; completed-copy relaunch;
+column stacks; Metal/layers and Mac mouse drawing. Iteration 2's Mac stack
+failure read width before asynchronous redo publication; its iPad pixel wait
+ran after the editor left the foreground. The test now waits for exact width,
+samples the full iPad screen and verifies the foreground. Earlier failures
+remain recorded. A scoped retry after the final iPad app-query timeout restores
+the review namespace and verifies the artist app descriptor unchanged.
+
+Corrected iteration-4 captures reveal blank thumbnails after recovery. The
+iteration-5 preview-readiness test fails on both hosts after 30 seconds: the
+new staged GPU still waits for the host catalog, preventing idle thumbnails.
+Apple now completes that startup gate for each GPU with the retained catalog;
+the library is neither reloaded nor tracked by an additional state flag.
+
+Both signed iteration-6 builds pass, and all four native workflows pass again
+on each host with no failures or skips. The new thumbnail check passes. Reviewed
+final recovery captures show the matching blue thumbnail and restored transparent
+checkerboards on both hosts. These captures establish recovery presentation,
+not the complete editor comparison against Web.
+The final iPad app query timed out after successful tests. Its scoped retry
+restored the review namespace and verified the artist app descriptor unchanged.
+
+The first push was rejected because shared main advanced to `9c89f7a`. The
+renderer milestone was rebased without overwriting that Paint-default update.
+The integrated Apple/host/UI/workspace suite passes 528 tests, with one existing
+host benchmark ignored. Both real-file column-stack persistence cases pass the
+new default, customized membership/width/preferences, switching and history.
+Iteration 8 passes the four existing native workflows on each host. Its new Paint
+fixture used a coordinator field in the native command; `id` corrects that setup.
+Iteration 9 passes the iPad Paint workflow. Read-only copies of the isolated
+Mac database retain the Paint bindings, while relaunch chooses a separate Sketch
+binding. Iteration 10 establishes that the visible scene identifier is unchanged;
+that is a restoration failure, not a reason to relax the same-scene assertion.
+Editor-owner construction now waits for the scene identifier, with its identity
+boundary inside a stable container. The test also covers the legitimate new-scene
+case by opening its saved workspace through the ordinary switcher.
+
+Both signed iteration-12 builds pass. All five native workflows pass on each
+host, with no failures or skips. The Mac restores Paint automatically in the
+same scene; its event log contains no switcher action after relaunch. The iPad
+run creates a new scene and reopens the saved workspace through the switcher.
+Reviewed captures show the new Paint columns. The Color field is clipped by its
+short scroll viewport at the default split; shared fit/scroll behavior remains
+part of full-editor visual acceptance. Full app-inventory queries timed out after
+the successful iPad run; scoped per-bundle queries restore the review session
+and verify the artist app descriptor unchanged.
+
+Evidence stays ignored under `artifacts/apple-renderer-recovery-v1/`. These checks
+do not establish physical background expiration, provider interruption, every
+window/surface transition, the complete feature/visual/physical-input inventory
+or sustained Mac 90 Hz/iPad 120 Hz performance. The overall goal remains open.
+
+## Shared column stacks — 2026-09-13
+
+This checkpoint follows `9996f51` and integrates shared main through `e46f271`.
+The eleven recovery stashes are preserved. Both Apple hosts use the ordinary
+dock views to open a full-height stack member, with shared active-icon
+connectors, selected tabs, split dividers and remembered widths. Native grips
+expose shared preferences and remain immediate drag sources. Held icon bodies,
+tabs, group grips and toolbar grips use shared stack-member and trailing-group
+targets. Closed aggregates have no resize affordance. Fresh Paint opens its
+right stack; custom saved layouts start closed. The retired Apple drawer fallback
+and shared platform opt-in checks are removed.
+
+After integration, 487 Apple/core/host/UI checks pass with one existing host
+benchmark ignored. The native ABI validates ordinary group publication and
+history on both presets. A hardware-GPU native contact test verifies auto-hide
+consumes the entire contact without ink, permits the next stroke and restores
+exact pixels with document Undo. Incoming diagnostics visibility and renderer
+replacement coverage now includes both Apple presets.
+
+AppKit iteration 4 passes eight checks across both presets and mouse/tablet
+input: held icons, immediate tabs/grips, panel/group/toolbar member insertion,
+trailing-group targets, fixed closed widths, member opening/switching, resize
+history, focus cancellation and late-release rejection. Two real workspace-file
+fixtures pass switching, relaunch, persisted membership/preferences/width and
+Undo/Redo while retaining working brush settings and discarding transient open
+state. These AppKit contacts do not establish physical Pencil acceptance.
+
+Signed build iteration 3 passes on both hosts. Native iteration 3 passes three
+tests on each host, with no failures or skips: both themes, stacking, switching,
+native resize and Undo/Redo, preferences, auto-hide and compact drawers; plus
+Metal launch/layers and Mac mouse drawing/document Undo/Redo. A timed-out iPad
+post-test app query succeeds on scoped retry; the review namespace is restored
+and the artist app descriptor is unchanged. All four stack captures were reviewed
+at normal size. They establish legible ordinary groups and selected connectors
+in these isolated fixtures, not the complete managed-editor/native-Web visual
+gate. Web Wasm checking passes with Homebrew LLVM after an initial compiler
+selection failure with Apple's clang.
+The initial failed fixture iterations are retained and excluded from pass counts.
+Evidence stays ignored under `artifacts/apple-column-stacks-v1/`; the integration
+snapshot is under `artifacts/apple-main-integration-e46f271/`.
+
+This closes implementation of Apple full-column stacks; broader UIKit/physical
+input, full-editor visual parity, lifecycle/provider recovery, the complete
+feature inventory and sustained 90/120 Hz acceptance remain open. The overall
+Apple goal is **incomplete**.
+
+## Shared native title bar — 2026-09-13
+
+Apple now consumes the shared typed title-bar projection and native drag protocol
+also used by Android. Both hosts expose Customize Title Bar, three shared sizes,
+all three placement zones, footer visibility, component-bank dragging, multi-select
+tool insertion, hidden-item overflow, context/keyboard movement, Cancel and one
+Done history entry. Rust owns the frozen geometry, validation, placement and
+history; AppKit/UIKit own timing, slop and contact capture. The native owner
+resolves and applies release actions together on its serial queue. Mac menus
+remain in the OS menu bar; unavailable controls are projected out of portable
+saved models and rejected as bank sources.
+
+Fresh Sketch uses individual header tools without the old toolbar bands or
+footer. The established untouched-default update preserves working values and
+edited histories. Apple's fixed header, separate Zen fallback, global clock
+visibility view, unused workspace-switcher sizing mode and duplicate Main Menu
+assembly are removed. Controls keep the live canvas underneath, with contrasting
+ink, live foreground/background paints and shared drawer anchors. Menu-label
+measurement follows the actual native font and shared spacing. Removing Web's
+obsolete narrow workspace-pill padding rule aligns its allocation with Apple.
+
+Native checks found two presentation defects: proportional measurement of a
+monospaced clock changed geometry during a minute tick and canceled a held drag;
+an inactive outer context wrapper replaced nested popup requests. Measurement
+now uses the displayed monospaced digits, and the shared popup preference helper
+appends active requests while preserving children. iPad fullscreen observation
+compares effective scene and display coordinates. A final Mac capture exposed
+brush hover underneath transparent title-bar controls. Native hit testing now
+clears idle canvas hover over UI, while preserving active-contact completion.
+The corrected capture retains the textured brush cursor on canvas and removes
+it over the Layers opener; no renderer or visual workaround was added.
+
+Integration through `ba77f9b` passes 483 Apple/core/host/UI tests, with one existing
+host benchmark ignored. The separate workspace default-update test passes on
+all five supported header platforms. Pixel regressions wait for the shared
+asynchronous raster restore before exact comparisons; active-input checks still
+advance individual frames. Web Wasm checking, header-menu and workspace-switcher
+interaction checks pass. Native AppKit input iteration 9 covers both presets at
+all sizes, inert bank clicks/holds, immediate mouse/pen pickup, held item menus,
+same-contact movement, detach/re-entry, minute changes, cancellation, keyboard
+movement and narrow overflow. Six managed persistence cases pass Done, workspace
+switching, unfinished-preview close/restart and persisted Undo/Redo.
+
+Both signed iteration-65 builds pass. Native iteration 64 passes Metal launch,
+customization and fullscreen status on both hosts. The iPad journey includes
+Main Menu → File → Recovered Drawings and Window → Customize Title Bar.
+Iteration 65 corrects stale test button names and passes fresh Sketch drawer
+switching/toggling on both hosts. Mac iteration 66 reproduces the hover issue;
+signed build 68 and its native drawer workflow establish the fix. Native Mac
+iteration 69 passes drawing and Undo/Redo afterward. The iPad review namespace
+is restored and the artist app descriptor is unchanged; Files has no remaining
+authentication blocker.
+
+The visual matrix includes 144 native and 144 Web captures. Native item allocation
+matches shared geometry within 0.5 logical pixels. After menu and switcher spacing
+fixes, the comparison has no unmatched items and a largest geometry difference
+of 4.14 logical pixels, attributable to clock padding/measurement. Native capture
+iteration 6 preserves all header PNG bytes and geometry after shared API/default
+integration. Normal-size captures verify readable ink, selection backgrounds,
+live paints and the open Sketch drawer on both hosts. Web still has solid tile
+backgrounds while GTK/Apple use transparent controls; full-editor visual acceptance
+remains open. These AppKit event streams do not establish physical Pencil coverage.
+
+The final integration through `1c83a95` changes Android header rendering,
+Android/Windows validation and documentation, leaving the tested Apple and shared
+Rust source unaffected. All ten recovery stashes remain. Evidence, integration
+snapshots and failed iterations stay ignored under `artifacts/apple-titlebar-v1/`
+and the named Apple main-integration folders. The overall goal remains incomplete:
+full feature/menu/panel inventory, Apple column stacks, retained renderer replacement
+and durable lifecycle recovery, provider/interruption cases, physical Pencil and
+keyboard input, full-editor visual review and sustained Mac 90 Hz/iPad 120 Hz
+workloads with current encoded-sRGB8 raster baselines are still required.
 
 ## Native Files, full Zen and raster integration — 2026-09-13
 

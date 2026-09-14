@@ -27,6 +27,11 @@ internal data class DocumentPicker(val request: JSONObject, val epoch: Long, val
 
 /** SAF owns locations; the shared session owns dirty checkpoints and close policy. */
 internal class DocumentController(private val host: CanvasHost, private val application: Application) {
+    companion object {
+        // JNI integration tests own private file descriptors. SAF UI has a
+        // separate end-to-end test and must not race those native job owners.
+        @Volatile internal var nativeFileJobsForTest = false
+    }
     var picker by mutableStateOf<DocumentPicker?>(null)
         private set
     var working by mutableStateOf(false)
@@ -34,6 +39,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     private var activeId: Int? = null
     private var approval = 0L to 0L
     fun observe(request: JSONObject?, file: JSONObject) {
+        if (BuildConfig.DEBUG && nativeFileJobsForTest) return
         val id = request?.getInt("id")
         if (id == activeId) return
         activeId = id
@@ -106,6 +112,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         } ?: error("The selected file cannot be written")
                     }
                     finish(id, true)
+                    if (kind == "save") host.documentChanged {
+                        if (host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optBoolean("modified") == false) host.recovery.retire()
+                    }
                 } else {
                     withContext(Dispatchers.IO) {
                         val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error("The selected file cannot be read")
@@ -113,6 +122,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     }
                     host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
                     host.documentChanged()
+                    host.recovery.retire()
                 }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { finish(id, false) }
@@ -132,6 +142,20 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     val file = state.getJSONObject("document_file")
     val request = state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "document" }
     val options = host.snapshot!!.getJSONObject("document_options")
+    LaunchedEffect(host.snapshot?.optBoolean("brush_ready")) {
+        if (host.snapshot?.optBoolean("brush_ready") == true) host.recovery.start()
+    }
+    val recovery = host.recovery
+    if (recovery.candidate != null) AlertDialog(
+        onDismissRequest = { recovery.dismiss(false) },
+        title = { Text("Recover drawing?") },
+        text = { Text(if (recovery.working) "Preparing drawing…" else "An unsaved drawing from a closed window is available.") },
+        confirmButton = { TextButton({ recovery.recover() }, enabled = !recovery.working, modifier = Modifier.testTag("recover-drawing")) { Text("Recover") } },
+        dismissButton = { Row {
+            TextButton({ recovery.dismiss(false) }, enabled = !recovery.working) { Text("Keep for Later") }
+            TextButton({ recovery.dismiss(true) }, enabled = !recovery.working) { Text("Discard") }
+        } }
+    )
     val controller = host.documents
     val activity = LocalActivity.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -163,7 +187,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             try { launcher.launch(intent) } catch (e: Exception) { controller.pickerFailed(e) }
         }
     }
-    LaunchedEffect(file.optBoolean("close_ready")) { if (file.optBoolean("close_ready")) activity?.finish() }
+    LaunchedEffect(file.optBoolean("close_ready")) { if (file.optBoolean("close_ready")) { host.recovery.retire(); activity?.finish() } }
     // Registered before workspace/popup handlers, which get first refusal.
     BackHandler { host.invoke("close_document") }
     state.optString("host_error").takeIf { it.isNotEmpty() && it != "null" }?.let { message ->

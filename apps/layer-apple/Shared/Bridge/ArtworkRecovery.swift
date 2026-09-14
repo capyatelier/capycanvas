@@ -99,7 +99,7 @@ import SwiftUI
             }
             return
         }
-        guard !file["busy"].bool, let native = store?.native else { finish(); return }
+        guard let native = store?.native else { finish(); return }
         let title = file["location"]["name"].string
         saving = true
         native.recoveryTask(expected: (file["epoch"].uint, file["revision"].uint)) { [weak self] task, failure in

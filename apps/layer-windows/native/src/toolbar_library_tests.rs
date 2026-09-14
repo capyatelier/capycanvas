@@ -148,7 +148,7 @@ fn toolbar_visibility_changes_while_manager_is_open_are_saved_with_layout_histor
             .unwrap()
             .history
             .layout(),
-        &f.native.session.state().workspace.layout
+        &layer_ui::durable_layout(&f.native.session.state().workspace.layout)
     );
     input(&mut f, Input::Cancel);
     restart(&mut f);

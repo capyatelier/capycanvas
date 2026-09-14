@@ -67,7 +67,11 @@ final class CanvasView: UIView {
             sceneGeometry = window.windowScene?.observe(\.effectiveGeometry, options: [.initial, .new]) { [weak self] scene, _ in
                 DispatchQueue.main.async {
                     guard let self, self.window?.windowScene === scene else { return }
-                    self.store.windowPresentation.observe(fullscreen: scene.isFullScreen)
+                    let space: any UICoordinateSpace
+                    if #available(iOS 26.0, *) { space = scene.effectiveGeometry.coordinateSpace }
+                    else { space = scene.coordinateSpace }
+                    let display = scene.screen.coordinateSpace
+                    self.store.windowPresentation.observe(fullscreen: space.convert(space.bounds, to: display) == display.bounds)
                 }
             }
             store.projectFiles.closeWindow = { [weak window, weak store] in

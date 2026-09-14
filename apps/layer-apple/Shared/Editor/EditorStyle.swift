@@ -28,6 +28,16 @@ extension View {
         return frame(width: max(0, r.width), height: max(0, r.height), alignment: .topLeading).offset(x: r.minX, y: r.minY)
     }
 }
+/// Shared grip orientation and inset for panel headers and column footers.
+struct PanelGrip: View {
+    var vertical = false
+    var body: some View {
+        SharedIcon(name: "grip").opacity(0.65)
+            .rotationEffect(.degrees(vertical ? 90 : 0))
+            .offset(x: vertical ? 0 : -1.6, y: vertical ? -1.6 : 0)
+    }
+}
+
 struct SharedIcon: View {
     let name: String
     var size: CGFloat = 16
@@ -69,10 +79,13 @@ struct IconTile: View {
     var selected = false
     var enabled = true
     var size: CGFloat = 16
+    var active = false
+    var joinedEdge: String?
+    var background: Color?
     let action: () -> Void
     var body: some View {
         Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected))
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge, background: background))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
     }
@@ -82,12 +95,23 @@ struct IconTile: View {
 /// control, including its selection. PlainButtonStyle would dim the glyph again.
 struct EditorControlButtonStyle: ButtonStyle {
     var selected = false
+    var active = false
+    var joinedEdge: String?
+    var background: Color?
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
+            bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
+            bottomTrailingRadius: joinedEdge == "bottom" || joinedEdge == "right" ? 0 : 6,
+            topTrailingRadius: joinedEdge == "top" || joinedEdge == "right" ? 0 : 6)
+    }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.background {
-            if configuration.isPressed {
-                RoundedRectangle(cornerRadius: 6).fill(.foreground).opacity(0.16)
-            } else if selected {
-                RoundedRectangle(cornerRadius: 6).fill(EditorPalette.sharedAccent.opacity(0.22))
+            if selected {
+                shape.fill(EditorPalette.sharedAccent.opacity(0.22))
+            } else if configuration.isPressed || active {
+                shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+            } else if let background {
+                shape.fill(background)
             }
         }
     }

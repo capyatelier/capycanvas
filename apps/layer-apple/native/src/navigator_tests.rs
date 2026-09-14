@@ -196,9 +196,9 @@ fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
-        app.draw_frame();
+        app.draw_until_idle();
         app.stroke();
-        app.draw_frame();
+        app.draw_until_idle();
         let pixels = app.pixels();
         let revision = unsafe { &*app.0 }.host.session.engine().document().revision;
         for _ in 0..6 {
@@ -255,17 +255,17 @@ fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
         let [x, y] = current.work_area_center();
         let center = current.input_transform().map(layer_core::Point { x, y });
         assert!((center.x - 40.).abs() < 0.01 && (center.y - 40.).abs() < 0.01);
-        app.draw_frame();
+        app.draw_until_idle();
         assert_eq!(
             unsafe { &*app.0 }.host.session.engine().document().revision,
             revision
         );
         assert_eq!(app.pixels(), pixels);
         app.invoke("undo");
-        app.draw_frame();
+        app.draw_until_idle();
         assert_ne!(app.pixels(), pixels);
         app.invoke("redo");
-        app.draw_frame();
+        app.draw_until_idle();
         assert_eq!(app.pixels(), pixels);
     }
 }

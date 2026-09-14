@@ -12,6 +12,7 @@ pub(crate) struct WindowsMetadata {
     pub windows_image_import: Option<Value>,
     pub windows_isolated_settings: bool,
     pub windows_workspace: Option<crate::workspace_service::WorkspaceStatus>,
+    pub windows_settings_close: Option<crate::settings::CloseStatus>,
     pub windows_workspace_manager: Option<crate::workspace_service::ManagerView>,
 }
 
@@ -47,6 +48,7 @@ mod tests {
             windows_image_import: None,
             windows_isolated_settings: true,
             windows_workspace: None,
+            windows_settings_close: None,
             windows_workspace_manager: None,
         }
     }
@@ -71,6 +73,7 @@ mod tests {
             "windows_image_import",
             "windows_isolated_settings",
             "windows_workspace",
+            "windows_settings_close",
             "windows_workspace_manager",
         ] {
             actual.as_object_mut().unwrap().remove(field);

@@ -227,8 +227,8 @@ impl SelectionClip {
             _ => layer_core::Point::default(),
         };
         let header = [
-            bounds.min_x,
-            bounds.min_y,
+            bounds.min_x(),
+            bounds.min_y(),
             bounds.width(),
             bounds.height(),
             u32::from(geometry.inverted),

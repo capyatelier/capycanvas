@@ -205,6 +205,8 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
         worker: Ok(worker),
         submitted: None,
         load_error: None,
+        save_error: None,
+        close: CloseStatus::default(),
     };
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     host.dispatch(UiAction::Invoke {
@@ -425,6 +427,8 @@ fn failed_save_is_reported_and_a_later_success_clears_the_error() {
         worker: Ok(worker),
         submitted: None,
         load_error: None,
+        save_error: None,
+        close: CloseStatus::default(),
     };
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     host.dispatch(UiAction::OpenSettings {
@@ -442,5 +446,267 @@ fn failed_save_is_reported_and_a_later_success_clears_the_error() {
         assert_eq!(host.session.state().host_error.is_some(), failed);
         assert!(host.session.state().requests.is_empty());
     }
+    service.finish(&mut host).unwrap();
+}
+
+fn change_preferences(host: &mut NativeHost, gamma: f32) {
+    host.dispatch(UiAction::OpenSettings {
+        page: layer_ui::SettingsPage::Appearance,
+    })
+    .unwrap();
+    host.dispatch(UiAction::EditSettings {
+        settings: edited(gamma),
+    })
+    .unwrap();
+    host.dispatch(UiAction::CloseSettings).unwrap();
+}
+fn pump_close(
+    host: &mut NativeHost,
+    service: &mut SettingsService,
+    wake: &mpsc::Receiver<()>,
+    failed: bool,
+) {
+    loop {
+        service.poll(host).unwrap();
+        if if failed {
+            service.close_status().error.is_some()
+        } else {
+            service.close_status().ready
+        } {
+            break;
+        }
+        wake.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+}
+
+#[test]
+fn close_waits_for_the_latest_write_and_does_not_stop_the_worker() {
+    let directory = Directory::new();
+    let mut file = directory.file();
+    let (entered, started) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let (wake, completed) = mpsc::channel();
+    let mut first = true;
+    let worker = Worker::start(
+        move |bytes| {
+            if std::mem::take(&mut first) {
+                entered.send(()).unwrap();
+                gate.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            file.write(bytes)
+        },
+        move || {
+            let _ = wake.send(());
+        },
+    )
+    .unwrap();
+    let mut service = SettingsService {
+        subscription: None,
+        worker: Ok(worker),
+        submitted: None,
+        load_error: None,
+        save_error: None,
+        close: CloseStatus::default(),
+    };
+    let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    change_preferences(&mut host, 1.25);
+    service.poll(&mut host).unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    change_preferences(&mut host, 1.75);
+    host.session.request_document_close().unwrap();
+    service.poll(&mut host).unwrap();
+    assert!(service.close_status().busy);
+    assert!(!service.close_status().ready);
+    // A stale recovery button must not authorize an in-flight write to stop.
+    service.discard_close(&mut host);
+    service.keep_open(&mut host);
+    assert!(!service.close_status().ready);
+    assert!(host.session.state().document_file.close_ready);
+    release.send(()).unwrap();
+    pump_close(&mut host, &mut service, &completed, false);
+    assert_eq!(
+        directory.file().load().unwrap().unwrap().pressure_gamma,
+        1.75
+    );
+    service.finish(&mut host).unwrap();
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let directory = Directory::new();
+    directory
+        .file()
+        .write(&encode(&edited(1.25)).unwrap())
+        .unwrap();
+    let locked = OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(directory.path.join("settings.json"))
+        .unwrap();
+    let (wake, completed) = mpsc::channel();
+    let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut service = SettingsService::at(&mut host, Ok(directory.file()), move || {
+        let _ = wake.send(());
+    });
+    change_preferences(&mut host, 1.75);
+    host.session.request_document_close().unwrap();
+    pump_close(&mut host, &mut service, &completed, true);
+    assert!(!service.close_status().ready);
+    let attempt = service.close_status().attempt;
+    service.retry_close(&mut host).unwrap();
+    pump_close(&mut host, &mut service, &completed, true);
+    assert!(service.close_status().attempt > attempt);
+    assert_eq!(
+        directory.file().load().unwrap().unwrap().pressure_gamma,
+        1.25
+    );
+    service.keep_open(&mut host);
+    service.poll(&mut host).unwrap();
+    assert!(!host.session.state().document_file.close_ready);
+    assert!(!service.close_status().requested);
+    assert_eq!(host.session.state().settings.pressure_gamma, 1.75);
+    drop(locked);
+    host.session.request_document_close().unwrap();
+    pump_close(&mut host, &mut service, &completed, false);
+    assert_eq!(
+        directory.file().load().unwrap().unwrap().pressure_gamma,
+        1.75
+    );
+    assert!(host.session.state().host_error.is_none());
+    service.finish(&mut host).unwrap();
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn discard_failed_preferences_leaves_the_saved_file_unchanged() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let directory = Directory::new();
+    let expected = encode(&edited(1.25)).unwrap();
+    directory.file().write(&expected).unwrap();
+    let locked = OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(directory.path.join("settings.json"))
+        .unwrap();
+    let (wake, completed) = mpsc::channel();
+    let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut service = SettingsService::at(&mut host, Ok(directory.file()), move || {
+        let _ = wake.send(());
+    });
+    change_preferences(&mut host, 1.75);
+    host.session.request_document_close().unwrap();
+    pump_close(&mut host, &mut service, &completed, true);
+    service.discard_close(&mut host);
+    service.poll(&mut host).unwrap();
+    assert!(service.close_status().ready);
+    service.finish(&mut host).unwrap();
+    drop(locked);
+    assert_eq!(
+        fs::read(directory.path.join("settings.json")).unwrap(),
+        expected
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let directory = Directory::new();
+    directory
+        .file()
+        .write(&encode(&edited(1.25)).unwrap())
+        .unwrap();
+    let locked = OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(directory.path.join("settings.json"))
+        .unwrap();
+    let (wake_a, completed_a) = mpsc::channel();
+    let mut first = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut a = SettingsService::at(&mut first, Ok(directory.file()), move || {
+        let _ = wake_a.send(());
+    });
+    change_preferences(&mut first, 1.75);
+    a.poll(&mut first).unwrap();
+    while SettingsService::pending(&first) {
+        completed_a.recv_timeout(Duration::from_secs(5)).unwrap();
+        a.poll(&mut first).unwrap();
+    }
+    assert!(first.session.state().host_error.is_some());
+    let (wake_b, completed_b) = mpsc::channel();
+    let mut second = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut b = SettingsService::at(&mut second, Ok(directory.file()), move || {
+        let _ = wake_b.send(());
+    });
+    assert_eq!(second.session.state().settings.pressure_gamma, 1.75);
+    assert!(second.session.state().requests.is_empty());
+    drop(locked);
+    second.session.request_document_close().unwrap();
+    pump_close(&mut second, &mut b, &completed_b, false);
+    assert_eq!(
+        directory.file().load().unwrap().unwrap().pressure_gamma,
+        1.75
+    );
+    a.finish(&mut first).unwrap();
+    b.finish(&mut second).unwrap();
+}
+
+#[test]
+fn clean_close_does_not_write_missing_preferences() {
+    let directory = Directory::new();
+    let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut service = SettingsService::at(&mut host, Ok(directory.file()), || {});
+    host.session.request_document_close().unwrap();
+    service.poll(&mut host).unwrap();
+    assert!(service.close_status().ready);
+    service.finish(&mut host).unwrap();
+    assert!(!directory.path.join("settings.json").exists());
+}
+
+#[test]
+fn stopped_storage_reports_the_latest_close_write_and_allows_discard() {
+    let (entered, started) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let (wake, completed) = mpsc::channel();
+    let worker = Worker::start(
+        move |_| {
+            entered.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(5)).unwrap();
+            panic!("isolated storage worker failure");
+        },
+        move || {
+            let _ = wake.send(());
+        },
+    )
+    .unwrap();
+    let mut service = SettingsService {
+        subscription: None,
+        worker: Ok(worker),
+        submitted: None,
+        load_error: None,
+        save_error: None,
+        close: CloseStatus::default(),
+    };
+    let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    change_preferences(&mut host, 1.25);
+    service.poll(&mut host).unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    change_preferences(&mut host, 1.75);
+    host.session.request_document_close().unwrap();
+    service.poll(&mut host).unwrap();
+    release.send(()).unwrap();
+    completed
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stopped storage must wake close recovery");
+    service.poll(&mut host).unwrap();
+    assert!(service.close_status().error.is_some());
+    assert!(!service.close_status().busy && !service.close_status().ready);
+    service.retry_close(&mut host).unwrap();
+    assert!(service.close_status().error.is_some());
+    assert!(!service.close_status().busy);
+    service.discard_close(&mut host);
+    assert!(service.close_status().ready);
     service.finish(&mut host).unwrap();
 }

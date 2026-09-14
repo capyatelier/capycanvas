@@ -1,6 +1,7 @@
 //! Bounded frame handoff and sole GPU/WSI owner. No GTK calls on the worker.
 //! Small dab/layer records cross threads; live canvas pixels remain on the GPU.
 use crate::wayland::{Child, Geometry, Parent};
+use gtk::prelude::WidgetExt;
 use layer_core::{AssetId, Layer};
 use layer_render::{
     BackendError, CanvasRenderer, CursorSegment, Dab, DabBatch, FramePacket, HostImage,
@@ -35,8 +36,19 @@ struct Frame {
     surround: [f32; 4],
     cursor: Vec<CursorSegment>,
     overviews: Vec<layer_render_wgpu::OverviewPlacement>,
+    // Every queued producer must resolve its immutable roots, even on failure.
+    pending_rasters: Vec<layer_core::raster::RasterRevision>,
     #[cfg(test)]
     queued_ns: u64,
+}
+impl Drop for Frame {
+    fn drop(&mut self) {
+        for raster in &self.pending_rasters {
+            if raster.try_data().is_none() {
+                let _ = raster.publish(Err("GPU worker stopped before raster capture".into()));
+            }
+        }
+    }
 }
 impl Frame {
     fn packet(&self) -> FramePacket<'_> {
@@ -73,6 +85,8 @@ enum Command {
     Readback(u64),
     Capture(mpsc::Sender<Result<ReadbackImage, String>>),
     Stop,
+    #[cfg(test)]
+    FailNextFrame,
 }
 enum Reply {
     Initialized,
@@ -145,6 +159,7 @@ impl RenderWorker {
             layer_render::RendererTelemetry::default(),
         ));
         let worker_telemetry = telemetry.clone();
+        let failure_area = area.clone();
         #[cfg(test)]
         let stats = Arc::new(std::sync::Mutex::new(crate::timing::Stats::default()));
         #[cfg(test)]
@@ -152,273 +167,36 @@ impl RenderWorker {
         let thread = std::thread::Builder::new()
             .name("canvas-gpu".into())
             .spawn(move || {
-                let result = Worker::new(parent, area, worker_clock).and_then(|mut worker| {
-                    if reply.send(Reply::Initialized).is_err() {
-                        return Ok(());
-                    }
-                    #[cfg(test)]
-                    let mut timing =
-                        crate::timing::Timing::new(worker.renderer.device(), worker_stats);
-                    let mut telemetry_enabled = false;
-                    let mut startup_input = None;
-                    let mut startup_progress = layer_render_wgpu::StartupProgress::default();
-                    let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
-                    let mut deferred = VecDeque::new();
-                    let mut document_drawn = false;
-                    loop {
-                        worker
-                            .renderer
-                            .device()
-                            .poll(wgpu::PollType::Poll)
-                            .map_err(error)?;
-                        worker.child.dispatch()?;
-                        if !startup_progress.complete
-                            && worker.paper_ready.load(Ordering::Acquire)
-                            && let Some((generation, document, brush, transform)) = &startup_input
-                        {
-                            if worker
-                                .renderer
-                                .startup_needs_update(document, brush, *transform)
-                            {
-                                worker
-                                    .renderer
-                                    .prepare_startup(document, brush, *transform)
-                                    .map_err(error)?;
-                            }
-                            let progress = worker.renderer.poll_startup().map_err(error)?;
-                            if progress != startup_progress {
-                                startup_progress = progress;
-                                reply
-                                    .send(Reply::Startup(
-                                        *generation,
-                                        progress,
-                                        worker.renderer.cursor_outlines(),
-                                    ))
-                                    .map_err(error)?;
-                            }
-                            while progress.canvas_ready
-                                && pending_frames
-                                    .front()
-                                    .is_some_and(|f| f.dabs.is_empty() || progress.brush_ready)
-                            {
-                                let frame = pending_frames.pop_front().unwrap();
-                                #[cfg(test)]
-                                timing.begin(frame.queued_ns);
-                                worker.draw(
-                                    &frame,
-                                    false,
-                                    #[cfg(test)]
-                                    &mut timing,
-                                )?;
-                                document_drawn = true;
-                                count.fetch_sub(1, Ordering::Release);
-                            }
-                            if progress.complete {
-                                startup_input = None;
-                            }
-                        }
-                        if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
-                            *snapshot = worker.renderer.telemetry();
-                        }
+                // A panic retires this entire owner; no encoder or renderer
+                // state is reused after unwinding.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Worker::new(parent, area, worker_clock)?.run(
+                        &receiver,
+                        &reply,
+                        &worker_telemetry,
+                        &count,
                         #[cfg(test)]
-                        timing.presented(worker.child.take_presented());
-                        while let Some(image) = worker.renderer.take_readback() {
-                            reply
-                                .send(Reply::Readback(image.map_err(error)?))
-                                .map_err(error)?;
-                        }
-                        while let Some(image) = worker.renderer.take_thumbnail() {
-                            reply
-                                .send(Reply::Thumbnail(image.map_err(error)?))
-                                .map_err(error)?;
-                        }
-                        if let Some(color) = worker.renderer.take_color_sample() {
-                            reply
-                                .send(Reply::ColorSample(color.map_err(error)))
-                                .map_err(error)?;
-                        }
-                        if let Some(region) = worker.renderer.take_region() {
-                            reply
-                                .send(Reply::Region(region.map_err(error)))
-                                .map_err(error)?;
-                        }
-                        while let Some(image) = worker.renderer.take_filter_previews() {
-                            reply
-                                .send(Reply::FilterPreviews(image.map_err(error)))
-                                .map_err(error)?;
-                        }
-                        if let Some(result) = worker.renderer.take_effect_validation() {
-                            reply.send(Reply::EffectValidation(result)).map_err(error)?;
-                        }
-                        let next = if document_drawn && !deferred.is_empty() {
-                            Ok(deferred.pop_front().unwrap())
-                        } else if cfg!(test)
-                            || !startup_progress.complete
-                            || worker.renderer.effect_validation_pending()
-                            || worker.renderer.filter_previews_pending()
-                            || worker.pending_present
-                            || worker.renderer.thumbnails_pending()
-                            || worker.renderer.color_sample_pending()
-                            || worker.renderer.region_pending()
-                            || worker.child.feedback_pending()
-                        {
-                            receiver.recv_timeout(Duration::from_millis(8))
-                        } else {
-                            receiver
-                                .recv()
-                                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
-                        };
-                        let command = match next {
-                            Ok(command) => command,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                if worker.pending_present
-                                    && let Some(target) = worker.acquire()?
-                                {
-                                    worker.publish(
-                                        target,
-                                        #[cfg(test)]
-                                        None,
-                                    )?;
-                                }
-                                continue;
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        };
-                        if !document_drawn
-                            && matches!(
-                                command,
-                                Command::Region(_)
-                                    | Command::Thumbnail(..)
-                                    | Command::ColorSample(_)
-                                    | Command::FilterPreviews(_)
-                                    | Command::Readback(_)
-                            )
-                        {
-                            deferred.push_back(command);
-                            continue;
-                        }
-                        match command {
-                            Command::TransformPreview(preview) => worker
-                                .renderer
-                                .set_transform_preview(preview.as_ref())
-                                .map_err(error)?,
-                            Command::Startup(generation, inputs) => {
-                                let (document, brush, transform) = *inputs;
-                                startup_input = Some((generation, document, brush, transform));
-                                startup_progress = Default::default();
-                            }
-                            Command::FinishStartupCache => worker.renderer.finish_startup_cache(),
-                            Command::Region(request) => {
-                                let result = worker.renderer.request_region(request);
-                                if !matches!(result, Ok(true)) {
-                                    reply
-                                        .send(Reply::Region(Err(result
-                                            .err()
-                                            .map(error)
-                                            .unwrap_or_else(|| "Region detector is busy".into()))))
-                                        .map_err(error)?;
-                                }
-                            }
-                            Command::EffectValidation(request) => {
-                                let request_id = request.request_id;
-                                let result = worker.renderer.request_effect_validation(request);
-                                if !matches!(result, Ok(true)) {
-                                    reply
-                                        .send(Reply::EffectValidation(
-                                            layer_render::EffectValidationResult {
-                                                request_id,
-                                                result: Err(result
-                                                    .err()
-                                                    .map(error)
-                                                    .unwrap_or_else(|| {
-                                                        "Filter validator busy".into()
-                                                    })),
-                                            },
-                                        ))
-                                        .map_err(error)?;
-                                }
-                            }
-                            Command::Telemetry(enabled) => {
-                                telemetry_enabled = enabled;
-                                worker.renderer.set_telemetry_enabled(enabled);
-                            }
-                            Command::FilterPreviews(request) => {
-                                let result = worker
-                                    .renderer
-                                    .request_filter_previews(request)
-                                    .map_err(error);
-                                if !matches!(result, Ok(true)) {
-                                    reply
-                                        .send(Reply::FilterPreviews(Err(result
-                                            .err()
-                                            .unwrap_or_else(|| "Preview renderer busy".into()))))
-                                        .map_err(error)?;
-                                }
-                            }
-                            Command::Thumbnail(id, target) => worker
-                                .renderer
-                                .request_thumbnail(id, target)
-                                .map_err(error)?,
-                            Command::ColorSample(request) => {
-                                let result = worker.renderer.request_color_sample(request);
-                                if !matches!(result, Ok(true)) {
-                                    reply
-                                        .send(Reply::ColorSample(Err(result
-                                            .err()
-                                            .map(error)
-                                            .unwrap_or_else(|| "Color sampler is busy".into()))))
-                                        .map_err(error)?;
-                                }
-                            }
-                            Command::Frame(frame) => {
-                                if worker.paper_submitted
-                                    && (!startup_progress.canvas_ready
-                                        || (!frame.dabs.is_empty()
-                                            && !startup_progress.brush_ready))
-                                {
-                                    pending_frames.push_back(frame);
-                                    continue;
-                                }
-                                #[cfg(test)]
-                                timing.begin(frame.queued_ns);
-                                let paper = !worker.paper_submitted;
-                                worker.draw(
-                                    &frame,
-                                    paper,
-                                    #[cfg(test)]
-                                    &mut timing,
-                                )?;
-                                if paper {
-                                    pending_frames.push_back(frame);
-                                } else {
-                                    document_drawn = true;
-                                    count.fetch_sub(1, Ordering::Release);
-                                }
-                            }
-                            Command::Asset(id, asset) => {
-                                worker
-                                    .renderer
-                                    .prepare_owned_asset(&id, &asset)
-                                    .map_err(error)?;
-                            }
-                            Command::Selection(selection) => worker
-                                .renderer
-                                .set_selection_outline(selection.as_ref())
-                                .map_err(error)?,
-                            Command::Release(id) => worker.renderer.release_asset(&id),
-                            Command::Readback(id) => {
-                                worker.renderer.request_readback(id).map_err(error)?
-                            }
-                            Command::Capture(reply) => {
-                                let _ = reply.send(worker.capture());
-                            }
-                            Command::Stop => break,
-                        }
-                    }
-                    Ok(())
+                        worker_stats,
+                    )
+                }))
+                .unwrap_or_else(|payload| {
+                    Err(payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "GPU worker panicked".into()))
                 });
+                // Resolve abandoned producers before the session observes loss.
+                drop(receiver);
                 if let Err(error) = result {
                     let _ = reply.send(Reply::Error(error));
+                    // GTK may already be idle. Schedule, never invoke inline
+                    // on the worker when the main context is temporarily free.
+                    gtk::glib::idle_add_once(move || {
+                        if let Some(area) = failure_area.upgrade() {
+                            let _ = area.activate_action("canvas.worker-stopped", None);
+                        }
+                    });
                 }
             })
             .map_err(error)?;
@@ -455,6 +233,10 @@ impl RenderWorker {
             #[cfg(test)]
             stats,
         })
+    }
+    #[cfg(test)]
+    pub(super) fn fail_next_frame(&self) {
+        self.send(Command::FailNextFrame).unwrap();
     }
     fn send(&self, command: Command) -> Result<(), BackendError> {
         self.commands
@@ -717,6 +499,13 @@ impl CanvasRenderer for RenderWorker {
             extent: packet.document_extent,
             // Immutable raster roots and sources cross threads by shared ownership.
             layers: packet.layers.to_vec(),
+            pending_rasters: packet
+                .layers
+                .iter()
+                .flat_map(|l| std::iter::once(&l.raster).chain(l.mask.iter().map(|m| &m.raster)))
+                .filter(|r| r.try_data().is_none())
+                .cloned()
+                .collect(),
             dabs: packet.dabs.to_vec(),
             batches: packet.dab_batches.to_vec(),
             restore_rasters: packet.restore_rasters.to_vec(),
@@ -763,6 +552,316 @@ struct Worker {
     pending_present: bool,
 }
 impl Worker {
+    #[cfg(test)]
+    fn inject_validation_failure(&self) {
+        let device = self.renderer.device();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("isolated failure probe"),
+            size: wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("isolated invalid scissor"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_scissor_rect(257, 0, 1, 1);
+        }
+        // Exercise wgpu's real validation panic, without resetting the driver
+        // or touching any other application's GPU device.
+        self.renderer.queue().submit([encoder.finish()]);
+    }
+    fn run(
+        mut self,
+        receiver: &mpsc::Receiver<Command>,
+        reply: &mpsc::Sender<Reply>,
+        worker_telemetry: &std::sync::Mutex<layer_render::RendererTelemetry>,
+        count: &AtomicUsize,
+        #[cfg(test)] worker_stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
+    ) -> Result<(), String> {
+        if reply.send(Reply::Initialized).is_err() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        let mut timing = crate::timing::Timing::new(self.renderer.device(), worker_stats);
+        let mut telemetry_enabled = false;
+        let mut startup_input = None;
+        let mut startup_progress = layer_render_wgpu::StartupProgress::default();
+        let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
+        let mut deferred = VecDeque::new();
+        let mut document_drawn = false;
+        #[cfg(test)]
+        let mut fail_next_frame = false;
+        loop {
+            self.renderer
+                .device()
+                .poll(wgpu::PollType::Poll)
+                .map_err(error)?;
+            self.child.dispatch()?;
+            if !startup_progress.complete
+                && self.paper_ready.load(Ordering::Acquire)
+                && let Some((generation, document, brush, transform)) = &startup_input
+            {
+                if self
+                    .renderer
+                    .startup_needs_update(document, brush, *transform)
+                {
+                    self.renderer
+                        .prepare_startup(document, brush, *transform)
+                        .map_err(error)?;
+                }
+                let progress = self.renderer.poll_startup().map_err(error)?;
+                if progress != startup_progress {
+                    startup_progress = progress;
+                    reply
+                        .send(Reply::Startup(
+                            *generation,
+                            progress,
+                            self.renderer.cursor_outlines(),
+                        ))
+                        .map_err(error)?;
+                }
+                while progress.canvas_ready
+                    && pending_frames
+                        .front()
+                        .is_some_and(|f| f.dabs.is_empty() || progress.brush_ready)
+                {
+                    let frame = pending_frames.pop_front().unwrap();
+                    #[cfg(test)]
+                    timing.begin(frame.queued_ns);
+                    self.draw(
+                        &frame,
+                        false,
+                        #[cfg(test)]
+                        &mut timing,
+                    )?;
+                    document_drawn = true;
+                    count.fetch_sub(1, Ordering::Release);
+                }
+                if progress.complete {
+                    startup_input = None;
+                }
+            }
+            if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
+                *snapshot = self.renderer.telemetry();
+            }
+            #[cfg(test)]
+            timing.presented(self.child.take_presented());
+            while let Some(image) = self.renderer.take_readback() {
+                reply
+                    .send(Reply::Readback(image.map_err(error)?))
+                    .map_err(error)?;
+            }
+            while let Some(image) = self.renderer.take_thumbnail() {
+                reply
+                    .send(Reply::Thumbnail(image.map_err(error)?))
+                    .map_err(error)?;
+            }
+            if let Some(color) = self.renderer.take_color_sample() {
+                reply
+                    .send(Reply::ColorSample(color.map_err(error)))
+                    .map_err(error)?;
+            }
+            if let Some(region) = self.renderer.take_region() {
+                reply
+                    .send(Reply::Region(region.map_err(error)))
+                    .map_err(error)?;
+            }
+            while let Some(image) = self.renderer.take_filter_previews() {
+                reply
+                    .send(Reply::FilterPreviews(image.map_err(error)))
+                    .map_err(error)?;
+            }
+            if let Some(result) = self.renderer.take_effect_validation() {
+                reply.send(Reply::EffectValidation(result)).map_err(error)?;
+            }
+            let next = if document_drawn && !deferred.is_empty() {
+                Ok(deferred.pop_front().unwrap())
+            } else if cfg!(test)
+                || !startup_progress.complete
+                || self.renderer.effect_validation_pending()
+                || self.renderer.filter_previews_pending()
+                || self.pending_present
+                || self.renderer.thumbnails_pending()
+                || self.renderer.color_sample_pending()
+                || self.renderer.region_pending()
+                || self.child.feedback_pending()
+            {
+                receiver.recv_timeout(Duration::from_millis(8))
+            } else {
+                receiver
+                    .recv()
+                    .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+            };
+            let command = match next {
+                Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if self.pending_present
+                        && let Some(target) = self.acquire()?
+                    {
+                        self.publish(
+                            target,
+                            #[cfg(test)]
+                            None,
+                        )?;
+                    }
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            if !document_drawn
+                && matches!(
+                    command,
+                    Command::Region(_)
+                        | Command::Thumbnail(..)
+                        | Command::ColorSample(_)
+                        | Command::FilterPreviews(_)
+                        | Command::Readback(_)
+                )
+            {
+                deferred.push_back(command);
+                continue;
+            }
+            match command {
+                #[cfg(test)]
+                Command::FailNextFrame => fail_next_frame = true,
+                Command::TransformPreview(preview) => self
+                    .renderer
+                    .set_transform_preview(preview.as_ref())
+                    .map_err(error)?,
+                Command::Startup(generation, inputs) => {
+                    let (document, brush, transform) = *inputs;
+                    startup_input = Some((generation, document, brush, transform));
+                    startup_progress = Default::default();
+                }
+                Command::FinishStartupCache => self.renderer.finish_startup_cache(),
+                Command::Region(request) => {
+                    let result = self.renderer.request_region(request);
+                    if !matches!(result, Ok(true)) {
+                        reply
+                            .send(Reply::Region(Err(result
+                                .err()
+                                .map(error)
+                                .unwrap_or_else(|| "Region detector is busy".into()))))
+                            .map_err(error)?;
+                    }
+                }
+                Command::EffectValidation(request) => {
+                    let request_id = request.request_id;
+                    let result = self.renderer.request_effect_validation(request);
+                    if !matches!(result, Ok(true)) {
+                        reply
+                            .send(Reply::EffectValidation(
+                                layer_render::EffectValidationResult {
+                                    request_id,
+                                    result: Err(result
+                                        .err()
+                                        .map(error)
+                                        .unwrap_or_else(|| "Filter validator busy".into())),
+                                },
+                            ))
+                            .map_err(error)?;
+                    }
+                }
+                Command::Telemetry(enabled) => {
+                    telemetry_enabled = enabled;
+                    self.renderer.set_telemetry_enabled(enabled);
+                }
+                Command::FilterPreviews(request) => {
+                    let result = self
+                        .renderer
+                        .request_filter_previews(request)
+                        .map_err(error);
+                    if !matches!(result, Ok(true)) {
+                        reply
+                            .send(Reply::FilterPreviews(Err(result
+                                .err()
+                                .unwrap_or_else(|| "Preview renderer busy".into()))))
+                            .map_err(error)?;
+                    }
+                }
+                Command::Thumbnail(id, target) => {
+                    self.renderer.request_thumbnail(id, target).map_err(error)?
+                }
+                Command::ColorSample(request) => {
+                    let result = self.renderer.request_color_sample(request);
+                    if !matches!(result, Ok(true)) {
+                        reply
+                            .send(Reply::ColorSample(Err(result
+                                .err()
+                                .map(error)
+                                .unwrap_or_else(|| "Color sampler is busy".into()))))
+                            .map_err(error)?;
+                    }
+                }
+                Command::Frame(frame) => {
+                    #[cfg(test)]
+                    if fail_next_frame {
+                        self.inject_validation_failure();
+                    }
+                    if self.paper_submitted
+                        && (!startup_progress.canvas_ready
+                            || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
+                    {
+                        pending_frames.push_back(frame);
+                        continue;
+                    }
+                    #[cfg(test)]
+                    timing.begin(frame.queued_ns);
+                    let paper = !self.paper_submitted;
+                    self.draw(
+                        &frame,
+                        paper,
+                        #[cfg(test)]
+                        &mut timing,
+                    )?;
+                    if paper {
+                        pending_frames.push_back(frame);
+                    } else {
+                        document_drawn = true;
+                        count.fetch_sub(1, Ordering::Release);
+                    }
+                }
+                Command::Asset(id, asset) => {
+                    self.renderer
+                        .prepare_owned_asset(&id, &asset)
+                        .map_err(error)?;
+                }
+                Command::Selection(selection) => self
+                    .renderer
+                    .set_selection_outline(selection.as_ref())
+                    .map_err(error)?,
+                Command::Release(id) => self.renderer.release_asset(&id),
+                Command::Readback(id) => self.renderer.request_readback(id).map_err(error)?,
+                Command::Capture(reply) => {
+                    let _ = reply.send(self.capture());
+                }
+                Command::Stop => break,
+            }
+        }
+        Ok(())
+    }
     fn new(
         parent: Parent,
         area: gtk::glib::SendWeakRef<gtk::Picture>,
@@ -981,7 +1080,8 @@ impl Worker {
             .device()
             .create_command_encoder(&Default::default());
         self.presenter
-            .encode(&self.renderer, &mut encoder, &view, camera, surround).map_err(error)?;
+            .encode(&self.renderer, &mut encoder, &view, camera, surround)
+            .map_err(error)?;
         #[cfg(test)]
         if let Some(timing) = &timing {
             timing.overview(
@@ -1051,13 +1151,15 @@ impl Worker {
             .renderer
             .device()
             .create_command_encoder(&Default::default());
-        presenter.encode(
-            &self.renderer,
-            &mut encoder,
-            &texture.create_view(&Default::default()),
-            view,
-            surround,
-        ).map_err(error)?;
+        presenter
+            .encode(
+                &self.renderer,
+                &mut encoder,
+                &texture.create_view(&Default::default()),
+                view,
+                surround,
+            )
+            .map_err(error)?;
         let stride = (view.width_px * 4).div_ceil(256) * 256;
         let buffer = self
             .renderer

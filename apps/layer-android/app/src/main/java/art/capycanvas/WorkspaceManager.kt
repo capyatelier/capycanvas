@@ -4,7 +4,6 @@ import android.view.WindowManager
 import android.view.KeyEvent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -28,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import org.json.JSONObject
+import org.json.JSONArray
 
 /** Compose owns focus/scroll/input; Rust owns records, selections and previews. */
 @Composable internal fun WorkspaceManager(host: CanvasHost) {
@@ -100,7 +100,17 @@ import org.json.JSONObject
         })
 }
 
-@Composable internal fun WorkspaceSwitcher(host: CanvasHost, modifier: Modifier = Modifier) {
+internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
+    val enabled = view != null && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form")
+    val choices = view?.array("switcher_display")?.objects() ?: emptyList()
+    return obj("title" to "Workspaces", "sections" to JSONArray(listOf(JSONArray(choices.map { row ->
+        val id = row.getString("id")
+        obj("label" to row.getString("title"), "selected" to (view?.optString("id") == id), "enabled" to enabled,
+            "action" to obj("type" to "workspace_manager", "command" to obj("type" to "switch", "id" to id)), "sections" to JSONArray())
+    }))))
+}
+
+@Composable internal fun WorkspaceSwitcher(host: CanvasHost, modifier: Modifier = Modifier, interactive: Boolean = true) {
     val view = host.workspaceManager ?: return
     val colors = LocalPalette.current
     val choices = view.array("switcher_display").objects()
@@ -108,16 +118,16 @@ import org.json.JSONObject
     LaunchedEffect(choices.firstOrNull()?.optString("id"), view.optString("id")) {
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
-    if (choices.isNotEmpty()) Row(modifier.clip(RoundedCornerShape(9.dp)).background(lerp(colors.surround, Color.Black, .2f))
-        .horizontalScroll(scroll).padding(3.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(RoundedCornerShape(18.dp)).background(colors.tabs)
+        .horizontalScroll(scroll).padding(4.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         choices.forEach { row ->
             val id = row.getString("id")
             val selected = view.optString("id") == id
-            Box(Modifier.widthIn(max = 128.dp).heightIn(min = 28.dp).clip(RoundedCornerShape(6.dp))
+            Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(RoundedCornerShape(15.dp))
                 .background(if (selected) colors.active else Color.Transparent)
-                .selectable(selected, enabled = view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form"), role = Role.RadioButton) {
+                .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form"), role = Role.RadioButton) {
                     host.workspaceInput(obj("type" to "switch", "id" to id))
-                }.padding(horizontal = 10.dp, vertical = 4.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
+                }.padding(horizontal = 10.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
                 Text(row.getString("title"), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }

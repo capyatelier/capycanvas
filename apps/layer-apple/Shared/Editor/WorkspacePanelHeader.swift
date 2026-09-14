@@ -92,8 +92,9 @@ struct WorkspaceGroupGrip: View {
     @ObservedObject var store: EditorStore
     let group: JSON
     var drawer = false
+    var vertical = false
     var body: some View {
-        SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
+        PanelGrip(vertical: vertical).frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle()).accessibilityElement().accessibilityLabel("Panel group options")
             .accessibilityIdentifier((drawer ? "drawer-group-options-" : "group-options-") + String(group.uint))
             .accessibilityHidden(false)
