@@ -609,3 +609,28 @@ single/two-document drawing frames pass the 8.33 ms CPU/completed gate. Actual
 GPU live/reserved allocations remain 221.88/640, 329.07/640 and 387.04/640 MiB;
 cumulative process high-water is 999,740 KiB (`disjoint-dense.log`). The source
 mode remains disabled pending the remaining operation and color integration.
+
+## Seventh implementation stage: original-aware raw sampling
+
+Current-layer point and area queries now read untouched source tiles directly
+through the bounded Float32 cache; edited paint pages override those originals.
+The mixed-format query uses at most 512 bytes of asynchronous readback (128 bytes
+for existing integer8-only queries). It decodes integer paint, averages linear
+premultiplied artwork, then unassociates the result. Transparent source padding
+and absent pages contribute transparent black. Sampling neither creates paint
+pages nor changes the composite revision. The renderer shares source ownership
+for queries only while the last submitted layer references that source.
+
+The new 513×257 integer16 fixture crosses four tiles, partial source boundaries
+and integer8 paint overrides, including alpha-zero hidden RGB and partial alpha.
+Point/5×5 results match an independent Float64 reference within 1e-6; deletion
+releases the query's source reference. This qualifies source-aware queries in the
+existing sRGB8 document, not integer16 painting or arbitrary working spaces.
+
+All 133 GPU library tests and four GPU project tests pass, followed by native GTK
+file and diagnostics/injected-failure/recovery checks. Reproduce using the same
+release build and GTK wrapper described above. Logs are
+`source-inspection-{build,gpu,project,gtk-files,gtk-recovery}.log`. The new source
+map synchronization follows the existing submitted-layer scan; this stage adds
+no work to individual brush dabs. Final frame-creation and sustained native
+latency comparisons remain required after the rest of the integration.

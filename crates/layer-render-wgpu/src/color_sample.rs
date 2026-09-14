@@ -1,6 +1,7 @@
 //! Point/area sampling from artwork textures before view transforms. At most
 //! 25 texels, one reusable buffer and one asynchronous request are resident.
-//! No scene rebuild, shader, full-image readback or blocking wait is needed.
+//! Source-backed pixels use the bounded working cache; no paint materialization
+//! or full-image readback is needed.
 use super::*;
 use layer_render::{ColorSample, ColorSampleRequest, ColorSampleSource};
 
@@ -71,14 +72,34 @@ impl WgpuRasterizer {
         let bottom = y.saturating_add(radius + 1).min(self.document_extent[1]);
         let width = right - left;
         let count = width * (bottom - top);
-        let buffer = self.color_sampler.buffer.get_or_insert_with(|| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("bounded artwork color sample"),
-                size: 128,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
+        let stride = if matches!(request.source, ColorSampleSource::Layer(id) if self.tiled_sources.contains_key(&id))
+        {
+            16
+        } else {
+            COLOR_FORMAT.block_copy_size(None).unwrap()
+        };
+        let capacity = if stride == 16 { 512 } else { 128 };
+        if self
+            .color_sampler
+            .buffer
+            .as_ref()
+            .is_some_and(|b| b.size() < capacity)
+        {
+            self.color_sampler.buffer = None;
+        }
+        let buffer = self
+            .color_sampler
+            .buffer
+            .get_or_insert_with(|| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bounded artwork color sample"),
+                    size: capacity,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
             })
-        });
+            .clone();
+        let mut formats = [false; 25];
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -87,22 +108,17 @@ impl WgpuRasterizer {
         );
         // Sparse missing pages contribute transparent black, never old buffer
         // contents. Copy each contiguous row segment across page boundaries.
-        encoder.clear_buffer(buffer, 0, None);
+        encoder.clear_buffer(&buffer, 0, None);
         for row in top..bottom {
             let mut column = left;
             while column < right {
-                let (source, origin, end) = match request.source {
+                let (source, origin, mut end) = match request.source {
                     ColorSampleSource::Composite => {
-                        (self.composite_texture.as_ref(), [column, row], right)
+                        (self.composite_texture.clone(), [column, row], right)
                     }
                     ColorSampleSource::Layer(id) => {
                         let coordinate = [column / PAGE_SIZE, row / PAGE_SIZE];
-                        let source = self
-                            .paint_layers
-                            .iter()
-                            .find(|l| l.id == id)
-                            .and_then(|l| l.pages.iter().find(|p| p.coordinate == coordinate))
-                            .map(|p| &p.active().texture);
+                        let source = self.raw_layer_tile(id, coordinate, &mut encoder)?;
                         (
                             source,
                             [column % PAGE_SIZE, row % PAGE_SIZE],
@@ -111,7 +127,15 @@ impl WgpuRasterizer {
                     }
                 };
                 if let Some(source) = source {
-                    debug_assert_eq!(source.format(), COLOR_FORMAT);
+                    let float = source.format() == wgpu::TextureFormat::Rgba32Float;
+                    let bytes = source.format().block_copy_size(None).unwrap();
+                    // An area may cross edited integer paint and untouched
+                    // Float32 source. Pad integer texels individually in that case.
+                    if bytes != stride {
+                        end = column + 1;
+                    }
+                    let index = ((row - top) * width + column - left) as usize;
+                    formats[index..index + (end - column) as usize].fill(float);
                     encoder.copy_texture_to_buffer(
                         wgpu::TexelCopyTextureInfo {
                             origin: wgpu::Origin3d {
@@ -122,9 +146,9 @@ impl WgpuRasterizer {
                             ..source.as_image_copy()
                         },
                         wgpu::TexelCopyBufferInfo {
-                            buffer,
+                            buffer: &buffer,
                             layout: wgpu::TexelCopyBufferLayout {
-                                offset: u64::from(((row - top) * width + column - left) * 4),
+                                offset: u64::from(((row - top) * width + column - left) * stride),
                                 ..Default::default()
                             },
                         },
@@ -138,6 +162,7 @@ impl WgpuRasterizer {
                 column = end;
             }
         }
+        self.uploads.finish(&encoder);
         encoder.submit(&self.queue);
         let ready = buffer.clone();
         let tx = self.color_sampler.tx.clone();
@@ -152,15 +177,26 @@ impl WgpuRasterizer {
                             .get_mapped_range()
                             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
                         let mut sum = [0.; 4];
-                        for texel in data[..count as usize * 4].chunks_exact(4) {
-                            let alpha = f32::from(texel[3]) / 255.;
-                            if alpha > 0. {
-                                for channel in 0..3 {
-                                    sum[channel] += layer_core::color::srgb_decode(
-                                        f32::from(texel[channel]) / 255.,
-                                    );
+                        for (i, texel) in data[..count as usize * stride as usize]
+                            .chunks_exact(stride as usize)
+                            .enumerate()
+                        {
+                            let color = if formats[i] {
+                                std::array::from_fn(|c| {
+                                    f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
+                                })
+                            } else {
+                                [
+                                    layer_core::color::srgb_decode(f32::from(texel[0]) / 255.),
+                                    layer_core::color::srgb_decode(f32::from(texel[1]) / 255.),
+                                    layer_core::color::srgb_decode(f32::from(texel[2]) / 255.),
+                                    f32::from(texel[3]) / 255.,
+                                ]
+                            };
+                            if color[3] > 0. {
+                                for c in 0..4 {
+                                    sum[c] += color[c];
                                 }
-                                sum[3] += alpha;
                             }
                         }
                         let rgba = if sum[3] > 0. {

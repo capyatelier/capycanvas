@@ -25,6 +25,10 @@ struct Slot {
     view: wgpu::TextureView,
     used: u64,
 }
+pub(super) struct SourceTile {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+}
 pub(super) struct PendingSource {
     pub source: Arc<SourceImage>,
     pub coordinate: [u32; 2],
@@ -92,7 +96,7 @@ impl SourceTiles {
         r: &WgpuRasterizer,
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
-    ) -> Result<(wgpu::TextureView, Option<PendingSource>), GpuRasterError> {
+    ) -> Result<(SourceTile, Option<PendingSource>), GpuRasterError> {
         if !r
             .device
             .features()
@@ -111,7 +115,13 @@ impl SourceTiles {
         {
             slot.used = self.clock;
             self.hits += 1;
-            return Ok((slot.view.clone(), None));
+            return Ok((
+                SourceTile {
+                    texture: slot.texture.clone(),
+                    view: slot.view.clone(),
+                },
+                None,
+            ));
         }
         self.misses += 1;
         let index = if self.slots.len() < SOURCE_SLOTS {
@@ -155,7 +165,10 @@ impl SourceTiles {
         slot.coordinate = coordinate;
         slot.used = self.clock;
         Ok((
-            slot.view.clone(),
+            SourceTile {
+                texture: slot.texture.clone(),
+                view: slot.view.clone(),
+            },
             Some(PendingSource {
                 source: source.clone(),
                 coordinate,

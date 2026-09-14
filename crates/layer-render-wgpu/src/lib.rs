@@ -22,11 +22,12 @@ use layer_render::{
     CanvasRenderer, Dab, DabBatch, DabBatchKind, DabMode, FramePacket, HostImage, PixelFormat,
     ReadbackImage,
 };
-use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
+use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::{Arc, mpsc}, time::Duration};
 
 mod builtin_masks;
 mod canvas_preview;
 mod color_sample;
+mod source_access;
 mod export_readback;
 mod raster;
 pub use export_readback::ExportReadback;
@@ -693,6 +694,7 @@ pub struct WgpuRasterizer {
     last_time_seconds: f32,
     filter_source_epoch: u64,
     image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
+    tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
     composite_bind_group: Option<wgpu::BindGroup>,
@@ -1015,6 +1017,7 @@ impl WgpuRasterizer {
             composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
             image_sources: Default::default(),
+            tiled_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
             raster: None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::default()),
@@ -1390,6 +1393,18 @@ impl WgpuRasterizer {
             self.preview_direct_to_composite = false;
         }
 
+        self.tiled_sources
+            .retain(|id, _| layers.iter().any(|l| l.id == *id && l.source.is_some()));
+        for layer in layers {
+            if let Some(source) = &layer.source
+                && self
+                    .tiled_sources
+                    .get(&layer.id)
+                    .is_none_or(|current| !Arc::ptr_eq(current, source))
+            {
+                self.tiled_sources.insert(layer.id, source.clone());
+            }
+        }
         self.paint_layers.retain(|stored| {
             layers
                 .iter()

@@ -318,9 +318,34 @@ impl Scene {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let (view, pending) = self.source_tiles.plan(r, source, coordinate)?;
+            let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
             if let Some(pending) = pending { self.jobs.push(Job::TiledSource(std::sync::Arc::new(pending))); }
-            Ok(Some(view))
+            Ok(Some(tile.view))
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
+    }
+    /// The caller must encode its read/copy before requesting another tile:
+    /// these textures belong to the fixed, queue-ordered source cache.
+    pub fn source_texture(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        source: &std::sync::Arc<layer_core::color::source::SourceImage>,
+        coordinate: [u32; 2],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<wgpu::Texture, GpuRasterError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            debug_assert!(self.jobs.is_empty());
+            let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
+            if let Some(pending) = pending {
+                // Each independent query owns its ordered uniform copy. Repeated
+                // sampling between frames must not grow the record buffer.
+                self.record_count = 0;
+                self.jobs.push(Job::TiledSource(std::sync::Arc::new(pending)));
+                self.encode_jobs(r, encoder)?;
+            }
+            Ok(tile.texture)
         }
         #[cfg(target_arch = "wasm32")]
         Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
