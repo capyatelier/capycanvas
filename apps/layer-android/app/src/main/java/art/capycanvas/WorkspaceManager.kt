@@ -4,7 +4,6 @@ import android.view.WindowManager
 import android.view.KeyEvent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -108,7 +107,7 @@ import org.json.JSONObject
     LaunchedEffect(choices.firstOrNull()?.optString("id"), view.optString("id")) {
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
-    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(RoundedCornerShape(18.dp)).background(lerp(colors.surround, Color.Black, .2f))
+    if (choices.isNotEmpty()) Row(modifier.height(34.dp).clip(RoundedCornerShape(18.dp)).background(colors.tabs)
         .horizontalScroll(scroll).padding(4.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         choices.forEach { row ->
             val id = row.getString("id")

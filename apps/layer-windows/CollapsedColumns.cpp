@@ -35,8 +35,9 @@ struct Column:std::enable_shared_from_this<Column>{
             }
         }});
         frame.Children().Append(scroll);
-        grip.Background(clear());grip.Child(panelGrip(data->theme()));
+        grip.Background(clear());grip.Child(panelGrip(data->theme(),true));
         auto item=O({{L"kind",S(L"column")},{L"column",N(id)}});
+        gestures->Source(background,{},item,true);
         gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item);
         AutomationProperties::SetAutomationId(grip,L"column-grip-"+to_hstring(id));
         AutomationProperties::SetName(grip,L"Move column");frame.Children().Append(grip);workspace.Children().Append(background);
@@ -117,8 +118,8 @@ struct Column:std::enable_shared_from_this<Column>{
                 Canvas::SetZIndex(connection.path,159);workspace.Children().Append(connection.path);
                 AutomationProperties::SetAutomationId(connection.path,L"column-connection-"+to_hstring(id)+L"-"+panel);
             }
-            auto next=link.Stringify();
-            if(next!=connection.geometry){connection.geometry=next;place(connection.path,object(link,L"bounds"));connection.path.Data(drawerBridge(link));}
+            auto encoded=link.Stringify();
+            if(encoded!=connection.geometry){connection.geometry=encoded;place(connection.path,object(link,L"bounds"));connection.path.Data(drawerBridge(link));}
         }
         for(auto it=connections.begin();it!=connections.end();)if(!currentConnections.contains(it->first)){
             uint32_t index;if(workspace.Children().IndexOf(it->second.path,index))workspace.Children().RemoveAt(index);it=connections.erase(it);

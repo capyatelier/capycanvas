@@ -598,6 +598,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(added){handle.Background(clear());handle.RenderTransform(TranslateTransform());root.Children().Append(handle);}
         auto transform=handle.RenderTransform().as<TranslateTransform>();transform.X(0);transform.Y(0);
         place(handle,bounds);Canvas::SetZIndex(handle,z);gestures->Source(handle,action,{},resetColumn);
+        if(str(action,L"type")==L"drag_divider"){
+            using namespace winrt::Microsoft::UI::Input;
+            auto shape=num(bounds,L"width")<num(bounds,L"height")?
+                InputSystemCursorShape::SizeWestEast:InputSystemCursorShape::SizeNorthSouth;
+            handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(shape));
+        }
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
     }
