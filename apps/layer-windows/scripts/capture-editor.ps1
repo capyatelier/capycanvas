@@ -67,8 +67,7 @@ function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::But
     (Find $Name $Type $Scope -Id:$Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function Fit-Canvas {
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
-    Invoke 'Fit canvas' ([System.Windows.Automation.ControlType]::MenuItem)
+    Invoke 'canvas-fit' -Id
 }
 function Set-Theme([string]$Theme) {
     Invoke 'settings-button' -Id

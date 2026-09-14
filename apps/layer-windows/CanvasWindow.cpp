@@ -1041,6 +1041,10 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+    // Artwork also reaches the caption area; keep the OS buttons readable on it.
+    auto captionBackground=color(str(object(state,L"palette"),L"bg",L"#333333"));
+    window.AppWindow().TitleBar().ButtonBackgroundColor(captionBackground);
+    window.AppWindow().TitleBar().ButtonInactiveBackgroundColor(captionBackground);
     auto foreground=color(str(object(state,L"palette"),L"text",L"#fafafb"));
     window.AppWindow().TitleBar().ButtonForegroundColor(foreground);
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);

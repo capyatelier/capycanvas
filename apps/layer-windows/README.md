@@ -1123,6 +1123,19 @@ separate.
 
 ## Matched editor captures
 
+The zoom/rotation readout now keeps a rounded theme background when artwork
+fills the window, matching Web/Android's readable footer. Its native button
+also fits the canvas on click or tap, as on Android, and supports Space when
+focused. The caption buttons keep their native Windows behavior with a theme
+background so their glyphs remain visible over artwork in either theme.
+
+The Release check captures fitted and zoomed paper in both themes. Native
+mouse, pen and touch injection plus Space activation fit without modifying the
+drawing or replacing the retained readout. Hiding the footer and canceling the
+preview restores it correctly. Caption-button mouse checks cover maximize,
+restore, minimize and normal close with zero exit. The capture fixture uses the
+footer's Fit canvas action. Physical digitizer and timing acceptance stay separate.
+
 The current Paint review covers twelve native/Web pairs: 744, 960 and 1200 by
 660 logical pixels at scale 1.5, both themes, with fitted and zoomed paper beneath
 the title bar. Tool Set geometry differs by at most 0.50 physical pixels and
