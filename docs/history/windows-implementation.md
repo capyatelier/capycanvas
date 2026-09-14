@@ -2735,3 +2735,33 @@ RecoverGpu and FailGpu document journeys pass queued/active pen recovery,
 exact exported pixels, thumbnail/history restoration, Save/Save As after
 exhausted recovery, committed raster preservation, queued contact cancellation,
 Cancel/Discard and durable reopen. Every owned process closes normally.
+
+### Portable and MSIX refresh after native stacks
+
+Both packages now contain clean production source 110a434, including immutable
+raster recovery and native full-column stacks. The portable ZIP contains 1,096
+files and is 57,012,058 bytes; its SHA-256 is
+370d7af4116814c5bbd51fb5f1fb6179bd6deb48daeec33b6fba77429887b58a.
+The unsigned 1.0.0.0 MSIX contains 1,102 archive files and is 57,339,803 bytes;
+its SHA-256 is 6cba431c98f924698f7cb9068816da24f79b8a8874564d3a03681455c860ef10.
+
+Repeated assembly produces identical archives. The extracted ZIP passes manifest
+inventory, launch from a path with spaces and an unrelated working directory,
+app-local runtime origins, filters, drawing/Undo/Redo, pan/resize and clean exit.
+The package fixture now isolates PATH to Windows directories and restores the
+calling shell afterward. A build shell otherwise supplies optional SDK shader
+compilers and invalidates the clean-runtime check. Both the ordinary-shell run
+and a run with SDK DXC deliberately present in the caller PATH pass.
+
+MSIX archive inventory, MakeAppx extraction, activation manifest, repeated logos,
+normalization, ZIP32, signed-package refusal and invalid-input checks pass. No
+signing, installation, update/uninstall, clean-machine test or UAC retry occurred.
+The payload is unchanged by this subsequent fixture/documentation-only update.
+
+The subsequent integration through upstream ba77f9b brings Android titlebar
+projection and the shared native HeaderRequest transport. Windows retains its
+existing header and Sketch tools pending its own projection. Host/UI/Windows/
+workspace suites pass again (26/367/103/85); unchanged core/engine coverage brings
+the ordinary total to 675. Strict Clippy, normal Release, and complete native
+editor/manager/restart checks pass. The packaged production milestone remains
+110a434; the later shared-header integration is not included in those archives.
