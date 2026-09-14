@@ -14,7 +14,7 @@ mod sources;
 #[derive(Clone)]
 enum Job {
     #[cfg(not(target_arch = "wasm32"))]
-    TiledSource(std::sync::Arc<sources::PendingSource>),
+    DecodedTile(std::sync::Arc<sources::PendingTile>),
     SourceUpload {
         buffer: wgpu::Buffer,
         texture: wgpu::Texture,
@@ -51,7 +51,7 @@ enum Job {
 }
 pub(super) struct Scene {
     #[cfg(not(target_arch = "wasm32"))]
-    source_tiles: sources::SourceTiles,
+    source_tiles: sources::DecodedTiles,
     pub style_base: usize,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -308,7 +308,7 @@ impl Scene {
         let effects = effects::Effects::new(r, &uniforms, &layout);
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            source_tiles: sources::SourceTiles::default(),
+            source_tiles: sources::DecodedTiles::default(),
             style_base: 0,
             pool: Vec::new(),
             used: Vec::new(),
@@ -360,7 +360,7 @@ impl Scene {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
-            if let Some(pending) = pending { self.jobs.push(Job::TiledSource(std::sync::Arc::new(pending))); }
+            if let Some(pending) = pending { self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending))); }
             Ok(Some(tile.view))
         }
         #[cfg(target_arch = "wasm32")]
@@ -383,13 +383,40 @@ impl Scene {
                 // Each independent query owns its ordered uniform copy. Repeated
                 // sampling between frames must not grow the record buffer.
                 self.record_count = 0;
-                self.jobs.push(Job::TiledSource(std::sync::Arc::new(pending)));
+                self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
                 self.encode_jobs(r, encoder)?;
             }
             Ok(tile)
         }
         #[cfg(target_arch = "wasm32")]
         Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepare_native_transfer(&mut self, r: &WgpuRasterizer, space: layer_core::color::RgbSpace) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
+        self.source_tiles.prepare_transfer(&r.device, space)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn restore_native_tiles(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        requests: &[crate::native_tiles::NativeTileRestore<'_>],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        debug_assert!(self.jobs.is_empty());
+        for request in requests {
+            sources::validate_raster(request.blob, request.space)?;
+        }
+        for request in requests {
+            let (tile, pending) = self.source_tiles.plan_raster(r, request.blob, request.space, request.destination)?;
+            if let Some(pending) = pending {
+                self.record_count = 0;
+                self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
+                self.encode_jobs(r, encoder)?;
+            }
+            // Consume this view before a later request can reuse the slot.
+            encoder.copy_texture_to_texture(tile.texture.as_image_copy(), request.working.as_image_copy(), tile.texture.size());
+        }
+        Ok(())
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn prepared_source_view(
@@ -1361,7 +1388,7 @@ impl Scene {
             let data = match job {
                 Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data),
                 #[cfg(not(target_arch = "wasm32"))]
-                Job::TiledSource(pending) => pending.data.as_ref(),
+                Job::DecodedTile(pending) => pending.data.as_ref(),
                 _ => None,
             };
             if let Some(data) = data {
@@ -1389,7 +1416,7 @@ impl Scene {
             }
             match job {
                 #[cfg(not(target_arch = "wasm32"))]
-                Job::TiledSource(pending) => {
+                Job::DecodedTile(pending) => {
                     if self.source_tiles.uploads_full() {
                         Self::submit_source_uploads(r, encoder)?;
                     }

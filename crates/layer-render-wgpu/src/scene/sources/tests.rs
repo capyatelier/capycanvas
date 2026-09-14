@@ -52,7 +52,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
                     }
                     let source = Arc::new(source);
                     for destination in [space, RgbSpace::Srgb] {
-                        let mut cache = SourceTiles {
+                        let mut cache = DecodedTiles {
                             destination,
                             ..Default::default()
                         };
@@ -161,7 +161,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
         tables.prepare(&r.device, space).unwrap();
     }
     assert_eq!(tables.gpu_bytes(), 3 * transfer::TABLE_BYTES);
-    let cache = SourceTiles::default();
+    let cache = DecodedTiles::default();
     let abandoned = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     for _ in 0..SOURCE_SLOTS {
         cache.charge_upload(&abandoned, FLOAT_TILE_BYTES);
@@ -218,7 +218,7 @@ fn native_source_decode_workloads() {
                 .flat_map(f32::to_ne_bytes)
                 .collect();
             r.queue.write_buffer(&scene.buffer, 0, &uniform);
-            let mut cache = SourceTiles {
+            let mut cache = DecodedTiles {
                 destination: space,
                 ..Default::default()
             };
@@ -309,4 +309,270 @@ impl Drop for BenchmarkAffinity {
             libc::sched_setaffinity(0, std::mem::size_of_val(&self.0), &self.0);
         }
     }
+}
+
+fn raster_fixture(
+    depth: IntegerDepth,
+    alpha: AlphaAssociation,
+    alpha_code: Option<u32>,
+) -> (Arc<TileBlob>, Vec<u8>) {
+    let maximum = depth.maximum();
+    let bytes: Vec<_> = (0..PAGE_SIZE * PAGE_SIZE)
+        .flat_map(|i| {
+            [
+                i & maximum,
+                (i * 101) & maximum,
+                (i * 237) & maximum,
+                alpha_code.unwrap_or((i * 317) & maximum),
+            ]
+        })
+        .flat_map(|v| (v as u16).to_le_bytes().into_iter().take(depth.bytes()))
+        .collect();
+    let descriptor = PixelDescriptor {
+        channels: 4,
+        bits_per_channel: depth.bits(),
+        encoding: TransferEncoding::Profile,
+        alpha,
+    };
+    (
+        Arc::new(TileBlob::encode(descriptor, &bytes).unwrap()),
+        bytes,
+    )
+}
+fn encode_pending(
+    r: &WgpuRasterizer,
+    scene: &Scene,
+    cache: &mut DecodedTiles,
+    pending: &PendingTile,
+    encoder: &mut crate::submission::CommandEncoder,
+) {
+    let bytes: Vec<_> = pending
+        .data
+        .unwrap()
+        .into_iter()
+        .flat_map(f32::to_ne_bytes)
+        .collect();
+    // Each helper call submits before the next uniform write.
+    r.queue.write_buffer(&scene.buffer, 0, &bytes);
+    let count = cache
+        .encode(r, encoder, pending, &scene.binding, 0)
+        .unwrap();
+    cache.charge_upload(encoder, count);
+}
+#[test]
+fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let scene = Scene::new(&r);
+    let mut cache = DecodedTiles::default();
+    for space in RgbSpace::ALL {
+        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for association in [
+                AlphaAssociation::Straight,
+                AlphaAssociation::PremultipliedLinear,
+            ] {
+                let maximum = depth.maximum();
+                for alpha_code in [
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                    Some(17),
+                    Some(maximum / 2),
+                    Some(maximum),
+                    None,
+                ] {
+                    let (blob, bytes) = raster_fixture(depth, association, alpha_code);
+                    for destination in [space, RgbSpace::Srgb] {
+                        let (tile, pending) =
+                            cache.plan_raster(&r, &blob, space, destination).unwrap();
+                        if let Some(pending) = pending {
+                            let mut commands = crate::submission::CommandEncoder::new(
+                                &r.device,
+                                &Default::default(),
+                            );
+                            encode_pending(&r, &scene, &mut cache, &pending, &mut commands);
+                            commands.submit(&r.queue);
+                        }
+                        let actual = crate::layer_tests::page_bytes(&r, &tile.texture);
+                        let matrix = space.linear_transform(destination);
+                        let mut linear_error = 0f64;
+                        let mut code_error = 0f64;
+                        for (input, output) in bytes
+                            .chunks_exact(4 * depth.bytes())
+                            .zip(actual.chunks_exact(16))
+                        {
+                            let code: [u32; 4] = std::array::from_fn(|c| {
+                                if depth == IntegerDepth::U8 {
+                                    u32::from(input[c])
+                                } else {
+                                    u32::from(u16::from_le_bytes(
+                                        input[c * 2..c * 2 + 2].try_into().unwrap(),
+                                    ))
+                                }
+                            });
+                            let measured: [f32; 4] = std::array::from_fn(|c| {
+                                f32::from_ne_bytes(output[c * 4..c * 4 + 4].try_into().unwrap())
+                            });
+                            let a = f64::from(code[3]) / f64::from(maximum);
+                            assert_eq!(
+                                (f64::from(measured[3]) * f64::from(maximum)).round() as u32,
+                                code[3]
+                            );
+                            if code[3] == 0 {
+                                assert_eq!(measured, [0.; 4]);
+                                continue;
+                            }
+                            if code[3] == maximum {
+                                assert_eq!(measured[3], 1.);
+                            }
+                            let rgb = std::array::from_fn::<_, 3, _>(|c| {
+                                space.decode(f64::from(code[c]) / f64::from(maximum))
+                            });
+                            for c in 0..3 {
+                                let reference =
+                                    matrix[c].iter().zip(rgb).map(|(m, v)| m * v).sum::<f64>()
+                                        * if association == AlphaAssociation::Straight {
+                                            a
+                                        } else {
+                                            1.
+                                        };
+                                linear_error =
+                                    linear_error.max((f64::from(measured[c]) - reference).abs());
+                                if destination == space {
+                                    let v = f64::from(measured[c])
+                                        / if association == AlphaAssociation::Straight {
+                                            f64::from(measured[3])
+                                        } else {
+                                            1.
+                                        };
+                                    code_error = code_error.max(
+                                        ((space.encode(v) * f64::from(maximum)).round()
+                                            - f64::from(code[c]))
+                                        .abs(),
+                                    );
+                                }
+                            }
+                        }
+                        assert!(
+                            linear_error <= 0.000003,
+                            "{space:?} {depth:?} {association:?} alpha={alpha_code:?} to={destination:?} linear={linear_error}"
+                        );
+                        assert_eq!(
+                            code_error, 0.,
+                            "{space:?} {depth:?} {association:?} alpha={alpha_code:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(cache.slots.len(), SOURCE_SLOTS);
+    assert_eq!(
+        cache.gpu_bytes(),
+        SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES + 3 * 256 * 256 * 4 + 3 * transfer::TABLE_BYTES
+    );
+    assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_values() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let scene = Scene::new(&r);
+    let mut cache = DecodedTiles::default();
+    let mut source_builder = SourceBuilder::new(
+        [256; 2],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        4 * 1024 * 1024,
+    )
+    .unwrap();
+    for _ in 0..256 {
+        source_builder.push_row(&[127; 1024]).unwrap();
+    }
+    let source = Arc::new(source_builder.finish().unwrap());
+    let (blob, _) = raster_fixture(IntegerDepth::U16, AlphaAssociation::Straight, Some(65535));
+    let weak = Arc::downgrade(&blob);
+    let mut identities = Vec::new();
+    for i in 0..SOURCE_SLOTS * 4 {
+        if cache.uploads_full() {
+            r.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .unwrap();
+        }
+        let other = Arc::new(TileBlob::encode(blob.descriptor, &blob.decode().unwrap()).unwrap());
+        let (tile, pending) = if i % 2 == 0 {
+            cache
+                .plan_raster(&r, &other, RgbSpace::ProPhoto, RgbSpace::Srgb)
+                .unwrap()
+        } else {
+            cache
+                .plan(&r, &Arc::new((*source).clone()), [0, 0])
+                .unwrap()
+        };
+        let pending = pending.unwrap();
+        if !identities.contains(&tile.texture) {
+            identities.push(tile.texture.clone());
+        }
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
+        encoder.submit(&r.queue);
+    }
+    assert_eq!(identities.len(), SOURCE_SLOTS);
+    let (_, pending) = cache
+        .plan_raster(&r, &blob, RgbSpace::Srgb, RgbSpace::Srgb)
+        .unwrap();
+    drop(pending);
+    let (_, pending) = cache
+        .plan_raster(&r, &blob, RgbSpace::Srgb, RgbSpace::Srgb)
+        .unwrap();
+    let pending = pending.unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
+    drop(pending);
+    drop(encoder);
+    let (_, pending) = cache
+        .plan_raster(&r, &blob, RgbSpace::Srgb, RgbSpace::Srgb)
+        .unwrap();
+    let pending = pending.unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
+    drop(pending);
+    encoder.submit(&r.queue);
+    assert!(
+        cache
+            .plan_raster(&r, &blob, RgbSpace::Srgb, RgbSpace::Srgb)
+            .unwrap()
+            .1
+            .is_none()
+    );
+    assert!(
+        cache
+            .plan_raster(&r, &blob, RgbSpace::ProPhoto, RgbSpace::Srgb)
+            .unwrap()
+            .1
+            .is_some()
+    );
+    assert!(
+        cache
+            .plan_raster(&r, &blob, RgbSpace::Srgb, RgbSpace::ProPhoto)
+            .unwrap()
+            .1
+            .is_some()
+    );
+    drop(blob);
+    assert!(weak.upgrade().is_none());
+    r.device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(READBACK_TIMEOUT),
+        })
+        .unwrap();
+    assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
+    assert_eq!(cache.slots.len(), SOURCE_SLOTS);
 }

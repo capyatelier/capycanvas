@@ -738,3 +738,291 @@ fn native_writeback_workloads() {
         }
     }
 }
+
+#[test]
+fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
+    use crate::raster::TileCapture;
+    use layer_core::raster::RasterTile;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let encoder = NativeTileEncoder::with_device(&r.device);
+    let status = NativeEncodeStatus::new(&r.device);
+    let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let canonical = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let encoded8 = texture(&r, wgpu::TextureFormat::Rgba8Uint);
+    let encoded16 = texture(&r, wgpu::TextureFormat::Rgba16Uint);
+    for space in RgbSpace::ALL {
+        let transfer = r.prepare_native_transfer(space).unwrap();
+        assert_eq!(transfer, r.prepare_native_transfer(space).unwrap());
+        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            let maximum = depth.maximum();
+            for association in [
+                AlphaAssociation::Straight,
+                AlphaAssociation::PremultipliedLinear,
+            ] {
+                let encoded = if depth == IntegerDepth::U8 {
+                    &encoded8
+                } else {
+                    &encoded16
+                };
+                let pixels: Vec<_> = (0..65536u32)
+                    .map(|i| {
+                        let a = [0, 1, 2, 17, maximum / 2, maximum][i as usize % 6] as f32
+                            / maximum as f32;
+                        let rgb: [f32; 3] = std::array::from_fn(|c| {
+                            space.decode(
+                                f64::from(i.wrapping_mul([1, 101, 237][c]) & maximum)
+                                    / f64::from(maximum),
+                            ) as f32
+                                * a
+                        });
+                        [rgb[0], rgb[1], rgb[2], a]
+                    })
+                    .collect();
+                upload(&r, &working, &working_bytes(&pixels));
+                let request = NativeTileRequest {
+                    working: &working,
+                    encoded,
+                    canonical: &canonical,
+                    transfer: &transfer,
+                    depth,
+                    alpha: association,
+                    region: [0, 0, 256, 256],
+                };
+                let descriptor = request.descriptor();
+                let batch = encoder.prepare(&r.device, &[request], &status).unwrap();
+                let mut first = None;
+                for cycle in 0..4 {
+                    submit(&r, &encoder, &status, std::slice::from_ref(&batch), true);
+                    let ticket = RasterTile::default();
+                    let capture = r
+                        .capture_tiles(
+                            &[TileCapture {
+                                descriptor,
+                                texture: encoded,
+                                tile: ticket.clone(),
+                            }],
+                            Some(&status),
+                        )
+                        .unwrap();
+                    capture.finish().unwrap();
+                    let backing = ticket.wait_backing().unwrap();
+                    let bytes = backing.decode().unwrap();
+                    if let Some(first) = &first {
+                        assert!(
+                            first == &bytes,
+                            "native code drift {space:?} {depth:?} {association:?} cycle={cycle}"
+                        );
+                    } else {
+                        first = Some(bytes);
+                    }
+                    r.restore_native_tiles(&[NativeTileRestore {
+                        blob: &backing,
+                        space,
+                        destination: space,
+                        working: &working,
+                    }])
+                    .unwrap();
+                    let restored = page_bytes(&r, &working);
+                    let canonical_bytes = page_bytes(&r, &canonical);
+                    let mut max_error = 0f32;
+                    for (a, b) in restored
+                        .chunks_exact(4)
+                        .zip(canonical_bytes.chunks_exact(4))
+                    {
+                        let a = f32::from_le_bytes(a.try_into().unwrap());
+                        let b = f32::from_le_bytes(b.try_into().unwrap());
+                        max_error = max_error.max((a - b).abs());
+                    }
+                    assert!(max_error <= 0.00000024, "canonical mismatch: {max_error}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn native_restore_preflight_and_late_corruption_preserve_live_pixels_and_retry() {
+    use layer_core::raster::TileBlob;
+    use std::sync::Arc;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let other = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let wrong = texture(&r, wgpu::TextureFormat::Rgba16Uint);
+    let sentinel = working_bytes(&vec![[0.12, 0.23, 0.34, 0.45]; 65536]);
+    upload(&r, &working, &sentinel);
+    let descriptor = PixelDescriptor {
+        encoding: TransferEncoding::Profile,
+        ..PixelDescriptor::SRGB8_STRAIGHT
+    };
+    let good = Arc::new(TileBlob::encode(descriptor, &[173; 256 * 256 * 4]).unwrap());
+    let invalid =
+        Arc::new(TileBlob::encode(PixelDescriptor::COVERAGE8, &[255; 256 * 256]).unwrap());
+    let request = |blob, working| NativeTileRestore {
+        blob,
+        space: RgbSpace::Srgb,
+        destination: RgbSpace::Srgb,
+        working,
+    };
+    assert!(
+        r.restore_native_tiles(&[request(&good, &working), request(&good, &working)])
+            .is_err()
+    );
+    assert!(
+        r.restore_native_tiles(&[request(&good, &working), request(&good, &wrong)])
+            .is_err()
+    );
+    assert!(
+        r.restore_native_tiles(&[request(&good, &working), request(&invalid, &other)])
+            .is_err()
+    );
+    assert!(page_bytes(&r, &working) == sentinel);
+    for (descriptor, space) in [
+        (PixelDescriptor::SRGB8_PAINT, RgbSpace::DisplayP3),
+        (
+            PixelDescriptor {
+                encoding: TransferEncoding::Linear,
+                ..descriptor
+            },
+            RgbSpace::Srgb,
+        ),
+        (
+            PixelDescriptor {
+                alpha: AlphaAssociation::None,
+                ..descriptor
+            },
+            RgbSpace::Srgb,
+        ),
+        (
+            PixelDescriptor {
+                bits_per_channel: 32,
+                ..descriptor
+            },
+            RgbSpace::Srgb,
+        ),
+    ] {
+        let mut invalid =
+            TileBlob::encode(PixelDescriptor::SRGB8_STRAIGHT, &[173; 256 * 256 * 4]).unwrap();
+        invalid.descriptor = descriptor;
+        let invalid = Arc::new(invalid);
+        assert!(
+            r.restore_native_tiles(&[NativeTileRestore {
+                blob: &invalid,
+                space,
+                destination: space,
+                working: &working
+            }])
+            .is_err()
+        );
+    }
+    assert!(page_bytes(&r, &working) == sentinel);
+    let many: Vec<_> = (0..17).map(|_| request(&good, &working)).collect();
+    assert!(r.restore_native_tiles(&many).is_err());
+    let mut corrupt = TileBlob::encode(descriptor, &[17; 256 * 256 * 4]).unwrap();
+    corrupt.digest[0] ^= 1;
+    let corrupt = Arc::new(corrupt);
+    assert!(
+        r.restore_native_tiles(&[request(&good, &working), request(&corrupt, &other)])
+            .is_err()
+    );
+    // Both are private candidates; no live revision was replaced. Abandoned
+    // decode reservations must not supply stale pixels when the work retries.
+    r.restore_native_tiles(&[request(&good, &working)]).unwrap();
+    let actual = page_bytes(&r, &working);
+    let a = 173f32 / 255.;
+    let expected = RgbSpace::Srgb.decode(173. / 255.) as f32 * a;
+    for pixel in actual.chunks_exact(16) {
+        for c in 0..3 {
+            assert!(
+                (f32::from_le_bytes(pixel[c * 4..c * 4 + 4].try_into().unwrap()) - expected).abs()
+                    < 0.0000002
+            );
+        }
+    }
+    r.restore_native_tiles(&[]).unwrap();
+}
+
+#[test]
+#[ignore = "hardware native raster restore with shared decode residency"]
+fn native_restore_workloads() {
+    use layer_core::raster::TileBlob;
+    use std::sync::Arc;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let working: Vec<_> = (0..16)
+        .map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float))
+        .collect();
+    for space in [RgbSpace::Srgb, RgbSpace::AdobeRgb, RgbSpace::ProPhoto] {
+        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            let descriptor = PixelDescriptor {
+                bits_per_channel: depth.bits(),
+                encoding: TransferEncoding::Profile,
+                ..PixelDescriptor::SRGB8_STRAIGHT
+            };
+            let blobs: Vec<_> = (0..20u32)
+                .map(|tile| {
+                    let bytes: Vec<_> = (0..65536u32)
+                        .flat_map(|i| {
+                            [
+                                i.wrapping_mul(8191) + tile * 31,
+                                i.wrapping_mul(17) + tile * 16381,
+                                if (i / 173 + tile) % 2 == 0 {
+                                    depth.maximum()
+                                } else {
+                                    0
+                                },
+                                depth.maximum(),
+                            ]
+                        })
+                        .flat_map(|v| (v as u16).to_le_bytes().into_iter().take(depth.bytes()))
+                        .collect();
+                    Arc::new(TileBlob::encode(descriptor, &bytes).unwrap())
+                })
+                .collect();
+            for count in [1, 16] {
+                for misses in [false, true] {
+                    let mut times = Vec::new();
+                    for frame in 0..120 {
+                        let requests: Vec<_> = (0..count)
+                            .map(|i| NativeTileRestore {
+                                blob: &blobs[if misses { (frame * count + i) % 20 } else { i }],
+                                space,
+                                destination: space,
+                                working: &working[i],
+                            })
+                            .collect();
+                        let start = std::time::Instant::now();
+                        r.restore_native_tiles(&requests).unwrap();
+                        let cpu = start.elapsed().as_secs_f64() * 1000.;
+                        r.device
+                            .poll(wgpu::PollType::Wait {
+                                submission_index: None,
+                                timeout: Some(READBACK_TIMEOUT),
+                            })
+                            .unwrap();
+                        let complete = start.elapsed().as_secs_f64() * 1000.;
+                        if frame == 0 {
+                            println!(
+                                "NATIVE_RESTORE cold space={space:?} depth={depth:?} tiles={count} misses={misses} cpu_ms={cpu:.4} complete_ms={complete:.4}"
+                            );
+                        }
+                        if frame >= 20 {
+                            times.push([cpu, complete]);
+                        }
+                    }
+                    for axis in 0..2 {
+                        times.sort_by(|a, b| a[axis].total_cmp(&b[axis]));
+                        println!(
+                            "NATIVE_RESTORE warm space={space:?} depth={depth:?} tiles={count} misses={misses} kind={} p95_ms={:.4} p99_ms={:.4}",
+                            ["cpu", "complete"][axis],
+                            times[94][axis],
+                            times[98][axis]
+                        );
+                    }
+                    println!(
+                        "NATIVE_RESTORE storage space={space:?} depth={depth:?} tiles={count} misses={misses} upload_peak={}",
+                        r.metrics.source_upload_peak_bytes
+                    );
+                }
+            }
+        }
+    }
+}

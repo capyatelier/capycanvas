@@ -9,6 +9,83 @@ pub use transfer::NativeTransfer;
 pub const MAX_BATCH_TILES: usize = 16;
 pub const STATUS_BYTES: u64 = 8;
 
+/// Restore a committed integer tile into a private 256×256 RGBA32Float candidate.
+/// Original images and native paint share the renderer's bounded decode cache.
+/// The profile identities are explicit, independent of the integer descriptor.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct NativeTileRestore<'a> {
+    pub blob: &'a std::sync::Arc<layer_core::raster::TileBlob>,
+    pub space: layer_core::color::RgbSpace,
+    pub destination: layer_core::color::RgbSpace,
+    pub working: &'a wgpu::Texture,
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::WgpuRasterizer {
+    /// Prepare and share the same transfer buffer used by source/raster decode
+    /// with native writeback. Call during mode preparation, before interaction.
+    pub fn prepare_native_transfer(
+        &mut self,
+        space: layer_core::color::RgbSpace,
+    ) -> Result<NativeTransfer, GpuRasterError> {
+        let mut scene = self
+            .scene
+            .take()
+            .unwrap_or_else(|| crate::scene::Scene::new(self));
+        let result = scene.prepare_native_transfer(self, space);
+        self.scene = Some(scene);
+        result
+    }
+    /// Queue at most sixteen restorations into caller-owned private candidates.
+    /// This may drain pending decode uploads to preserve the staging ceiling;
+    /// schedule cold batches outside input handling. On error discard all
+    /// candidates. No document revision is published by this operation.
+    pub fn restore_native_tiles(
+        &mut self,
+        requests: &[NativeTileRestore<'_>],
+    ) -> Result<(), GpuRasterError> {
+        if requests.len() > MAX_BATCH_TILES {
+            return Err(GpuRasterError::Color(
+                "Native restore batch exceeds sixteen tiles".into(),
+            ));
+        }
+        for (i, request) in requests.iter().enumerate() {
+            let t = request.working;
+            if t.size()
+                != (wgpu::Extent3d {
+                    width: 256,
+                    height: 256,
+                    depth_or_array_layers: 1,
+                })
+                || t.dimension() != wgpu::TextureDimension::D2
+                || t.mip_level_count() != 1
+                || t.sample_count() != 1
+                || t.format() != wgpu::TextureFormat::Rgba32Float
+                || !t.usage().contains(wgpu::TextureUsages::COPY_DST)
+                || requests[..i].iter().any(|old| old.working == t)
+            {
+                return Err(GpuRasterError::Color(
+                    "Invalid or duplicate native restore destination".into(),
+                ));
+            }
+        }
+        if requests.is_empty() {
+            return Ok(());
+        }
+        let mut scene = self
+            .scene
+            .take()
+            .unwrap_or_else(|| crate::scene::Scene::new(self));
+        let mut encoder = crate::submission::CommandEncoder::new(&self.device, &Default::default());
+        let result = scene.restore_native_tiles(self, requests, &mut encoder);
+        self.scene = Some(scene);
+        self.uploads.finish(&encoder);
+        if result.is_ok() {
+            self.last_submission = Some(encoder.submit(&self.queue));
+        }
+        result
+    }
+}
+
 /// A 256×256 working tile and its two publication candidates. Only `region` is
 /// written. Initialize both destinations from their previous pixels to preserve
 /// others, and publish neither until the status succeeds. The canonical working

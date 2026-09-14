@@ -1,10 +1,10 @@
-// Integer source samples enter Float32 directly. No bounded intermediate or
-// premultiplied integer representation is used for the immutable original.
+// Native integer samples enter Float32 directly. Original images retain
+// straight RGB; committed raster tiles declare their alpha association.
 struct Settings {
     red: vec4<f32>,
     green: vec4<f32>,
     blue: vec4<f32>,
-    options: vec4<f32>, // unused, integer maximum, valid width, valid height
+    options: vec4<f32>, // premultiplied storage, integer maximum, valid width, valid height
     unused0: vec4<f32>,
     unused1: vec4<f32>,
 }
@@ -24,5 +24,6 @@ struct Settings {
     let code = samples.rgb * scale;
     let linear = vec3(transfer[code.r].x, transfer[code.g].x, transfer[code.b].x);
     let rgb = vec3<f32>(dot(settings.red.xyz,linear), dot(settings.green.xyz,linear), dot(settings.blue.xyz,linear));
-    return vec4<f32>(rgb * alpha, alpha);
+    if alpha == 0. { return vec4<f32>(0.); }
+    return vec4<f32>(select(rgb * alpha, rgb, settings.options.x != 0.), alpha);
 }

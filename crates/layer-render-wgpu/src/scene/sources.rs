@@ -1,12 +1,13 @@
-//! GPU source slots have fixed ownership. Jobs defer decoding until their
+//! GPU decoded tile slots have fixed ownership. Jobs defer decoding until their
 //! ordered upload; eviction never creates another retained GPU tile. Built-in
 //! profiles decode on the GPU, while embedded profiles use the native CMM.
 use super::*;
 use crate::source_access::RawTile;
 use layer_core::color::{
-    ColorProfile, IntegerDepth, RgbSpace,
+    AlphaAssociation, ColorProfile, IntegerDepth, PixelDescriptor, RgbSpace, TransferEncoding,
     source::{SourceChannels, SourceImage},
 };
+use layer_core::raster::TileBlob;
 use std::{
     collections::VecDeque,
     sync::{
@@ -19,20 +20,76 @@ pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 1
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
+enum Key {
+    Image(Weak<SourceImage>, [u32; 2]),
+    Raster(Weak<TileBlob>, RgbSpace, RgbSpace),
+}
+impl Key {
+    fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Image(a, x), Self::Image(b, y)) => a.ptr_eq(b) && x == y,
+            (Self::Raster(a, x, d), Self::Raster(b, y, e)) => a.ptr_eq(b) && x == y && d == e,
+            _ => false,
+        }
+    }
+}
 struct Slot {
-    source: Weak<SourceImage>,
-    coordinate: [u32; 2],
+    key: Option<Key>,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     used: u64,
     valid: Arc<std::sync::atomic::AtomicBool>,
 }
-pub(super) struct PendingSource {
-    pub source: Arc<SourceImage>,
-    pub coordinate: [u32; 2],
+enum Pixels {
+    Image(Arc<SourceImage>, [u32; 2]),
+    Raster(Arc<TileBlob>, RgbSpace),
+}
+pub(super) struct PendingTile {
+    pixels: Pixels,
     pub texture: wgpu::Texture,
     pub data: Option<[f32; 24]>,
     write: crate::submission::CacheWrite,
+}
+struct NativeSamples<'a> {
+    tile: &'a TileBlob,
+    descriptor: PixelDescriptor,
+    channels: SourceChannels,
+    depth: IntegerDepth,
+    space: RgbSpace,
+}
+impl Pixels {
+    fn native(&self) -> Result<NativeSamples<'_>, GpuRasterError> {
+        match self {
+            Self::Image(source, coordinate) => {
+                let interpretation = &source.interpretation;
+                let ColorProfile::Builtin(space) = interpretation.profile else {
+                    unreachable!()
+                };
+                let tile = source
+                    .tiles
+                    .get(coordinate)
+                    .ok_or_else(|| GpuRasterError::Color("Missing source tile".into()))?;
+                Ok(NativeSamples {
+                    tile,
+                    descriptor: interpretation.descriptor(),
+                    channels: interpretation.channels,
+                    depth: interpretation.depth,
+                    space,
+                })
+            }
+            Self::Raster(tile, space) => Ok(NativeSamples {
+                tile,
+                descriptor: tile.descriptor,
+                channels: SourceChannels::Rgba,
+                depth: if tile.descriptor.bits_per_channel == 16 {
+                    IntegerDepth::U16
+                } else {
+                    IntegerDepth::U8
+                },
+                space: *space,
+            }),
+        }
+    }
 }
 struct EncodedInput {
     texture: wgpu::Texture,
@@ -53,7 +110,7 @@ impl Drop for UploadCharge {
     }
 }
 #[derive(Default)]
-pub(super) struct SourceTiles {
+pub(super) struct DecodedTiles {
     destination: RgbSpace,
     slots: Vec<Slot>,
     clock: u64,
@@ -65,19 +122,24 @@ pub(super) struct SourceTiles {
     pub hits: u64,
     pub misses: u64,
 }
-impl SourceTiles {
+impl DecodedTiles {
+    pub fn prepare_transfer(
+        &mut self,
+        device: &wgpu::Device,
+        space: RgbSpace,
+    ) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
+        self.transfer.prepare(device, space).cloned()
+    }
     pub fn prepared_view(
         &self,
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
     ) -> Option<&wgpu::TextureView> {
-        let weak = Arc::downgrade(source);
+        let key = Key::Image(Arc::downgrade(source), coordinate);
         self.slots
             .iter()
             .find(|s| {
-                s.coordinate == coordinate
-                    && s.source.ptr_eq(&weak)
-                    && s.valid.load(Ordering::Acquire)
+                s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire)
             })
             .map(|s| &s.view)
     }
@@ -112,7 +174,55 @@ impl SourceTiles {
         r: &WgpuRasterizer,
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
-    ) -> Result<(RawTile, Option<PendingSource>), GpuRasterError> {
+    ) -> Result<(RawTile, Option<PendingTile>), GpuRasterError> {
+        let (tile, write) = self.plan_key(r, Key::Image(Arc::downgrade(source), coordinate))?;
+        let pending = write.map(|write| PendingTile {
+            pixels: Pixels::Image(source.clone(), coordinate),
+            texture: tile.texture.clone(),
+            data: builtin_settings(source, coordinate, self.destination),
+            write,
+        });
+        Ok((tile, pending))
+    }
+
+    /// Committed native paint shares the original-image cache, transfer tables
+    /// and upload ceiling. Cache keys never retain compressed history backing.
+    pub fn plan_raster(
+        &mut self,
+        r: &WgpuRasterizer,
+        blob: &Arc<TileBlob>,
+        space: RgbSpace,
+        destination: RgbSpace,
+    ) -> Result<(RawTile, Option<PendingTile>), GpuRasterError> {
+        validate_raster(blob, space)?;
+        let d = blob.descriptor;
+        let depth = if d.bits_per_channel == 16 {
+            IntegerDepth::U16
+        } else {
+            IntegerDepth::U8
+        };
+        let (tile, write) =
+            self.plan_key(r, Key::Raster(Arc::downgrade(blob), space, destination))?;
+        let pending = write.map(|write| PendingTile {
+            pixels: Pixels::Raster(blob.clone(), space),
+            texture: tile.texture.clone(),
+            data: Some(rgb_settings(
+                space,
+                destination,
+                depth,
+                [PAGE_SIZE; 2],
+                d.alpha,
+            )),
+            write,
+        });
+        Ok((tile, pending))
+    }
+
+    fn plan_key(
+        &mut self,
+        r: &WgpuRasterizer,
+        key: Key,
+    ) -> Result<(RawTile, Option<crate::submission::CacheWrite>), GpuRasterError> {
         if !r
             .device
             .features()
@@ -123,9 +233,8 @@ impl SourceTiles {
             ));
         }
         self.clock = self.clock.wrapping_add(1);
-        let weak = Arc::downgrade(source);
         if let Some(slot) = self.slots.iter_mut().find(|s| {
-            s.source.ptr_eq(&weak) && s.coordinate == coordinate && s.valid.load(Ordering::Acquire)
+            s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire)
         }) {
             slot.used = self.clock;
             self.hits += 1;
@@ -159,8 +268,7 @@ impl SourceTiles {
             let view = texture.create_view(&Default::default());
             let id = self.slots.len();
             self.slots.push(Slot {
-                source: Weak::new(),
-                coordinate,
+                key: None,
                 texture,
                 view,
                 used: 0,
@@ -176,8 +284,7 @@ impl SourceTiles {
                 .0
         };
         let slot = &mut self.slots[index];
-        slot.source = weak;
-        slot.coordinate = coordinate;
+        slot.key = Some(key);
         slot.used = self.clock;
         let write = crate::submission::CacheWrite::new();
         slot.valid = write.validity();
@@ -186,13 +293,7 @@ impl SourceTiles {
                 texture: slot.texture.clone(),
                 view: slot.view.clone(),
             },
-            Some(PendingSource {
-                source: source.clone(),
-                coordinate,
-                texture: slot.texture.clone(),
-                data: builtin_settings(source, coordinate, self.destination),
-                write,
-            }),
+            Some(write),
         ))
     }
 
@@ -200,13 +301,13 @@ impl SourceTiles {
         &mut self,
         r: &WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
-        pending: &PendingSource,
+        pending: &PendingTile,
         uniforms: &wgpu::BindGroup,
         offset: u32,
     ) -> Result<u64, GpuRasterError> {
         let bytes = if pending.data.is_some() {
-            let interpretation = &pending.source.interpretation;
-            let index = usize::from(interpretation.depth == IntegerDepth::U16);
+            let samples = pending.pixels.native()?;
+            let index = usize::from(samples.depth == IntegerDepth::U16);
             let pipelines = &r.scene_pipelines.source;
             let input = self.inputs[index].get_or_insert_with(|| {
                 let texture = r.device.create_texture(&wgpu::TextureDescriptor {
@@ -227,9 +328,7 @@ impl SourceTiles {
                     bindings: Default::default(),
                 }
             });
-            let ColorProfile::Builtin(space) = interpretation.profile else {
-                unreachable!()
-            };
+            let space = samples.space;
             let table = self.transfer.prepare(&r.device, space)?;
             let binding = input.bindings[transfer::Tables::index(space)].get_or_insert_with(|| {
                 r.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -249,18 +348,13 @@ impl SourceTiles {
                     ],
                 })
             });
-            let tile = pending
-                .source
-                .tiles
-                .get(&pending.coordinate)
-                .ok_or_else(|| GpuRasterError::Color("Missing source tile".into()))?;
-            if tile.descriptor != interpretation.descriptor() {
+            if samples.tile.descriptor != samples.descriptor {
                 return Err(GpuRasterError::Color(
                     "Source tile has the wrong sample representation".into(),
                 ));
             }
-            let decoded = tile.decode().map_err(GpuRasterError::Color)?;
-            let step = interpretation.depth.bytes();
+            let decoded = samples.tile.decode().map_err(GpuRasterError::Color)?;
+            let step = samples.depth.bytes();
             let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * 4 * step;
             let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("bounded integer source upload"),
@@ -272,13 +366,13 @@ impl SourceTiles {
                 let mut mapped = buffer
                     .get_mapped_range_mut(..)
                     .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                if interpretation.channels == SourceChannels::Rgba {
+                if samples.channels == SourceChannels::Rgba {
                     mapped.copy_from_slice(&decoded);
                 } else {
                     // Expand channels in one row of scratch. Alpha is coverage;
                     // grayscale uses the declared RGB transfer on equal R/G/B.
                     let mut row = [0u8; PAGE_SIZE as usize * 8];
-                    let bpp = interpretation.pixel_bytes();
+                    let bpp = samples.channels.count() * step;
                     let row_bytes = PAGE_SIZE as usize * 4 * step;
                     for (y, input) in decoded.chunks_exact(PAGE_SIZE as usize * bpp).enumerate() {
                         for (pixel, rgba) in input
@@ -286,7 +380,7 @@ impl SourceTiles {
                             .zip(row[..row_bytes].chunks_exact_mut(4 * step))
                         {
                             for c in 0..3 {
-                                let channel = if interpretation.channels == SourceChannels::Rgb {
+                                let channel = if samples.channels == SourceChannels::Rgb {
                                     c
                                 } else {
                                     0
@@ -294,7 +388,7 @@ impl SourceTiles {
                                 rgba[c * step..(c + 1) * step]
                                     .copy_from_slice(&pixel[channel * step..(channel + 1) * step]);
                             }
-                            if interpretation.channels.has_alpha() {
+                            if samples.channels.has_alpha() {
                                 rgba[3 * step..].copy_from_slice(&pixel[bpp - step..]);
                             } else {
                                 rgba[3 * step..].fill(255);
@@ -325,7 +419,10 @@ impl SourceTiles {
             pass.draw(0..3, 0..1);
             bytes as u64
         } else {
-            let buffer = self.upload_icc(r, pending)?;
+            let Pixels::Image(source, coordinate) = &pending.pixels else {
+                unreachable!()
+            };
+            let buffer = self.upload_icc(r, source, *coordinate)?;
             copy_upload(encoder, &buffer, &pending.texture, PAGE_SIZE * 16);
             FLOAT_TILE_BYTES
         };
@@ -336,16 +433,17 @@ impl SourceTiles {
     fn upload_icc(
         &mut self,
         r: &WgpuRasterizer,
-        pending: &PendingSource,
+        source: &Arc<SourceImage>,
+        coordinate: [u32; 2],
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        let weak = Arc::downgrade(&pending.source);
+        let weak = Arc::downgrade(source);
         let index = if let Some(index) = self.decoders.iter().position(|(s, _)| s.ptr_eq(&weak)) {
             index
         } else {
             // Current exposed documents are sRGB8. The source stays native;
             // future document working-space selection supplies this destination.
             let decoder = layer_color::WorkingDecoder::new(
-                &pending.source.interpretation,
+                &source.interpretation,
                 self.destination,
                 Default::default(),
             )
@@ -361,7 +459,7 @@ impl SourceTiles {
             .resize((PAGE_SIZE * PAGE_SIZE) as usize, [0.; 4]);
         decoder
             .1
-            .decode_tile(&pending.source, pending.coordinate, &mut self.pixels)
+            .decode_tile(source, coordinate, &mut self.pixels)
             .map_err(GpuRasterError::Color)?;
         self.decoders.push_back(decoder);
         let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
@@ -416,6 +514,24 @@ fn copy_upload(
     );
 }
 
+pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), GpuRasterError> {
+    let d = blob.descriptor;
+    if d.channels != 4
+        || !matches!(d.bits_per_channel, 8 | 16)
+        || !matches!(
+            d.alpha,
+            AlphaAssociation::Straight | AlphaAssociation::PremultipliedLinear
+        )
+        || !(d.encoding == TransferEncoding::Profile
+            || (d.encoding == TransferEncoding::Srgb && space == RgbSpace::Srgb))
+    {
+        return Err(GpuRasterError::Color(
+            "Invalid native raster decode representation".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn builtin_settings(
     source: &SourceImage,
     coordinate: [u32; 2],
@@ -427,18 +543,34 @@ fn builtin_settings(
     if source.interpretation.channels == SourceChannels::Cmyk {
         return None;
     }
+    Some(rgb_settings(
+        space,
+        destination,
+        source.interpretation.depth,
+        std::array::from_fn(|i| {
+            source.extent[i]
+                .saturating_sub(coordinate[i] * PAGE_SIZE)
+                .min(PAGE_SIZE)
+        }),
+        AlphaAssociation::Straight,
+    ))
+}
+fn rgb_settings(
+    space: RgbSpace,
+    destination: RgbSpace,
+    depth: IntegerDepth,
+    extent: [u32; 2],
+    alpha: AlphaAssociation,
+) -> [f32; 24] {
     let mut data = [0.; 24];
     for (i, row) in space.linear_transform(destination).iter().enumerate() {
         data[i * 4..i * 4 + 3].copy_from_slice(&row.map(|v| v as f32));
     }
-    data[13] = source.interpretation.depth.maximum() as f32;
-    data[14] = source.extent[0]
-        .saturating_sub(coordinate[0] * PAGE_SIZE)
-        .min(PAGE_SIZE) as f32;
-    data[15] = source.extent[1]
-        .saturating_sub(coordinate[1] * PAGE_SIZE)
-        .min(PAGE_SIZE) as f32;
-    Some(data)
+    data[12] = f32::from(alpha == AlphaAssociation::PremultipliedLinear);
+    data[13] = depth.maximum() as f32;
+    data[14] = extent[0] as f32;
+    data[15] = extent[1] as f32;
+    data
 }
 
 #[derive(Clone)]

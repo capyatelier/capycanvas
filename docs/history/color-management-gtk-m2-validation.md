@@ -1650,3 +1650,155 @@ all pass. Logs: `native-capture-native-build.log`,
 panic is handled successfully. Changed Rust formatting, Python parsing and
 `git diff --check` pass. Native document/raster format adoption, source/composite
 residency, cold preparation and the complete GTK SDR journeys remain pending.
+
+## Shared native raster decoding and restoration (parent `d56520f`)
+
+The fixed sixteen-slot original-image decode cache also accepts committed integer
+raster blobs. It keeps weak blob identity, source working-space identity and
+requested destination space in its key, so a different interpretation cannot
+reuse pixels with the previous meaning and history backing is not pinned by GPU
+cache entries. Both consumers share the integer upload textures, three transfer
+curves, sixteen Float32 textures and sixteen-upload ceiling. There is no second
+retained decoded-paint cache. Stored straight RGB is associated after decoding;
+stored linear-premultiplied RGB is not multiplied by coverage again. Zero coverage
+produces canonical transparent black without changing retained native bytes.
+
+`restore_native_tiles` queues up to sixteen full tiles into caller-owned private
+RGBA32Float candidates, consuming each cache view before a later request can reuse
+its slot. It validates destination shape/format/usage, duplicate destinations,
+integer descriptors and declared profile meaning before recording restoration.
+Corrupt compressed contents still fail on bounded decode. Callers must discard
+all candidates on error; this primitive publishes no document revision. Like
+source preparation it may drain preceding upload work at the staging ceiling and
+belongs in scheduled cold work, outside input handling. `prepare_native_transfer`
+lets writeback use the very same curve buffer as source/raster decoding and moves
+curve preparation outside interaction.
+
+Physical GPU correctness covers 112 space/depth/alpha combinations, each checked
+in its native space and sRGB. The fixtures exercise every integer16 code, all
+integer8 codes, zero/one/two/seventeen/half/full coverage and varying coverage.
+Native code recovery has zero error; cross-space Float32 premultiplied output is
+within the predeclared absolute linear tolerance 3e-6 against f64 transfer/matrix
+reference calculations. Sixty-four mixed original/native misses reuse exactly
+sixteen physical textures. Unencoded and encoded-but-discarded reservations are
+invalidated; successful retry, weak backing release, both profile components of
+the key, and descriptor rejection pass. Sixteen space/depth/alpha combinations
+also complete four physical writeback → compressed capture → restore cycles,
+with exact native bytes across cycles and restored/canonical component agreement
+within 2.4e-7. These are native tile primitives, not a qualification of the still
+pending document tool pipeline.
+
+The shared decoded cache maximum remains **18.25 MiB**: sixteen MiB of Float32
+slots, 0.75 MiB of integer input textures and 1.5 MiB of transfer tables. At most
+four/eight MiB of integer8/integer16 upload payload is in flight for a sixteen-tile
+batch (ICC Float32 uploads retain the existing sixteen-MiB limit). Curve creation
+uses its separately recorded mapped initialization. A caller retaining sixteen
+Float32 working candidates adds sixteen MiB; that allocation is not hidden in the
+decode-cache counter. Mutable working-tile eviction and full photo residency are
+still separate, unfinished integration work.
+
+The complete GPU suite passes **151 tests / 24 hardware benchmarks ignored**
+(`native-raster-full-gpu-tests.log`). The new restore workload measures one or
+sixteen caller-owned destinations, all cache hits or cyclic misses over twenty
+compressed native tiles, both depths, and the three distinct transfer curves.
+Twenty warm-up batches precede one hundred measured batches in each case; two
+runs cover **4,800 measured batches**. CPU time includes restore validation,
+cache lookup, bounded decode/hash/upload on misses, uniforms, copies and queue
+submission. Completed time explicitly waits for the last queue work. Source
+fixture creation, destination allocation, writeback, capture/compression,
+document publication and presentation are outside this timing window.
+
+Across both runs, sixteen cache hits have completed p95 **0.0847–0.1062 ms** and
+CPU p95 at most **0.0273 ms**. Sixteen integer8 misses have completed p95
+**2.6518–3.7434 ms**; sixteen integer16 misses are **10.3709–10.5893 ms**. This
+uncached batch fails an 8.33 ms interactive budget and must be scheduled before
+input consumes it. One integer16 miss has completed p95 **0.5142–0.7015 ms**.
+The ProPhoto integer8 single-miss case has repeatable completed p99
+**2.1106–2.1234 ms** despite p95 below 0.20 ms; the outlier source is not yet
+attributed. It is retained as a scheduling risk, consistent with the earlier
+isolated upload/submission stalls. Process high-water is **144,348 / 140,168 KiB**;
+this is the small tile fixture, not a whole-photo memory qualification.
+
+Fresh parent/current/current/parent runs of the unchanged original-image
+benchmark cover **3,200 measured sixteen-miss batches**. The previously observed
+roughly seven/ten-ms integer16 CPU bands remain present in both implementations;
+the change does not establish their cause. Matching slower-band completed p95
+ranges include sRGB16 parent 10.2127 ms versus current 10.1938–10.5131 ms,
+P3 integer16 parent 10.0878–10.2014 versus current 10.0217–10.1629 ms, and Adobe
+integer16 parent 9.9668–10.0221 versus current 10.1601 ms (the other current run
+is in the faster band). The relative regression trigger does not reproduce
+across the paired arms. Source and native restore still require cold scheduling.
+Source process high-water varies 142,160–180,012 KiB across the four runs; no
+process-memory reduction is claimed from that variation.
+
+Reproduction: release-build the GPU test executable at parent `d56520f` and this
+change; select `LAYER_GPU_INDEX=0`. Run `native_source_decode_workloads --ignored
+--nocapture --test-threads=1` in parent/current/current/parent order, then run
+`native_restore_workloads` with the same flags twice. Each executable is copied
+only after a successful build. `native-raster-benchmark-runs.json` records binary
+hashes and elapsed times; `native-raster-decode-measurements.json` contains all
+case values, with raw `native-raster-source-*` and `native-raster-restore-bench-*`
+logs. Compilation and other GPU workloads do not overlap the measurements.
+
+The fresh fixed/parent/current drawing comparison covers **32,760 measured
+frames**, all twenty-five scenarios with three repetitions per arm. Fixed
+`e46f271` and parent `d56520f` use the previously verified, saved production
+executables; the current executable is rebuilt successfully from this change.
+These are new runs, not reused timings. Maximum CPU Move p95/p99 is
+**2.089/2.814 ms fixed**, **2.082/2.849 ms parent**, and **2.128/2.762 ms current**.
+Every Move/Pen-up sample stays within 8.33 ms. All twenty-five PNGs are
+byte-identical across all three arms. Reports and hashes are
+`native-raster-frame-{0-fixed,1-parent,2-current}.md`,
+`native-raster-frame-runs.json` and `native-raster-frame-measurements.json`.
+The short-run relative triggers include palette knife versus fixed, natural
+blender versus both baselines, and watercolor wash/wet watercolor versus parent;
+longer paired checks follow below. This harness measures CPU frame creation and
+completed work, not native input-to-present.
+
+Ten-repetition fixed/parent/current/current/parent runs of palette knife, natural
+blender, watercolor wash and wet watercolor add **29,200 measured frames**. All
+stay below 8.33 ms. Palette Move CPU p99 is 1.738/1.726 ms current versus 1.682 ms
+fixed and 1.820/1.939 ms parent; completed p99 is 2.819/2.761 versus 2.768 fixed
+and 2.744/2.976 parent. Watercolor wash completed p99 is 4.350/4.381 current versus
+4.328 fixed and 4.371/4.345 parent; wet watercolor CPU p99 is 2.795/2.808 versus
+2.813 fixed and 2.860/2.804 parent. Those initial Move triggers clear. Natural
+blender Pen-up CPU p99 varies 1.792/1.602 current and 1.530/2.169 parent;
+completed p99 is 2.989/2.833 current versus 3.161 fixed and 2.664/3.403 parent,
+so the initial Pen-up trigger does not reproduce across both paired arms.
+Palette Pen-up CPU p99 remains above the single fixed arm (2.433/2.220 versus
+1.984 ms), while parent is slower at 3.271/3.428 ms; completed Pen-up is within
+the fixed comparison. A longer fixed/current check follows. Raw
+`native-raster-repeat-*` reports and `native-raster-repeat-measurements.json`
+retain every arm, including slower parent values.
+
+An isolated phase diagnostic narrows the single-tile stall to **`Queue::submit`**.
+At ProPhoto integer8 miss frames 25/57, command finalization is about
+0.009–0.010 ms and the queue call is **2.04–2.21 ms**, while decode/job preparation
+is about 0.18 ms. The same diagnostic sees a roughly 2 ms queue call on a fully
+cached integer16 restore at frame 68. This distinguishes the stall from native
+transfer calculation, decompression and command-buffer finalization; it does not
+establish the underlying wgpu/driver cause. First use of each transfer curve
+still has the expected separate 2.2–3.0 ms preparation cost. The probe is generated
+in a fresh temporary archive by `artifacts/color-m2/trace-native-restore.py`;
+`native-raster-restore-profile-{0,1}.log` contains phase records,
+`native-raster-restore-coarse-{0,1}.log` preserves the first diagnostic, and the
+successful build/location are recorded alongside them. Instrumented executables
+are excluded from qualification and do not modify production code. Cold work and
+submission scheduling remain required before exposing native photo editing.
+
+The final thirty-repetition fixed/current/fixed palette check adds **13,140
+frames** and clears the remaining short-run CPU trigger. Pen-up CPU p99 is
+**2.137 ms current**, between fixed **2.167/1.979 ms** and within the threshold
+of both. Completed Pen-up p99 is **3.493 ms current** versus fixed
+**3.805/3.777 ms**; Move CPU p95/p99 is **1.383/1.696 ms current** versus fixed
+**1.386/1.706** and **1.443/1.903 ms**. No frame misses the absolute limit.
+Reports are `native-raster-palette-{0-fixed,1-current,2-fixed}.md` and the run
+manifest is `native-raster-palette-runs.json`. Across the initial and focused
+comparisons this stage measures **75,100 drawing frames**. These checks do not
+clear the earlier outstanding transform/prediction or full-photo limits.
+
+Changed Rust formatting and `git diff --check` pass. The existing drawing path
+remains active; native document/raster adoption, the common Float32 tool pipeline,
+bounded edited/composite/filter residency, managed GTK viewing and the complete
+SDR journeys still require implementation and qualification. No additional
+platform host integration is enabled by this stage.
