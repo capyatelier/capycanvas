@@ -283,6 +283,25 @@ fn imported_ramp_uses_the_srgb_transfer_curve() {
     assert_import_pixels(&bytes, &output);
 }
 
+#[test]
+#[should_panic(expected = "sRGB ramp")]
+fn import_oracle_rejects_encoded_pixels_treated_as_linear() {
+    let source = [16, 128, 240, 255];
+    let wrong = source.map(|v| scalar_stored_srgb_byte(f64::from(v) / 255.));
+    assert_import_pixels(&source, &wrong);
+}
+
+#[test]
+#[should_panic(expected = "sRGB ramp")]
+fn import_oracle_rejects_linear8_storage() {
+    let source = [16, 128, 240, 255];
+    let wrong = source.map(|v| {
+        let linear = scalar_srgb_decode(f64::from(v) / 255.);
+        scalar_stored_srgb_byte((linear * 255.).round() / 255.)
+    });
+    assert_import_pixels(&source, &wrong);
+}
+
 fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
     assert_eq!(bytes.len(), output.len());
     for (index, (source, pixel)) in bytes
@@ -303,16 +322,12 @@ fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
             // storage code. Propagate that interval through unassociation;
             // a uniform straight-RGB tolerance is incorrect near zero alpha.
             let stored = scalar_srgb_encode(linear * alpha) * 255.;
-            let export = |code: f64| {
-                let value = if alpha == 0. {
-                    0.
-                } else {
-                    scalar_srgb_decode(code / 255.) / alpha
-                };
+            let export = |sample: f64| {
+                let value = if alpha == 0. { 0. } else { sample / alpha };
                 (scalar_srgb_encode(value.clamp(0., 1.)) * 255.).round() as u8
             };
-            let low = export(stored.floor()).saturating_sub(1);
-            let high = export(stored.ceil()).saturating_add(1);
+            let low = export(scalar_srgb_sample_bounds(stored.floor())[0]).saturating_sub(1);
+            let high = export(scalar_srgb_sample_bounds(stored.ceil())[1]).saturating_add(1);
             assert!(
                 (low..=high).contains(&pixel[channel]),
                 "sRGB ramp at pixel {index}, channel {channel}: source={source:?}, actual={pixel:?}, permitted={low}..={high}"
@@ -335,6 +350,15 @@ fn scalar_srgb_encode(v: f64) -> f64 {
     } else {
         1.055 * v.powf(1. / 2.4) - 0.055
     }
+}
+
+// Fixed-function sRGB loads may differ by half a code on the encoded side
+// (D3D12_SRGB_TO_FLOAT_TOLERANCE_IN_ULP). Propagate that physical conversion
+// bound before unassociation; a constant straight-RGB allowance is insufficient
+// near zero alpha. The strict independent PNG comparison stays unchanged.
+// https://learn.microsoft.com/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-data-conversion
+fn scalar_srgb_sample_bounds(code: f64) -> [f64; 2] {
+    [code - 0.5, code + 0.5].map(|v| scalar_srgb_decode(v.clamp(0., 255.) / 255.))
 }
 
 fn scalar_paint_store(linear: f64) -> f64 {
@@ -404,8 +428,10 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                     scalar_srgb_decode(f64::from(source[channel]) / 255.) * alpha,
                 ) * 255.;
                 let mut permitted = Vec::new();
-                for input in [code.floor(), code.ceil()] {
-                    let stored = scalar_srgb_decode(input / 255.);
+                for stored in [
+                    scalar_srgb_sample_bounds(code.floor())[0],
+                    scalar_srgb_sample_bounds(code.ceil())[1],
+                ] {
                     let linear = if alpha == 0. { 0. } else { stored / alpha };
                     let adjusted = if id == "curves" {
                         let channel_value =
@@ -417,12 +443,11 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                         .powf(1. / f64::from(values[3][0]))
                     };
                     let code = scalar_srgb_encode(adjusted.clamp(0., 1.) * alpha) * 255.;
-                    for output in [code.floor(), code.ceil()] {
-                        let straight = if alpha == 0. {
-                            0.
-                        } else {
-                            scalar_srgb_decode(output / 255.) / alpha
-                        };
+                    for output in [
+                        scalar_srgb_sample_bounds(code.floor())[0],
+                        scalar_srgb_sample_bounds(code.ceil())[1],
+                    ] {
+                        let straight = if alpha == 0. { 0. } else { output / alpha };
                         permitted.push((scalar_srgb_encode(straight.clamp(0., 1.)) * 255.).round() as u8);
                     }
                 }
@@ -748,7 +773,8 @@ fn runtime_filter_pixel_reference() {
     }
     assert!(
         error <= 1,
-        "Filter output changed after validated import: maximum byte error {error}"
+        "Filter output changed after validated import: maximum byte error {error}; adapter={:?}",
+        r.adapter().get_info()
     );
 }
 

@@ -20,7 +20,13 @@ in Git history. They are not valid expectations for encoded sRGB8 paint.
 Separate double-precision oracles test transfer/alpha, tone filters, halftone
 endpoints and linear spatial sampling. Conversion tests propagate adjacent
 physical storage-code bounds through unassociation, rather than applying an
-arbitrary straight-color tolerance near zero alpha. The spatial oracle keeps
+arbitrary straight-color tolerance near zero alpha. The import and tone oracles
+also propagate the half-encoded-code uncertainty allowed for fixed-function
+sRGB loads by Direct3D (`D3D12_SRGB_TO_FLOAT_TOLERANCE_IN_ULP`), using independent
+scalar transfer functions. Negative cases reject missing sRGB decoding and the
+old linear-eight-bit storage contract. See Microsoft's
+[data conversion rules](https://learn.microsoft.com/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-data-conversion).
+The spatial oracle keeps
 its original one-linear-code sampling bound and accounts for the new storage
 quantizer. Neither changes the strict independent PNG comparison.
 
