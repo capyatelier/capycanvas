@@ -36,7 +36,7 @@ impl WorkspacePreset {
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         self.layout_with_header_tools(
             platform,
-            matches!(platform, crate::Platform::Gtk | crate::Platform::Web),
+            matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android),
         )
     }
 
@@ -52,7 +52,13 @@ impl WorkspacePreset {
                 let stack = layout.column_stack_mut(column);
                 stack.drawers = false;
                 stack.auto_hide = false;
-                if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) {
+                if matches!(
+                    platform,
+                    crate::Platform::Gtk
+                        | crate::Platform::Web
+                        | crate::Platform::Android
+                        | crate::Platform::Windows
+                ) {
                     let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
                     if band.edge != Edge::Right {
                         continue;
@@ -231,7 +237,13 @@ impl DockLayout {
     /// The shipped Paint arrangement opens its right column on adoption or
     /// reset. This is initial presentation; ordinary open/close stays transient.
     pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
-        if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android)
+        if matches!(
+            platform,
+            crate::Platform::Gtk
+                | crate::Platform::Web
+                | crate::Platform::Android
+                | crate::Platform::Windows
+        )
             && self.collapsed.len() == 1
             && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
         {
@@ -314,6 +326,7 @@ mod tests {
             crate::Platform::Gtk,
             crate::Platform::Web,
             crate::Platform::Android,
+            crate::Platform::Windows,
         ] {
             for preset in WorkspacePreset::ALL {
                 let layout = preset.layout(platform);
@@ -335,7 +348,13 @@ mod tests {
                     .iter()
                     .all(|s| !s.drawers)
             );
-            if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android) {
+            if matches!(
+                platform,
+                crate::Platform::Gtk
+                    | crate::Platform::Web
+                    | crate::Platform::Android
+                    | crate::Platform::Windows
+            ) {
                 assert_eq!(layout.collapsed.len(), 1);
                 assert!(layout.is_collapsed(12) && !layout.is_collapsed(4));
                 assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
@@ -355,7 +374,7 @@ mod tests {
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
         // Hosts without the new header projection keep their existing controls.
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Android);
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Ios);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -382,8 +401,16 @@ mod tests {
     }
 
     #[test]
-    fn gtk_and_web_sketch_have_only_individual_header_tools() {
-        for platform in [crate::Platform::Gtk, crate::Platform::Web] {
+    fn windows_sketch_keeps_tools_accessible_before_header_projection() {
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Windows);
+        assert!(layout.panel_group(Panel::Toolbar).is_some());
+        assert!(layout.panel_group(Panel::Commands).is_some());
+        assert!(layout.canvas_info.visible);
+    }
+
+    #[test]
+    fn projected_sketch_has_only_individual_header_tools() {
+        for platform in [crate::Platform::Gtk, crate::Platform::Web, crate::Platform::Android] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.bands.is_empty() && layout.floating.is_empty());
             assert_eq!(

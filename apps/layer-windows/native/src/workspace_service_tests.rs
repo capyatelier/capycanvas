@@ -204,9 +204,12 @@ fn startup_waits_for_canvas_idle_then_close_restores_layout_and_working_values()
     f.ready();
     assert!(f.service.accepts_input(wall()));
     assert_eq!(
-        f.native.session.state().workspace.layout,
+        layer_ui::durable_layout(&f.native.session.state().workspace.layout),
         layer_ui::WorkspacePreset::Illustrator.layout(Platform::Windows)
     );
+    // Paint opens its right column without storing that transient presentation.
+    assert!(f.native.session.layout(f.native.logical).collapsed.iter()
+        .any(|column| column.id == 12 && column.open.is_some()));
     f.native
         .dispatch(UiAction::SetBrushSize { value: 47. })
         .unwrap();

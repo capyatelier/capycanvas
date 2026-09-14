@@ -1,7 +1,7 @@
 #pragma once
 #include "PanelBody.h"
 
-// Projects shared drawers and attached column groups with retained native widgets;
+// Projects shared tabbed drawers with retained native widgets;
 // the render owner remains responsible for geometry and GPU overview images.
 class WorkspaceDrawers {
 public:
