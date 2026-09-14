@@ -24,12 +24,14 @@ struct Slot {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     used: u64,
+    valid: Arc<std::sync::atomic::AtomicBool>,
 }
 pub(super) struct PendingSource {
     pub source: Arc<SourceImage>,
     pub coordinate: [u32; 2],
     pub texture: wgpu::Texture,
     pub data: Option<[f32; 24]>,
+    write: crate::submission::CacheWrite,
 }
 struct EncodedInput {
     texture: wgpu::Texture,
@@ -70,7 +72,11 @@ impl SourceTiles {
         let weak = Arc::downgrade(source);
         self.slots
             .iter()
-            .find(|s| s.coordinate == coordinate && s.source.ptr_eq(&weak))
+            .find(|s| {
+                s.coordinate == coordinate
+                    && s.source.ptr_eq(&weak)
+                    && s.valid.load(Ordering::Acquire)
+            })
             .map(|s| &s.view)
     }
     pub fn uploads_full(&self) -> bool {
@@ -115,11 +121,9 @@ impl SourceTiles {
         }
         self.clock = self.clock.wrapping_add(1);
         let weak = Arc::downgrade(source);
-        if let Some(slot) = self
-            .slots
-            .iter_mut()
-            .find(|s| s.source.ptr_eq(&weak) && s.coordinate == coordinate)
-        {
+        if let Some(slot) = self.slots.iter_mut().find(|s| {
+            s.source.ptr_eq(&weak) && s.coordinate == coordinate && s.valid.load(Ordering::Acquire)
+        }) {
             slot.used = self.clock;
             self.hits += 1;
             return Ok((
@@ -157,6 +161,7 @@ impl SourceTiles {
                 texture,
                 view,
                 used: 0,
+                valid: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
             id
         } else {
@@ -171,6 +176,8 @@ impl SourceTiles {
         slot.source = weak;
         slot.coordinate = coordinate;
         slot.used = self.clock;
+        let write = crate::submission::CacheWrite::new();
+        slot.valid = write.validity();
         Ok((
             RawTile {
                 texture: slot.texture.clone(),
@@ -181,6 +188,7 @@ impl SourceTiles {
                 coordinate,
                 texture: slot.texture.clone(),
                 data: builtin_settings(source, coordinate, self.destination),
+                write,
             }),
         ))
     }
@@ -193,7 +201,7 @@ impl SourceTiles {
         uniforms: &wgpu::BindGroup,
         offset: u32,
     ) -> Result<u64, GpuRasterError> {
-        if pending.data.is_some() {
+        let bytes = if pending.data.is_some() {
             let interpretation = &pending.source.interpretation;
             let index = usize::from(interpretation.depth == IntegerDepth::U16);
             let pipelines = &r.scene_pipelines.source;
@@ -297,12 +305,14 @@ impl SourceTiles {
             pass.set_bind_group(0, uniforms, &[offset]);
             pass.set_bind_group(1, &input.binding, &[]);
             pass.draw(0..3, 0..1);
-            Ok(bytes as u64)
+            bytes as u64
         } else {
             let buffer = self.upload_icc(r, pending)?;
             copy_upload(encoder, &buffer, &pending.texture, PAGE_SIZE * 16);
-            Ok(FLOAT_TILE_BYTES)
-        }
+            FLOAT_TILE_BYTES
+        };
+        pending.write.track(encoder);
+        Ok(bytes)
     }
 
     fn upload_icc(

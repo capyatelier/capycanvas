@@ -6,6 +6,8 @@ pub(super) struct Thumbnails {
     rx: mpsc::Receiver<Result<ReadbackImage, GpuRasterError>>,
     pending: usize,
     gpu: Option<PreviewPipeline>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) sources: Option<crate::source_thumbnails::SourceThumbnails>,
     pub paper: Option<(LayerId, [f32; 4])>,
 }
 impl Thumbnails {
@@ -16,6 +18,8 @@ impl Thumbnails {
             rx,
             pending: 0,
             gpu: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            sources: None,
             paper: None,
         }
     }
@@ -23,6 +27,12 @@ impl Thumbnails {
         let image = self.rx.try_recv().ok()?;
         self.pending = self.pending.saturating_sub(1);
         Some(image)
+    }
+    pub fn storage_bytes(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.sources.as_ref().map_or(0, |s| s.storage_bytes());
+        #[cfg(target_arch = "wasm32")]
+        0
     }
 }
 impl WgpuRasterizer {
@@ -40,13 +50,31 @@ impl WgpuRasterizer {
                 label: Some("asynchronous layer preview"),
             },
         );
-        let gpu = self
-            .thumbnails
-            .gpu
-            .take()
-            .unwrap_or_else(|| PreviewPipeline::new(self));
-        let source = gpu.render(self, target, &mut encoder);
-        self.thumbnails.gpu = Some(gpu);
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = if self.tiled_sources.contains_key(&target) {
+            let mut gpu = self
+                .thumbnails
+                .sources
+                .take()
+                .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
+            let result = gpu.render(self, target, &mut encoder);
+            self.thumbnails.sources = Some(gpu);
+            Some(result?)
+        } else {
+            None
+        };
+        #[cfg(target_arch = "wasm32")]
+        let source: Option<PageSurface> = None;
+        let source = source.unwrap_or_else(|| {
+            let gpu = self
+                .thumbnails
+                .gpu
+                .take()
+                .unwrap_or_else(|| PreviewPipeline::new(self));
+            let source = gpu.render(self, target, &mut encoder);
+            self.thumbnails.gpu = Some(gpu);
+            source
+        });
         let tx = self.thumbnails.tx.clone();
         self.thumbnails.pending += 1;
         self.submit_ui_readback(

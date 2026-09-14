@@ -967,3 +967,96 @@ and `source-brush-borrow-gpu-bench`, `--scenario NAME --repeats 10 --report FILE
 (the mode runs its own single fixture and does not use `--repeats`). Final
 integer16 paint, source-aware transforms/thumbnails and bounded whole-document
 working/composite residency remain prerequisites to enabling GTK photo editing.
+
+## Bounded original-photo thumbnails and abandoned uploads (2026-09-14)
+
+Photo-layer thumbnails now frame the document and integrate linear premultiplied
+pixels over exact box footprints, including partial source tiles, transparency
+and empty canvas beyond the photo. This preserves photo composition. Existing
+paint-only thumbnails still frame visible marks; paper and mask journeys keep
+their existing behavior. The finished 32px UI image uses the existing sRGB UI
+handoff. These overviews never feed edits, numerical sampling or export; managed
+viewing will replace that UI handoff with the rest of the GTK display integration.
+
+The original overview is cached by weak source identity and document extent.
+Each original tile also retains only its contribution to the few thumbnail
+pixels it intersects. A paint override replaces that contribution, without
+redecoding the original. Eight cached originals are allowed; each contribution
+buffer has a checked 512 KiB ceiling, plus 16 KiB for its overview. Shared row
+scratch is 128 KiB, working sums 16 KiB and parameters 48 bytes. Tile-footprint
+metadata is bounded by the validated source tile count. GPU allocations appear
+in renderer telemetry; weak keys do not retain original compressed data or old
+paint generations. This cache is specific to the currently exposed sRGB working
+representation and must be invalidated when document working-space selection is
+integrated.
+
+A physical-GPU test compares all 1024 linear sums against a Float64 area oracle
+on a 2305×769 ProPhoto16 source inside a 2401×901 document. It covers 40 source
+tiles, high-frequency data, alpha 0/1/257/32768/65535, wide-gamut components,
+opaque paint replacement, complete erasure and removing overrides. Maximum
+allowed absolute linear error is 0.00002. Repeat queries are byte-exact and
+perform no unchanged-source decoding. Separate tests cover eviction, extent
+changes, weak ownership, discarded command encoders and a late malformed tile
+followed by retry. All three tests pass (`source-thumbnail-final-tests.log`).
+
+The discarded-encoder test exposed a shared source-cache prerequisite: a planned
+upload could leave its CPU cache key valid after its producing GPU commands were
+abandoned. Source uploads and overviews now carry cancellation-aware validity;
+dropping unencoded jobs or unsubmitted commands invalidates those keys. Failed
+scene encoding also drops its outstanding jobs. Retrying performs fresh uploads
+and reproduces the Float64 reference instead of accepting partial pixels.
+
+The first bounded prototype redecoded originals beneath each paint override.
+At 24 MP, 64 overrides overflowed the 16-slot source cache on every request:
+CPU p95/p99 **46.000/46.633 ms**, completed **47.654/48.274 ms**. Compact cached
+contributions remove that failure: CPU **0.844/1.021 ms**, completed
+**4.683/4.839 ms**, with 196,448 bytes of retained thumbnail GPU storage. Across
+all 480 requests, original decoding now occurs only during the initial overview
+(384 tiles), versus 8,064 decodes in the prototype. Saved comparison binaries
+are `source-thumbnail-{first,compact}-gpu-tests`.
+
+The harness uses deterministic ProPhoto16 color ramps/stripes with varied alpha,
+a fresh renderer and 20 warm-up plus 100 measured requests per override count.
+It measures request CPU construction and GPU completion/readback separately;
+these are isolated thumbnail requests, not drawing-frame or native presentation
+latency. Source creation and renderer initialization precede the timed cold
+request. The first cold request includes overview pipeline creation, tile decode,
+upload, integration and UI readback. The process high-water includes fixture
+construction and renderer state but not GTK or a fully composited photograph.
+All runs use reference GPU 0. The final 45/60 MP runs are uncontended; earlier
+runs overlapping compilation are retained with `-during-build` and excluded.
+
+| Measurement | 24 MP (6000×4000) | 45 MP (8192×5504) | 60 MP (8192×7324) |
+| --- | ---: | ---: | ---: |
+| Cold CPU / completed ms | 260.665 / 261.982 | 559.755 / 561.622 | 725.116 / 726.844 |
+| Warm unedited completed p95 / p99 ms | 0.059 / 0.085 | 0.076 / 0.082 | 0.070 / 0.088 |
+| One override completed p95 / p99 ms | 0.130 / 0.148 | 0.171 / 0.217 | 0.140 / 0.151 |
+| 16 overrides completed p95 / p99 ms | 1.110 / 1.125 | 1.394 / 1.726 | 1.274 / 1.423 |
+| 64 overrides CPU p95 / p99 ms | 0.844 / 1.021 | 0.966 / 0.982 | 0.858 / 0.883 |
+| 64 overrides completed p95 / p99 ms | 4.683 / 4.839 | 5.455 / 5.609 | 5.239 / 5.499 |
+| Retained thumbnail GPU bytes | 196448 | 185904 | 193584 |
+| Source upload peak bytes | 8388608 | 8388608 | 8388608 |
+| Process high-water KiB | 271492 | 212780 | 214936 |
+
+Cold overview construction **does not meet an interactive frame budget**. Before
+GTK enables photo editing, prepare it during cancellable photo loading or split
+it into scheduled work that yields to drawing. More than 64 overrides and
+concurrent drawing still require qualification; these results are not a blanket
+latency guarantee. The warm results establish a useful bounded implementation
+without excusing that remaining scheduling work.
+
+Reproduce after `cargo test --offline --release -p layer-render-wgpu --lib
+--no-run`, using its printed test executable with
+`LAYER_GPU_INDEX=0 LAYER_PHOTO_BENCH_EXTENT=6000x4000 TEST_BINARY
+source_thumbnails::tests::photo_thumbnail_workloads --ignored --nocapture`.
+Use the other extents above; wrap with `/usr/bin/time -v` for process high-water.
+Reports: `source-thumbnail-first-24.log`, `source-thumbnail-compact-{24,45,60}.log`.
+
+The final build passes **139 GPU tests / 19 benchmark tests ignored**, all four
+GPU project round trips, and isolated native GTK file and diagnostics/GPU-recovery
+workflows. The recovery test's injected validation failure is expected and the
+workflow passes. Logs: `source-thumbnail-native-build.log`,
+`source-thumbnail-{gpu-tests,project-tests}.log`,
+`source-thumbnail-gtk-{files,recovery}{,-run}.log`. Ordinary drawing shaders and
+paint-only thumbnail behavior are unchanged; final sustained frame and native
+input-to-present qualification remains required with the complete GTK workflow.

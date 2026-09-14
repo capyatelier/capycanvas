@@ -60,6 +60,8 @@ mod selection_clip;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
+#[cfg(not(target_arch = "wasm32"))]
+mod source_thumbnails;
 pub use present::{OverviewPlacement, ViewportPresenter};
 
 // RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear
@@ -3840,6 +3842,7 @@ impl CanvasRenderer for WgpuRasterizer {
             + m.paint_state_storage_bytes
             + m.composite_storage_bytes
             + self.canvas_preview.storage_bytes()
+            + self.thumbnails.storage_bytes()
             + self
                 .transforms
                 .as_ref()

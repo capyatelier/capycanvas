@@ -4,6 +4,51 @@
 //! and submit each chunk in order before materializing the next one.
 use std::ops::{Deref, DerefMut};
 
+/// A cached GPU value is usable in queue order while its producing commands
+/// are pending. Discarding those commands must invalidate the CPU cache key.
+pub(crate) struct CacheWrite {
+    valid: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tracked: std::sync::atomic::AtomicBool,
+}
+impl CacheWrite {
+    pub fn new() -> Self {
+        Self {
+            valid: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            tracked: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    pub fn validity(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.valid.clone()
+    }
+    pub fn track(&self, encoder: &CommandEncoder) {
+        use std::sync::atomic::Ordering;
+        assert!(!self.tracked.swap(true, Ordering::Relaxed));
+        let guard = DiscardedCacheWrite(Some(self.valid.clone()));
+        encoder.on_submitted_work_done(move || guard.complete());
+    }
+}
+impl Drop for CacheWrite {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        if !self.tracked.load(Ordering::Relaxed) {
+            self.valid.store(false, Ordering::Release);
+        }
+    }
+}
+struct DiscardedCacheWrite(Option<std::sync::Arc<std::sync::atomic::AtomicBool>>);
+impl DiscardedCacheWrite {
+    fn complete(mut self) {
+        self.0 = None;
+    }
+}
+impl Drop for DiscardedCacheWrite {
+    fn drop(&mut self) {
+        if let Some(valid) = &self.0 {
+            valid.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 pub(crate) struct CommandEncoder {
     device: wgpu::Device,
     current: wgpu::CommandEncoder,
@@ -62,7 +107,11 @@ impl CommandEncoder {
     #[cfg(test)]
     pub fn submit_timed(self, queue: &wgpu::Queue) -> [f64; 2] {
         let mut timing = [0.; 2];
-        for encoder in self.earlier.into_iter().chain(std::iter::once(self.current)) {
+        for encoder in self
+            .earlier
+            .into_iter()
+            .chain(std::iter::once(self.current))
+        {
             let start = std::time::Instant::now();
             let commands = encoder.finish();
             timing[0] += start.elapsed().as_secs_f64() * 1000.;

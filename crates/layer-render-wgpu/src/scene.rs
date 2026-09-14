@@ -1330,6 +1330,19 @@ impl Scene {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        let result = self.encode_jobs_inner(r, encoder);
+        if result.is_err() {
+            // Dropping unencoded reservations invalidates their source keys.
+            self.jobs.clear();
+        }
+        result
+    }
+
+    fn encode_jobs_inner(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
         let base = self.record_count;
         self.effects.encode_preparation(encoder);
         self.record_count += self.jobs.len();

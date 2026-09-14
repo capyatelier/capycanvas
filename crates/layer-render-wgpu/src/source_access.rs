@@ -107,13 +107,22 @@ impl WgpuRasterizer {
         let Some(source) = self.tiled_sources.get(&layer).cloned() else {
             return Ok(None);
         };
+        self.original_source_tile(&source, coordinate, encoder)
+    }
+
+    pub(super) fn original_source_tile(
+        &mut self,
+        source: &std::sync::Arc<layer_core::color::source::SourceImage>,
+        coordinate: [u32; 2],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<Option<RawTile>, GpuRasterError> {
         if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE)
             || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE)
         {
             return Ok(None);
         }
         let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-        let result = scene.source_tile_for_query(self, &source, coordinate, encoder);
+        let result = scene.source_tile_for_query(self, source, coordinate, encoder);
         self.scene = Some(scene);
         result.map(Some)
     }
