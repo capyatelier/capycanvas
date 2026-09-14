@@ -52,6 +52,52 @@ pub struct Dab {
     pub texture_sign: [f32; 2],
     /// Resolved grain depth, pull, deposit, and deformation strength.
     pub material: [f32; 4],
+    /// Previous contact's radii and rotation for the continuous GPU footprint.
+    /// Zero radii select the legacy isolated-dab behavior.
+    pub previous: [f32; 4],
+    /// Pressure, tilt amount, distance in nominal diameters, and stroke seed.
+    pub contact: [f32; 4],
+    /// The preceding contact's sensor values, for interpolation on the GPU.
+    pub previous_contact: [f32; 4],
+}
+
+impl Dab {
+    /// Conservative footprint, including the swept previous pose and all
+    /// bounded GPU edge expansion. Shared by allocation and raster scissoring.
+    pub fn bounds(self) -> layer_core::Rect {
+        let [cos, sin] = self.rotation;
+        let mut x = (self.radii[0] * cos).hypot(self.radii[1] * sin) + 1.0;
+        let mut y = (self.radii[0] * sin).hypot(self.radii[1] * cos) + 1.0;
+        let swept = self.previous[0] > 0.0;
+        if swept {
+            let radius = self.radii[0]
+                .max(self.radii[1])
+                .max(self.previous[0])
+                .max(self.previous[1])
+                * 1.5
+                + 1.0;
+            x = radius;
+            y = radius;
+        }
+        let previous = if swept {
+            Point {
+                x: self.center.x - self.motion[0],
+                y: self.center.y - self.motion[1],
+            }
+        } else {
+            self.center
+        };
+        layer_core::Rect {
+            min: Point {
+                x: self.center.x.min(previous.x) - x,
+                y: self.center.y.min(previous.y) - y,
+            },
+            max: Point {
+                x: self.center.x.max(previous.x) + x,
+                y: self.center.y.max(previous.y) + y,
+            },
+        }
+    }
 }
 
 pub use layer_core::ProjectAssetFormat as PixelFormat;
@@ -88,6 +134,7 @@ pub struct DabStyle {
     pub wet_mix: BrushWetMix,
     pub transport: Option<BrushTransport>,
     pub deform: BrushDeform,
+    pub contact: Option<layer_core::BrushContact>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

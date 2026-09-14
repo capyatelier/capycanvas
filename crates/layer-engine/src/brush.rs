@@ -194,6 +194,24 @@ impl DabGenerator {
         for point in stroke.points.iter().copied() {
             damage = damage.union(generator.append(point, &stroke.brush, output));
         }
+        damage.union(generator.finish(&stroke.brush, output))
+    }
+
+    /// Close the last sub-spacing segment using the final pressure/pose. This
+    /// matters for a pointed lift: copying the preceding large dab rounds it off.
+    pub(crate) fn finish(&mut self, brush: &BrushSnapshot, output: &mut Vec<Dab>) -> Rect {
+        if brush.contact.is_none() {
+            return Rect::EMPTY;
+        }
+        let (Some(last), Some(dab)) = (self.last, self.last_emitted_dab) else {
+            return Rect::EMPTY;
+        };
+        if (last.position().x - dab.center.x).hypot(last.position().y - dab.center.y) <= 0.0001 {
+            return Rect::EMPTY;
+        }
+        let evaluated = self.evaluate(last, brush);
+        let mut damage = Rect::EMPTY;
+        self.emit_contacts(evaluated, brush, output, &mut damage);
         damage
     }
 
@@ -207,7 +225,13 @@ impl DabGenerator {
         let Some(mut dab) = self.last_emitted_dab else {
             return Rect::EMPTY;
         };
-        let modeled = self.modeled_position().unwrap_or(endpoint);
+        let modeled = if dab.previous[0] > 0.0 {
+            dab.previous = [dab.radii[0], dab.radii[1], dab.rotation[0], dab.rotation[1]];
+            dab.previous_contact = dab.contact;
+            dab.center
+        } else {
+            self.modeled_position().unwrap_or(endpoint)
+        };
         dab.center = endpoint;
         dab.motion = [endpoint.x - modeled.x, endpoint.y - modeled.y];
         let mut damage = Rect::EMPTY;
@@ -323,8 +347,17 @@ impl DabGenerator {
 
         let mut diameter = finite_or(values.diameter, brush.diameter)
             .clamp(brush.bounds.minimum_size, brush.bounds.maximum_size);
-        let (taper_size, taper_opacity) =
-            taper_factors(point.stroke_distance, self.total_distance, diameter, brush);
+        let taper_reference = if brush.contact.is_some() {
+            brush.diameter
+        } else {
+            diameter
+        };
+        let (taper_size, taper_opacity) = taper_factors(
+            point.stroke_distance,
+            self.total_distance,
+            taper_reference,
+            brush,
+        );
         diameter = (diameter * taper_size).clamp(0.01, MAX_BRUSH_DIAMETER);
         let aspect = finite_or(values.aspect, brush.aspect).clamp(0.02, 50.0);
         let direction = point.direction_turns * std::f32::consts::TAU;
@@ -340,10 +373,20 @@ impl DabGenerator {
             y: point.position().y + sin.mul_add(along, cos * across),
         };
         let tilt_direction = point.point.tilt[1].atan2(point.point.tilt[0]);
-        let rotation = finite_or(values.rotation, brush.angle_radians)
+        let tilt = (point.point.tilt[0].hypot(point.point.tilt[1]) / 1.2).clamp(0.0, 1.0);
+        let mut rotation = finite_or(values.rotation, brush.angle_radians)
             + direction * brush.shape.follow_direction
             + tilt_direction * brush.shape.follow_tilt
             + point.point.twist * brush.shape.follow_twist;
+        let mut radii = [diameter * 0.5, diameter * 0.5 / aspect];
+        if let Some(contact) = brush.contact {
+            let spread = contact.tilt_spread * tilt * tilt;
+            radii[0] *= 1.0 + spread;
+            radii[1] *= 1.0 + spread * 0.18;
+            if contact.tilt_spread > 0.0 && tilt > 0.001 {
+                rotation = tilt_direction + brush.angle_radians;
+            }
+        }
         let (rotation_sin, rotation_cos) = rotation.sin_cos();
         let motion = self.last_contact_position.map_or([0.0; 2], |last| {
             [point.position().x - last.x, point.position().y - last.y]
@@ -362,7 +405,7 @@ impl DabGenerator {
         EvaluatedDab {
             dab: Dab {
                 center,
-                radii: [diameter * 0.5, diameter * 0.5 / aspect],
+                radii,
                 rotation: [rotation_cos, rotation_sin],
                 motion,
                 color_rgba_linear: resolve_color(
@@ -381,6 +424,14 @@ impl DabGenerator {
                     (values.deposit * charge).clamp(0.0, 1.0),
                     values.deform_strength.clamp(0.0, 1.0),
                 ],
+                previous: [0.0; 4],
+                contact: [
+                    point.point.pressure,
+                    tilt,
+                    point.stroke_distance / brush.diameter.max(0.01),
+                    (self.stroke_seed & 65535) as f32,
+                ],
+                previous_contact: [0.0; 4],
             },
             spacing: (finite_or(values.spacing, brush.spacing)
                 * (1.0 + signed_unit(hash32(variant ^ 0x7f4a_7c15)) * brush.path.spacing_jitter))
@@ -448,6 +499,20 @@ impl DabGenerator {
                 variant,
                 self.stroke_seed,
             );
+            if brush.contact.is_some() {
+                let previous = self.last_emitted_dab.unwrap_or(dab);
+                dab.previous = [
+                    previous.radii[0],
+                    previous.radii[1],
+                    previous.rotation[0],
+                    previous.rotation[1],
+                ];
+                dab.previous_contact = previous.contact;
+                dab.motion = [
+                    dab.center.x - previous.center.x,
+                    dab.center.y - previous.center.y,
+                ];
+            }
             include_dab(damage, dab);
             self.last_emitted_dab = Some(dab);
             output.push(dab);
@@ -608,13 +673,7 @@ fn spacing_for(dab: Dab, spacing: f32) -> f32 {
 }
 
 fn include_dab(damage: &mut Rect, dab: Dab) {
-    let [cos, sin] = dab.rotation;
-    let extent_x = (dab.radii[0] * cos).hypot(dab.radii[1] * sin) + 1.0;
-    let extent_y = (dab.radii[0] * sin).hypot(dab.radii[1] * cos) + 1.0;
-    damage.min.x = damage.min.x.min(dab.center.x - extent_x);
-    damage.min.y = damage.min.y.min(dab.center.y - extent_y);
-    damage.max.x = damage.max.x.max(dab.center.x + extent_x);
-    damage.max.y = damage.max.y.max(dab.center.y + extent_y);
+    *damage = damage.union(dab.bounds());
 }
 
 fn finite_or(value: f32, fallback: f32) -> f32 {
@@ -629,7 +688,7 @@ fn taper_factors(
 ) -> (f32, f32) {
     let envelope = |progress: f32, minimum: f32| {
         let progress = progress.clamp(0.0, 1.0);
-        let smooth = progress * progress * (3.0 - 2.0 * progress);
+        let smooth = (progress * progress * (3.0 - 2.0 * progress)).powf(brush.taper.tip_sharpness);
         minimum + (1.0 - minimum) * smooth
     };
     let start_extent = brush.taper.start_distance_diameters * diameter;
@@ -807,6 +866,50 @@ mod tests {
     }
 
     #[test]
+    fn contact_lift_closes_the_spacing_gap_and_replays_the_same_point() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let stroke = Stroke::new(
+            StrokeId(17),
+            layer_core::LayerId(1),
+            layer_core::StrokeTool::Brush,
+            brush.clone(),
+            vec![
+                point(0., 0.8, 0),
+                point(17., 0.5, 8_000),
+                point(31.123, 0., 16_000),
+            ],
+        )
+        .unwrap();
+        let mut live = DabGenerator::default();
+        live.reset_for_stroke(stroke.id, &brush);
+        let mut dabs = Vec::new();
+        for point in stroke.points.iter().copied() {
+            live.append(point, &brush, &mut dabs);
+        }
+        live.finish(&brush, &mut dabs);
+        let end = dabs.last().unwrap();
+        assert_eq!(end.center.x, 31.123);
+        assert!(end.radii[0] < 0.1, "the tip should resolve to a point");
+        assert!(end.previous[0] > 0.);
+        let mut replay = Vec::new();
+        DabGenerator::generate(&stroke, &mut replay);
+        assert_eq!(dabs, replay);
+    }
+
+    #[test]
+    fn taper_sharpness_changes_the_tip_without_changing_its_length() {
+        let mut brush = BrushSnapshot::default();
+        brush.taper.end_distance_diameters = 1.;
+        brush.taper.end_size = 0.;
+        let soft = taper_factors(95., Some(100.), 10., &brush).0;
+        brush.taper.tip_sharpness = 2.;
+        let sharp = taper_factors(95., Some(100.), 10., &brush).0;
+        assert!(sharp < soft);
+        assert_eq!(taper_factors(100., Some(100.), 10., &brush).0, 0.);
+        assert_eq!(taper_factors(90., Some(100.), 10., &brush).0, 1.);
+    }
+
+    #[test]
     fn cursor_reuses_shape_dynamics_without_advancing_paint_randomness() {
         let mut brush = BrushSnapshot::default();
         brush.shape.rotation_jitter = 0.7;
@@ -842,6 +945,9 @@ mod tests {
                 hardness: 1.0,
                 texture_sign: [1.0; 2],
                 material: [0.0; 4],
+                previous: [0.0; 4],
+                contact: [0.0; 4],
+                previous_contact: [0.0; 4],
             },
         );
         assert_eq!(damage.min, Point { x: 18.0, y: 19.0 });

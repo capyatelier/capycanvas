@@ -52,6 +52,7 @@ remains at its existing path while implementation work continues.
 - [Color-management delivery milestones and merge gates](color-management-milestones.md).
 - [Color-management code and product review](color-management-review.md).
 - [Advanced brush engine](advanced-brush-engine.md).
+- [Pencil, charcoal and ink brush redesign](dry-media-brush-design.md).
 - [Wgpu rendering program](rendering-program.md).
 - [Rendering optimization log](optimization-log.md).
 

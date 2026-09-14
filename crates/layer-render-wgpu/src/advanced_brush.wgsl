@@ -8,6 +8,16 @@ struct Style {
     dual_grain: vec4<f32>,
     advanced: vec4<f32>,
     edges: vec4<f32>,
+    material_a: vec4<f32>,
+    material_b: vec4<f32>,
+    operation: vec4<u32>,
+    deformation: vec4<f32>,
+    render_mode: vec4<f32>,
+    transport_a: vec4<f32>,
+    transport_b: vec4<f32>,
+    contact_a: vec4<f32>,
+    contact_b: vec4<f32>,
+    contact_c: vec4<f32>,
 }
 
 @group(0) @binding(0)
@@ -44,6 +54,9 @@ struct VertexInput {
     @location(5) flow_hardness: vec2<f32>,
     @location(6) texture_sign: vec2<f32>,
     @location(7) material: vec4<f32>,
+    @location(8) previous: vec4<f32>,
+    @location(9) contact: vec4<f32>,
+    @location(10) previous_contact: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -56,6 +69,11 @@ struct VertexOutput {
     @location(5) world: vec2<f32>,
     @location(6) material: vec4<f32>,
     @location(7) center: vec2<f32>,
+    @location(8) @interpolate(flat) previous: vec4<f32>,
+    @location(9) @interpolate(flat) contact: vec4<f32>,
+    @location(10) @interpolate(flat) previous_contact: vec4<f32>,
+    @location(11) @interpolate(flat) geometry: vec4<f32>,
+    @location(12) @interpolate(flat) motion: vec2<f32>,
 }
 
 @vertex
@@ -68,10 +86,15 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
     );
     let local = corners[input.vertex_index];
     let scaled = local * input.radii;
-    let world = input.center + vec2<f32>(
+    var world = input.center + vec2<f32>(
         scaled.x * input.rotation.x - scaled.y * input.rotation.y,
         scaled.x * input.rotation.y + scaled.y * input.rotation.x,
     );
+    if style.contact_a.x > 0.5 {
+        let radius = max(max(input.radii.x, input.radii.y), max(input.previous.x, input.previous.y)) * 1.5 + 1.0;
+        let start = input.center - input.motion;
+        world = mix(min(start, input.center) - vec2<f32>(radius), max(start, input.center) + vec2<f32>(radius), local * 0.5 + vec2<f32>(0.5));
+    }
     let origin = render_target.origin_extent.xy;
     let extent = render_target.origin_extent.zw;
 
@@ -90,11 +113,25 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
     output.world = world;
     output.material = input.material;
     output.center = input.center;
+    output.previous = input.previous;
+    output.contact = input.contact;
+    output.previous_contact = input.previous_contact;
+    output.geometry = vec4<f32>(input.radii, input.rotation);
+    output.motion = input.motion;
     return output;
 }
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if style.contact_a.x > 0.5 {
+        let coverage = evolving_contact(input.world, input.center, input.geometry.xy, input.geometry.zw,
+            input.motion, input.previous, input.contact, input.previous_contact, input.flow_hardness.y);
+        if coverage <= 0.0 { discard; }
+        let exposure = contact_exposure(input.motion, input.geometry.xy, input.geometry.zw, input.flow_hardness.y);
+        let alpha = (1.0 - exp(-coverage * input.flow_hardness.x * input.color.a * exposure * 6.0))
+            * brush_selection_at(input.world);
+        return vec4<f32>(input.color.rgb * alpha, alpha);
+    }
     var coverage = tip_coverage(
         style.flags.x > 0.5,
         primary_texture,

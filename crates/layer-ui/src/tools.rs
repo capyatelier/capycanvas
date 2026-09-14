@@ -177,8 +177,42 @@ impl ToolGroup {
 // also the keys of the GPU preview cache and saved brush assets.
 const PRESETS: &[(DefaultBrushPreset, &str, ToolGroup)] = &[
     (DefaultBrushPreset::GPen, "G-Pen", ToolGroup::Pen),
+    (DefaultBrushPreset::RoughGPen, "Rough G-Pen", ToolGroup::Pen),
+    (
+        DefaultBrushPreset::CalligraphyPen,
+        "Calligraphy Pen",
+        ToolGroup::Pen,
+    ),
+    (
+        DefaultBrushPreset::AntiquePen,
+        "Antique Pen",
+        ToolGroup::Pen,
+    ),
+    (
+        DefaultBrushPreset::RealisticPen,
+        "Realistic Pen",
+        ToolGroup::Pen,
+    ),
+    (DefaultBrushPreset::WetInk, "Wet Ink", ToolGroup::Pen),
+    (DefaultBrushPreset::BlottyInk, "Blotty Ink", ToolGroup::Pen),
+    (
+        DefaultBrushPreset::BrushedInk,
+        "Realistic Brushed Ink",
+        ToolGroup::Pen,
+    ),
     (DefaultBrushPreset::Marker, "Marker", ToolGroup::Marker),
     (DefaultBrushPreset::Pencil, "Pencil", ToolGroup::Pencil),
+    (
+        DefaultBrushPreset::PointyPencil,
+        "Pointy Pencil",
+        ToolGroup::Pencil,
+    ),
+    (
+        DefaultBrushPreset::ShadingPencil,
+        "Shading Pencil",
+        ToolGroup::Pencil,
+    ),
+    (DefaultBrushPreset::Charcoal, "Charcoal", ToolGroup::Pastel),
     (DefaultBrushPreset::Chalk, "Chalk", ToolGroup::Pastel),
     (
         DefaultBrushPreset::PastelBlock,
@@ -616,7 +650,7 @@ mod tests {
 
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
-        assert_eq!(PRESETS.len(), 24);
+        assert_eq!(PRESETS.len(), 34);
         let mut ids = std::collections::BTreeSet::new();
         for &(preset, _, group) in PRESETS {
             assert!(ids.insert(preset as u32));

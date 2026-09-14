@@ -413,7 +413,8 @@ impl BrushPassPlan {
             || style.alpha_locked
             || style.rendering.blend_mode != BrushBlendMode::Normal
             || state.coverage;
-        let textured = style.grain.is_some()
+        let textured = style.contact.is_some()
+            || style.grain.is_some()
             || style.dual.is_some()
             || style.rendering.alpha_threshold > 0.0
             || style.rendering.wet_edge > 0.0
@@ -897,10 +898,9 @@ impl WgpuRasterizer {
         let edge_layout = create_edge_layout(&device);
         let watercolor_layout = create_color_neighborhood_layout(&device);
         let transport_layout = create_transport_layout(&device);
-        let style_stride = device
-            .limits()
-            .min_uniform_buffer_offset_alignment
-            .max(mem::size_of::<StyleGpu>() as u32) as u64;
+        let style_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let style_stride =
+            (mem::size_of::<StyleGpu>() as u64).div_ceil(style_alignment) * style_alignment;
         let style_capacity = INITIAL_STYLE_RECORDS;
         let style_buffer = create_style_buffer(&device, style_stride, style_capacity);
         let style_bind_group = create_style_bind_group(&device, &style_layout, &style_buffer);
@@ -5102,6 +5102,9 @@ struct StyleGpu {
     render_mode: [f32; 4],
     transport_a: [f32; 4],
     transport_b: [f32; 4],
+    contact_a: [f32; 4],
+    contact_b: [f32; 4],
+    contact_c: [f32; 4],
 }
 
 #[repr(C)]
@@ -5149,6 +5152,9 @@ impl StyleGpu {
             render_mode: [0.0; 4],
             transport_a: [0.0; 4],
             transport_b: [0.0; 4],
+            contact_a: [0.0; 4],
+            contact_b: [0.0; 4],
+            contact_c: [0.0; 4],
         }
     }
 
@@ -5265,6 +5271,21 @@ impl StyleGpu {
                 transport.dry_flow,
                 transport.distance,
                 transport.water_load,
+            ];
+        }
+        if let Some(contact) = style.contact {
+            result.contact_a = [1.0, contact.paper, contact.tip_bias, contact.edge_roughness];
+            result.contact_b = [
+                contact.edge_scale,
+                contact.fibers,
+                contact.fiber_strength,
+                contact.pooling,
+            ];
+            result.contact_c = [
+                contact.pressure_gain,
+                contact.depletion,
+                contact.tilt_shading,
+                f32::from(style.rendering.accumulation == BrushAccumulation::Uniform),
             ];
         }
         // This lane is unused by dry and composite shaders and avoids growing
@@ -6110,6 +6131,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     include_str!("advanced_brush.wgsl"),
                     include_str!("brush_coverage.wgsl"),
+                    include_str!("contact.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),
             })
@@ -6123,6 +6145,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     include_str!("material_brush.wgsl"),
                     include_str!("brush_coverage.wgsl"),
+                    include_str!("contact.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),
             })
@@ -6585,9 +6608,10 @@ fn brush_pipeline_format(
     format: wgpu::TextureFormat,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
+    const ATTRIBUTES: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
         0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2,
-        4 => Float32x4, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4
+        4 => Float32x4, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4,
+        8 => Float32x4, 9 => Float32x4, 10 => Float32x4
     ];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -6746,6 +6770,24 @@ fn parse_ascii_pgm(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
         pixels.push(((value.min(max) * 255 + max / 2) / max) as u8);
     }
     Some((width, height, pixels))
+}
+
+/// Original paper-height recipe, generated once and cached/uploaded as R8.
+/// Fine tooth survives light pressure; broader fibers avoid white-noise grain.
+fn procedural_contact_paper() -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(1024 * 1024);
+    for y in 0..1024 {
+        for x in 0..1024 {
+            let u = (x as f32 + 0.5) / 1024.;
+            let v = (y as f32 + 0.5) / 1024.;
+            let tooth = periodic_value_noise(u, v, 640, 640, 0x124f_4139);
+            let fibers = periodic_value_noise(u, v, 360, 180, 0x823a_5421);
+            let structure = periodic_value_noise(u, v, 72, 72, 0x3ae2_9141);
+            let height = 0.12 + 0.76 * (tooth * 0.64 + fibers * 0.26 + structure * 0.1);
+            pixels.push((height.clamp(0., 1.) * 255.).round() as u8);
+        }
+    }
+    pixels
 }
 
 fn procedural_paper_grain() -> Vec<u8> {
@@ -6965,6 +7007,9 @@ mod tests {
             hardness: 1.0,
             texture_sign: [1.0, 1.0],
             material: [0.0, 0.0, 1.0, 0.0],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         }
     }
 
@@ -6981,6 +7026,7 @@ mod tests {
             wet_mix: BrushWetMix::default(),
             transport: None,
             deform: BrushDeform::default(),
+            contact: None,
         }
     }
 
@@ -7346,8 +7392,8 @@ mod tests {
 
     #[test]
     fn gpu_records_match_shader_layouts() {
-        assert_eq!(mem::size_of::<Dab>(), 80);
-        assert_eq!(mem::size_of::<StyleGpu>(), 256);
+        assert_eq!(mem::size_of::<Dab>(), 128);
+        assert_eq!(mem::size_of::<StyleGpu>(), 304);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 
@@ -8266,6 +8312,7 @@ mod tests {
             wet_mix: BrushWetMix::default(),
             transport: None,
             deform: BrushDeform::default(),
+            contact: None,
         };
         let dab = Dab {
             center: Point { x: 64.0, y: 64.0 },
@@ -8277,6 +8324,9 @@ mod tests {
             hardness: 0.8,
             texture_sign: [1.0, 1.0],
             material: [0.8, 0.0, 1.0, 0.0],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         };
         let batch = DabBatch {
             material_update: 0,
@@ -8346,6 +8396,9 @@ mod tests {
             hardness: 1.0,
             texture_sign: [1.0, 1.0],
             material: [0.0, 0.0, 1.0, 0.0],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         };
         let dry_batch = DabBatch {
             material_update: 0,
@@ -8368,6 +8421,7 @@ mod tests {
                 wet_mix: BrushWetMix::default(),
                 transport: None,
                 deform: BrushDeform::default(),
+                contact: None,
             },
             damage: Rect {
                 min: Point { x: 18.0, y: 50.0 },
@@ -8403,6 +8457,9 @@ mod tests {
             hardness: 1.0,
             texture_sign: [1.0, 1.0],
             material: [0.0, 1.0, 1.0, 0.0],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         };
         let smudge_batch = DabBatch {
             material_update: 0,
@@ -8425,6 +8482,7 @@ mod tests {
                 wet_mix,
                 transport: None,
                 deform: BrushDeform::default(),
+                contact: None,
             },
             damage: Rect {
                 min: Point { x: 47.0, y: 47.0 },
@@ -8456,6 +8514,9 @@ mod tests {
             hardness: 1.0,
             texture_sign: [1.0, 1.0],
             material: [0.0, 0.0, 0.0, 1.0],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         };
         let liquify_batch = DabBatch {
             material_update: 0,
@@ -8482,6 +8543,7 @@ mod tests {
                     strength: 1.0,
                     ..BrushDeform::default()
                 },
+                contact: None,
             },
             damage: Rect {
                 min: Point { x: 71.0, y: 45.0 },

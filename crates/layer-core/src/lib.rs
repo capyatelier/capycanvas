@@ -6,6 +6,10 @@
 //! already captured document snapshots.
 
 pub mod color;
+mod contact;
+pub use contact::BrushContact;
+mod contact_presets;
+pub use contact_presets::CONTACT_BRUSH_PRESETS;
 mod effect_catalog;
 mod effects;
 pub mod raster;
@@ -25,10 +29,11 @@ mod project_storage;
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
-    BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,
-    PAPER_GRAIN_TEXTURE_ASSET, PENCIL_TEXTURE_ASSET, WATERCOLOR_TIP_TEXTURE_ASSET,
-    WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET, WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET,
-    WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET, WATERCOLOR_TRANSPORT_SHORT_NARROW_ASSET, default_brush,
+    BRISTLE_GRAIN_TEXTURE_ASSET, CONTACT_PAPER_TEXTURE_ASSET, DefaultBrushPreset,
+    PAINTBRUSH_TEXTURE_ASSET, PAPER_GRAIN_TEXTURE_ASSET, PENCIL_TEXTURE_ASSET,
+    WATERCOLOR_TIP_TEXTURE_ASSET, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,
+    WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET, WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET,
+    WATERCOLOR_TRANSPORT_SHORT_NARROW_ASSET, default_brush,
 };
 
 use std::{
@@ -502,6 +507,7 @@ impl Default for BrushStabilization {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct BrushTaper {
     pub start_distance_diameters: f32,
     pub end_distance_diameters: f32,
@@ -509,6 +515,9 @@ pub struct BrushTaper {
     pub end_size: f32,
     pub start_opacity: f32,
     pub end_opacity: f32,
+    /// Shape of the taper: 1 preserves the smooth envelope; higher values
+    /// narrow more quickly toward the endpoint. Independent of taper length.
+    pub tip_sharpness: f32,
 }
 
 impl Default for BrushTaper {
@@ -520,6 +529,7 @@ impl Default for BrushTaper {
             end_size: 1.0,
             start_opacity: 1.0,
             end_opacity: 1.0,
+            tip_sharpness: 1.0,
         }
     }
 }
@@ -773,6 +783,9 @@ pub struct BrushSnapshot {
     pub transport: Option<BrushTransport>,
     pub deform: BrushDeform,
     pub bounds: BrushBounds,
+    /// Optional coherent GPU contact model. Omitted in legacy snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<BrushContact>,
 }
 
 impl Default for BrushSnapshot {
@@ -803,6 +816,7 @@ impl Default for BrushSnapshot {
             transport: None,
             deform: BrushDeform::default(),
             bounds: BrushBounds::default(),
+            contact: None,
         }
     }
 }
@@ -822,7 +836,8 @@ impl BrushSnapshot {
             self.aspect,
             self.angle_radians,
         ];
-        if self.schema_version != 4
+        if !matches!(self.schema_version, 4 | 5)
+            || (self.schema_version == 4 && self.contact.is_some())
             || base.iter().any(|value| !value.is_finite())
             || !(0.01..=MAX_BRUSH_DIAMETER).contains(&self.diameter)
             || !(0.0..=1.0).contains(&self.opacity)
@@ -834,6 +849,12 @@ impl BrushSnapshot {
             return Err(BrushError::InvalidBase);
         }
         self.validate_advanced()?;
+        if let Some(contact) = self.contact {
+            contact.validate()?;
+            if contact.paper > 0.0 && self.grain.is_none() {
+                return Err(BrushError::InvalidAdvanced);
+            }
+        }
         if self.mappings.len() > MAX_BRUSH_MAPPINGS {
             return Err(BrushError::TooManyMappings);
         }
@@ -963,6 +984,8 @@ impl BrushSnapshot {
             || self.path.jitter_across > MAX_BRUSH_SCATTER_DIAMETERS
             || self.path.continuous_rate_hz > 1_000.0
             || self.shape.count == 0
+            || !self.taper.tip_sharpness.is_finite()
+            || !(0.25..=4.0).contains(&self.taper.tip_sharpness)
             || self.shape.count > MAX_BRUSH_STAMP_COUNT
             || transport_invalid
             || self.bounds.minimum_size < 0.01
@@ -1015,7 +1038,8 @@ impl BrushSnapshot {
             .min(MAX_BRUSH_SCATTER_DIAMETERS)
             .hypot(scatter[1].min(MAX_BRUSH_SCATTER_DIAMETERS))
             * diameter;
-        shape_radius + scatter_radius + 2.0
+        let contact_extent = self.contact.map_or(1.0, |c| (1.0 + c.tilt_spread) * 1.5);
+        shape_radius * contact_extent + scatter_radius + 2.0
     }
 
     fn target_range(&self, target: BrushTarget) -> (f32, f32) {

@@ -7,6 +7,8 @@ mod color_panel;
 mod column_drop;
 #[path = "column_stack_tests.rs"]
 mod column_stack_tests;
+#[path = "contact_brush_tests.rs"]
+mod contact_brush;
 #[path = "workspace_layout_drop_tests.rs"]
 mod workspace_layout_drop;
 #[path = "drag_pickup_tests.rs"]

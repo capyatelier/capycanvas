@@ -47,6 +47,7 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                 &source,
                 include_str!("../brush_coverage.wgsl"),
+                include_str!("../contact.wgsl"),
                 include_str!("../selection_clip.wgsl"),
             ])),
         });
