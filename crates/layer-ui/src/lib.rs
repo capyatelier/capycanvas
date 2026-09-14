@@ -496,9 +496,17 @@ impl CommandId {
         match self {
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac
+                Platform::Gtk
+                    | Platform::Web
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
+                    | Platform::Windows
             ),
-            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac),
+            Self::Fullscreen => matches!(
+                platform,
+                Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows
+            ),
             Self::NewDocument
             | Self::OpenDocument
             | Self::SaveDocument

@@ -7,6 +7,11 @@ pointer replay verifies drawing, undo/redo, and a painted document continuing
 behind titlebar controls. Full OS input, workspace parity, recovery and
 presentation acceptance remain open; this is not a release package.
 
+The workspace-owned native title bar and inline customization now use the shared
+Web/Android arrangement, tool picker and workspace history. See the current
+[title-bar acceptance record](../../docs/development/title-bar-windows-acceptance.md)
+for scope and reproduction commands; older header/clock notes below are historical.
+
 ## Milestone integration
 
 Windows implementation work lives on `ports/windows`. At each major milestone, merge

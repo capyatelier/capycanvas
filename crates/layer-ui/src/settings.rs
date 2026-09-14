@@ -1343,10 +1343,12 @@ mod copy_tests {
             Platform::Android,
             Platform::Ios,
             Platform::Mac,
+            Platform::Windows,
         ] {
             assert!(original.field(PreferenceId::ShowClock, platform).is_err());
         }
-        for platform in [Platform::Generic, Platform::Windows] {
+        {
+            let platform = Platform::Generic;
             let mut settings = original.clone();
             let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
             assert_eq!(row.title, "Show battery and clock");

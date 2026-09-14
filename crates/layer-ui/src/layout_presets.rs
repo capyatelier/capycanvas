@@ -456,8 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn windows_sketch_keeps_tools_accessible_before_header_projection() {
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Windows);
+    fn generic_sketch_keeps_tools_accessible_without_header_projection() {
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Generic);
         assert!(layout.panel_group(Panel::Toolbar).is_some());
         assert!(layout.panel_group(Panel::Commands).is_some());
         assert!(layout.canvas_info.visible);
@@ -471,6 +471,7 @@ mod tests {
             crate::Platform::Android,
             crate::Platform::Ios,
             crate::Platform::Mac,
+            crate::Platform::Windows,
         ] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.bands.is_empty() && layout.floating.is_empty());

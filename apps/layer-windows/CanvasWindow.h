@@ -97,7 +97,7 @@ private:
     bool inputStopped=false; // mutex: admitted work remains owned by the worker.
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
-    std::vector<winrt::Windows::Graphics::RectInt32> captionRegions;
+    std::vector<winrt::Windows::Graphics::RectInt32> captionRegions,captionInputRegions;
     bool captionRegionsValid=false;
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer captionRetry{nullptr};
     bool closing=false, closed=false, finishing=false, resize=false, paused=false, servicesReady=false;

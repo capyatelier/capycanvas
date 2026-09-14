@@ -100,10 +100,10 @@ void CanvasWindow::Open() {
     Automation::AutomationProperties::SetName(canvasFocus,L"Drawing canvas");
     root.Children().Append(canvasFocus);
     root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->dialogOpen.load())self->Key(e,true);
+        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,true)))self->Key(e,true);
     });
     root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->dialogOpen.load())self->Key(e,false);
+        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,false)))self->Key(e,false);
     });
     root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
         if(auto self=weak.lock())self->ChromeMotion(e);
@@ -216,21 +216,30 @@ void CanvasWindow::Resize() {
     }else{
         if(captionRetry)captionRetry.Stop();
         if(workspace)workspace->SetTitlebarInsets(float(left)/scale,float(right)/scale,float(height)/scale);
-        std::vector<Windows::Graphics::RectInt32> regions;
+        std::vector<Windows::Graphics::RectInt32> regions,inputRegions;
         if(header){
             header->SetFullscreen(!caption);
             header->SetInsets(float(left)/scale,float(right)/scale);
-            if(caption)regions=header->DragRegions(scale,next.width);
+            if(caption){regions=header->DragRegions(scale,next.width);inputRegions=header->InputRegions(scale,next.width);}
         } else if(caption)regions.push_back(Windows::Graphics::RectInt32{
             left,0,std::max(0,int32_t(next.width)-left-right),int32_t(48*scale)});
         if(caption){
-            bool same=captionRegionsValid&&regions.size()==captionRegions.size()&&
-                std::equal(regions.begin(),regions.end(),captionRegions.begin(),[](auto a,auto b){
-                    return a.X==b.X&&a.Y==b.Y&&a.Width==b.Width&&a.Height==b.Height;
+            auto equal=[](auto const& a,auto const& b){
+                return a.size()==b.size()&&std::equal(a.begin(),a.end(),b.begin(),[](auto x,auto y){
+                    return x.X==y.X&&x.Y==y.Y&&x.Width==y.Width&&x.Height==y.Height;
                 });
+            };
+            bool same=captionRegionsValid&&equal(regions,captionRegions)&&equal(inputRegions,captionInputRegions);
             // Painting snapshots can refresh header state without moving controls.
             // Only changed hit geometry needs a non-client window update.
-            if(!same){titlebar.SetDragRectangles(regions);captionRegions=std::move(regions);captionRegionsValid=true;}
+            if(!same){
+                titlebar.SetDragRectangles(regions);
+                // Caption changes alone do not reliably retire pen/touch hit
+                // regions. Publish the complementary interactive regions too.
+                auto source=Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(window.AppWindow().Id());
+                source.SetRegionRects(Microsoft::UI::Input::NonClientRegionKind::Passthrough,inputRegions);
+                captionRegions=std::move(regions);captionInputRegions=std::move(inputRegions);captionRegionsValid=true;
+            }
         }else captionRegionsValid=false;
     }
     {
@@ -278,7 +287,7 @@ void CanvasWindow::Start() {
         },
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
             if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
-        });
+        },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
     root.Children().Append(header->Root());
     settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
@@ -509,7 +518,8 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     bool canvas=focused&&focused==canvasFocus;
     // Native controls retain text, slider and focus-navigation keys. Releases
     // still reach shared state so moving focus cannot leave a pan key held.
-    bool editing=!canvas;
+    // F11 remains a window action while a toolbar button or native field has focus.
+    bool editing=!canvas&&key!=VirtualKey::F11;
     if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;
     using namespace Windows::Data::Json;
     JsonObject modifiers;
@@ -946,7 +956,7 @@ void CanvasWindow::UpdatePopup() {
     bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
     canvasFocus.IsEnabled(!blocked);
     if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
-    if(header)header->Root().IsHitTestVisible(!unavailable);
+    if(header){header->Root().IsHitTestVisible(!unavailable);header->SetBlocked(blocked);}
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }

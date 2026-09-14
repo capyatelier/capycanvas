@@ -207,9 +207,11 @@ fn startup_waits_for_canvas_idle_then_close_restores_layout_and_working_values()
         layer_ui::durable_layout(&f.native.session.state().workspace.layout),
         layer_ui::WorkspacePreset::Illustrator.layout(Platform::Windows)
     );
-    // Paint opens its right column without storing that transient presentation.
-    assert!(f.native.session.layout(f.native.logical).collapsed.iter()
-        .any(|column| column.id == 12 && column.open.is_some()));
+    // Paint keeps its primary panels visible and the secondary strip closed.
+    let resolved = f.native.session.layout(f.native.logical);
+    assert_eq!(resolved.collapsed.len(), 1);
+    assert_eq!(resolved.collapsed[0].id, 4);
+    assert!(resolved.collapsed[0].open.is_none());
     f.native
         .dispatch(UiAction::SetBrushSize { value: 47. })
         .unwrap();

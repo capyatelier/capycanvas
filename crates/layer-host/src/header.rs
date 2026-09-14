@@ -31,6 +31,75 @@ pub(crate) enum HeaderRequest {
     },
 }
 
+impl NativeHost {
+    pub(crate) fn header_request(&mut self, request: HeaderRequest) -> Value {
+        let state = self.session.state();
+        let model = state.workspace.layout.header.projected_for(state.platform);
+        let editing = state.customization.header_editing;
+        if !editing
+            || self
+                .header_drag
+                .as_ref()
+                .is_some_and(|d| !d.is_current(&model))
+        {
+            self.header_drag = None;
+        }
+        match request {
+            HeaderRequest::Geometry {
+                width,
+                insets,
+                metrics,
+            } => json!(model.resolve(width, insets, &metrics, editing)),
+            HeaderRequest::Begin {
+                source,
+                width,
+                insets,
+                metrics,
+                press,
+                grab,
+            } => {
+                let available = match source {
+                    HeaderDragSource::Component(item) => item.available_on(state.platform),
+                    _ => true,
+                };
+                self.header_drag = (editing && available)
+                    .then(|| {
+                        HeaderDrag::new(
+                            &model,
+                            HeaderDragStart {
+                                source,
+                                geometry: model.resolve(width, insets, &metrics, true),
+                                width,
+                                insets,
+                                metrics,
+                                press,
+                                grab,
+                            },
+                        )
+                    })
+                    .flatten();
+                json!(self.header_drag.is_some())
+            }
+            HeaderRequest::Preview { position } => {
+                json!(self.header_drag.as_mut().and_then(|d| d.preview(position)))
+            }
+            HeaderRequest::Finish { position, cancel } => json!(
+                self.header_drag
+                    .take()
+                    .filter(|_| !cancel)
+                    .and_then(|mut d| d.preview(position)?.action)
+                    .map(|a| a.action())
+            ),
+            HeaderRequest::Step { id, forward } => json!(
+                editing
+                    .then(|| model.step(id, forward))
+                    .flatten()
+                    .map(|a| a.action())
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,74 +185,5 @@ mod tests {
             })
             .is_null()
         );
-    }
-}
-
-impl NativeHost {
-    pub(crate) fn header_request(&mut self, request: HeaderRequest) -> Value {
-        let state = self.session.state();
-        let model = state.workspace.layout.header.projected_for(state.platform);
-        let editing = state.customization.header_editing;
-        if !editing
-            || self
-                .header_drag
-                .as_ref()
-                .is_some_and(|d| !d.is_current(&model))
-        {
-            self.header_drag = None;
-        }
-        match request {
-            HeaderRequest::Geometry {
-                width,
-                insets,
-                metrics,
-            } => json!(model.resolve(width, insets, &metrics, editing)),
-            HeaderRequest::Begin {
-                source,
-                width,
-                insets,
-                metrics,
-                press,
-                grab,
-            } => {
-                let available = match source {
-                    HeaderDragSource::Component(item) => item.available_on(state.platform),
-                    _ => true,
-                };
-                self.header_drag = (editing && available)
-                    .then(|| {
-                        HeaderDrag::new(
-                            &model,
-                            HeaderDragStart {
-                                source,
-                                geometry: model.resolve(width, insets, &metrics, true),
-                                width,
-                                insets,
-                                metrics,
-                                press,
-                                grab,
-                            },
-                        )
-                    })
-                    .flatten();
-                json!(self.header_drag.is_some())
-            }
-            HeaderRequest::Preview { position } => {
-                json!(self.header_drag.as_mut().and_then(|d| d.preview(position)))
-            }
-            HeaderRequest::Finish { position, cancel } => json!(
-                self.header_drag
-                    .take()
-                    .filter(|_| !cancel)
-                    .and_then(|mut d| d.preview(position)?.action)
-                    .map(|a| a.action())
-            ),
-            HeaderRequest::Step { id, forward } => json!(
-                editing
-                    .then(|| model.step(id, forward))
-                    .flatten()
-                    .map(|a| a.action())
-            ),
-        }
     }
 }
