@@ -478,6 +478,7 @@ background saves do not restore the owner unnecessarily.
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-navigator.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-snap.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 cargo test --locked -p layer-ui --lib
 cargo test --locked -p layer-windows --lib
 cargo clippy --locked -p layer-windows --all-targets --no-deps -- -D warnings
@@ -490,6 +491,18 @@ retained controls, actual preview pixels after a controlled stroke and Undo,
 document aspect changes, resize, hide/reopen, theme colors and zero exit.
 The lifecycle fixture checks clean and dirty minimized close, visible decisions,
 Cancel preservation, maximized-state preservation and explicit Discard.
+The Snap fixture sends guarded Windows+Left/Right to its isolated foreground
+window and checks the actual DWM frame against the monitor work area. It retains
+a seeded drawing through left/right Snap, each minimize/restore cycle, maximize
+and restore. The camera viewport must match the native canvas exactly; the
+canvas fills the client area below the native one-pixel top border. Every state
+also receives OS-injected mouse and pen strokes: sampled interior pixels must
+appear, return exactly after one Undo, and reappear exactly after one Redo.
+The sample ends before the transient stroke-tip hover marker. Full client
+captures are retained without masks or pixel replacement. One final Undo removes
+the seed drawing, and clean close must exit successfully within five seconds.
+Use PowerShell 7 on an available desktop; this does not qualify physical pen
+hardware, mixed-display DPI, or painting cadence.
 Captures and profiles remain under ignored artifacts/windows.
 
 These are functional checks. Physical Navigator pointer gestures, full workspace
