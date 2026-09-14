@@ -2691,3 +2691,47 @@ for 672 ordinary tests across the validated suites. Strict Clippy and a normal
 Release rebuild pass. The native manager rerun passes preview, starting-layout
 history, Undo/Redo, creation, switching, rename/delete, brush reset, restart and
 clean exit. Windows still uses tabbed drawers pending the full-column port.
+
+### Native Windows column stacks and raster-worker integration
+
+Windows now uses the shared full-column stack projection. Open members reuse
+ordinary native panel groups; retained icon buttons, group dividers and connector
+paths follow shared geometry. Every visible group's active icon is selected.
+Closed multi-member stacks have no resize affordance; an open member retains
+its own width and native tab controls while resizing. Shared Rust continues
+to own drop validation, layout publication and one-step history.
+
+The guarded production-editor fixture passes with OS-delivered mouse, pen and
+touch. It covers immediate grips/tabs, held icon bodies and device-specific
+menus, stack/member insertion, cancellation, Undo/Redo, member switching, retained
+resizing, fixed closed widths, individual drawers, consumed auto-hide contacts,
+both themes, full Zen and restart. Membership, widths and preferences persist;
+temporary open columns do not. Paint opens its default right column on adoption
+and reset. Sketch keeps its docked tools pending native header projection.
+
+The integration includes upstream main through 23bc780, retaining Android/Web
+stack and raster-worker changes. Platform gates and shared destination tests
+include both Android and Windows. The combined ordinary suites pass 674 tests
+(45 core, 49 engine, 25 host, 367 UI, 103 Windows and 85 workspace). Strict
+all-target Windows/UI/workspace Clippy, the normal Release build and C++
+input/queue/publication checks pass. Seven actual D3D12 document/filter removal
+tests pass serially. Two incoming conditional lints and one unused native local
+were simplified without suppressions.
+
+The hardware readback helper waits for pending document edits to finish before
+reading pixels, following the new deferred raster-frame contract. Its exact
+import/recovery/Undo/Redo pixel comparisons remain unchanged. The Zen fixture
+moves the pointer off the strip before asserting hidden chrome; hovering the
+strip intentionally reveals it. The native color wheel remains unchanged.
+
+This milestone does not establish whole-editor visual identity, physical
+pressure/tilt/eraser behavior, mixed-display or real driver-reset acceptance,
+installed MSIX acceptance, or sustained physical 120 Hz painting/input latency.
+
+The final Release editor and workspace manager also pass titlebar hit regions,
+shared/native geometry, tools, both themes, full Zen, retained canvas resizing,
+preview/history/starting-layout transactions and restart. The complete native
+RecoverGpu and FailGpu document journeys pass queued/active pen recovery,
+exact exported pixels, thumbnail/history restoration, Save/Save As after
+exhausted recovery, committed raster preservation, queued contact cancellation,
+Cancel/Discard and durable reopen. Every owned process closes normally.

@@ -372,10 +372,10 @@ impl WgpuRasterizer {
                         }
                     }
                     None if packet.reset_layers => {
-                        if let Some(current) = current {
-                            if !ready(Some(current), &current.data) {
-                                return false;
-                            }
+                        if let Some(current) = current
+                            && !ready(Some(current), &current.data)
+                        {
+                            return false;
                         }
                     }
                     _ => {}
@@ -505,18 +505,18 @@ impl WgpuRasterizer {
                     // transformed source/destination footprints.
                     let damage = batch_pixel_rect(batch, packet.document_extent);
                     target.changed.extend(page_coordinates(damage));
-                    if batch.stroke_end && batch.style.rendering.edge_after_stroke {
-                        if let Some(layer) =
+                    if batch.stroke_end
+                        && batch.style.rendering.edge_after_stroke
+                        && let Some(layer) =
                             self.paint_layers.iter().find(|l| l.id == batch.layer_id)
-                        {
-                            target.changed.extend(
-                                layer
-                                    .coverage_pages
-                                    .iter()
-                                    .filter(|p| p.owner == Some(batch.stroke_id))
-                                    .map(|p| p.coordinate),
-                            );
-                        }
+                    {
+                        target.changed.extend(
+                            layer
+                                .coverage_pages
+                                .iter()
+                                .filter(|p| p.owner == Some(batch.stroke_id))
+                                .map(|p| p.coordinate),
+                        );
                     }
                 }
             }

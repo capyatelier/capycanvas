@@ -1226,3 +1226,31 @@ tests remain ignored. Whole-editor
 raster identity, configurable-switcher interactions, drag pickup, physical input,
 lifecycle/DPI/recovery, packaging and final presentation acceptance remain open.
 See the implementation history for detailed evidence and its scope.
+
+### Native column stacks
+
+Windows now projects complete open stack members with its existing native panel
+groups. Shared Rust supplies member geometry, connectors, drop targets, width
+limits and history. The icon strip retains its buttons, group dividers and
+connector paths; closed multi-member stacks expose no resize handle. Selecting
+a member opens its full column or its ordinary tabbed drawer according to
+the stack preference. Auto-hide consumes the outside canvas contact.
+
+Paint's shipped default opens its right column on adoption/reset. Stack
+membership, widths and preferences persist, while open columns remain transient.
+Sketch retains its docked tools until the native workspace-owned title bar is
+ported. The accepted Direct2D color wheel is unchanged.
+
+Run the isolated production-editor journey for each device, serially:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device mouse
+./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device pen
+./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device touch
+~~~
+
+The fixture checks geometry, connectors, selected icons, pickup policy,
+stack/member drops, cancellation and one-step history, retained resizing,
+individual drawers, auto-hide, themes, Zen and restart. These are guarded
+OS-delivered synthetic inputs. Physical pen/touch, complete visual acceptance,
+mixed displays and 120 Hz painting still require their separate checks.
