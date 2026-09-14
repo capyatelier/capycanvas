@@ -375,10 +375,20 @@ mod allocation {
                 && let Some(hint) = owner.drop_hint.borrow().as_ref()
             {
                 let b = hint.bounds;
+                let body = matches!(hint.target, DockTarget::Tab { .. })
+                    && b.width > 3. && b.height > 3.;
+                let rect = gtk::graphene::Rect::new(b.x, b.y, b.width, b.height);
                 snapshot.append_color(
-                    &gdk::RGBA::new(0.38, 0.68, 1.0, 0.95),
-                    &gtk::graphene::Rect::new(b.x, b.y, b.width, b.height),
+                    &gdk::RGBA::new(0.38, 0.68, 1.0, if body { 0.25 } else { 0.95 }),
+                    &rect,
                 );
+                if body {
+                    snapshot.append_border(
+                        &gtk::gsk::RoundedRect::from_rect(rect, 0.),
+                        &[2.; 4],
+                        &[gdk::RGBA::new(0.38, 0.68, 1.0, 0.95); 4],
+                    );
+                }
             }
             if let Some(owner) = &owner
                 && let Some(drag) = owner.workspace_drag.borrow().as_ref()

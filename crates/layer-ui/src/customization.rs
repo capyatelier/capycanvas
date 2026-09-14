@@ -660,7 +660,7 @@ impl DockLayout {
     }
     fn column_sections(&self, group: Option<u32>) -> Vec<Vec<ContextMenuItem>> {
         let Some(group) = group else { return Vec::new(); };
-        if self.column_for_group(group).is_none()
+        if self.collapsible_column_for_group(group).is_none()
             && self.collapsed_column_for_group(group).is_none()
         {
             return Vec::new();
@@ -1839,6 +1839,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetColumnDrawers { column, drawers } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() { return Err("Unknown column".into()); }
                 let root = layout.column_stack(column).column;
                 let s = layout.column_stack_mut(column);
@@ -1849,6 +1852,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetColumnAutoHide { column, auto_hide } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() {
                     return Err("Unknown column".into());
                 }
@@ -1856,6 +1862,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ApplyColumnStack { column } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() { return Err("Unknown column".into()); }
                 let source = layout.column_stack(column);
                 for root in layout.column_roots() {

@@ -40,13 +40,18 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
   };
   const snapshot=()=>evaluate("layerApp.state().workspace");
   try {
-    for(const device of ["mouse","touch"]) for(const scenario of ["group","tab","tear-off","navigator"]) {
+    for(const device of ["mouse","touch"]) for(const scenario of ["group","tab","tear-off","navigator","color-overlap"]) {
       const workspace=structuredClone(fixture);
       if(scenario==="navigator") {workspace.layout.bands[1].root.panels.push("navigator");workspace.layout.bands[1].root.active="navigator";}
+      if(scenario==="color-overlap")workspace.layout.bands[0].root.panels.push("color");
       await send({type:"restore_workspace",workspace});
-      if(["group","navigator"].includes(scenario))await send({type:"move_group",group:43,target:{kind:"float",position:[550,220]}});
+      if(scenario==="color-overlap") {
+        await send({type:"move_panel",panel:"color",target:{kind:"float",position:[430,160]}});
+        await evaluate(`(()=>{const w=layerApp.app.workspace_persistence(),f=w.layout.floating.find(f=>f.root.panels?.includes('color'));f.width=360;f.height=400;layerApp.dispatch({type:'restore_workspace',workspace:w});})()`);await wait();
+      }
+      if(["group","navigator","color-overlap"].includes(scenario))await send({type:"move_group",group:43,target:{kind:"float",position:[550,220]}});
       const before=await snapshot();
-      const selector=["group","navigator"].includes(scenario)?'.dock-group[data-group="43"] .dock-tabs > .panel-grip':'.dock-group[data-group="43"] .dock-tab[data-panel="properties"]';
+      const selector=["group","navigator","color-overlap"].includes(scenario)?'.dock-group[data-group="43"] .dock-tabs > .panel-grip':'.dock-group[data-group="43"] .dock-tab[data-panel="properties"]';
       const start=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
       held=device;await input("down",start);
       const origin=scenario==="tear-off"?{x:650,y:400}:scenario==="tab"?start:{x:start.x-14,y:start.y};
@@ -56,7 +61,7 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
         const app=layerApp.app, original={};
         const probe=window.motionProbe={counts:{},cpu:[],frames:[],callbacks:[],placementCpu:[],moves:0,running:true,original,refreshStacks:[],raf:window.requestAnimationFrame};
         window.requestAnimationFrame=callback=>probe.raf.call(window,callback.name==="presentWorkspaceFrame"?now=>{const t=performance.now();callback(now);probe.callbacks.push(now);probe.placementCpu.push(performance.now()-t);}:callback);
-        for(const name of ["state","layout","workspace_update","drop_hint","tab_drag_preview","dispatch","frame","navigator_surface","navigator_size"]){
+        for(const name of ["state","layout","workspace_update","drop_hint","tab_drag_preview","dispatch","frame","navigator_surface","navigator_size","color_hue_stops","color_field_pixels"]){
           original[name]=app[name].bind(app);app[name]=(...args)=>{const t=performance.now();const value=original[name](...args);probe.counts[name]=(probe.counts[name]||0)+1;if(name==="frame"&&value.regions)probe.refreshStacks.push({regions:value.regions,revision:String(value.revision)});if(name==="state")probe.refreshStacks.push(new Error().stack);if(name==="dispatch"&&args[0].phase==="move"){probe.moves++;probe.cpu.push(performance.now()-t);}return value;};
         }
         const update=original.workspace_update(),id=update.drag.group?.id;
@@ -87,6 +92,11 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
       assert.equal(probe.revision,probe.finalRevision,"retain the Rust model revision");
       assert.ok(probe.error<=1,"native placement matches absolute shared geometry");
       assert.ok(probe.moves>100,"exercise sustained real input");
+      if(scenario==="color-overlap") {
+        assert.equal(probe.counts.color_hue_stops||0,0,"reuse the hue ring during overlapping motion");
+        assert.equal(probe.counts.color_field_pixels||0,0,"reuse the field during overlapping motion");
+        assert.ok(await evaluate(`(()=>{const a=motionProbe.node.getBoundingClientRect(),b=document.querySelector('.color-wheel').getBoundingClientRect();return a.x<b.right&&a.right>b.x&&a.y<b.bottom&&a.bottom>b.y;})()`),"motion overlaps the visible Color wheel");
+      }
       if(scenario==="navigator") {
         assert.equal(probe.counts.navigator_size||0,0,"native overview needs no geometry publication during translation");
         assert.equal(probe.counts.navigator_surface||0,0,"retain the GPU surface");

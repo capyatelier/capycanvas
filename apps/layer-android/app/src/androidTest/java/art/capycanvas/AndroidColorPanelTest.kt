@@ -184,6 +184,28 @@ class AndroidColorPanelTest {
                     val expected = expectedPick("field", stage.topLeft + Offset(relative.x.roundToInt() + .5f, relative.y.roundToInt() + .5f)).getJSONArray("foreground")
                     val channels = listOf(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel), android.graphics.Color.blue(pixel))
                     channels.forEachIndexed { i, actual -> assertEquals("$theme $width $shape rendered channel $i", expected.getDouble(i) * 255, actual.toDouble(), 4.0) }
+                    // Exercise the retained hue shader after shape/size changes.
+                    // Sample the stroke interior, away from its moving marker.
+                    val geometry = view().getJSONObject("geometry")
+                    val radius = (geometry.number("inner") + geometry.number("outer")) * wheel.width / 2
+                    val marker = view().array("wheel_hue_marker").let { wheel.topLeft + Offset(it.getDouble(0).toFloat(), it.getDouble(1).toFloat()) * wheel.width }
+                    val stops = JSONArray(Native.colorHueStops(shape)).objects()
+                    for (degrees in listOf(15, 75, 135, 195, 255, 315)) {
+                        val radians = degrees * PI / 180
+                        val at = wheel.center + Offset(cos(radians).toFloat(), sin(radians).toFloat()) * radius
+                        if ((at - marker).getDistance() < 16 * density) continue
+                        val x = (at.x - stage.left).roundToInt(); val y = (at.y - stage.top).roundToInt()
+                        val angle = atan2(y + .5 - relative.y, x + .5 - relative.x) * 180 / PI
+                        val t = ((angle - view().number("wheel_hue_start_degrees") + 720) % 360 / 360).toFloat()
+                        val last = stops.indexOfFirst { it.number("offset") >= t }.coerceAtLeast(1)
+                        val a = stops[last - 1]; val b = stops[last]
+                        val mix = (t - a.number("offset")) / (b.number("offset") - a.number("offset"))
+                        val ring = shot.getPixel(x, y)
+                        listOf(android.graphics.Color.red(ring), android.graphics.Color.green(ring), android.graphics.Color.blue(ring)).forEachIndexed { i, actual ->
+                            val wanted = a.array("color").getDouble(i) * (1 - mix) + b.array("color").getDouble(i) * mix
+                            assertEquals("$theme $width $shape hue ring $degrees channel $i", wanted * 255, actual.toDouble(), 4.0)
+                        }
+                    }
                     shot.recycle()
                 }
                 report.put(obj("theme" to theme, "width" to width, "shape" to shape, "side" to stage.width / density, "layout" to layout))
@@ -322,6 +344,7 @@ class AndroidColorPanelTest {
             capture("docked-$theme-$pointer").recycle()
             val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "color" in it.array("panels").values() }.getInt("id")
             action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to true)))
+            action(obj("type" to "customize", "action" to obj("type" to "set_column_drawers", "column" to group, "drawers" to true)))
             tap(bounds("column-icon-color").center)
             waitFor("retained drawer") { find(owner.semanticsOwner.unmergedRootSemanticsNode, "color-panel") != null }
             settle()

@@ -36,8 +36,20 @@ fn native_workspace_motion_input() {
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let mut reports = Vec::new();
     for touch in [false, true] {
-        for scenario in ["group", "tab", "tear-off", "navigator"] {
+        for scenario in ["group", "tab", "tear-off", "navigator", "color-overlap"] {
             let mut fixture = original.clone();
+            let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+            if scenario == "color-overlap" {
+                fixture.layout.set_panel_visible(Panel::Color, true).unwrap();
+                fixture.layout.move_panel(
+                    viewport,
+                    Panel::Color,
+                    DockTarget::Float { position: [430., 160.] },
+                ).unwrap();
+                let color = fixture.layout.floating.last_mut().unwrap();
+                color.width = 360.;
+                color.height = Some(400.);
+            }
             if scenario == "navigator" {
                 let band = fixture
                     .layout
@@ -61,8 +73,7 @@ fn native_workspace_motion_input() {
                 .layout
                 .panel_group(Panel::Layers)
                 .unwrap();
-            let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-            if matches!(scenario, "group" | "navigator") {
+            if matches!(scenario, "group" | "navigator" | "color-overlap") {
                 w.dispatch(UiAction::MoveGroup {
                     group,
                     target: DockTarget::Float {
@@ -75,6 +86,9 @@ fn native_workspace_motion_input() {
             if scenario == "navigator" {
                 assert!(w.navigator.root.is_mapped(), "measure a visible Navigator");
             }
+            if scenario == "color-overlap" {
+                assert!(w.color_panel.root.is_mapped(), "measure a visible Color panel");
+            }
             assert!(!w.status.is_visible(), "{}", w.status.text());
             let before = saved();
             let view = w
@@ -85,7 +99,7 @@ fn native_workspace_motion_input() {
                 .unwrap()
                 .root
                 .clone();
-            let target = if matches!(scenario, "group" | "navigator") {
+            let target = if matches!(scenario, "group" | "navigator" | "color-overlap") {
                 find_css(view.upcast_ref(), "panel-grip").unwrap()
             } else {
                 w.groups
@@ -140,6 +154,8 @@ fn native_workspace_motion_input() {
             );
             let model = w.publication.model_revision.get();
             let refreshes = w.publication.refreshes.get();
+            let color_cache = (scenario == "color-overlap").then(|| color_panel::hue_guide(&w));
+            let colors = state(&w).colors;
             w.publication.inputs.borrow_mut().clear();
             w.publication.frames.borrow_mut().clear();
             let clock = w.surface.frame_clock().unwrap();
@@ -188,6 +204,13 @@ fn native_workspace_motion_input() {
             perform(serde_json::to_value(events).unwrap());
             pump(50);
             clock.disconnect(after);
+            if let Some(cache) = color_cache {
+                assert_eq!(color_panel::hue_guide(&w), cache, "overlapping motion reuses the texture");
+                assert_eq!(state(&w).colors, colors, "overlapping motion does not pick colors");
+                let color = w.color_panel.root.compute_bounds(&w.surface).unwrap();
+                let moving = view.compute_bounds(&w.surface).unwrap();
+                assert!(color.intersection(&moving).is_some(), "motion crosses the Color panel");
+            }
             assert_eq!(
                 w.publication.refreshes.get(),
                 refreshes,

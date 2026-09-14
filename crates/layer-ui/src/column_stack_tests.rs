@@ -1326,6 +1326,7 @@ fn resetting_open_member_width_preserves_stack_membership_and_open_state() {
 fn adopting_drawers_off_closes_existing_drawer_presentations() {
     for merge in [false, true] {
         let (mut s, left, right) = stack_fixture();
+        s.state.workspace.layout.column_stack_mut(right).drawers = true;
         stack_edit(
             &mut s,
             CustomizationAction::SetColumnDrawers {

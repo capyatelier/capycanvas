@@ -9,6 +9,12 @@ has an immediate drag handle. Dropping that handle on another member stacks
 the columns; dropping beside a stack or at a side edge unstacks the member.
 Tile bodies retain the application-wide hold-before-drag convention.
 
+Only top-level side columns can collapse. Columns inside vertically stacked
+groups remain expanded, including when their parent column opens. Side-by-side
+top-level columns can collapse independently; a stack's members are the only
+collapsed children of its root. Saved nested collapsed columns and nested stacks
+reopen as ordinary groups, preserving their panels, selected tabs and split tree.
+
 Dropping an individual panel, a whole toolbar, or a tab group into a
 member's empty lower area or footer grip creates a new collapsed column after
 that member. The gap between members is also an insertion target. The new
@@ -23,7 +29,8 @@ It only appears when the last group is scrolled into view and excludes the
 grip itself. The grip and spacing between members continue creating stack
 members. All hosts use the shared target geometry.
 
-“Open individual panels” and Auto-hide belong to the stack. Enabling
+“Open individual panels” and Auto-hide belong to the stack and both default to
+disabled for a new stack. Explicit saved preferences are retained. Enabling
 “Open individual panels” opens the selected tab group in a compact popover.
 With it disabled, a tile selects its tab and opens that member's complete
 ordinary column toward the canvas. One member can be
@@ -110,6 +117,26 @@ through the production recognizers. It covers full-height opening and switching,
 active connectors, fixed closed-stack width, stack preferences, panel/group/toolbar
 and held-icon drops, the trailing append target, cancellation and undo/redo.
 The existing `--column-drops` suite checks adjacent tile and divider boundaries.
+
+On GTK, Web and Android, dropping a panel, toolbar, tab group or column in the menu/title bar
+prepends it to the side column directly below the pointer. An expanded column
+receives new groups; a collapsed stack receives a new first member. A column
+inserted among expanded groups keeps its tree and opens its contents. No panel
+group reserves the upper portion of its body for a split insertion. Instead,
+the upper 20% of each group's body extends its tab-strip target: the horizontal
+pointer position chooses a tab insertion slot, with the preview line in the
+tab strip. This applies to first and lower groups, floating groups and drawers.
+
+Dropping into a GTK, Web or Android panel group's body prepends the incoming tabs and selects
+the incoming content. A translucent filled rectangle with an outline covers
+the target's content area. Existing tabs stay in the group. Tab strips continue
+to offer precise insertion positions with a line preview.
+
+Run `bash tools/performance/workspace-motion.sh gtk --native-test=native_layout_drop_input`
+for mouse/touch menu-bar and body drops on both sides and themes, including
+previews, cancellation, selected content and one-step undo/redo. Captures are
+written to `LAYER_TEST_ARTIFACTS` when supplied. Physical pen review remains
+separate; these changes do not alter native pickup timing or device arbitration.
 
 The history comparison includes collapsed member boundaries. Moving the last
 member into the preceding column can preserve the panel order while changing

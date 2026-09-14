@@ -157,6 +157,15 @@ raster timings, run
 `cargo run --locked --release -p layer-ui --example color_wheel_bench`.
 This measures computation only, not GTK snapshotting or display latency.
 
+GTK retains the hue guide as a native-resolution `GdkTexture`, keyed by pixel
+size and wheel shape. Paint changes and overlapping panel motion reuse it;
+the stroke and markers remain native vectors. This avoids repeatedly rendering
+the Okhsv ring's hundreds of gradient stops into intermediate textures.
+`--color-panel` checks cache reuse, size/shape invalidation and ring colors
+against the original native gradient; repeat at display scale 2 for DPI coverage.
+`--workspace-motion` includes mouse/touch floating-panel motion over Color and
+checks texture reuse while recording native presentation timing.
+
 For real pointer/hold/drag delivery, use
 `bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.
 That [runner](../../tools/performance/workspace-motion.sh) provides an isolated
@@ -204,3 +213,10 @@ ordinary width/split resizing with retained widgets, mode switching and auto-hid
 The run directory contains both-theme captures and `resize-*.json` reports of
 painted group allocations against shared geometry. The previous `--column-groups`
 fixture and custom Group panel renderer are retired.
+
+For menu-bar prepend targets and the panel-body drop highlight, run
+`LAYER_TEST_ARTIFACTS="$PWD/artifacts/layout-drops/gtk" bash tools/performance/workspace-motion.sh gtk --native-test=native_layout_drop_input`.
+This checks panel, group, toolbar and column sources, both sides and themes,
+mouse/touch input, cancellation and one-step history. New column stacks open
+full columns by default; only top-level columns can collapse.
+The same run checks tab insertion from the upper body of first and lower groups.

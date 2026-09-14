@@ -219,7 +219,7 @@ class AndroidInteractionTest {
                     "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
                 if (kind.startsWith("drawer") || kind == "column") {
                     customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
-                    if (kind.startsWith("drawer")) { tap(bounds(if (drawerToolbar) "column-icon-toolbar" else "column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle() }
+                    if (kind.startsWith("drawer")) { customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true)); tap(bounds(if (drawerToolbar) "column-icon-toolbar" else "column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle() }
                 }
                 val tag = when (kind) {
                     "tab" -> "tab-sizes"
@@ -270,6 +270,7 @@ class AndroidInteractionTest {
             if (kind.startsWith("drawer") || kind=="column") {
                 customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
                 if (kind.startsWith("drawer")) {
+                    customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
                     tap(bounds("column-icon-toolbar").center)
                     waitFor("toolbar drawer") { exists("column-drawer-41") }; settle()
                 }
@@ -320,6 +321,7 @@ class AndroidInteractionTest {
             tool=pointer; restore()
             if(kind.startsWith("drawer") || kind=="column") {
                 customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to true))
+                if(kind.startsWith("drawer")) customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
                 if(kind.startsWith("drawer")) { tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle() }
             }
             val tag=when(kind) { "tab"->"tab-sizes"; "ribbon"->"ribbon-grip-toolbar"; "group"->"group-grip-41"
@@ -516,6 +518,112 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun menuBodyAndExtendedTabDropsAcrossDevices() {
+        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
+            "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon_name")
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        try { for (right in listOf(false, true)) {
+            val theme = if (right) "light" else "dark"
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (pointer in pointerTools) for (zone in listOf("menu", "stack-menu", "body", "tabs-top", "tabs-lower"))
+                for (source in listOf("panel", "group", "toolbar", "column")) {
+                    if (source == "column" && !zone.endsWith("menu")) continue
+                    tool = pointer
+                    val label = "$theme/$pointer/$source/$zone"
+                    android.util.Log.i("CapyLayoutDrops", label)
+                    val layout = JSONObject(fixture.toString())
+                    layout.getJSONObject("layout").apply {
+                        put("bands", JSONArray(listOf(
+                            obj("id" to 40, "edge" to if (right) "right" else "left", "extent" to 252,
+                                "root" to obj("kind" to "split", "id" to 41, "axis" to "vertical", "fraction" to .5,
+                                    "first" to tabs(42, "brushes"), "second" to tabs(43, "sizes"))),
+                            obj("id" to 44, "edge" to if (right) "left" else "right", "extent" to 310,
+                                "root" to tabs(45, "layers", "adjustments", "properties")),
+                            obj("id" to 46, "edge" to "top", "extent" to 36, "root" to tabs(47, "toolbar")))))
+                        put("column_stacks", JSONArray()); put("next_id", maxOf(50, getInt("next_id")))
+                    }
+                    action(obj("type" to "restore_workspace", "workspace" to layout))
+                    if (zone == "stack-menu") customize(obj("type" to "set_column_collapsed", "group" to 42, "collapsed" to true))
+                    if (source == "column") customize(obj("type" to "set_column_collapsed", "group" to 45, "collapsed" to true))
+                    if (source == "group") {
+                        action(obj("type" to "select_panel_tab", "group" to 45, "panel" to "properties"))
+                        action(obj("type" to "move_group", "group" to 45, "target" to obj("kind" to "float", "position" to JSONArray(listOf(500, 230))),
+                            "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
+                    }
+                    val before = workspace()
+                    val targetId = if (zone == "tabs-lower") 43 else 42
+                    val b = bounds(if (zone == "stack-menu") "collapsed-column-41" else "group-$targetId")
+                    val tabHeight = snapshot().getJSONObject("layout").number("tab_bar_height") * density
+                    val destination = when {
+                        zone.endsWith("menu") -> Offset(b.center.x, bounds("title-bar").center.y)
+                        zone.startsWith("tabs") -> bounds(if (zone == "tabs-lower") "tab-sizes" else "tab-brushes").let {
+                            Offset(if (zone == "tabs-lower") it.right - 4 * density else it.left + 4 * density, b.top + tabHeight + 3 * density)
+                        }
+                        else -> b.center
+                    }
+                    val press = bounds(when (source) {
+                        "column" -> "column-grip-45"; "toolbar" -> "ribbon-grip-toolbar"
+                        "group" -> "group-grip-45"; else -> "tab-layers"
+                    }).center
+                    fun begin() {
+                        waitFor("workspace window focus") { owner.view.hasWindowFocus() }
+                        event(MotionEvent.ACTION_DOWN, press)
+                        event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
+                        event(MotionEvent.ACTION_MOVE, destination); settle()
+                    }
+                    begin()
+                    val hint = host.workspaceGeometry?.hint ?: error("$label missing hint at $destination; dragging=${workspaceDragging()}")
+                    val expected = when (zone) {
+                        "menu" -> obj("kind" to "split", "group" to 42, "edge" to "top")
+                        "stack-menu" -> obj("kind" to "stack_column", "column" to 41, "before" to true)
+                        else -> obj("kind" to "tab", "group" to targetId, "index" to if (zone == "tabs-lower") 1 else 0)
+                    }
+                    assertEquals(label, expected.toString(), hint.getJSONObject("target").toString())
+                    val shown = bounds("workspace-drop-hint")
+                    val hb = hint.getJSONObject("bounds")
+                    assertEquals(label, bounds("workspace").left + hb.number("x") * density, shown.left, 1.1f)
+                    assertEquals(label, hb.number("width") * density, shown.width, 1.1f)
+                    if (zone == "body") {
+                        assertEquals(label, b.top + tabHeight, shown.top, 1.1f)
+                        assertEquals(label, b.bottom, shown.bottom, 1.1f)
+                        if (source == "group" && pointer == MotionEvent.TOOL_TYPE_MOUSE) {
+                            val image = instrumentation.uiAutomation.takeScreenshot()
+                            val output = File(activity.getExternalFilesDir(null), "validation/layout-drops").apply { mkdirs() }
+                            File(output, "$theme-body.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                            image.recycle()
+                        }
+                    } else if (zone.startsWith("tabs")) {
+                        assertEquals(label, b.top, shown.top, 1.1f)
+                        assertEquals(label, 3 * density, shown.width, 1.1f)
+                    }
+                    if (source == "panel") {
+                        event(MotionEvent.ACTION_CANCEL); settle(); assertEquals("$label cancel", before, workspace()); begin()
+                    }
+                    event(MotionEvent.ACTION_UP); settle()
+                    val after = workspace()
+                    val moved = if (source == "toolbar") listOf("toolbar") else if (source in listOf("group", "column")) listOf("layers", "adjustments", "properties") else listOf("layers")
+                    if (zone == "body" || zone.startsWith("tabs")) {
+                        val target = group(moved[0])
+                        val old = listOf(if (zone == "tabs-lower") "sizes" else "brushes")
+                        assertEquals(label, targetId, target.getInt("id"))
+                        assertEquals(label, if (zone == "tabs-lower") old + moved else moved + old, target.array("panels").values())
+                        assertEquals(label, if (source == "group") "properties" else moved[0], target.getString("active"))
+                    } else if (zone == "stack-menu") {
+                        val stack = JSONObject(after).getJSONObject("layout").array("column_stacks").objects().first { 41 in it.array("members").values() }
+                        assertEquals(label, 2, stack.array("members").length())
+                        assertEquals(label, 41, stack.array("members").getInt(1))
+                        assertFalse("New stacks open whole columns", stack.getBoolean("drawers"))
+                    } else {
+                        assertTrue(label, group(moved[0]).getJSONObject("bounds").number("y") < group("brushes").getJSONObject("bounds").number("y"))
+                        assertEquals(label, 0, JSONObject(after).getJSONObject("layout").array("collapsed").length())
+                    }
+                    assertFalse(label, exists("workspace-drop-hint"))
+                    action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals("$label undo", before, workspace())
+                    action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals("$label redo", after, workspace())
+                }
+        } } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+    }
+
     @Test fun openDrawersAndCollapsedCanvasSidesAcceptTouchAndPenDrops() {
         for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS))
             for (right in listOf(false, true)) for (open in listOf(false, true)) {
@@ -525,7 +633,7 @@ class AndroidInteractionTest {
                 val source = if (right) "brushes" else "layers"
                 val target = if (right) "navigator" else "brushes"
                 customize(obj("type" to "set_column_collapsed", "group" to column, "collapsed" to true))
-                if (open) { tap(bounds("column-icon-$target").center); waitFor("open target drawer") { exists("column-drawer-$column") }; settle() }
+                if (open) { customize(obj("type" to "set_column_drawers", "column" to column, "drawers" to true)); tap(bounds("column-icon-$target").center); waitFor("open target drawer") { exists("column-drawer-$column") }; settle() }
                 val before = workspace()
                 event(MotionEvent.ACTION_DOWN, bounds("tab-$source").center)
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
@@ -627,6 +735,7 @@ class AndroidInteractionTest {
                 tool = pointer; restore()
                 if (source == "drawer") {
                     customize(obj("type" to "set_column_collapsed", "group" to 48, "collapsed" to true))
+                    customize(obj("type" to "set_column_drawers", "column" to 47, "drawers" to true))
                     tap(bounds("column-icon-layers").center)
                     waitFor("source drawer") { exists("drawer-tab-layers") }; settle()
                 }
@@ -969,6 +1078,7 @@ class AndroidInteractionTest {
             }
             move(obj("kind" to "tab", "group" to 41, "index" to null))
             customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
             tap(bounds("column-icon-toolbar").center); waitFor("nested toolbar") { exists(tag(2)) }; settle()
             click(2); check(2); click(1, 2); check(1); click(0, 1); check(0)
         } finally {
@@ -1035,6 +1145,7 @@ class AndroidInteractionTest {
             val panelColor = android.graphics.Color.parseColor(if (theme == "light") "#ededed" else "#414141")
             for ((column, panel) in listOf(41 to "brushes", 43 to "navigator")) {
                 customize(obj("type" to "set_column_collapsed", "group" to column, "collapsed" to true))
+                customize(obj("type" to "set_column_drawers", "column" to column, "drawers" to true))
                 val tag = "column-icon-$panel"
                 fun checkClosed() {
                     val b = bounds(tag)
@@ -1087,6 +1198,7 @@ class AndroidInteractionTest {
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme)); restore()
                 customize(obj("type" to "set_column_collapsed", "group" to 46, "collapsed" to true))
+                customize(obj("type" to "set_column_drawers", "column" to 46, "drawers" to true))
                 assertEquals("First tile retains standard top padding", 6 * density,
                     bounds("column-icon-brushes").top - bounds("collapsed-column-46").top, 1f)
                 instrumentation.runOnMainSync { assertFalse(exists("column-divider-46-0")) }
@@ -1141,6 +1253,7 @@ class AndroidInteractionTest {
             }
             val colors = pixels("tab-brushes")
             customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
             tap(bounds("column-icon-brushes").center); waitFor("Drawer tabs") { exists("drawer-tab-brushes") }; settle()
             val drawer = bounds("drawer-tab-brushes")
             assertEquals("Drawer uses the same tab width", docked.width, drawer.width, 1f)
@@ -1426,6 +1539,7 @@ class AndroidInteractionTest {
         for(pointer in pointerTools) for(panel in listOf("brushes","sizes")) {
             tool=pointer; restore()
             customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to true))
+            customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
             tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle()
             val before=workspace()
             val press=bounds("column-icon-$panel").center
