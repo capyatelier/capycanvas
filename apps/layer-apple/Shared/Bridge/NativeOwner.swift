@@ -20,6 +20,8 @@ final class NativeOwner: @unchecked Sendable {
     private let queue: DispatchQueue
     private let handle: OpaquePointer
     private var layer: CAMetalLayer?
+    private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
+    private var gpuHealth: DispatchSourceTimer?
     private let presentationGate = FramePresentationGate()
     var canAdmitPresentation: Bool { presentationGate.hasCapacity }
     func whenPresentationAvailable(_ action: (@Sendable () -> Void)?) {
@@ -100,6 +102,7 @@ final class NativeOwner: @unchecked Sendable {
         }) { value in loaded.set(value); queue.resume() }
     }
     deinit {
+        gpuHealth?.cancel()
         persistence.unsubscribe(observerID)
         trace?.finish()
         let handle = handle, retainedLayer = layer
@@ -238,7 +241,7 @@ final class NativeOwner: @unchecked Sendable {
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(30)
         @Sendable func poll() {
-            let ready = capy_apple_project_ready(handle)
+            let ready = opening ? capy_apple_project_ready(handle) : capy_apple_prepare_recovery(handle, FrameTrace.now())
             if ready == 1 {
                 if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
                 else { completion(nil, "Document preparation timed out") }
@@ -256,11 +259,15 @@ final class NativeOwner: @unchecked Sendable {
         }
         queue.async(execute: poll)
     }
-    /// One attempt at a committed, idle snapshot. The recovery scheduler retries
-    /// after a later edit/idle interval; it never stalls input waiting for a stroke.
+    /// Capture only a committed raster boundary. Active ink may continue; its
+    /// preceding committed pixels remain recoverable until the next pen-up.
     func recoveryTask(expected: (UInt64, UInt64), completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
         queue.async { [self] in
-            guard capy_apple_project_ready(handle) == 0 else { completion(nil, nil); return }
+            defer { try? publish() }
+            let ready = capy_apple_prepare_recovery(handle, FrameTrace.now())
+            guard ready == 0 else {
+                completion(nil, ready < 0 ? capy_apple_error(handle).map(String.init(cString:)) : nil); return
+            }
             guard let pointer = capy_apple_project_task(handle, 2) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:))); return
             }
@@ -320,14 +327,13 @@ final class NativeOwner: @unchecked Sendable {
     /// A barrier across both queues includes accepted edits, their writes and
     /// acknowledgments. Lifecycle adapters can hold a background/termination
     /// allowance without synchronously blocking the UI or render owner.
-    // DEPRECATED artwork barrier: capy_apple_recovery_flush_input is not a
-    // host-backed checkpoint. Follow the GTK/Web/Android committed-raster
-    // capture_project_recovery -> file-worker -> durable publication flow;
-    // continue to distinguish settings/workspace writes from artwork recovery.
+    // This prepares the committed snapshot and preferences only. EditorStore
+    // separately waits for ArtworkRecovery's project worker and atomic manifest
+    // publication before reporting that the lifecycle barrier has succeeded.
     func flushPersistence(_ completion: @escaping @Sendable (Bool) -> Void) {
         let deadline = DispatchTime.now() + .seconds(10)
         @Sendable func poll() {
-            let result = persistence.root == nil ? 0 : capy_apple_recovery_flush_input(handle, FrameTrace.now())
+            let result = persistence.root == nil ? 0 : capy_apple_prepare_recovery(handle, FrameTrace.now())
             do { try publish() } catch { receive(nil, error.localizedDescription) }
             if result == 1 && DispatchTime.now() < deadline {
                 queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll); return
@@ -380,21 +386,61 @@ final class NativeOwner: @unchecked Sendable {
     func attach(_ layer: CAMetalLayer, width: UInt32, height: UInt32, scale: Float) {
         let lease = MetalLayerLease(layer)
         perform { [self] in
-            let layer = lease.value
-            let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("art.capycanvas.apple.shader-pipelines", isDirectory: true)
-            try cache.path.withCString {
-                try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale, $0))
-            }
-            (self.layer as? ObservedMetalLayer)?.presentationGate = nil
-            self.layer = layer
-            presentationGate.reset(capacity: layer.maximumDrawableCount)
-            (layer as? ObservedMetalLayer)?.presentationGate = presentationGate
+            let previous = self.layer
+            defer { withExtendedLifetime(previous) {}; try? publish() }
+            (previous as? ObservedMetalLayer)?.presentationGate = nil
+            self.layer = lease.value
+            surfaceSize = (width, height, scale)
+            startGpuHealthChecks()
+            try attachCurrentLayer()
             #if DEBUG
             surfaceSized = true
             #endif
             try applyInitialActions()
-            try publish()
+        }
+    }
+    private func attachCurrentLayer() throws {
+        guard let layer, let size = surfaceSize else { throw HostFailure(message: "The canvas has no presentation surface") }
+        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("art.capycanvas.apple.shader-pipelines", isDirectory: true)
+        presentationGate.reset(capacity: layer.maximumDrawableCount)
+        (layer as? ObservedMetalLayer)?.presentationGate = presentationGate
+        try cache.path.withCString {
+            try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), size.width, size.height, size.scale, $0))
+        }
+    }
+    private func startGpuHealthChecks() {
+        guard gpuHealth == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(250))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Failure callbacks can arrive after the display link goes idle.
+            // Healthy checks do not publish UI state or submit canvas work.
+            let status = capy_apple_poll_renderer(handle)
+            if status != 0 {
+                do { try check(status); try publish() }
+                catch { try? publish(); receive(nil, error.localizedDescription) }
+            }
+        }
+        gpuHealth = timer; timer.resume()
+    }
+    #if DEBUG
+    func testGpuFault(validation: Bool) {
+        guard ProcessInfo.processInfo.environment["CAPY_GPU_RECOVERY_TEST"] == "1" else { return }
+        perform { [self] in try check(capy_apple_test_gpu_fault(handle, validation ? 1 : 0)) }
+    }
+    #endif
+    func restartCanvas(_ completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            do {
+                try check(capy_apple_suspend_renderer(handle))
+                try publish()
+                try attachCurrentLayer()
+                try publish(); completion(nil)
+            } catch {
+                try? publish(); completion(error.localizedDescription)
+            }
         }
     }
     private func loadBundledFilters() throws {
@@ -409,13 +455,13 @@ final class NativeOwner: @unchecked Sendable {
             }
             _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge", "library": true]))
         }
-        try check(capy_apple_finish_startup_cache(handle))
         bundledFiltersLoaded = true
         try publish()
     }
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
             try check(capy_apple_resize(handle, width, height, scale))
+            surfaceSize = (width, height, scale)
             presentationGate.reset(capacity: layer?.maximumDrawableCount)
             #if DEBUG
             surfaceSized = true
@@ -425,7 +471,7 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func applyInitialActions() throws {
         #if DEBUG
-        guard workspaceInitialized && surfaceSized else { return }
+        guard workspaceInitialized && surfaceSized && canvasReady else { return }
         if initialActions.contains(where: { $0["type"].string == "workspace_manager" }) {
             // Workspace fixture commands have the same idle requirement as
             // their UI entries. Bundled filter preparation can outlive launch.
@@ -467,7 +513,8 @@ final class NativeOwner: @unchecked Sendable {
         perform { [self] in
             try check(capy_apple_detach(handle))
             (layer as? ObservedMetalLayer)?.presentationGate = nil
-            presentationGate.reset(); layer = nil
+            gpuHealth?.cancel(); gpuHealth = nil
+            presentationGate.reset(); layer = nil; surfaceSize = nil
         }
     }
     func pointer(id: UInt64, tool: UInt32, button: UInt32, records: [Double], predicted: Bool, revision: UInt64,
@@ -587,13 +634,17 @@ final class NativeOwner: @unchecked Sendable {
                 if result == 0 || now >= lastSnapshotTime + 33_000_000 {
                     try publish(); lastSnapshotTime = now
                 }
-                if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
                 #if DEBUG
                 if !initialActions.isEmpty {
                     try applyInitialActions()
                     if initialActions.isEmpty { try publish() }
                 }
                 #endif
+                if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
+                // Catalog ownership survives GPU replacement. Finish each new
+                // device's startup gate without loading that catalog again;
+                // the native operation is idempotent while shaders finish.
+                if canvasReady && !shadersReady { try check(capy_apple_finish_startup_cache(handle)) }
                 if let observation {
                     let state: UInt64 = (canvasReady ? 1 : 0) | (bundledFiltersLoaded ? 2 : 0)
                         | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)
@@ -605,6 +656,8 @@ final class NativeOwner: @unchecked Sendable {
                 completion(result == 1, capy_apple_camera_revision(handle), costs)
             } catch {
                 observation?.record(FrameTraceEvent(kind: .state, a: FrameTrace.now(), b: now, d: 1))
+                presentationGate.reset()
+                try? publish()
                 receive(nil, error.localizedDescription)
                 completion(false, capy_apple_camera_revision(handle), costs)
             }

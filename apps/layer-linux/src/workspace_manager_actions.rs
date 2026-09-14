@@ -229,7 +229,7 @@ impl NativeWorkspaces {
                     .as_mut()
                     .unwrap()
                     .session
-                    .preview_workspace_layout(stored.entity.starting_layout()?)
+                    .preview_workspace_layout(&stored.entity.starting_layout(layer_ui::Platform::Gtk)?)
                     .map_err(StoreError::invalid)?;
                 w.changed(Ok(change));
                 if !dialog::confirm(w, &prompt.title, &prompt.message, prompt.confirm, false).await

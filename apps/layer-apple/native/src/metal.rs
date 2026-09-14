@@ -4,7 +4,7 @@ use layer_render_wgpu::{
     GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, ViewportPresenter, WgpuRasterizer,
 };
 use layer_ui::CanvasCursor;
-use std::{ffi::c_void, time::Instant};
+use std::{ffi::c_void, sync::{Arc, OnceLock}, time::Instant};
 
 /// Native layout in logical editor coordinates. Pixel scale and camera state
 /// are resolved on the render owner, including after display/surface changes.
@@ -30,6 +30,7 @@ pub struct MetalHost {
     timing_enabled: bool,
     timing: Option<GpuFrameTimer>,
     overviews: Vec<OverviewSlot>,
+    failure: Arc<OnceLock<String>>,
 }
 
 fn error(e: impl std::fmt::Display) -> String {
@@ -37,6 +38,69 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 
 impl MetalHost {
+    /// Each device records failures separately; a retired callback cannot stop
+    /// its replacement. All session changes still happen on the serial owner.
+    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, renderer: WgpuRasterizer) -> Result<(), String> {
+        let failure = Arc::new(OnceLock::new());
+        let lost = failure.clone();
+        renderer.device().set_device_lost_callback(move |reason, message| {
+            lost.get_or_init(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
+        });
+        let errors = failure.clone();
+        renderer.device().on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            errors.get_or_init(|| error.to_string());
+        }));
+        let previous = host.session.state().revision;
+        let (retired, change) = host.session.replace_renderer(layer_host::Renderer(Some(renderer)))?;
+        host.apply_change(previous, change);
+        self.failure = failure;
+        self.timing = None;
+        self.blank_presented = false;
+        self.cursor = Default::default();
+        host.startup = Default::default();
+        if retired.0.is_some() {
+            std::thread::Builder::new().name("capy-retired-gpu".into())
+                .spawn(move || drop(retired)).map_err(error)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn observe_failure(&mut self, host: &mut NativeHost, poll: bool) {
+        if poll && let Some(gpu) = &host.session.engine().backend().0
+            && let Err(error) = gpu.device().poll(wgpu::PollType::Poll)
+        {
+            self.failure.get_or_init(|| error.to_string());
+        }
+        if host.session.engine().backend().0.is_some()
+            && let Some(message) = self.failure.get().cloned()
+        {
+            self.stop(host, message);
+        }
+    }
+
+    pub(crate) fn stop(&mut self, host: &mut NativeHost, message: String) {
+        // Retire capture/encoder resources on a worker. Their completion can
+        // wait, but already captured immutable rasters remain saveable.
+        let suspension = host.suspend_renderer();
+        self.surface = None;
+        self.timing = None;
+        let retired = host.session.renderer_mut().0.take();
+        self.instance = None;
+        self.blank_presented = false;
+        self.cursor = Default::default();
+        host.document_adopted();
+        host.dirty = false;
+        let retirement = if retired.is_some() {
+            std::thread::Builder::new().name("capy-retired-gpu".into())
+                .spawn(move || drop(retired)).map(|_| ())
+        } else { Ok(()) };
+        host.error = Some(match (suspension, retirement) {
+            (Err(error), _) => format!("{message}\nRecovery could not finish: {error}"),
+            (_, Err(error)) => format!("{message}\nGPU retirement failed: {error}"),
+            _ => message,
+        });
+    }
+
     pub(crate) fn set_overviews(&mut self, mut slots: Vec<OverviewSlot>) -> Result<bool, String> {
         if slots.len() > 32
             || slots.iter().any(|s| {
@@ -111,8 +175,6 @@ impl MetalHost {
         }
         .map_err(error)?;
         if host.session.engine().backend().0.is_none() {
-            host.startup = Default::default();
-            self.blank_presented = false;
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                     compatible_surface: Some(&surface),
@@ -131,16 +193,10 @@ impl MetalHost {
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            // DEPRECATED raster integration: direct renderer assignment bypasses
-            // source re-upload, raster/history restoration and device-loss
-            // bookkeeping. Port macOS/iPadOS to UiSession::replace_renderer, as
-            // used by GTK, Web and Android, before qualifying this host for M1.
-            host.session.renderer_mut().0 = Some(
+            self.install_renderer(host,
                 WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, cache)
                     .map_err(error)?,
-            );
-            // Workspace restoration can select Diagnostics before GPU creation.
-            host.session.sync_renderer_telemetry();
+            )?;
         }
         let [width, height] = host.session.state().camera.viewport;
         let gpu = host.session.renderer_mut().0.as_ref().unwrap();
@@ -210,6 +266,8 @@ impl MetalHost {
         now: u64,
         presentation: u64,
     ) -> Result<(bool, [u64; 5]), String> {
+        self.observe_failure(host, true);
+        if host.session.rendering_suspended() { return Ok((false, [0; 5])); }
         if (!host.dirty && host.startup.complete) || self.surface.is_none() {
             return Ok((false, [0; 5]));
         }

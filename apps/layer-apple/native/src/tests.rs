@@ -12,6 +12,8 @@ mod input;
 mod navigator;
 #[path = "recovery_tests.rs"]
 mod recovery;
+#[path = "renderer_tests.rs"]
+mod renderer;
 #[path = "workspace_tests.rs"]
 mod workspace;
 #[path = "workspace_library_tests.rs"]

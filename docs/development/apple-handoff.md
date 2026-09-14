@@ -10,6 +10,73 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Retained renderer and committed recovery
+
+This milestone follows published column-stack commit `7d5d59b` and integrates
+shared main through `9c89f7a`, including Android header transparency and the new
+Paint arrangement. Paint keeps Color/Diagnostics, Properties/Filters and Layers
+in its outer right column. Tool Set, Tool/Brush size and Navigator occupy the
+closed secondary strip immediately inward. All eleven recovery stashes remain.
+
+Both Apple hosts suspend and replace failed GPUs through the shared session API.
+Device loss, uncaptured validation errors and rendering failures retain the CPU
+document, embedded sources, committed rasters, history and working settings. An
+unfinished contact is cancelled. Restart Canvas reconstructs that session;
+Save As remains available. Device-specific callbacks cannot stop a replacement,
+and thumbnail/filter-preview generations reset. A nonblocking owner check
+observes failure after the display link goes idle. Healthy surface attachment
+retains its GPU. Direct renderer assignment and the deprecated input-only
+recovery barrier are removed.
+
+Recovery preparation submits queued pen-up without a drawable and validates a
+committed snapshot. Active ink can retain its preceding committed pixels. The
+complete store barrier waits for preferences, workspace writes, the project
+worker and atomic recovery-manifest publication. Manual save shares preparation;
+recovery can proceed during a pending file request. The existing project codec
+and atomic recovery writer are reused.
+
+Native testing found two additional defects. Replacement GPUs remained behind
+a catalog-startup gate already completed by the retired device, leaving their
+thumbnails pending indefinitely. Startup now completes for each device using
+the retained catalog. Mac relaunch also kept the visible scene identifier while
+opening a different workspace owner. Editor construction now waits for resolved
+scene storage, with its identity boundary inside a stable container.
+
+The integrated Apple/host/UI/workspace suite passes 528 tests, with one existing
+host benchmark ignored. Hardware renderer iteration 6 covers both Apple presets
+across explicit suspension, real device destruction and uncaptured validation:
+cancelled contact, exact source/raster reconstruction, saving while stopped,
+pending Save retention, settings/camera, stale callbacks/releases, Undo/Redo and
+later painting. Real-owner recovery iteration 4 passes both presets, including
+queued ink/pen-up with no following drawable and durable atomic recovery.
+The updated column-stack persistence fixture passes both presets with the new
+Paint default, customized stacks/width/preferences, switching and history.
+
+Both signed iteration-12 builds pass. Native iteration 12 passes five workflows
+per host with no failures or skips: renderer/thumbnail recovery, completed-copy
+relaunch, column stacks, Metal/layer controls (with Mac mouse drawing), and the
+new Paint geometry/opening/relaunch check. Mac restores Paint in the same scene
+without a switch action. The iPad run creates a new scene and opens the retained
+Paint workspace through the normal switcher. These do not establish the complete
+system window/scene restoration matrix. Reviewed recovery captures show restored
+blue thumbnails and transparent checkerboards. Paint captures show the revised
+columns; the short top Color group requires scrolling, so verify shared fit/scroll
+behavior during the remaining full-editor visual review.
+
+Earlier failures remain in the evidence: early raster/fixture readiness checks,
+landscape screenshot cropping and foreground loss, asynchronous width assertions,
+the real startup-gate failure, the new Paint fixture's incorrect native command
+field, and the Mac scene-owner mismatch. Full iPad app inventory queries can time
+out after successful tests. Scoped per-bundle queries restore the review session
+and verify the artist app descriptor unchanged. Use
+`native-v12/ipad-scoped2-apps-after.json` as the current device baseline.
+
+Evidence is ignored under `artifacts/apple-renderer-recovery-v1/`. Physical
+background expiration, interrupted provider access, the complete feature and
+window/surface inventory, physical Pencil/keyboard coverage, full-editor visual
+parity and sustained Mac 90 Hz/iPad 120 Hz workloads remain open. The overall
+goal is **incomplete**.
+
 ## Shared column stacks
 
 This milestone follows published title-bar commit `9996f51` and integrates shared

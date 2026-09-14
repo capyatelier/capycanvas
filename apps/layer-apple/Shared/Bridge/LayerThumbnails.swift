@@ -24,7 +24,7 @@ import CoreGraphics
     func show(_ id: UInt64) { visible.insert(id); refresh() }
     func hide(_ id: UInt64) { visible.remove(id) }
     func refresh() {
-        guard task == nil else { return }
+        guard task == nil, store?.snapshot["gpu_ready"].bool == true else { return }
         task = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(120)) } catch { return }

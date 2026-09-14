@@ -33,17 +33,34 @@ struct EditorView<Canvas: View>: View {
                     }.placed(store.snapshot["layout"]["status"])
                 }
             }
-            if let failure = store.failure {
+            if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Canvas error").font(.headline)
                     Text(failure).textSelection(.enabled)
-                    Button("Dismiss") { store.failure = nil }
+                    if !store.snapshot["gpu_ready"].bool {
+                        HStack {
+                            Button("Restart Canvas") { store.restartCanvas() }.disabled(store.restartingCanvas)
+                            Button("Save As…") { store.invoke("save_document_as") }
+                                .disabled(!store.command("save_document_as")["enabled"].bool)
+                        }
+                    } else {
+                        Button("Dismiss") { store.failure = nil }
+                    }
                 }.padding(24).frame(maxWidth: 500).background(palette["panel"], in: RoundedRectangle(cornerRadius: 12))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             #if DEBUG
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
                 PersistenceProbe(store: store)
+            }
+            if ProcessInfo.processInfo.environment["CAPY_GPU_RECOVERY_TEST"] == "1" {
+                HStack {
+                    Button("Lose test device") { store.native?.testGpuFault(validation: false) }
+                    Button("Validate test failure") { store.native?.testGpuFault(validation: true) }
+                    Text(store.snapshot["gpu_ready"].bool && store.snapshot["brush_ready"].bool ? "Renderer ready" : "Renderer stopped")
+                        .accessibilityIdentifier("renderer-test-status")
+                }.padding(6).background(palette["panel"])
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
             #endif
         }

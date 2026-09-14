@@ -10,6 +10,7 @@ import SwiftUI
     @Published var catalog = JSON()
     @Published var failure: String?
     @Published var canvasSubmitted = false
+    @Published private(set) var restartingCanvas = false
     @Published var storageFailure: String?
     @Published var storagePending = true
     @Published var canRetryStorage = false
@@ -75,8 +76,13 @@ import SwiftUI
                 storageFailure = next["persistence"]["error"].isNull ? nil : next["persistence"]["error"].string
                 return
             }
+            let hadRenderer = snapshot["gpu_ready"].bool
             switch ui.receive(next) {
             case .full:
+                if hadRenderer != snapshot["gpu_ready"].bool {
+                    layerThumbnails.reset(); filterPreviews.reset()
+                    if !snapshot["gpu_ready"].bool { canvasSubmitted = false }
+                }
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 projectFiles.receive(state.json)
@@ -101,6 +107,20 @@ import SwiftUI
             cameraRevision = state["camera"]["revision"].uint
         }
         wake?()
+    }
+    func restartCanvas() {
+        guard !restartingCanvas, let native else { return }
+        interruptInput?()
+        restartingCanvas = true
+        canvasSubmitted = false
+        native.restartCanvas { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.restartingCanvas = false
+                self.failure = error
+                self.wake?()
+            }
+        }
     }
     func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
         guard let native else { completion(false); return }

@@ -186,6 +186,16 @@ final class EditorLaunchTests: XCTestCase {
         checkColumnStacks(in: editorTestApplication(), theme: "dark")
     }
 
+    @MainActor func testRendererRecovery() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkRendererRecovery(in: editorTestApplication())
+    }
+
+    @MainActor func testPaintDefaultColumns() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkPaintDefaultColumns(in: editorTestApplication())
+    }
+
     @MainActor func testTitleBarSystemStatus() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkTitleBarSystemStatus(in: editorTestApplication())

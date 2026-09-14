@@ -33,6 +33,10 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testColumnStacksDark() { checkColumnStacks(in: editorTestApplication(), theme: "dark") }
 
+    @MainActor func testPaintDefaultColumns() { checkPaintDefaultColumns(in: editorTestApplication()) }
+
+    @MainActor func testRendererRecovery() { checkRendererRecovery(in: editorTestApplication()) }
+
     @MainActor func testTitleBarSystemStatus() {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

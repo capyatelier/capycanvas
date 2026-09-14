@@ -29,8 +29,12 @@ import Foundation
             func layout() -> String { store.state["workspace"]["layout"].stableKey }
             func member(_ id: UInt64) -> JSON { store.snapshot["layout"]["collapsed"].array.first { $0["id"].uint == id } ?? JSON() }
             func customize(_ value: [String: Any]) async throws { try await action(store, ["type":"customize", "action":value]) }
-            precondition(!member(12)["open"].isNull, "Fresh Paint opens its right stack")
-            try await customize(["type":"set_column_collapsed", "group":6, "collapsed":true])
+            precondition(member(12).isNull && !member(4).isNull && member(4)["open"].isNull,
+                "Fresh Paint retains its primary column and closes the secondary strip")
+            let groups = store.snapshot["layout"]["groups"].array
+            for id: UInt64 in [14, 15, 16] { precondition(groups.contains { $0["id"].uint == id }) }
+            for id: UInt64 in [6, 7, 10] { precondition(!groups.contains { $0["id"].uint == id }) }
+            try await customize(["type":"set_column_collapsed", "group":16, "collapsed":true])
             try await customize(["type":"set_column_drawers", "column":4, "drawers":false])
             let beforeStack = layout()
             try await action(store, ["type":"move_column", "column":12,
@@ -45,7 +49,8 @@ import Foundation
             precondition(bounds.width > 0)
             let divider = store.snapshot["layout"]["dividers"].array.first {
                 !$0["fixed"].bool && $0["bounds"].rect.height > $0["bounds"].rect.width
-                    && abs($0["bounds"].rect.minX - bounds.maxX - 6) < 0.5
+                    && min(abs($0["bounds"].rect.minX - bounds.maxX - 6),
+                        abs(bounds.minX - $0["bounds"].rect.maxX - 6)) < 0.5
             }!
             try await action(store, ["type":"nudge_divider", "id":divider["id"].raw,
                 "forward":true, "viewport":store.snapshot["layout"]["viewport"].raw])

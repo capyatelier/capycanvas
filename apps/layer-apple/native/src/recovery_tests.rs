@@ -119,7 +119,7 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
         assert!(!before_flush.0.is_null());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            let status = unsafe { capy_apple_recovery_flush_input(app.0, 1_030_000_000) };
+            let status = unsafe { capy_apple_prepare_recovery(app.0, 1_030_000_000) };
             assert!(status >= 0);
             if status == 0 {
                 break;

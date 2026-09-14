@@ -108,6 +108,90 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Retained renderer and committed recovery — 2026-09-13
+
+This checkpoint follows `7d5d59b` and integrates shared main through `9c89f7a`,
+including Android header transparency and the revised Paint columns. All eleven
+recovery stashes remain intact.
+
+Apple now uses shared renderer suspension/replacement instead of direct GPU
+assignment. Failure callbacks belong to one device generation, and the serial
+owner also polls health while native drawing is idle. Rendering errors retain
+the CPU document, committed pixels, embedded assets, history and working values;
+unfinished input is cancelled. Restart Canvas reconstructs that session and
+Save As remains available. Native thumbnail/filter-preview generations reset.
+Retirement runs on a worker; ordinary surface replacement retains a healthy GPU.
+
+The retired input-only recovery barrier is replaced by preparation of a committed
+snapshot without a drawable. Active ink can retain the previous committed raster.
+The store reports lifecycle success only after preferences/workspace writes and
+the existing project worker's atomic recovery publication. Recovery no longer
+waits merely because a manual file request is pending. No second project codec,
+compatibility renderer or recovery writer is introduced.
+
+The integrated Apple/host/UI suite passes 442 tests, with one existing host
+benchmark ignored. Hardware renderer iteration 6 covers both presets with
+explicit suspension, actual device loss and uncaptured validation. It verifies
+cancelled active input, exact restored source/raster pixels, saving while stopped,
+pending requests, working settings/camera, stale callbacks and releases, document
+Undo/Redo and new painting. Real-owner persistence iteration 4 passes both presets,
+including pen-up followed by durable recovery without another drawable, cancelled
+publication, newest-revision coalescing, failure/retry and owner restart.
+
+Both signed iteration-3 builds pass. Native iteration 3 passes four workflows
+per host with no failures or skips: idle renderer loss/validation and visible
+restart with exact artwork samples and history; completed-copy relaunch;
+column stacks; Metal/layers and Mac mouse drawing. Iteration 2's Mac stack
+failure read width before asynchronous redo publication; its iPad pixel wait
+ran after the editor left the foreground. The test now waits for exact width,
+samples the full iPad screen and verifies the foreground. Earlier failures
+remain recorded. A scoped retry after the final iPad app-query timeout restores
+the review namespace and verifies the artist app descriptor unchanged.
+
+Corrected iteration-4 captures reveal blank thumbnails after recovery. The
+iteration-5 preview-readiness test fails on both hosts after 30 seconds: the
+new staged GPU still waits for the host catalog, preventing idle thumbnails.
+Apple now completes that startup gate for each GPU with the retained catalog;
+the library is neither reloaded nor tracked by an additional state flag.
+
+Both signed iteration-6 builds pass, and all four native workflows pass again
+on each host with no failures or skips. The new thumbnail check passes. Reviewed
+final recovery captures show the matching blue thumbnail and restored transparent
+checkerboards on both hosts. These captures establish recovery presentation,
+not the complete editor comparison against Web.
+The final iPad app query timed out after successful tests. Its scoped retry
+restored the review namespace and verified the artist app descriptor unchanged.
+
+The first push was rejected because shared main advanced to `9c89f7a`. The
+renderer milestone was rebased without overwriting that Paint-default update.
+The integrated Apple/host/UI/workspace suite passes 528 tests, with one existing
+host benchmark ignored. Both real-file column-stack persistence cases pass the
+new default, customized membership/width/preferences, switching and history.
+Iteration 8 passes the four existing native workflows on each host. Its new Paint
+fixture used a coordinator field in the native command; `id` corrects that setup.
+Iteration 9 passes the iPad Paint workflow. Read-only copies of the isolated
+Mac database retain the Paint bindings, while relaunch chooses a separate Sketch
+binding. Iteration 10 establishes that the visible scene identifier is unchanged;
+that is a restoration failure, not a reason to relax the same-scene assertion.
+Editor-owner construction now waits for the scene identifier, with its identity
+boundary inside a stable container. The test also covers the legitimate new-scene
+case by opening its saved workspace through the ordinary switcher.
+
+Both signed iteration-12 builds pass. All five native workflows pass on each
+host, with no failures or skips. The Mac restores Paint automatically in the
+same scene; its event log contains no switcher action after relaunch. The iPad
+run creates a new scene and reopens the saved workspace through the switcher.
+Reviewed captures show the new Paint columns. The Color field is clipped by its
+short scroll viewport at the default split; shared fit/scroll behavior remains
+part of full-editor visual acceptance. Full app-inventory queries timed out after
+the successful iPad run; scoped per-bundle queries restore the review session
+and verify the artist app descriptor unchanged.
+
+Evidence stays ignored under `artifacts/apple-renderer-recovery-v1/`. These checks
+do not establish physical background expiration, provider interruption, every
+window/surface transition, the complete feature/visual/physical-input inventory
+or sustained Mac 90 Hz/iPad 120 Hz performance. The overall goal remains open.
+
 ## Shared column stacks — 2026-09-13
 
 This checkpoint follows `9996f51` and integrates shared main through `e46f271`.

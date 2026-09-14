@@ -289,6 +289,10 @@ project format. Both targets support custom canvas dimensions and PNG export. GP
 readback and PNG encoding run on the file worker. Unsaved artwork also receives
 private recovery copies. Use **File → Recovered Drawings…** to open one; copies
 are offered after restart and retain unsaved status until you explicitly save.
+GPU failure preserves the editor's CPU session and offers **Restart Canvas** or
+**Save As…**. Restart reconstructs the document through the shared renderer API,
+retaining history and working settings. Recovery preparation handles queued
+pen-up without a drawable; lifecycle success waits for durable publication.
 See [PERSISTENCE.md](PERSISTENCE.md) for atomic generations, lifecycle handling,
 reproducible checks and remaining physical-device/performance acceptance.
 
