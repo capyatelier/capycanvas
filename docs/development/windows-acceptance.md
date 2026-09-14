@@ -11,12 +11,12 @@ checkpoints; their earlier lists of missing features are not the current backlog
 
 ## Validated application and packages
 
-The previously reviewed Release application and both packages contain `35131be`, including
-shared header surfaces, native layer keyboard actions and upstream contact-brush
-mask painting. Portable assembly and extracted runtime checks pass; unsigned MSIX
-assembly and archive guards pass. Both packages use the clean published source.
-The current native Release also includes the Preferences accessibility changes
-and curve transactions described below. These have not yet reached the packages.
+The reviewed Release application and both packages contain `457174e`, including
+shared header surfaces, native layer keyboard actions, contact-brush mask painting,
+Preferences accessibility and the curve transactions described below. Portable
+assembly and extracted runtime checks pass; unsigned MSIX assembly and archive
+guards pass. Both packages use the clean published source. The extracted portable
+app also passes the full effects journey, including all three curve input devices.
 
 Native curve drags now preview in one shared transaction. Release commits one
 Undo step; Escape, capture loss and hiding Properties restore the original curve.
@@ -70,8 +70,8 @@ rerun for this header change. None of these results establish painting performan
 | Touch and pen routing | Eighteen native injected-contact checks pass on `f051e61`: pan/pinch/rotation anchoring, third-contact pause, contact replacement, cancellation/restart, single-finger Hand and a later pen stroke with independent Undo. | Physical pressure/history, tilt, eraser, hover, cancellation and comprehensive physical touch are still required. Synthetic input and renderer pressure/tilt tests do not establish digitizer behavior. |
 | Documents, storage and windows | Import/export, Unicode project paths, embedded assets, save/replacement/close decisions and two GPU reconstructions pass the document journey (`575345b`). Preference failure/retry and multiwindow isolation pass. Snap, minimize/restore, maximize/restore and painting history pass on the available 60 Hz display (`05cbdb5`). | Mixed-display/DPI and system suspend/resume remain unverified. Forced GPU reconstruction is separate from those transitions. |
 | Filters | The pinned `50e3acd` renderer matches independent pre-migration algorithms on the same Windows GPU: D3D12 within one byte, Vulkan exact, across 160 sampled cases. | The original Linux PNG reference still fails for both implementations. This qualifies the sampled migration comparison; it does not establish cross-platform perceptual equivalence or newly retest filters after brush integration. |
-| Portable ZIP | `35131be`: repeated assembly produces identical bytes. Extracted payload inventory/hashes, app-local runtime origins, paths with spaces, unrelated working directory, filters, drawing/history, pan/resize and zero-exit close pass. | The exercise ran on the development host. Clean-machine acceptance remains open; deterministic archive assembly does not imply identical compiler output across machines. |
-| MSIX | `35131be`: repeated unsigned assembly, complete inventory, MakeAppx unpack, activation metadata, logos and archive validation pass. Lock retry and signature/invalid-input guards pass. | Distribution signing and installed launch/update/uninstall remain open. No signing or installation is implied by these archive checks. |
+| Portable ZIP | `457174e`: repeated assembly produces identical bytes. Extracted payload inventory/hashes, app-local runtime origins, paths with spaces, unrelated working directory, filters, drawing/history, pan/resize and zero-exit close pass. | The exercise ran on the development host. Clean-machine acceptance remains open; deterministic archive assembly does not imply identical compiler output across machines. |
+| MSIX | `457174e`: repeated unsigned assembly, complete inventory, MakeAppx unpack, activation metadata, logos and archive validation pass. Lock retry and signature/invalid-input guards pass. | Distribution signing and installed launch/update/uninstall remain open. No signing or installation is implied by these archive checks. |
 | 120 Hz painting | Input/presentation instrumentation and analysis tools exist. | Sustained actual ≥120 Hz painting and input-to-present p99 <8.33 ms are unmeasured. The available panel is 60 Hz; offscreen timings cannot close this gate. |
 
 See the [title-bar record](title-bar-windows-acceptance.md),
