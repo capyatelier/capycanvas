@@ -118,6 +118,22 @@ A full command channel reports an explicit error and cancels active input.
 Wheel and canvas shortcuts use shared Rust navigation/keymap policy. Native
 widgets keep their own text, slider and focus-navigation keys.
 
+Ordinary workspace buttons retain application shortcuts after a mouse click:
+Ctrl+Z, Ctrl+Shift+Z/Ctrl+Y and tool-selection letters no longer require another
+click on the canvas. Text fields and sliders keep their native editing keys;
+Space/Enter still activate focused buttons, Tab traverses controls, and open
+menus retain keyboard navigation and Escape. Key releases still clear shared
+held state when focus moves. F11 keeps its existing window behavior.
+
+On an available desktop, run the focused shortcut journey in a clean isolated
+review launched with CAPY_SMOKE_TEST=1 and CAPY_TRACE_UI=1. It checks actual
+mouse clicks and guarded OS keyboard input, retained button focus, tool keys,
+text/slider editing, Space/Enter, Tab and nested-menu dismissal:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-shortcuts.ps1 -ProcessId <owned-review-pid> -StateFile artifacts/windows/Release/ui-state.json
+~~~
+
 Run allocation/order checks from a Visual Studio developer PowerShell:
 
 ~~~powershell

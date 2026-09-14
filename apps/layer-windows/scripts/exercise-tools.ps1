@@ -54,13 +54,15 @@ function Draft([string]$Id,[string]$Text){
     Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Text} 'Draft was not retained'
 }
 function Select-Tool([string]$Id){
-    $target=$null
-    foreach($panel in (Model).panels){
-        $tile=$panel.tiles|Where-Object {$_.control.kind -eq 'command' -and $_.control.command -eq $Id}|Select-Object -First 1
-        if($tile){$target="tile-$($panel.id)-$($tile.id)";break}
-    }
-    if(!$target){throw "Command has no native toolbar tile: $Id"}
-    Invoke-Id $target
+    $target=@{id=$null}
+    Wait-Until {
+        foreach($panel in (Model).panels){
+            $tile=$panel.tiles|Where-Object {$_.control.kind -eq 'command' -and $_.control.command -eq $Id}|Select-Object -First 1
+            if($tile){$target.id="tile-$($panel.id)-$($tile.id)";return $true}
+        }
+        $false
+    } "Command has no native toolbar tile: $Id"
+    Invoke-Id $target.id
     Wait-Until {
         if($Id -eq 'scale_rotate'){return (Model).state.layer_tools.tool -eq 'transform'}
         @((Model).state.commands|Where-Object {$_.id -eq $Id -and $_.selected}).Count -eq 1
@@ -109,8 +111,8 @@ if(!@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).
 }
 if(!@((Model).layout.groups|Where-Object active -eq 'tool_settings').Count){Invoke-Id 'panel-tab-tool_settings'}
 Wait-Until {@((Model).layout.groups|Where-Object active -eq 'tool_settings').Count -eq 1} 'Tool panel did not activate'
-$null=Field 'flow'
 Select-Tool 'pen'
+$null=Field 'flow'
 $entry=Field 'flow';$original=$entry.GetRuntimeId() -join ':'
 $subtool=(Control 'tool-subtool-0' -Id).GetRuntimeId() -join ':'
 Draft 'flow' '40 + 2'

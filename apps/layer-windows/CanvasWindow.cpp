@@ -519,10 +519,17 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(pressed)heldKeys.try_emplace(uint32_t(key),name);
     else heldKeys.erase(uint32_t(key));
     bool canvas=focused&&focused==canvasFocus;
-    // Native controls retain text, slider and focus-navigation keys. Releases
-    // still reach shared state so moving focus cannot leave a pan key held.
+    // Ordinary buttons keep application shortcuts after a click. Their native
+    // activation/navigation keys, editors and open menus retain keyboard input.
+    // Releases still clear shared held state when focus moves during a gesture.
+    bool button=focused&&bool(focused.try_as<Primitives::ButtonBase>());
+    bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Tab||
+        key==VirtualKey::Escape||key==VirtualKey::Left||key==VirtualKey::Right||
+        key==VirtualKey::Up||key==VirtualKey::Down||key==VirtualKey::Home||key==VirtualKey::End||
+        key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F10||
+        key==VirtualKey::Menu||(GetKeyState(VK_MENU)&0x8000);
     // F11 remains a window action while a toolbar button or native field has focus.
-    bool editing=!canvas&&key!=VirtualKey::F11;
+    bool editing=key!=VirtualKey::F11&&(menuOpen.load()||(!canvas&&(!button||navigation)));
     if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;
     using namespace Windows::Data::Json;
     JsonObject modifiers;
