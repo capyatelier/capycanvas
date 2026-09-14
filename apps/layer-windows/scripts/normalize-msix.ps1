@@ -3,7 +3,19 @@ $ErrorActionPreference='Stop'
 # MakeAppx uses wall-clock ZIP timestamps even when payload times are fixed.
 # Change only those header fields. Preserve compressed blocks, block-map sizes,
 # CRCs, file data and all other metadata. Signed packages must never be edited.
-$stream=[IO.File]::Open((Resolve-Path -LiteralPath $Path).Path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+$resolved=(Resolve-Path -LiteralPath $Path).Path
+$openTimer=[Diagnostics.Stopwatch]::StartNew()
+while($true){
+    try{
+        $stream=[IO.File]::Open($resolved,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+        break
+    }catch [IO.IOException]{
+        # A newly packed archive can be briefly held by another process.
+        $code=$_.Exception.GetBaseException().HResult -band 0xffff
+        if($code -notin @(32,33) -or $openTimer.Elapsed.TotalSeconds -ge 5){throw}
+        Start-Sleep -Milliseconds 100
+    }
+}
 $reader=[IO.BinaryReader]::new($stream,[Text.Encoding]::UTF8,$true)
 $writer=[IO.BinaryWriter]::new($stream,[Text.Encoding]::UTF8,$true)
 try{
