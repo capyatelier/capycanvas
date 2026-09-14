@@ -12925,6 +12925,7 @@ mod tests {
             Platform::Ios,
             Platform::Web,
             Platform::Android,
+            Platform::Windows,
         ] {
             for effect in ["curves", "gradient_map"] {
                 let mut app = session();

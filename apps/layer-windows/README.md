@@ -529,7 +529,10 @@ remains ignored during these checks.
 
 Properties renders shared number, choice, toggle, RGBA color, curve and gradient
 controls with native WinUI widgets. Curve plots and effect constraints come from
-Rust. Reset, point/stop selection and document changes invalidate old edit drafts.
+Rust. Curve drags preview through one shared transaction: release commits one
+Undo step; Escape, capture loss and hiding the source restore its starting value.
+Unchanged clicks preserve Redo, and existing handles retain their grab offset.
+Reset, point/stop selection and document changes invalidate old edit drafts.
 
 Filters uses the shared category/search catalog and GPU previews, following
 Android's row layout. Only visible rows request previews, in batches of at most
@@ -546,10 +549,12 @@ Navigator presentation paths.
 The isolated fixture checks all six property kinds, reset draft guards, retained
 curve controls, resize, category/search/insertion, actual preview pixels after a
 controlled stroke and exact Undo, both themes, document replacement and zero exit.
-It saves only app captures and synthetic state under ignored artifacts/windows.
-Runtime filter package import, complete Layers/workspace controls and the full
-editor preset remain pending. These checks do not establish physical pointer
-gesture, full visual parity or frame-cadence/input-latency acceptance.
+Guarded OS mouse, pen and touch contacts check curve preview, one-step Undo/Redo,
+unchanged clicks, Escape, source hiding and canceled insertions. Pen device removal
+and canceled touch contacts additionally check native cancellation. Every rollback
+must preserve Redo. The fixture saves app captures and disposable state under
+ignored artifacts/windows. Physical devices, full visual parity and presentation
+performance remain separate; see the [current acceptance index](../../docs/development/windows-acceptance.md).
 
 Debug builds optimize Naga, the WGSL compiler dependency, while retaining
 debuggable application Rust. Process exit joins retired shader workers after

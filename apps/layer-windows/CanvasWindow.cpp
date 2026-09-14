@@ -100,7 +100,13 @@ void CanvasWindow::Open() {
     Automation::AutomationProperties::SetName(canvasFocus,L"Drawing canvas");
     root.Children().Append(canvasFocus);
     root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,true)))self->Key(e,true);
+        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,true))
+            &&e.Key()!=Windows::System::VirtualKey::Escape)self->Key(e,true);
+    });
+    // Native editors and captured controls cancel first; only an unhandled
+    // Escape reaches the shared drawer and application shortcuts.
+    root.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
+        if(auto self=weak.lock();self&&!self->dialogOpen.load()&&e.Key()==Windows::System::VirtualKey::Escape)self->Key(e,true);
     });
     root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
         if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,false)))self->Key(e,false);
@@ -474,9 +480,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     auto key=e.Key();
     if(pressed&&key==VirtualKey::Escape&&workspace&&workspace->CancelGesture()){e.Handled(true);return;}
     auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
-    // The preview route runs before a TextBox can cancel its draft. Let that
-    // native handler own Escape; key releases still clear shared held state.
-    if(pressed&&key==VirtualKey::Escape&&focused&&focused.try_as<TextBox>())return;
+
     std::wstring name;
     switch(key) {
     case VirtualKey::Shift:name=L"shift";break;

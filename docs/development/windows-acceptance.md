@@ -15,12 +15,23 @@ The previously reviewed Release application and both packages contain `35131be`,
 shared header surfaces, native layer keyboard actions and upstream contact-brush
 mask painting. Portable assembly and extracted runtime checks pass; unsigned MSIX
 assembly and archive guards pass. Both packages use the clean published source.
-The current native Release (`ae0cf85`) also includes the Preferences accessibility changes
-described below. Those changes have not yet been incorporated into the packages.
+The current native Release also includes the Preferences accessibility changes
+and curve transactions described below. These have not yet reached the packages.
 
-The integrated release passes 398 shared UI and 110 Windows tests; 11 hardware/manual
-tests remain ignored. Its full native Preferences fixture and actual Narrator
-journey also pass after merging the upstream effect-history changes.
+Native curve drags now preview in one shared transaction. Release commits one
+Undo step; Escape, capture loss and hiding Properties restore the original curve.
+Unchanged clicks keep Redo and preserve the grab offset. The full native effects
+fixture passes with OS-delivered mouse, pen and touch: completed drags, unchanged
+clicks, source hiding, Escape and insertion rollback all preserve exact history.
+Pen device removal and canceled touch input also restore the preview. The existing
+editor journey passes, including numeric-draft Escape, retained fields, themes,
+Zen and normal shutdown. The shared effect-gesture regression now includes Windows
+and passes across all five tested platforms. These are synthetic input checks,
+not physical digitizer or 120 Hz acceptance.
+
+The preceding integrated release (`ae0cf85`) passed 398 shared UI and 110 Windows
+tests; 11 hardware/manual tests remained ignored. Its full native Preferences
+fixture and actual Narrator journey also passed after merging upstream effect history.
 
 The layer change (`483ad16`) passes the complete native layer journey: native
 Toggle states, Space activation, alpha-lock Undo/Redo, Menu and Shift+F10 on names,

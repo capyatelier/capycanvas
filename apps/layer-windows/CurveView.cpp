@@ -18,18 +18,26 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     hstring coordinateContext;
     uint32_t generation=0;
     std::optional<uint32_t> pointer;
+    Point press{},start{};
     int selected=0,count=0;
     hstring drawn;
     A points()const{return array(object(property->model(),L"value"),L"value");}
     A point()const{auto p=points();return p.Size()?p.GetArrayAt(std::clamp(selected,0,int(p.Size())-1)):values({0,0});}
-    void change(int index,Point p,bool removePoint=false){
+    void change(int index,Point p,bool removePoint=false,hstring const& phase={}){
         property->action(O({{L"op",S(L"curve_point")},{L"index",index<0?JsonValue::CreateNullValue():N(index)},
-            {L"point",values({p.X,p.Y})},{L"remove",B(removePoint)}}));
+            {L"point",values({p.X,p.Y})},{L"remove",B(removePoint)}}),phase);
     }
     Point position(Point p)const{
-        return {float(std::clamp(p.X/graph.ActualWidth(),0.,1.)),float(std::clamp(1-p.Y/graph.ActualHeight(),0.,1.))};
+        return {float(p.X/graph.ActualWidth()),float(1-p.Y/graph.ActualHeight())};
     }
-    void cancel(){pointer.reset();graph.ReleasePointerCaptures();}
+    Point dragged(Point p)const{
+        auto at=position(p);return {start.X+(at.X-press.X),start.Y+(at.Y-press.Y)};
+    }
+    void cancel(){
+        if(!pointer)return;
+        pointer.reset();change(selected,{},false,L"cancel");graph.ReleasePointerCaptures();
+    }
+    ~CurveEditor(){cancel();}
     void add(){
         auto p=points();if(p.Size()<2||p.Size()>=32)return;
         double gap=0,x=0;int at=1;
@@ -71,19 +79,27 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             self->pointer=raw.PointerId();self->focus.Focus(FocusState::Programmatic);
             self->selected=index;
             if(index<0){self->selected=0;for(auto p:points)if(p.GetArray().GetNumberAt(0)<at.X)self->selected++;}
-            self->change(index,at);e.Handled(true);
+            self->press=at;self->start=at;
+            // Preserve the grab offset, including a click with no movement.
+            if(index>=0){auto p=points.GetArrayAt(index);self->start={float(p.GetNumberAt(0)),float(p.GetNumberAt(1))};}
+            self->change(index,self->start,false,L"down");e.Handled(true);
         }});
         graph.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            self->change(self->selected,self->position(e.GetCurrentPoint(self->graph).Position()));e.Handled(true);
+            self->change(self->selected,self->dragged(e.GetCurrentPoint(self->graph).Position()),false,L"move");e.Handled(true);
         }});
         graph.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            self->change(self->selected,self->position(e.GetCurrentPoint(self->graph).Position()));self->cancel();e.Handled(true);
+            self->change(self->selected,self->dragged(e.GetCurrentPoint(self->graph).Position()),false,L"up");
+            self->pointer.reset();self->graph.ReleasePointerCaptures();e.Handled(true);
         }});
         graph.PointerCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
-        graph.PointerCaptureLost([weak](auto&&,auto&&){if(auto self=weak.lock())self->pointer.reset();});
+        graph.PointerCaptureLost([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
         graph.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
         focus.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
             using Windows::System::VirtualKey;
+            if(self->pointer){
+                if(e.Key()==VirtualKey::Escape)self->cancel();
+                e.Handled(true);return;
+            }
             auto p=self->point();Point at{float(p.GetNumberAt(0)),float(p.GetNumberAt(1))};
             switch(e.Key()){
                 case VirtualKey::Left:at.X-=.01f;break;
