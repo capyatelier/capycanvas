@@ -155,6 +155,23 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
 ```
 
+[Stacked collapsed columns](../../docs/ui/stacked-columns.md) use shared Rust
+membership, drop targets, preferences, geometry and history. The ordinary dock
+views render an open member's panels and split dividers; existing drawer shapes
+connect its selected sidebar icons. Grip menus choose full-column opening,
+individual tabbed drawers and Auto-hide. Closed multi-member stacks have no
+resize affordance; an open member retains its own resizable width. Fresh Paint
+opens the right stack. Saved custom arrangements start closed while retaining
+their stack settings and ordinary panel layout.
+
+`tests/column-stacks.swift` checks AppKit mouse/tablet input on both presets,
+including held icons, immediate tabs/grips, target distinctions, cancellation and
+one-step history. `tests/column-stack-persistence.swift` uses real temporary
+workspace libraries for switching, relaunch and persisted Undo/Redo. Run these
+with `scripts/test-project-files.sh`. Both native UI targets provide
+`testColumnStacks` and `testColumnStacksDark`; physical Pencil validation remains
+part of the broader input gate.
+
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.

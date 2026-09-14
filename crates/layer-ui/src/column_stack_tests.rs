@@ -34,6 +34,8 @@ fn member_trailing_edges_append_groups_without_taking_grips() {
         Platform::Web,
         Platform::Android,
         Platform::Windows,
+        Platform::Mac,
+        Platform::Ios,
     ]
     .into_iter()
     .flat_map(|p| (0..3).map(move |i| (p, i)))
@@ -394,19 +396,10 @@ fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
             ..
         }
     ));
-    for platform in [Platform::Web, Platform::Android, Platform::Windows] {
+    for platform in [Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
         s.set_platform(platform);
         for point in [center(below.empty), center(below.grip), gap] {
             assert!(matches!(s.drop_hint(STACK_VIEW, point, &[], item, None).unwrap().target, DockTarget::StackColumn { .. }));
-        }
-    }
-    for platform in [Platform::Mac, Platform::Ios] {
-        s.set_platform(platform);
-        for point in [center(below.empty), center(below.grip), gap] {
-            assert!(
-                !s.drop_hint(STACK_VIEW, point, &[], item, None)
-                    .is_some_and(|h| matches!(h.target, DockTarget::StackColumn { .. }))
-            );
         }
     }
     s.set_platform(Platform::Gtk);
@@ -527,6 +520,8 @@ fn paint_defaults_open_right_stack_on_load_and_reset() {
         Platform::Web,
         Platform::Android,
         Platform::Windows,
+        Platform::Mac,
+        Platform::Ios,
     ] {
         check_paint_default_stack(platform);
     }
@@ -1003,7 +998,7 @@ fn auto_hide_consumes_canvas_contact_and_preserves_popup_and_nested_drawer_conta
 }
 
 #[test]
-fn ordinary_drawers_and_unported_hosts_keep_the_existing_drawer_behavior() {
+fn individual_panels_open_one_ordinary_drawer_per_stack_on_every_host() {
     for platform in [
         Platform::Gtk,
         Platform::Web,
@@ -1019,7 +1014,7 @@ fn ordinary_drawers_and_unported_hosts_keep_the_existing_drawer_behavior() {
             &mut s,
             CustomizationAction::SetColumnDrawers {
                 column: left,
-                drawers: platform.stacked_columns(),
+                drawers: true,
             },
         );
         click_column(&mut s, Panel::Brushes);

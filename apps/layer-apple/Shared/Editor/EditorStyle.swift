@@ -71,12 +71,12 @@ struct IconTile: View {
     var enabled = true
     var size: CGFloat = 16
     var active = false
-    var joinedBottom = false
+    var joinedEdge: String?
     var halo: Color?
     let action: () -> Void
     var body: some View {
         Button(action: action) { SharedIcon(name: icon, size: size, halo: halo).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedBottom: joinedBottom))
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
     }
@@ -98,10 +98,12 @@ struct EditorInkHalo: ViewModifier {
 struct EditorControlButtonStyle: ButtonStyle {
     var selected = false
     var active = false
-    var joinedBottom = false
+    var joinedEdge: String?
     private var shape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: joinedBottom ? 0 : 6,
-            bottomTrailingRadius: joinedBottom ? 0 : 6, topTrailingRadius: 6)
+        UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
+            bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
+            bottomTrailingRadius: joinedEdge == "bottom" || joinedEdge == "right" ? 0 : 6,
+            topTrailingRadius: joinedEdge == "top" || joinedEdge == "right" ? 0 : 6)
     }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.background {

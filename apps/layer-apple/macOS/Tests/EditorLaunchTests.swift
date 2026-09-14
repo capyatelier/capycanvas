@@ -29,6 +29,10 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testTitleBarToolDrawers() { checkTitleBarToolDrawers(in: editorCaptureApplication()) }
 
+    @MainActor func testColumnStacks() { checkColumnStacks(in: editorTestApplication()) }
+
+    @MainActor func testColumnStacksDark() { checkColumnStacks(in: editorTestApplication(), theme: "dark") }
+
     @MainActor func testTitleBarSystemStatus() {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

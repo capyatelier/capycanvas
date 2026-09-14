@@ -11,6 +11,102 @@ fn snapshot(app: &App) -> Value {
 fn customize(app: &App, action: Value) {
     app.action(json!({"type":"customize","action":action}));
 }
+
+#[test]
+fn apple_column_stacks_publish_ordinary_groups_and_persist_members_not_open_state() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let layout = || unsafe { &*app.0 }.host.session.state().workspace.layout.clone();
+        let mut columns = Vec::new();
+        for panel in [layer_ui::Panel::Brushes, layer_ui::Panel::Layers] {
+            let group = layout().panel_group(panel).unwrap();
+            customize(&app, json!({"type":"set_column_collapsed","group":group,"collapsed":true}));
+            let column = layout().collapsed_column_for_group(group).unwrap();
+            customize(&app, json!({"type":"set_column_drawers","column":column,"drawers":false}));
+            columns.push((column, group));
+        }
+        let [(left, brushes), (right, layers)] = columns.try_into().unwrap();
+        let before = app.state()["workspace"].clone();
+        app.action(json!({"type":"move_column","column":right,"target":{"kind":"stack_column","column":left,"before":false},"viewport":[1200,900]}));
+        let stacked = app.state()["workspace"].clone();
+        assert_eq!(layout().column_stack(left).members, [left, right]);
+        app.invoke("undo_workspace");
+        assert_eq!(app.state()["workspace"], before);
+        app.invoke("redo_workspace");
+        assert_eq!(app.state()["workspace"], stacked);
+        for (column, group, panel) in [(left, brushes, "brushes"), (right, layers, "layers")] {
+            customize(&app, json!({"type":"toggle_column_drawer","group":group,"panel":panel}));
+            let view = snapshot(&app)["layout"].clone();
+            let members = view["collapsed"].as_array().unwrap();
+            assert_eq!(members.iter().filter(|c| !c["open"].is_null()).count(), 1);
+            let member = members.iter().find(|c| c["id"] == column).unwrap();
+            assert_eq!(member["open"]["column"], column);
+            assert_eq!(member["open"]["connections"].as_array().unwrap().len(), member["groups"].as_array().unwrap().len());
+            assert!(view["groups"].as_array().unwrap().iter().any(|g| g["id"] == group));
+            assert!(app.state()["customization"]["column_drawers"].as_array().unwrap().is_empty());
+            assert_eq!(app.state()["workspace"], stacked, "Opening a member is transient");
+        }
+        app.action(json!({"type":"restore_workspace","workspace":stacked}));
+        assert!(layout().column_stack(left).open_column.is_none());
+        customize(&app, json!({"type":"set_column_drawers","column":left,"drawers":true}));
+        customize(&app, json!({"type":"toggle_column_drawer","group":brushes,"panel":"brushes"}));
+        assert_eq!(app.state()["customization"]["column_drawers"].as_array().unwrap().len(), 1);
+        assert!(snapshot(&app)["layout"]["collapsed"].as_array().unwrap().iter().all(|c| c["open"].is_null()));
+    }
+}
+
+#[test]
+fn apple_stack_auto_hide_consumes_native_contact_before_the_next_contact_paints() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        let group = unsafe { &*app.0 }.host.session.state().workspace.layout
+            .panel_group(layer_ui::Panel::Brushes).unwrap();
+        customize(&app, json!({"type":"set_column_collapsed","group":group,"collapsed":true}));
+        let column = unsafe { &*app.0 }.host.session.state().workspace.layout.collapsed_column_for_group(group).unwrap();
+        customize(&app, json!({"type":"set_column_drawers","column":column,"drawers":false}));
+        customize(&app, json!({"type":"set_column_auto_hide","column":column,"auto_hide":true}));
+        customize(&app, json!({"type":"toggle_column_drawer","group":group,"panel":"brushes"}));
+        app.draw_until_idle();
+        let initial = app.pixels();
+        for facts in [
+            layer_ui::ChromeFacts { popup_open: true, ..Default::default() },
+            layer_ui::ChromeFacts { content_drawer: Some(layer_ui::Bounds { x:850., y:650., width:100., height:100. }), ..Default::default() },
+        ] {
+            app.request(1, json!(layer_ui::UiInput::Chrome {
+                event: layer_ui::ChromeEvent::Contact { position:[900.,700.], canvas:true }, facts, viewport:[1200.,900.],
+            }));
+            assert!(unsafe { &*app.0 }.host.session.state().workspace.layout.column_stack(column).open_column.is_some());
+        }
+        app.request(1, json!(layer_ui::UiInput::Chrome {
+            event: layer_ui::ChromeEvent::Refresh, facts:Default::default(), viewport:[1200.,900.],
+        }));
+        // The gesture starts on the canvas outside the expanded member. Its
+        // complete native down/move/up sequence belongs to auto-hide dismissal.
+        let stroke = || {
+            let session = &unsafe { &*app.0 }.host.session;
+            let [a,b,c,d,tx,ty] = session.state().camera.document_to_surface();
+            let doc = session.engine().document();
+            let x = f64::from(tx + (a * doc.width as f32 + c * doc.height as f32) * 0.5);
+            let y = f64::from(ty + (b * doc.width as f32 + d * doc.height as f32) * 0.5);
+            let records = [x,y,1.,0.,0.,0.,0.,1_000_000_000.,1.,
+                x+10.,y+10.,1.,0.,0.,0.,0.,1_010_000_000.,2.,
+                x+20.,y+20.,1.,0.,0.,0.,0.,1_020_000_000.,3.];
+            assert_eq!(unsafe { capy_apple_pointer(app.0, 1, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0)) }, 0);
+            app.draw_until_idle();
+        };
+        stroke();
+        assert!(unsafe { &*app.0 }.host.session.state().workspace.layout.column_stack(column).open_column.is_none());
+        assert_eq!(app.pixels(), initial, "Auto-hide must consume the entire native contact without ink");
+        // Positive control: dismissal must release input for the next stroke.
+        stroke();
+        assert_ne!(app.pixels(), initial);
+        app.invoke("undo");
+        app.draw_until_idle();
+        assert_eq!(app.pixels(), initial);
+    }
+}
 fn config(app: &App, id: &str) -> Value {
     app.state()["workspace"]["layout"]["panels"]
         .as_array()

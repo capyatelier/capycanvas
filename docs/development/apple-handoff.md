@@ -10,6 +10,63 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Shared column stacks
+
+This milestone follows published title-bar commit `9996f51` and integrates shared
+main through `e46f271`, including raster failure handling and diagnostics
+visibility. All eleven recovery stashes are retained; the latest preserves the
+column-stack work before that integration.
+
+Both Apple hosts now open complete stack members with the ordinary SwiftUI dock
+groups and split dividers. Rust owns membership, targets, layout, preferences
+and history. Existing drawer connectors join every active group's sidebar icon
+to its open column. Grip menus expose Open individual panels, Auto-hide and
+Apply to all columns. Closed multi-member stacks have no resize source; open
+members retain their own canvas-facing width handle. Fresh Paint opens its right
+stack. Saved custom stacks start closed. The obsolete Apple drawer fallback,
+shared opt-in method and always-true platform guards are removed. Header and
+sidebar buttons share one joined-edge shape.
+
+The integrated Apple/core/host/UI suite passes 487 tests, with one existing host
+benchmark ignored. Native ABI checks cover both Apple presets, ordinary group
+publication, one-step stack history, compact drawers, and a hardware-GPU
+auto-hide contact test: the entire dismissing down/move/up contact leaves pixels
+unchanged; the next contact paints and document Undo restores the original.
+Popup and nested-drawer facts preserve the open column. The incoming diagnostics
+test also covers visibility and renderer replacement on both Apple presets.
+
+AppKit input iteration 4 passes eight checks across mouse/tablet contacts and
+both presets. It covers immediate grips/tabs, held icons, panel/group/toolbar
+member insertion, the trailing group target, member switching, fixed closed
+width, resizing, focus cancellation, late releases and exact Undo/Redo. The
+two real-file persistence checks pass fresh Paint defaults, workspace switching,
+relaunch, membership/preferences/width, working brush values and persisted
+Undo/Redo; open-state changes never persist. Initial fixture failures (stale
+group IDs, missing native event loop/viewport and incomplete Chrome facts) remain
+in the evidence and are not counted as passes.
+
+Both signed iteration-3 builds pass. Native iteration 3 passes three tests on
+each host with no failures or skips: light/dark stack pickup, member switching,
+open-member resize and Undo/Redo, grip preferences, auto-hide and compact drawers;
+plus Metal launch/layer controls and mouse drawing/document Undo/Redo on Mac.
+The iPad's final app query timed out after successful tests; a scoped retry
+restored its review namespace and verified the artist app descriptor unchanged.
+The current device descriptor baseline is the iteration-3 retry result. Files
+no longer requires authentication. Web Wasm checking passes with Homebrew LLVM;
+the first check used Apple's clang, which does not support the Wasm C target.
+
+All four native light/dark captures were inspected at normal size. The open
+member's standard groups, selected icons, connectors, gaps and resized width are
+readable on both hosts. These isolated workspace fixtures do not establish the
+complete managed-editor/native-Web visual gate.
+
+Evidence is ignored under `artifacts/apple-column-stacks-v1/` and the integration
+snapshot under `artifacts/apple-main-integration-e46f271/`. The overall goal is
+**incomplete**: the complete feature/menu/panel inventory, retained renderer
+replacement and durable lifecycle recovery, provider/interruption workflows,
+physical Pencil/keyboard coverage, complete visual comparison and sustained
+Mac 90 Hz/iPad 120 Hz workloads remain open.
+
 ## Shared title bar milestone
 
 This milestone integrates shared main through `1c83a95`, following `9d67041`
@@ -79,7 +136,7 @@ Evidence and failed iterations stay ignored under `artifacts/apple-titlebar-v1/`
 Integration snapshots remain under `artifacts/apple-main-integration-6ddfb38/`,
 `artifacts/apple-main-integration-23bc780/` and
 `artifacts/apple-main-integration-ba77f9b/`. Remaining goal work includes the full
-feature/menu/panel inventory, Apple column stacks, retained renderer replacement
+feature/menu/panel inventory, retained renderer replacement
 and durable lifecycle recovery, provider/interruption checks, physical Pencil
 and keyboard input, full-editor visual review and sustained Mac 90 Hz/iPad
 120 Hz workloads with current encoded-sRGB8 raster baselines.

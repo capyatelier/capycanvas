@@ -58,6 +58,8 @@ impl WorkspacePreset {
                         | crate::Platform::Web
                         | crate::Platform::Android
                         | crate::Platform::Windows
+                        | crate::Platform::Mac
+                        | crate::Platform::Ios
                 ) {
                     let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
                     if band.edge != Edge::Right {
@@ -243,6 +245,8 @@ impl DockLayout {
                 | crate::Platform::Web
                 | crate::Platform::Android
                 | crate::Platform::Windows
+                | crate::Platform::Mac
+                | crate::Platform::Ios
         )
             && self.collapsed.len() == 1
             && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
@@ -360,6 +364,8 @@ mod tests {
                     | crate::Platform::Web
                     | crate::Platform::Android
                     | crate::Platform::Windows
+                    | crate::Platform::Mac
+                    | crate::Platform::Ios
             ) {
                 assert_eq!(layout.collapsed.len(), 1);
                 assert!(layout.is_collapsed(12) && !layout.is_collapsed(4));

@@ -108,6 +108,52 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Shared column stacks — 2026-09-13
+
+This checkpoint follows `9996f51` and integrates shared main through `e46f271`.
+The eleven recovery stashes are preserved. Both Apple hosts use the ordinary
+dock views to open a full-height stack member, with shared active-icon
+connectors, selected tabs, split dividers and remembered widths. Native grips
+expose shared preferences and remain immediate drag sources. Held icon bodies,
+tabs, group grips and toolbar grips use shared stack-member and trailing-group
+targets. Closed aggregates have no resize affordance. Fresh Paint opens its
+right stack; custom saved layouts start closed. The retired Apple drawer fallback
+and shared platform opt-in checks are removed.
+
+After integration, 487 Apple/core/host/UI checks pass with one existing host
+benchmark ignored. The native ABI validates ordinary group publication and
+history on both presets. A hardware-GPU native contact test verifies auto-hide
+consumes the entire contact without ink, permits the next stroke and restores
+exact pixels with document Undo. Incoming diagnostics visibility and renderer
+replacement coverage now includes both Apple presets.
+
+AppKit iteration 4 passes eight checks across both presets and mouse/tablet
+input: held icons, immediate tabs/grips, panel/group/toolbar member insertion,
+trailing-group targets, fixed closed widths, member opening/switching, resize
+history, focus cancellation and late-release rejection. Two real workspace-file
+fixtures pass switching, relaunch, persisted membership/preferences/width and
+Undo/Redo while retaining working brush settings and discarding transient open
+state. These AppKit contacts do not establish physical Pencil acceptance.
+
+Signed build iteration 3 passes on both hosts. Native iteration 3 passes three
+tests on each host, with no failures or skips: both themes, stacking, switching,
+native resize and Undo/Redo, preferences, auto-hide and compact drawers; plus
+Metal launch/layers and Mac mouse drawing/document Undo/Redo. A timed-out iPad
+post-test app query succeeds on scoped retry; the review namespace is restored
+and the artist app descriptor is unchanged. All four stack captures were reviewed
+at normal size. They establish legible ordinary groups and selected connectors
+in these isolated fixtures, not the complete managed-editor/native-Web visual
+gate. Web Wasm checking passes with Homebrew LLVM after an initial compiler
+selection failure with Apple's clang.
+The initial failed fixture iterations are retained and excluded from pass counts.
+Evidence stays ignored under `artifacts/apple-column-stacks-v1/`; the integration
+snapshot is under `artifacts/apple-main-integration-e46f271/`.
+
+This closes implementation of Apple full-column stacks; broader UIKit/physical
+input, full-editor visual parity, lifecycle/provider recovery, the complete
+feature inventory and sustained 90/120 Hz acceptance remain open. The overall
+Apple goal is **incomplete**.
+
 ## Shared native title bar — 2026-09-13
 
 Apple now consumes the shared typed title-bar projection and native drag protocol

@@ -1629,11 +1629,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .flatten();
             group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
-            // Hosts opt in after projecting the complete stack and its member targets.
-            (matches!(
-                self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows
-            ) && !docks_hidden)
+            (!docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
                 .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
@@ -2585,7 +2581,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down {
                         let divider = self.divider(id, viewport)?;
                         let mut drag = ResizeDrag::new(position, divider.bounds);
-                        if self.column_resize_enabled() && self.layout(viewport).open_column_at_divider(id).is_none() {
+                        if self.layout(viewport).open_column_at_divider(id).is_none() {
                             let columns = self
                                 .state
                                 .workspace
@@ -2814,13 +2810,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     DrawerAnchor::Column { group, origin, .. } => {
                         let layout = &self.state.workspace.layout;
                         let column = layout.collapsed_column_for_group(group)?;
-                        if self.state.platform.stacked_columns() && !layout.column_stack(column).drawers {
+                        if !layout.column_stack(column).drawers {
                             return None;
                         }
                         // These hosts draw the sidebar selection and connector at the visible tab.
                         let origin = if matches!(
                             self.state.platform,
-                            Platform::Gtk | Platform::Android | Platform::Web
+                            Platform::Gtk | Platform::Android | Platform::Web | Platform::Mac | Platform::Ios
                         ) {
                             self.state.workspace.layout.active_panel(origin)?
                         } else {
@@ -3138,19 +3134,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or_else(|| "Unknown divider".into())
     }
 
-    fn column_resize_enabled(&self) -> bool {
-        matches!(
-            self.state.platform,
-            Platform::Gtk
-                | Platform::Generic
-                | Platform::Android
-                | Platform::Web
-                | Platform::Ios
-                | Platform::Mac
-                | Platform::Windows
-        )
-    }
-
     fn resize_divider(
         &mut self,
         id: u32,
@@ -3263,15 +3246,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         }
-        let collapse = self
-            .column_resize_enabled()
-            .then(|| {
-                self.state
-                    .workspace
-                    .layout
-                    .collapse_at_divider(id, point, viewport)
-            })
-            .flatten();
+        let collapse = self.state.workspace.layout.collapse_at_divider(id, point, viewport);
         if let Some(collapse) = collapse {
             let root = collapse.root;
             let original_width = self.workspace_history.gesture_start().and_then(|s| {
@@ -4268,7 +4243,7 @@ mod tests {
 
     #[test]
     fn diagnostics_sample_in_open_columns_and_stop_when_hidden() {
-        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
             for drawers in [false, true] {
                 let mut s = session();
                 s.set_platform(platform);

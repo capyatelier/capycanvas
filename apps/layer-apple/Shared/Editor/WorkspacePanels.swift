@@ -36,12 +36,15 @@ struct WorkspacePanels: View {
             if workspace.expansion.isNull && !store.snapshot["chrome_hidden"].bool {
                 ForEach(store.snapshot["layout"]["dividers"].array.indices, id: \.self) { index in
                     let divider = store.snapshot["layout"]["dividers"][index]
-                    WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]))
-                        .placed(divider["bounds"])
-                        .accessibilityAdjustableAction { direction in
-                            store.dispatch(["type": "nudge_divider", "id": divider["id"].raw, "forward": direction == .increment,
-                                "viewport": store.snapshot["layout"]["viewport"].raw])
-                        }
+                    if !divider["fixed"].bool {
+                        WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]))
+                            .placed(divider["bounds"])
+                            .accessibilityIdentifier("workspace-divider-\(divider["id"].uint)")
+                            .accessibilityAdjustableAction { direction in
+                                store.dispatch(["type": "nudge_divider", "id": divider["id"].raw, "forward": direction == .increment,
+                                    "viewport": store.snapshot["layout"]["viewport"].raw])
+                            }
+                    }
                 }
             }
             WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)

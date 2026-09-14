@@ -291,7 +291,7 @@ private struct HeaderItemControl: View {
                     Button { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) } label: {
                         HeaderPaintIcon(colors: store.state["colors"], size: size["icon"].number).modifier(EditorInkHalo(color: halo))
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                    }.buttonStyle(EditorControlButtonStyle(active: drawerOpen || hovering, joinedBottom: drawerOpen))
+                    }.buttonStyle(EditorControlButtonStyle(active: drawerOpen || hovering, joinedEdge: drawerOpen ? "bottom" : nil))
                         .accessibilityLabel(description["label"].string)
                 } else {
                     tile(description["icon"].string) { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) }
@@ -303,7 +303,7 @@ private struct HeaderItemControl: View {
     private func tile(_ icon: String, action: @escaping () -> Void) -> some View {
         IconTile(icon: icon, label: description["label"].string, selected: description["selected"].bool,
             enabled: editing || description["enabled"].bool, size: size["icon"].number,
-            active: drawerOpen || hovering, joinedBottom: drawerOpen, halo: halo, action: action)
+            active: drawerOpen || hovering, joinedEdge: drawerOpen ? "bottom" : nil, halo: halo, action: action)
     }
 }
 

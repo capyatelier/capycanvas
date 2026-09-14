@@ -1,6 +1,6 @@
 # Stacked collapsed columns
 
-This replaces the former Group panel presentation. GTK, Web, Android and Windows implement this presentation;
+This replaces the former Group panel presentation. GTK, Web, Android, Windows, macOS and iPadOS implement this presentation;
 the workspace model, drop validation, geometry and history are shared Rust.
 
 A stack contains one or more collapsed columns. Each member retains its dock
@@ -9,7 +9,7 @@ has an immediate drag handle. Dropping that handle on another member stacks
 the columns; dropping beside a stack or at a side edge unstacks the member.
 Tile bodies retain the application-wide hold-before-drag convention.
 
-On GTK, Web, Android and Windows, dropping an individual panel, a whole toolbar, or a tab group into a
+Dropping an individual panel, a whole toolbar, or a tab group into a
 member's empty lower area or footer grip creates a new collapsed column after
 that member. The gap between members is also an insertion target. The new
 column contains only the dropped content; a whole group retains its tab order,
@@ -21,7 +21,7 @@ line at the tile boundary. It includes the trailing gap above the footer grip,
 so compact members earlier in a stack have the same target as its last member.
 It only appears when the last group is scrolled into view and excludes the
 grip itself. The grip and spacing between members continue creating stack
-members. All four hosts use the shared target geometry.
+members. All hosts use the shared target geometry.
 
 “Open individual panels” and Auto-hide belong to the stack. Enabling
 “Open individual panels” opens the selected tab group in a compact popover.
@@ -59,11 +59,30 @@ Old Group panel settings migrate to “Open individual panels” disabled. The
 custom all-tabs renderer, per-panel height weights and dedicated resize actions
 are retired.
 
-Other hosts retain stack membership and preferences and use ordinary tabbed
-drawers until full-column opening is ported. The shared model does not serialize
-an open member. The unchanged Paint default on GTK, Web, Android and Windows opens its right stack when loaded,
+The shared model does not serialize an open member. The Paint default opens its right stack when loaded,
 previewed or reset, with Auto-hide and Open individual panels disabled. Other
 saved arrangements start with their stacks closed.
+
+Apple uses the ordinary SwiftUI dock groups, dividers and existing drawer
+connector shape for full-column opening. Column grips expose the shared stack
+preferences. Closed aggregate dividers have no native resize source. The former
+Apple drawer fallback and shared platform opt-in gates are removed.
+
+Run the Apple native input and actual-file persistence checks with:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/column-stacks.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/column-stack-persistence.swift
+```
+
+The AppKit input fixture uses real mouse/tablet events on both Apple presets.
+It checks immediate grips/tabs, held icons, member and trailing-group drops,
+switching, fixed closed widths, resizing, focus cancellation and exact Undo/Redo.
+The persistence fixture switches and restarts actual temporary workspace
+libraries, retaining membership, preferences, width, working tools and history
+while discarding transient opening. Native `testColumnStacks` and
+`testColumnStacksDark` exercise the editor on each host. Physical Pencil and
+complete visual/performance acceptance remain separate checks.
 
 Validate the additional GTK targets with
 `bash tools/performance/workspace-motion.sh gtk --native-test=native_stack_member_drop_input`.
