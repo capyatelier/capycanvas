@@ -105,7 +105,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   },200);
   function row(label,input){const r=element("label","property-row"),text=element("span","",label);text.title=label;r.append(text,input);return r;}
   function curveEditor(layer,key){
-    const graph=svg("svg",{viewBox:"0 0 200 200",class:"curve-editor",role:"img","aria-label":"Tone curve"});
+    const graph=svg("svg",{viewBox:"0 0 200 200",preserveAspectRatio:"none",class:"curve-editor",role:"img","aria-label":"Tone curve"});
     const grid=svg("path",{d:"M50 0V200M100 0V200M150 0V200M0 50H200M0 100H200M0 150H200",stroke:"currentColor",opacity:.2});
     const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g",{fill:"currentColor"});graph.append(grid,path,points);
     let control,drag;

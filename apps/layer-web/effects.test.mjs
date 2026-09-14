@@ -102,6 +102,27 @@ export async function benchmarkFilters({evaluate}) {
   }
 }
 
+// Use the visible endpoint, not a point calculated from the outer hit area:
+// SVG letterboxing used to put that handle outside its own pickup radius.
+export async function checkCurveEndpoint({call,evaluate,settle}) {
+  const count=()=>evaluate("document.querySelector('.curve-editor:not([hidden])').querySelectorAll('circle').length");
+  const before=await count();assert.equal(before,2);
+  const point=await evaluate(`(()=>{
+    const graph=document.querySelector('.curve-editor:not([hidden])'),endpoint=graph.querySelector('circle:last-child');
+    const p=new DOMPoint(endpoint.cx.baseVal.value,endpoint.cy.baseVal.value).matrixTransform(graph.getScreenCTM());
+    // Press the visible inner part; the panel scrollbar overlaps the outer edge.
+    return {x:p.x-3,y:p.y+1};
+  })()`);
+  await call("Input.dispatchMouseEvent",{type:"mousePressed",...point,button:"left",buttons:1,clickCount:1});
+  const target={x:point.x,y:point.y+5};
+  await call("Input.dispatchMouseEvent",{type:"mouseMoved",...target,button:"left",buttons:1});
+  await call("Input.dispatchMouseEvent",{type:"mouseReleased",...target,button:"left",buttons:0,clickCount:1});
+  await settle();
+  assert.equal(await count(),before,"Dragging a visible curve endpoint must edit it without inserting another point");
+  const moved=await evaluate("document.querySelector('.curve-editor:not([hidden]) circle:last-child').cy.baseVal.value");
+  assert.ok(Math.abs(moved-6)<0.01,"The endpoint must follow the drag; a missed hit is not a successful pickup");
+}
+
 export async function checkDiagnostics({evaluate,settle}) {
   const send=action=>evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
   await send({type:"customize",action:{type:"set_panel_visible",panel:"stats",visible:true}});
@@ -186,7 +207,10 @@ export async function checkAdjustments({call,evaluate,settle}) {
     const curve=view.controls.find(c=>c.kind.kind==="curve");
     const number=view.controls.find(c=>c.kind.kind==="number");
     const gradient=view.controls.find(c=>c.kind.kind==="gradient");
-    if(curve) await send({type:"effect",action:{op:"curve_point",layer:view.layer,key:curve.key,index:null,point:[.45,.65],remove:false}});
+    if(curve) {
+      await checkCurveEndpoint({call,evaluate,settle});
+      await send({type:"effect",action:{op:"curve_point",layer:view.layer,key:curve.key,index:null,point:[.45,.65],remove:false}});
+    }
     else if(number) await send({type:"effect",action:{op:"set",layer:view.layer,key:number.key,value:{kind:"number",value:number.kind.numeric.min}}});
     if(gradient) {
       await evaluate("document.querySelector('.gradient-ramp').click()");
