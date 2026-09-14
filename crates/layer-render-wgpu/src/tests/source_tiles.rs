@@ -191,7 +191,7 @@ fn tiled_sources_stream_through_fixed_slots_and_materialize_only_painted_pages()
             max: Point { x: 120., y: 120. },
         },
     };
-    frame(&mut r, &[dab], &[batch], &[]);
+    frame(&mut r, &[dab], std::slice::from_ref(&batch), &[]);
     assert_eq!(r.paint_layers[0].pages.len(), 1);
     let painted = image(&mut r);
     let at = (100 * extent[0] as usize + 100) * 4;
@@ -201,7 +201,19 @@ fn tiled_sources_stream_through_fixed_slots_and_materialize_only_painted_pages()
         let at = (y * extent[0] as usize + x) * 4;
         assert_eq!(&painted[at..at + 4], &expected[at..at + 4]);
     }
+    // A second disconnected edit must not make undo reload the source between
+    // them. Separate frames also exercise accumulated uncommitted GPU damage.
+    let second = test_dab([1900., 350.], [0., 1., 0., 1.], 0.5);
+    let mut second_batch = batch.clone();
+    second_batch.stroke_id = StrokeId(2);
+    second_batch.damage = Rect {
+        min: Point { x: 1880., y: 330. }, max: Point { x: 1920., y: 370. },
+    };
+    frame(&mut r, &[second], &[second_batch], &[]);
+    assert_eq!(r.paint_layers[0].pages.len(), 2);
+    let work = r.metrics.composited_pixels;
     frame(&mut r, &[], &[], &[(LayerId(1), before)]);
+    assert_eq!(r.metrics.composited_pixels - work, 2 * u64::from(PAGE_SIZE * PAGE_SIZE));
     assert!(r.paint_layers[0].pages.is_empty());
     let actual = image(&mut r);
     assert_eq!(

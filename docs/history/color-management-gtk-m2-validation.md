@@ -584,3 +584,28 @@ regions, material/smudge neighbor inputs, previews/thumbnails, document working
 space/depth, integer16 raster capture/restoration/export, bounded composition and
 filters, all GTK color journeys and managed display. No other platform host
 integration is authorized or performed in this stage.
+
+## Sixth implementation stage: disjoint restoration damage
+
+Raster restoration now retains the individual changed tile footprints, expanding
+each watercolor footprint for its neighbors. Pointwise scene composition visits
+only the translated tiles in those footprints. Full rebuilds, painting/preview
+cleanup, animated programs and image-boundary effects keep their existing full
+damage propagation. Source/composite precision and cache limits are unchanged.
+
+The extended source fixture paints two disconnected tiles in separate frames,
+restores the original raster root and verifies both the exact displayed image
+and two tiles' worth of composition work. The existing displayed Gaussian-blur
+test verifies the image-boundary fallback. All 132 GPU library tests, four GPU
+project tests and native GTK file and diagnostics/recovery workflows pass:
+`disjoint-{gpu-tests,project-tests,gtk-files,gtk-recovery}.log`.
+
+The same dense source workload now measures undo/redo at **15.23/11.50 ms**
+(24 MP), **22.57/14.33 ms** (45 MP) and **18.30/13.46 ms** (60 MP), compared with
+25.10/14.71, 45.97/35.21 and 56.45/48.58 ms in the previous stage. These single
+bulk-operation observations return close to the original baseline; they are not
+p99 distributions. Exact export hashes remain unchanged. All 1,280 measured
+single/two-document drawing frames pass the 8.33 ms CPU/completed gate. Actual
+GPU live/reserved allocations remain 221.88/640, 329.07/640 and 387.04/640 MiB;
+cumulative process high-water is 999,740 KiB (`disjoint-dense.log`). The source
+mode remains disabled pending the remaining operation and color integration.

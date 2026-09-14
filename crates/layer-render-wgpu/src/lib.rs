@@ -3663,6 +3663,7 @@ impl WgpuRasterizer {
                 PixelRect::full([width, height]),
                 &mut encoder,
                 false,
+                None,
             )?;
             self.scene = Some(scene);
         }
@@ -3732,6 +3733,7 @@ impl WgpuRasterizer {
                 PixelRect::full([width, height]),
                 &mut encoder,
                 true,
+                None,
             )?;
             self.scene = Some(scene);
         }
@@ -4727,9 +4729,22 @@ impl CanvasRenderer for WgpuRasterizer {
             self.transforms = Some(transforms);
             self.transform_damage.extend(result?);
         }
+        // Restrict pointwise restoration/transform composition to its actual
+        // tiles. Preview cleanup, global effects and full rebuilds retain their
+        // complete damage propagation. Translate before rounding to scene tiles.
+        let mut composite_tiles = (dirty.is_empty()
+            && !reset
+            && !packet.composite_all
+            && !self.transform_damage.is_empty()
+            && original_batches.is_empty()
+            && packet.dabs.is_empty()
+            && packet.layers.iter().all(|l| {
+                l.effect.as_ref().is_none_or(|e| !e.animated() && !e.program.image_boundary())
+            }))
+        .then(std::collections::BTreeSet::new);
         for &(layer, bounds) in &self.transform_damage {
             let offset = layer_core::target_offset(packet.layers, layer);
-            dirty = dirty.union(pixel_rect(
+            let bounds = pixel_rect(
                 layer_core::Rect {
                     min: layer_core::Point {
                         x: bounds.min_x() as f32 + offset.x,
@@ -4741,7 +4756,11 @@ impl CanvasRenderer for WgpuRasterizer {
                     },
                 },
                 packet.document_extent,
-            ));
+            );
+            if let Some(tiles) = &mut composite_tiles {
+                tiles.extend(page_coordinates(bounds));
+            }
+            dirty = dirty.union(bounds);
         }
         if self.transform_damage.iter().any(|(_, b)| !b.is_empty()) {
             self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
@@ -4777,7 +4796,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     dirty = dirty.union(pixel_rect(rect, packet.document_extent));
                 }
             }
-            scene.compose(self, packet, dirty, &mut encoder, true)?;
+            scene.compose(self, packet, dirty, &mut encoder, true, composite_tiles.as_ref())?;
             self.scene = Some(scene);
         } else if !dirty.is_empty() {
             struct WatercolorBinding {

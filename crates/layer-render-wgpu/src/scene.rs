@@ -1089,6 +1089,7 @@ impl Scene {
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
         overlay: bool,
+        tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
         self.effects.retain(packet.layers);
         let dirty = self.update_images(r, packet, dirty, encoder)?;
@@ -1139,7 +1140,12 @@ impl Scene {
             r.metrics.composited_pixels += dirty.area();
             return Ok(());
         }
+        let mut composited = 0;
         for tile in page_coordinates(dirty) {
+            if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
+                continue;
+            }
+            composited += page_rect(tile).intersect(dirty).area();
             let mut output = self.group(r, packet, None, tile)?;
             if overlay {
                 for layer in packet.layers {
@@ -1200,7 +1206,7 @@ impl Scene {
             self.free(output);
         }
         self.encode_jobs(r, encoder)?;
-        r.metrics.composited_pixels += dirty.area();
+        r.metrics.composited_pixels += composited;
         Ok(())
     }
 

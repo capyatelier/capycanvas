@@ -80,25 +80,46 @@ struct Target {
     changed: BTreeSet<[u32; 2]>,
 }
 
-fn restored_damage(before: &RasterData, after: &RasterData, changed: &BTreeSet<[u32; 2]>, extent: [u32; 2]) -> PixelRect {
-    let mut damage = PixelRect::EMPTY;
+fn restored_damage(
+    before: &RasterData,
+    after: &RasterData,
+    changed: &BTreeSet<[u32; 2]>,
+    extent: [u32; 2],
+) -> Vec<PixelRect> {
+    let mut coordinates = changed.clone();
     let style_changed = before.watercolor != after.watercolor;
     for key in before.tiles.keys().chain(after.tiles.keys()) {
-        let same = before.tiles.get(key).zip(after.tiles.get(key))
+        let same = before
+            .tiles
+            .get(key)
+            .zip(after.tiles.get(key))
             .is_some_and(|(a, b)| a.same_capture(b));
         if !same || style_changed {
-            damage = damage.union(page_rect(key.coordinate));
+            coordinates.insert(key.coordinate);
         }
     }
-    for &coordinate in changed { damage = damage.union(page_rect(coordinate)); }
-    damage = damage.intersect(PixelRect::full(extent));
-    // Neighboring watercolor tiles can contribute visible wet edges. This is
-    // deliberately conservative and bounded by the existing 3x3 neighborhood.
-    if before.watercolor.is_some() || after.watercolor.is_some() {
-        damage = damage.expand(PAGE_SIZE, extent);
-    }
-    damage
+    // Preserve holes between changed pages. Watercolor neighbors expand each
+    // actual footprint, rather than expanding one large enclosing rectangle.
+    let radius = if before.watercolor.is_some() || after.watercolor.is_some() {
+        PAGE_SIZE
+    } else {
+        0
+    };
+    coordinates
+        .into_iter()
+        .flat_map(|coordinate| {
+            page_coordinates(
+                page_rect(coordinate)
+                    .intersect(PixelRect::full(extent))
+                    .expand(radius, extent),
+            )
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|coordinate| page_rect(coordinate).intersect(PixelRect::full(extent)))
+        .collect()
 }
+
 #[derive(Default)]
 pub(super) struct RasterRuntime {
     targets: BTreeMap<LayerId, Target>,
@@ -458,7 +479,7 @@ impl WgpuRasterizer {
             for (id, revision) in packet.restore_rasters {
                 if let Some(current) = runtime.targets.get_mut(id) {
                     let data = revision.wait_data().map_err(GpuRasterError::Effect)?;
-                    damage.push((*id, restored_damage(&current.data, &data, &current.changed, packet.document_extent)));
+                    damage.extend(restored_damage(&current.data, &data, &current.changed, packet.document_extent).into_iter().map(|rect| (*id, rect)));
                     let mut before = if reset {
                         RasterData::default()
                     } else {
@@ -497,7 +518,7 @@ impl WgpuRasterizer {
                     if let Some(current) = runtime.targets.get_mut(&id) {
                         if reset || (wanted.is_some() && current.revision != *revision) {
                             let data = wanted.unwrap_or_else(|| current.data.clone());
-                            damage.push((id, restored_damage(&current.data, &data, &current.changed, packet.document_extent)));
+                            damage.extend(restored_damage(&current.data, &data, &current.changed, packet.document_extent).into_iter().map(|rect| (id, rect)));
                             let mut before = if reset {
                                 RasterData::default()
                             } else {
@@ -516,7 +537,7 @@ impl WgpuRasterizer {
                     } else {
                         let data = wanted.unwrap_or_default();
                         if !data.tiles.is_empty() {
-                            damage.push((id, restored_damage(&RasterData::default(), &data, &BTreeSet::new(), packet.document_extent)));
+                            damage.extend(restored_damage(&RasterData::default(), &data, &BTreeSet::new(), packet.document_extent).into_iter().map(|rect| (id, rect)));
                             self.restore_raster(id, &RasterData::default(), &data)?;
                         }
                         runtime.targets.insert(
