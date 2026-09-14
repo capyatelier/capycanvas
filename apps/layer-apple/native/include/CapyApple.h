@@ -90,6 +90,7 @@ int32_t capy_apple_finish_startup_cache(CapyApple *app);
 int32_t capy_apple_import_layer(CapyApple *app, const char *name, uint32_t width,
                                uint32_t height, const uint8_t *rgba, size_t count);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
+int32_t capy_apple_redraw(CapyApple *app);
 int32_t capy_apple_detach(CapyApple *app);
 int32_t capy_apple_suspend_renderer(CapyApple *app);
 int32_t capy_apple_poll_renderer(CapyApple *app); /* 0 available, 1 suspended, -1 error */

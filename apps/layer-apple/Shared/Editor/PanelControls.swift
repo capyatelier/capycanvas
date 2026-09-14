@@ -35,6 +35,8 @@ struct PanelControls: View {
                     ScrollView {
                         controlBody(maximumHeight: max(128, viewport.size.height - padding * 2))
                     }
+                    // Workspace layout already reserves space above the keyboard.
+                    .ignoresSafeArea(.keyboard)
                 }
             } else { controlBody() }
         }

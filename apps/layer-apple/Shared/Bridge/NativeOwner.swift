@@ -28,8 +28,12 @@ final class NativeOwner: @unchecked Sendable {
         presentationGate.whenAvailable(action)
     }
     /// Resizing or returning from occlusion/suspension can discard previously
-    /// submitted drawables. Late callbacks cannot retire replacement tickets.
-    func invalidatePresentations() { presentationGate.reset() }
+    /// submitted drawables. Late callbacks cannot retire replacement tickets;
+    /// request a fresh frame even when the document has no further edits.
+    func invalidatePresentations() {
+        presentationGate.reset()
+        perform { [self] in try check(capy_apple_redraw(handle)) }
+    }
     private var lastSnapshotTime: UInt64 = 0
     private var bundledFiltersLoaded = false
     private var canvasReady = false

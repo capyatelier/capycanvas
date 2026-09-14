@@ -9,65 +9,65 @@
     {
       "name": "Document transport",
       "commands": ["new_document", "open_document", "save_document", "save_document_as", "export_document", "close_document"],
-      "checks": ["tests/project-files.swift", "tests/recovery.swift"],
+      "checks": ["tests/project-files.swift", "tests/recovery.swift", "Shared/Tests/DocumentControlChecks.swift", "iOS/Tests/EditorLaunchTests.swift"],
       "ios": "partial: direct transport and simulator workflows; full physical provider/lifecycle matrix remains",
-      "mac": "partial: direct transport and focused window/restart workflows; full provider/lifecycle matrix remains"
+      "mac": "partial: native File menu, Save As/Save, process restart/Open with three layers and sampled artwork, complete decoded PNG equality before/after reopen, unchanged project bytes after export, native cancellation and direct transport; full provider/lifecycle matrix remains"
     },
     {
       "name": "Drawing tools",
       "commands": ["pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify"],
-      "checks": ["native/src/workspace_tests.rs", "native/src/input_tests.rs", "native/src/tests.rs"],
-      "ios": "partial: grouped catalog reachability and synthetic pixel/input oracles; complete physical tool/sensor/performance matrix remains",
-      "mac": "partial: grouped catalog reachability and synthetic pixel/input oracles; complete physical tablet/tool/performance matrix remains"
+      "checks": ["native/src/workspace_tests.rs", "native/src/input_tests.rs", "native/src/tests.rs", "Shared/Tests/CanvasToolChecks.swift"],
+      "ios": "partial: native selection, scrolling and size editing for all thirty painting/erasing presets including the twelve contact brushes, earlier Blend/Liquify control workflows, grouped catalog and synthetic pixel/input oracles; physical Pencil artwork, sensors, interrupted strokes and performance remain",
+      "mac": "partial: real mouse strokes/erasure for all thirty painting/erasing presets including the twelve contact brushes, earlier contrasting-edge Blend/Liquify workflows, sampled artwork and one-step Undo/Redo, native selection, scrolling and size editing; tablet, sensors, interrupted strokes and performance remain"
     },
     {
       "name": "Selection, fill, and shapes",
       "commands": ["lasso", "auto_select", "fill", "gradient", "figure"],
-      "checks": ["native/src/tests.rs"],
-      "ios": "partial: shared action/property checks; all native modes, modifiers, and resulting-pixel workflows remain",
-      "mac": "partial: shared action/property checks; all native modes, modifiers, and resulting-pixel workflows remain"
+      "checks": ["native/src/tests.rs", "Shared/Tests/CanvasToolChecks.swift", "Shared/Tests/RegionSelectionChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift"],
+      "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; Pencil artwork, region refinement and modifiers remain",
+      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes; native lasso artwork/cancellation, edge refinement and modifiers remain"
     },
     {
       "name": "Object transforms",
       "commands": ["move", "scale_rotate", "apply_transform", "cancel_transform", "transform_aspect"],
-      "checks": ["native/src/tests.rs"],
-      "ios": "partial: transform settings and pixel transactions; complete native drag/handle workflows remain",
-      "mac": "partial: transform settings and pixel transactions; complete native drag/handle workflows remain"
+      "checks": ["native/src/tests.rs", "Shared/Tests/SelectionTransformChecks.swift"],
+      "ios": "partial: numeric scale/rotation and linked/unlinked mask/content transforms, validation, Apply/Cancel/history, Move controls and tool-change/background cancellation with sampled artwork and stable window bounds; Pencil/pointer handles and mask/group Move, modifiers and interrupted contacts remain",
+      "mac": "partial: numeric scale/rotation and validation, linked/unlinked mask/content numeric transforms and actual mouse Move with Apply/Cancel/history, layer/group Move release/history and edge scaling, Shift proportions/movement/rotation snapping, Option centered scaling, Escape/tool-change/background cancellation and sampled artwork; remaining corners, tablet and interrupted contacts remain"
     },
     {
       "name": "Hand and eyedropper",
       "commands": ["hand", "eyedropper"],
-      "checks": ["native/src/tests.rs", "native/src/navigator_tests.rs"],
-      "ios": "partial: shared routing/camera/color checks; full touch navigation and color sampling workflows remain",
-      "mac": "partial: shared routing/camera/color checks; full trackpad/tablet and color sampling workflows remain"
+      "checks": ["native/src/tests.rs", "native/src/navigator_tests.rs", "Shared/Tests/CanvasNavigationChecks.swift"],
+      "ios": "partial: simulator single-finger Hand pan/Fit restoration with stable window, unchanged artwork history and both eyedropper choices; Pencil sampling and multi-contact navigation remain",
+      "mac": "partial: native mouse Hand pan/Fit restoration, visible/layer eyedropper samples including compositing and transparent-pixel preservation; trackpad/tablet and multi-contact navigation remain"
     },
     {
       "name": "Rulers",
       "commands": ["ruler", "show_rulers", "snap_rulers", "delete_ruler"],
-      "checks": ["native/src/tests.rs"],
-      "ios": "partial: shared tool settings; full create/select/edit/snap/delete workflows remain",
-      "mac": "partial: shared tool settings; full create/select/edit/snap/delete workflows remain"
+      "checks": ["native/src/tests.rs", "Shared/Tests/CanvasToolChecks.swift"],
+      "ios": "partial: native choice/selected state for all three rulers and Show/Snap controls; Pencil creation, editing, snapping and history remain",
+      "mac": "partial: real mouse creation/handle editing, visibility, deletion and sampled-overlay Undo/Redo for all three rulers; constrained painting, modifiers and cancellation remain"
     },
     {
       "name": "Artwork history",
       "commands": ["undo", "redo"],
-      "checks": ["native/src/tests.rs", "native/src/input_tests.rs", "Shared/Tests/NumericControlChecks.swift"],
+      "checks": ["native/src/tests.rs", "native/src/input_tests.rs", "Shared/Tests/NumericControlChecks.swift", "Shared/Tests/MenuSettingsChecks.swift"],
       "ios": "partial: exact pixel restoration and physical Pencil smoke check; full history across all edit types remains",
-      "mac": "partial: exact pixel restoration and focused editor actions; full history across all edit types remains"
+      "mac": "partial: exact pixel restoration, focused editor actions and native numeric text Undo/Redo preserving artwork before returning to artwork history; full history across all edit types remains"
     },
     {
       "name": "Layer operations",
       "commands": ["clear_layer", "add_layer", "delete_layer", "raise_layer", "lower_layer"],
-      "checks": ["native/src/tests.rs", "Shared/Tests/LayerActionChecks.swift", "iOS/Tests/EditorLaunchTests.swift", "tests/layer-row-input.swift", "tests/layer-row-lifecycle.swift"],
-      "ios": "partial: mask/content actions, touch scrolling/grip drop and Undo/Redo; physical layer continuation and broader native workflows remain",
-      "mac": "partial: native pen/mouse pickup, scrolling, hierarchy and source/remount cancellation with Undo/Redo; complete native layer workflows remain"
+      "checks": ["native/src/tests.rs", "Shared/Tests/LayerActionChecks.swift", "iOS/Tests/EditorLaunchTests.swift", "tests/layer-row-input.swift", "tests/layer-row-lifecycle.swift", "Shared/Tests/SelectionTransformChecks.swift"],
+      "ios": "partial: mask/content and link controls, two-child grouping/collapse/visibility/ungroup artwork/history, touch scrolling/grip drop and Undo/Redo; physical layer continuation and broader native workflows remain",
+      "mac": "partial: native pen/mouse pickup, scrolling, hierarchy and source/remount cancellation, mask/link controls, two-child grouping/collapse/visibility/ungroup artwork and actual group Move with Undo/Redo; broader native layer workflows remain"
     },
     {
       "name": "Pixel selection actions",
       "commands": ["fill_selection", "select_all", "deselect", "invert_selection"],
-      "checks": ["native/src/tests.rs"],
-      "ios": "partial: direct menu-action pixel checks; all selection modes and native workflows remain",
-      "mac": "partial: direct menu-action pixel checks; all selection modes and native workflows remain"
+      "checks": ["native/src/tests.rs", "Shared/Tests/SelectionTransformChecks.swift", "Shared/Tests/RegionSelectionChecks.swift"],
+      "ios": "partial: native Select all, Fill, Deselect, empty/full Invert and sampled-pixel history workflows; lasso and modifier workflows remain",
+      "mac": "partial: native Select all, Fill, Deselect, empty/full Invert and sampled-pixel history workflows; lasso and modifier workflows remain"
     },
     {
       "name": "Workspace and Zen",
@@ -77,32 +77,39 @@
       "mac": "partial: direct topology/style/history, SwiftUI drawer geometry/docking, component captures and focused editor controls; full customization/Zen/window layout matrix remains"
     },
     {
+      "name": "Title-bar customization",
+      "commands": ["customize_workspace_ui"],
+      "checks": ["Shared/Editor/EditorHeader.swift", "Shared/Bridge/HeaderPresentation.swift", "tests/header-native-input.swift", "tests/header-persistence.swift", "Shared/Tests/SystemStatusChecks.swift"],
+      "ios": "partial: shared geometry, persistence, physical customization and tool drawers pass; simulator top-edge drag and menu input remain unresolved",
+      "mac": "partial: shared geometry, native mouse/pen customization, persistence and physical editor workflows pass; complete window/overflow/state matrix remains"
+    },
+    {
       "name": "Camera",
       "commands": ["fit_canvas", "zoom_in", "zoom_out", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"],
-      "checks": ["native/src/navigator_tests.rs", "Shared/Tests/NumericControlChecks.swift"],
-      "ios": "partial: direct camera/Navigator geometry and focused controls; full gesture/input/geometry matrix remains",
-      "mac": "partial: direct camera/Navigator geometry and focused controls; full gesture/input/geometry matrix remains"
+      "checks": ["native/src/navigator_tests.rs", "Shared/Tests/NumericControlChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift"],
+      "ios": "partial: direct camera/Navigator checks, native Hand pan/Fit restoration and selected flip state; multi-contact and physical input matrix remains",
+      "mac": "partial: direct camera/Navigator checks, native Hand pan/Fit restoration and selected flip state; trackpad/tablet input matrix remains"
     },
     {
       "name": "Preferences and shortcuts",
       "commands": ["toggle_theme", "settings", "keyboard_shortcuts"],
       "checks": ["tests/persistence-owner.swift", "tests/system-status.swift", "Shared/Tests/MenuSettingsChecks.swift", "Shared/Tests/SystemStatusChecks.swift"],
-      "ios": "partial: persistence, search, shortcut conflict and clock-policy checks; every preference, physical battery/lifecycle and hardware-keyboard combination remains",
-      "mac": "partial: persistence, search, shortcut conflict and clock-policy checks; every preference, portable-Mac battery/lifecycle and keyboard/focus combination remains"
+      "ios": "partial: persistence, search, shortcut conflict, clock policy and printable canvas shortcuts after toolbar/number Return/Settings dismissal; numeric Command-A/text history, physical Escape, broader text-menu/traversal and hardware combinations remain",
+      "mac": "partial: persistence, search, shortcut conflict, clock policy and canvas shortcuts after toolbar/number Return/Escape/Settings dismissal, native numeric text selection and Undo/Redo; every preference, portable-Mac battery/lifecycle and broader text-menu/traversal/keyboard combinations remain"
     },
     {
       "name": "Native windows",
       "commands": ["fullscreen", "new_window"],
       "checks": ["tests/window-presentation.swift", "Shared/Tests/WindowChecks.swift"],
       "ios": "partial: independent simulator windows; full-screen toggle unavailable and physical scene/window matrix remains",
-      "mac": "partial: independent windows and direct full-screen request/observation/failure checks; full-screen editor layout/rendering remains"
+      "mac": "partial: independent windows, last-window close/reopen through File and Command-N with a fresh scene and formatted controls, direct full-screen request/observation/failure checks and actual light Paint full-screen canvas, mouse stroke/history and original-window restoration; complete preset/display/interruption matrix remains"
     },
     {
       "name": "Application information and links",
       "commands": ["about", "website", "source_code"],
-      "checks": ["Shared/Editor/EditorView.swift", "Shared/Settings/SettingsView.swift"],
-      "ios": "open: shared About/link routes implemented; complete displayed information and URL handoff checks remain",
-      "mac": "open: shared About/link routes implemented; complete displayed information and URL handoff checks remain"
+      "checks": ["Shared/Editor/EditorView.swift", "Shared/Settings/SettingsView.swift", "Shared/Tests/MenuSettingsChecks.swift"],
+      "ios": "partial: simulator About information, search/close and real Safari handoff from Help/About for both public links pass; physical alternate-handler and failure paths remain",
+      "mac": "partial: public OS app name, About information, search/close and real default-browser handoff from Help/About for both public links pass; alternate-handler and failure paths remain"
     }
   ],
   "workspace_commands": {

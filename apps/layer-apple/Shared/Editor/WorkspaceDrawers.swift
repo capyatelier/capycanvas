@@ -53,7 +53,6 @@ private struct WorkspaceCollapsedColumn: View {
                                 surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw])))
                                 .placed(JSON(icon["bounds"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
                                 .accessibilityIdentifier("column-icon-" + panel["id"].string)
-                                .accessibilityAddTraits(selected ? .isSelected : [])
                         }
                     }
                 }.frame(width: clip.rect.width, height: max(clip.rect.height, bottom - clip.rect.minY + offset), alignment: .topLeading)

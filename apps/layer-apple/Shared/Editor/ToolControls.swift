@@ -37,7 +37,7 @@ struct ToolSetControls: View {
                                 .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66, alignment: .leading)
                         }
                     }
-                }.padding(.horizontal, 12).padding(.vertical, 4).frame(maxWidth: .infinity)
+                }.padding(.horizontal, group ? 0 : 12).padding(.vertical, 4).frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
                 .disabled(!command.isNull && !command["enabled"].bool)

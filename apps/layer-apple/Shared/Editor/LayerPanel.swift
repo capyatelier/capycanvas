@@ -157,13 +157,12 @@ private struct LayerButton: View {
     let label: String
     var enabled = true
     var selected = false
-    var width: CGFloat = 24
     var height: CGFloat = 24
     var size: CGFloat = 16
     let action: () -> Void
     var body: some View {
         IconTile(icon: icon, label: label, selected: selected, enabled: enabled, size: size, action: action)
-            .frame(width: width, height: height).accessibilityIdentifier("layer-" + label)
+            .frame(width: 24, height: height).accessibilityIdentifier("layer-" + label)
     }
 }
 
@@ -194,9 +193,9 @@ private struct LayerRow: View {
                     .frame(width: 3, height: 28).opacity(layer["clipped"].bool ? 1 : 0)
                 thumbnail(mask: false)
                 if layer["has_mask"].bool {
-                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? "Unlink mask from layer" : "Link mask to layer", width: 12, size: 12) {
+                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? "Unlink mask from layer" : "Link mask to layer", size: 12) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
-                    }.opacity(layer["mask_linked"].bool ? 1 : 0.35)
+                    }.foregroundStyle(palette["text"].opacity(layer["mask_linked"].bool ? 1 : 0.35))
                     thumbnail(mask: true)
                 }
             }.padding(.leading, min(CGFloat(layer["depth"].uint) * 8, 24))

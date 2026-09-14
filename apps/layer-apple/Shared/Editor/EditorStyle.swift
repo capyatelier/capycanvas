@@ -11,6 +11,7 @@ struct EditorPalette {
     subscript(_ name: String) -> Color { Color(hex: source[name].string) }
     var accent: Color { Self.sharedAccent }
     var active: Color { accent.opacity(0.22) }
+    func headerBackground(light: Bool) -> Color { self["bg"].opacity(light ? 0.5 : 1) }
 }
 extension Color {
     init(hex: String) {
@@ -82,12 +83,15 @@ struct IconTile: View {
     var active = false
     var joinedEdge: String?
     var background: Color?
+    var keepsBackground = false
     let action: () -> Void
     var body: some View {
         Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge, background: background))
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge,
+                background: background, keepsBackground: keepsBackground))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -98,6 +102,7 @@ struct EditorControlButtonStyle: ButtonStyle {
     var active = false
     var joinedEdge: String?
     var background: Color?
+    var keepsBackground = false
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
             bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
@@ -106,12 +111,15 @@ struct EditorControlButtonStyle: ButtonStyle {
     }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.background {
-            if selected {
-                shape.fill(EditorPalette.sharedAccent.opacity(0.22))
-            } else if configuration.isPressed || active {
-                shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
-            } else if let background {
-                shape.fill(background)
+            ZStack {
+                if let background, keepsBackground || !(selected || configuration.isPressed || active) {
+                    shape.fill(background)
+                }
+                if selected {
+                    shape.fill(EditorPalette.sharedAccent.opacity(0.22))
+                } else if configuration.isPressed || active {
+                    shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+                }
             }
         }
     }

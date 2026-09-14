@@ -9,7 +9,7 @@ struct NumericTextField: UIViewRepresentable {
     let fontSize: CGFloat
     let color: Color
     let identifier: String
-    let submit: () -> Bool
+    let submit: (_ returnToCanvas: Bool) -> Bool
     let cancel: () -> Void
     let step: (Int) -> Void
     @Environment(\.isEnabled) private var enabled
@@ -58,12 +58,12 @@ struct NumericTextField: UIViewRepresentable {
             }
         }
         func textFieldDidEndEditing(_ textField: UITextField) { if parent.focused { parent.focused = false } }
-        func textFieldShouldReturn(_ textField: UITextField) -> Bool { parent.submit() }
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool { parent.submit(true) }
     }
     final class Field: UITextField {
         var cancel: () -> Void = {}
         var step: (Int) -> Void = { _ in }
-        var submit: () -> Bool = { true }
+        var submit: (Bool) -> Bool = { _ in true }
         override var keyCommands: [UIKeyCommand]? {
             let commands = [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(cancelEdit)),
                 UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(increase)),
@@ -73,7 +73,7 @@ struct NumericTextField: UIViewRepresentable {
         }
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             if presses.contains(where: { $0.key?.keyCode == .keyboardEscape }) { cancel(); return }
-            if presses.contains(where: { $0.key?.keyCode == .keyboardTab }), !submit() { return }
+            if presses.contains(where: { $0.key?.keyCode == .keyboardTab }), !submit(false) { return }
             super.pressesBegan(presses, with: event)
         }
         override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {

@@ -7,6 +7,7 @@ struct ApplicationMenus: View {
     var iconSize: CGFloat = 16
     var tileSize: CGFloat = 36
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var light: Bool { store.state["theme"].string == "light" }
     private var textSize: Double {
         store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
     }
@@ -19,14 +20,15 @@ struct ApplicationMenus: View {
                         Text(menu["label"].string).fontWeight(.bold).fixedSize()
                             .frame(width: EditorTextMetrics.width(menu["label"].string, size: textSize, weight: .bold))
                             .padding(.horizontal, 8).frame(height: tileSize)
-                    }.buttonStyle(EditorControlButtonStyle(background: palette["bg"]))
+                    }.buttonStyle(EditorControlButtonStyle(background: light ? nil : palette["bg"]))
                         .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
             }.font(.system(size: textSize)).fixedSize()
+                .background(light ? palette.headerBackground(light: true) : .clear, in: RoundedRectangle(cornerRadius: 6))
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)
-            }.buttonStyle(EditorControlButtonStyle(background: palette["bg"]))
+            }.buttonStyle(EditorControlButtonStyle(background: palette.headerBackground(light: light), keepsBackground: light))
                 .accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
                 .modifier(HeaderControlMeasurement(id: "application-menus"))
         }

@@ -3,6 +3,61 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNewEditorAfterLastWindowClose() {
+        checkNewEditorAfterLastWindowClose(in: editorCaptureApplication())
+    }
+
+    @MainActor func testNativeProjectRoundTrip() throws {
+        try checkNativeProjectRoundTrip(in: editorCaptureApplication())
+    }
+
+    @MainActor func testEditorKeyboardFocus() { checkEditorKeyboardFocus(in: editorCaptureApplication()) }
+    @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
+
+    @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }
+
+    @MainActor func testPaintingBrushes() { checkPaintingBrushes(in: editorCaptureApplication()) }
+
+    @MainActor func testFullscreenEditor() { checkFullscreenEditor(in: editorCaptureApplication()) }
+
+    @MainActor func testMaskTransforms() { checkMaskTransforms(in: editorCaptureApplication()) }
+
+    @MainActor func testGroupArtworkWorkflow() { checkGroupArtworkWorkflow(in: editorCaptureApplication()) }
+
+    @MainActor func testMoveAndTransformCancellation() {
+        checkMoveAndTransformCancellation(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTransformFieldRetainsScroll() {
+        checkTransformFieldRetainsScroll(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTransformRotationAndHandles() {
+        checkTransformRotationAndHandles(in: editorCaptureApplication())
+    }
+
+    @MainActor func testLassoControls() { checkLassoControls(in: editorCaptureApplication()) }
+
+    @MainActor func testHandAndEyedropper() { checkHandAndEyedropper(in: editorCaptureApplication()) }
+
+    @MainActor func testRegionSelectionAndFill() { checkRegionSelectionAndFill(in: editorCaptureApplication()) }
+
+    @MainActor func testSelectionInversion() { checkSelectionInversion(in: editorCaptureApplication()) }
+
+    @MainActor func testRulerWorkflow() {
+        checkRulerWorkflow(in: editorCaptureApplication())
+    }
+
+    @MainActor func testFiguresAndGradients() {
+        checkFiguresAndGradients(in: editorCaptureApplication())
+    }
+
+    @MainActor func testAboutAndApplicationMenus() { checkAboutAndApplicationMenus(in: editorCaptureApplication()) }
+
+    @MainActor func testApplicationLinkHandoff() { checkApplicationLinkHandoff(in: editorCaptureApplication()) }
+
+    @MainActor func testSelectionAndTransform() { checkSelectionAndTransform(in: editorCaptureApplication()) }
+
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
     @MainActor func testWorkspaceSwitcher() {

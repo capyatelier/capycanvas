@@ -12,6 +12,14 @@ fn customize(app: &App, action: Value) {
     app.action(json!({"type":"customize","action":action}));
 }
 
+// Drawer workflows opt into drawers; ordinary collapsed columns open whole members.
+fn enable_column_drawers(app: &App, panel: layer_ui::Panel) {
+    let layout = &unsafe { &*app.0 }.host.session.state().workspace.layout;
+    let group = layout.panel_group(panel).unwrap();
+    let column = layout.column_for_group(group).unwrap();
+    customize(app, json!({"type":"set_column_drawers","column":column,"drawers":true}));
+}
+
 #[test]
 fn apple_column_stacks_publish_ordinary_groups_and_persist_members_not_open_state() {
     for platform in [0, 1] {
@@ -141,6 +149,7 @@ fn apple_tab_preview_uses_frozen_geometry_and_commits_the_same_slot() {
     for platform in [0, 1] {
         for collapsed in [false, true] {
             let app = App::new(platform);
+            enable_column_drawers(&app, layer_ui::Panel::Brushes);
             let group = unsafe { &*app.0 }
                 .host
                 .session
@@ -243,6 +252,7 @@ fn apple_column_drawer_drags_preserve_history_and_accept_measured_drop_targets()
     for platform in [0, 1] {
         for whole in [false, true] {
             let app = App::new(platform);
+            enable_column_drawers(&app, layer_ui::Panel::Brushes);
             let layout = || {
                 unsafe { &*app.0 }
                     .host
@@ -348,6 +358,7 @@ fn apple_column_drawer_drags_preserve_history_and_accept_measured_drop_targets()
 
             // Open a second collapsed group and dock the floating source into
             // its measured tab bar through the same drop preview used by Swift.
+            enable_column_drawers(&app, layer_ui::Panel::Layers);
             let target = layout().panel_group(layer_ui::Panel::Layers).unwrap();
             customize(
                 &app,
@@ -866,6 +877,7 @@ fn apple_drawer_dismissal_consumes_the_entire_canvas_contact_then_allows_paintin
 fn apple_collapsed_toolbar_child_drawers_follow_live_tiles_and_preserve_topology() {
     for platform in [0, 1] {
         let app = App::new(platform);
+        enable_column_drawers(&app, layer_ui::Panel::Brushes);
         let group = unsafe { &*app.0 }
             .host
             .session

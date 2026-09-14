@@ -9,7 +9,7 @@ struct NumericTextField: NSViewRepresentable {
     let fontSize: CGFloat
     let color: Color
     let identifier: String
-    let submit: () -> Bool
+    let submit: (_ returnToCanvas: Bool) -> Bool
     let cancel: () -> Void
     let step: (Int) -> Void
     @Environment(\.isEnabled) private var enabled
@@ -63,9 +63,9 @@ struct NumericTextField: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.cancelOperation(_:)): parent.cancel(); return true
-            case #selector(NSResponder.insertNewline(_:)): _ = parent.submit(); return true
+            case #selector(NSResponder.insertNewline(_:)): _ = parent.submit(true); return true
             case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
-                return !parent.submit()
+                return !parent.submit(false)
             case #selector(NSResponder.moveUp(_:)): parent.step(1); return true
             case #selector(NSResponder.moveDown(_:)): parent.step(-1); return true
             default: return false
@@ -74,6 +74,18 @@ struct NumericTextField: NSViewRepresentable {
     }
     private final class Field: NSTextField {
         var beginEditing: () -> Bool = { true }
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            guard let editor = currentEditor() as? NSTextView,
+                event.charactersIgnoringModifiers?.lowercased() == "z",
+                flags == .command || flags == [.command, .shift] else {
+                return super.performKeyEquivalent(with: event)
+            }
+            // Text history takes precedence over the editor's artwork commands.
+            if flags.contains(.shift) { editor.undoManager?.redo() }
+            else { editor.undoManager?.undo() }
+            return true
+        }
         override func mouseDown(with event: NSEvent) {
             // AppKit's didBeginEditing notification arrives on the first text
             // change. The field editor can already exist before mouseDown;

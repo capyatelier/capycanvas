@@ -17,6 +17,74 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Current contact renderer, eight-layer 4K ink — 2026-09-14
+
+After integrating the shared swept-contact renderer, both current Release apps
+complete a 45-second `layered-4k` diagnostic. Each uses the unchanged 4096-square,
+eight-paint-layer G-Pen fixture, prediction, pressure variation and 240 Hz input,
+with ten-second warm-up/postlude and GPU timestamp recording disabled. Mac uses
+2400 × 1740 drawable pixels at 90 Hz; physical iPad uses 2752 × 2064 at 120 Hz.
+The runs are serial, with no compiler, UI automation or GPU profiler running.
+
+| Short measurement | Mac | Physical iPad |
+| --- | ---: | ---: |
+| CPU owner p99 / max, ms | 4.035 / 15.695 | 7.939 / 17.628 |
+| CPU frames over host budget | 27 | 48 |
+| Long continuous intervals / total | 62 / 3,728 | 35 / 5,035 |
+| Continuous interval p99 / max, ms | 22.222 / 33.334 | 8.334 / 25.000 |
+| Peak measured footprint, MiB | 1,278.32 | 1,330.80 |
+| Measured footprint growth, MiB | 21.52 | 12.55 |
+
+Both intervals finish with no rejected input, renderer errors, recorder overflow,
+missing callbacks or zero-time measured presentations. Full readiness precedes
+measurement. Mac retains one zero-time presentation outside measurement. The
+reviewed Mac capture shows pressure-varying ink over the underpaint, the complete
+editor and live Navigator. These are valid runs with failing target cadence.
+
+All 27 slow Mac CPU frames follow a pen-up receipt. However, 61 of its 62 long
+continuous presentation intervals join frames whose latest receipts are both
+movement; shortening pen-up work alone does not explain those gaps. On iPad,
+22 slow CPU frames follow pen-up and 26 follow movement. The latter include
+drawable-acquisition waits exceeding 1 ms. Receipt associations are diagnostic,
+not causal proof or evidence of which input pixels appeared. No presentation,
+admission, fidelity or snapshot change is adopted from this observation.
+
+The same iPad binary subsequently completes 600.008 measured seconds with
+135,003 nonpredicted samples and 67,295 actual presentations. CPU owner
+p50/p95/p99/max is 1.743/2.664/9.245/22.298 ms, with 948 frames over 8.33 ms.
+Continuous presentation p99/max is 12.498/29.167 ms; 727 of 66,919 intervals
+exceed the existing cadence threshold. Drawable acquisition p99/max is
+5.004/21.209 ms. No measured callbacks are missing or zero-time; no input is
+rejected, and there are no renderer errors or recorder overflows. Full readiness
+precedes measurement and the postlude completes. Sustained cadence still fails.
+
+Measured iPad footprint grows 291.28 MiB to a 1,574.08 MiB peak. Thermal state
+remains nominal. History, renderer and recorder contributions are not isolated,
+so this does not establish a leak or bounded long-term memory use. The owned
+process is verified closed, its disposable app removed and the existing test
+runner restored. Both review and artist editor descriptors remain unchanged;
+neither editor is updated or restarted. No XCTest startup retry is attempted.
+
+The same Mac binary completes 600.001 measured seconds with 135,001
+nonpredicted samples and 50,213 actual presentations. CPU owner
+p50/p95/p99/max is 2.338/3.407/4.073/21.860 ms, with 322 frames over 11.11 ms.
+Continuous presentation p99/max is 22.222/33.334 ms; 909 of 49,837 intervals
+exceed the cadence threshold. Drawable acquisition p99/max is 0.155/0.654 ms.
+Measured footprint grows 326.47 MiB to a 1,574.75 MiB peak, with nominal thermal
+state. All input is accepted, readiness precedes measurement, the postlude
+completes, and there are no renderer errors, recorder overflows or missing/
+zero-time measured presentations. The final full-window capture is reviewed
+and the owned process is verified closed. Sustained Mac cadence also fails.
+
+Both ten-minute runs preserve the original workload on the same source; all
+measurement jobs are terminal. A subsequent mask-only contact-brush correction
+does not change their ordinary color-painting path. The following main integration
+adds explicit grouping to the shader's existing integer hash expression.
+Isolated GPU execution, calibrated recorder overhead,
+physical Pencil latency, memory attribution and the complete workload matrix
+remain open. Evidence and the completed-run checkpoint are ignored under
+`artifacts/performance/contact-layered4k-fb81ebe/`.
+
 ## Metal presentation notification diagnostic — 2026-09-13
 
 No renderer change was adopted from this diagnostic. Apple's

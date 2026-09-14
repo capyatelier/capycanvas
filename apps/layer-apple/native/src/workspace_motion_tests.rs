@@ -3,7 +3,11 @@ use super::*;
 fn normalize_paint_revisions(app: &App, snapshot: &mut Value) {
     // Each publication must match its own live state before comparing two
     // sessions, whose immutable raster identities are independently allocated.
-    assert_eq!(snapshot["state"], app.state());
+    // SnapshotFormatter preserves Value's widened numbers. Compare after the
+    // same JSON encode/decode, including its floating-point round trip.
+    let encoded = serde_json::to_vec(&app.state()).unwrap();
+    let live: Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(snapshot["state"], live);
     let state = &mut snapshot["state"];
     for layer in state["layers"].as_array_mut().unwrap() {
         assert!(layer["paint_revision"].is_u64());

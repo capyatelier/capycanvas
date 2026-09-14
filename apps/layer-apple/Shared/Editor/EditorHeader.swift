@@ -18,6 +18,7 @@ import SwiftUI
     private var entries: [JSON] { model["zones"].array.flatMap(\.array) }
     private var size: JSON { view["sizes"].array.first { $0["id"].string == model["size"].string } ?? JSON() }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var light: Bool { store.state["theme"].string == "light" }
     private var geometry: JSON { header.preview.isNull ? header.geometry : header.preview["geometry"] }
     private var recoveryMenu: Bool {
         !editing && store.state["platform"].string != "mac"
@@ -71,7 +72,7 @@ import SwiftUI
             if recoveryMenu {
                 ApplicationMenuButton(store: store) { SharedIcon(name: "menu", size: size["icon"].number)
                     .frame(width: size["tile"].number, height: size["tile"].number) }
-                    .buttonStyle(EditorControlButtonStyle(background: palette["bg"]))
+                    .buttonStyle(EditorControlButtonStyle(background: palette.headerBackground(light: light), keepsBackground: light))
                     .accessibilityLabel("Main Menu").accessibilityIdentifier("header-recovery-menu")
                     .offset(x: store.headerLeadingInset + 6, y: 6)
             }
@@ -85,7 +86,7 @@ import SwiftUI
                         } else {
                             EditorMenuButton(menu: { overflow(zone) }, identifier: "header-overflow-menu") { overflowIcon }
                         }
-                    }.buttonStyle(EditorControlButtonStyle(background: palette["bg"]))
+                    }.buttonStyle(EditorControlButtonStyle(background: palette.headerBackground(light: light), keepsBackground: light))
                         .accessibilityLabel("More title bar items")
                         .accessibilityIdentifier("header-overflow-\(zone)").placed(geometry["overflow"][zone])
                 }
@@ -209,7 +210,7 @@ import SwiftUI
             HeaderItemControl(store: store, entry: entry, description: metadata(entry), size: size, status: status,
                 width: max(0, width - (editing ? 20 : 0)), editing: editing)
         }.frame(width: width, height: size["tile"].number)
-            .background(editing ? palette["bg"] : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .background(editing && !light ? palette["bg"] : .clear, in: RoundedRectangle(cornerRadius: 6))
     }
     private func overflow(_ zone: Int) -> AppleContextMenu {
         let rows = geometry["hidden"][zone].array.compactMap { id -> Any? in
@@ -251,6 +252,7 @@ private struct HeaderItemControl: View {
     @State private var hovering = false
     private var kind: String { entry["item"]["kind"].string }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var light: Bool { store.state["theme"].string == "light" }
     private var drawerOpen: Bool {
         let anchor = store.state["customization"]["drawer"]["anchor"]
         return !editing && anchor["kind"].string == "header" && anchor["id"].uint == entry["id"].uint
@@ -263,7 +265,7 @@ private struct HeaderItemControl: View {
                     .modifier(HeaderControlMeasurement(id: "zen-button"))
             case "menu":
                 ApplicationMenuButton(store: store) { SharedIcon(name: "menu", size: size["icon"].number).frame(maxWidth: .infinity, maxHeight: .infinity) }
-                    .buttonStyle(EditorControlButtonStyle(active: hovering, background: palette["bg"]))
+                    .buttonStyle(EditorControlButtonStyle(active: hovering, background: palette.headerBackground(light: light), keepsBackground: light))
                     .accessibilityLabel("Main Menu").accessibilityIdentifier("application-menus")
                     .modifier(HeaderControlMeasurement(id: "application-menus"))
             case "menu_labels": ApplicationMenus(store: store, iconSize: size["icon"].number, tileSize: size["tile"].number)
@@ -294,7 +296,7 @@ private struct HeaderItemControl: View {
                     Button { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) } label: {
                         HeaderPaintIcon(colors: store.state["colors"], size: size["icon"].number)
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                    }.buttonStyle(EditorControlButtonStyle(active: drawerOpen || hovering, joinedEdge: drawerOpen ? "bottom" : nil, background: palette["bg"]))
+                    }.buttonStyle(EditorControlButtonStyle(active: drawerOpen || hovering, joinedEdge: drawerOpen ? "bottom" : nil, background: palette.headerBackground(light: light), keepsBackground: light))
                         .accessibilityLabel(description["label"].string)
                 } else {
                     tile(description["icon"].string) { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) }
@@ -304,14 +306,14 @@ private struct HeaderItemControl: View {
         }.frame(width: width, height: size["tile"].number)
             .background {
                 if ["document_title", "clock", "battery"].contains(kind) {
-                    RoundedRectangle(cornerRadius: 6).fill(palette["bg"])
+                    RoundedRectangle(cornerRadius: 6).fill(palette.headerBackground(light: light))
                 }
             }.onHover { hovering = $0 }
     }
     private func tile(_ icon: String, action: @escaping () -> Void) -> some View {
         IconTile(icon: icon, label: description["label"].string, selected: description["selected"].bool,
             enabled: editing || description["enabled"].bool, size: size["icon"].number,
-            active: drawerOpen || hovering, joinedEdge: drawerOpen ? "bottom" : nil, background: palette["bg"], action: action)
+            active: drawerOpen || hovering, joinedEdge: drawerOpen ? "bottom" : nil, background: palette.headerBackground(light: light), keepsBackground: light, action: action)
     }
 }
 

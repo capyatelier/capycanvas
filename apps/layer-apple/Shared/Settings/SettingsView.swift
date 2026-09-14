@@ -64,7 +64,11 @@ struct SettingsView: View {
             }
         }
     }
-    private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
+    private func action(_ value: [String: Any]) {
+        // Native search/selection bindings can finish while the sheet closes.
+        guard !model.isNull else { return }
+        store.dispatch(["type": "preferences", "action": value])
+    }
     private func edit(_ row: JSON, _ value: Any) { action(["type": "edit", "id": row["id"].raw, "value": value]) }
     @ViewBuilder private func preference(_ row: JSON) -> some View {
         let kind = row["kind"]
@@ -85,7 +89,13 @@ struct SettingsView: View {
             case "info":
                 LabeledContent(row["title"].string, value: kind["value"].string)
             case "link":
-                if let url = URL(string: kind["url"].string) { Link(kind["label"].string, destination: url) }
+                if let url = URL(string: kind["url"].string) {
+                    LabeledContent(row["title"].string) {
+                        Link(kind["label"].string, destination: url)
+                            .foregroundStyle(.tint)
+                            .accessibilityIdentifier("preference-" + row["id"].string)
+                    }
+                }
             default: Text(row["title"].string)
             }
             if !row["description"].string.isEmpty { Text(row["description"].string).font(.caption).foregroundStyle(.secondary) }
