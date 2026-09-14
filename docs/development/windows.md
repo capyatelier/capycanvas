@@ -207,10 +207,17 @@ cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-window
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailPreferences
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
 ./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ```
+
+The document journey checks native import/save/export pickers, Unicode paths,
+corrupt-file recovery, Preferences drafts and save/cancel/close behavior. With
+`-RecoverGpu`, it also verifies two GPU reconstructions, queued and active
+controlled pen strokes, identical exported images, thumbnails and Undo/Redo.
+Preferences opens through Edit, independently of the configured titlebar buttons.
 
 The persistence fixture owns disposable profiles through the absolute
 `CAPY_SETTINGS_DIRECTORY` override. It verifies autosave, restart, final-edit
