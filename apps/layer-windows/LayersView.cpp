@@ -53,22 +53,22 @@ void LayersView::init(){
     struct Toggle {wchar_t const* icon;wchar_t const* label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
     for(auto spec:{Toggle{L"alpha-lock",L"Alpha lock",L"alpha_locked",L"alpha_lock",L"alpha_lock"},
         Toggle{L"lock",L"Lock editing",L"locked",L"lock",L"edit_lock"},Toggle{L"clip",L"Clip to layer below",L"clipped",L"clip",L"clip"}}){
-        auto pick=button(data,spec.label,[weak,spec]{if(auto self=weak.lock()){
+        auto pick=button<Primitives::ToggleButton>(data,spec.label,[weak,spec]{if(auto self=weak.lock()){
             auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(spec.op)},
                 {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
         }});
         pick.Width(24);pick.Height(24);pick.Content(icon(spec.icon,data->theme()));
         AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));ToolTipService::SetToolTip(pick,box_value(spec.label));
         tools.Children().Append(pick);controls.emplace_back([data=data,pick,spec](J layer,J capabilities){
-            pick.IsEnabled(flag(capabilities,spec.capability));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected():clear());
+            pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected():clear());
         });
     }
-    auto reference=button(data,L"Use selected layers as references",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
+    auto reference=button<Primitives::ToggleButton>(data,L"Use selected layers as references",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
     reference.Width(24);reference.Height(24);reference.Content(icon(L"reference",data->theme()));
     AutomationProperties::SetAutomationId(reference,L"layer-reference");tools.Children().Append(reference);
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
         auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);
-        reference.Background(flag(view,L"references_selected")?selected():clear());
+        reference.IsChecked(flag(view,L"references_selected"));reference.Background(flag(view,L"references_selected")?selected():clear());
         auto text=str(view,L"reference_action_label");AutomationProperties::SetName(reference,text);ToolTipService::SetToolTip(reference,box_value(text));
     }});
     header.Children().Append(tools);root.Children().Append(header);

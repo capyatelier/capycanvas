@@ -587,8 +587,11 @@ The fixture uses a disposable settings directory and app-only captures under
 ignored artifacts. It covers painting and exact thumbnail restoration after
 Undo, retained rows, shared controls, masks, multi-selection, rename,
 duplication/deletion, grouping, collapsed editing targets, row virtualization,
-theme changes and document replacement. It does not measure presentation or
-physical input latency.
+theme changes and document replacement. Layer flags expose the native Toggle
+pattern, including updates after Undo/Redo and keyboard Space activation.
+Menu and Shift+F10 open the appropriate menu from the focused layer name,
+content or mask; F2 starts name editing. These checks do not establish complete
+screen-reader acceptance or measure presentation/physical input latency.
 
 Image-as-layer import is covered by the native document fixture above. Runtime
 filter package import remains pending. The complete workspace projection and
