@@ -1,4 +1,109 @@
 import XCTest
+import ImageIO
+
+#if os(macOS)
+extension XCTestCase {
+    @MainActor func checkNativeProjectRoundTrip(in app: XCUIApplication) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Files " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("RoundTrip.capy")
+        let png = root.appendingPathComponent("Before.png")
+        let reopenedPNG = root.appendingPathComponent("After.png")
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let title = app.staticTexts["document-title"]
+        func titleText() -> String { title.value as? String ?? title.label }
+        let extent = titleText().components(separatedBy: " · ").last!
+        let dimensions = extent.components(separatedBy: " × ").compactMap(Int.init)
+        XCTAssertEqual(dimensions.count, 2)
+        let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        func command(_ id: String, _ label: String) {
+            editorMenu(in: app, menu: "File", id: id, label: label)
+        }
+        func goTo(_ url: URL) {
+            app.typeKey("g", modifierFlags: [.command, .shift])
+            app.typeText(url.path + "\n")
+        }
+        func savePanel(to url: URL) {
+            let save = app.windows.buttons["OKButton"].firstMatch
+            XCTAssertTrue(save.waitForExistence(timeout: 15))
+            goTo(root)
+            let name = app.textFields["saveAsNameTextField"]
+            workspaceActivate(name)
+            name.typeKey("a", modifierFlags: .command); name.typeText(url.lastPathComponent)
+            workspaceActivate(save)
+            XCTAssertTrue(save.waitForNonExistence(timeout: 15))
+            expectation(for: NSPredicate { _, _ in FileManager.default.fileExists(atPath: url.path) }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        func export(to url: URL) {
+            command("export_document", "Export PNG…"); savePanel(to: url)
+            XCTAssertTrue(titleText().hasPrefix("RoundTrip.capy · "), "PNG export must retain the editable project location")
+        }
+        func pixels(_ url: URL) throws -> Data {
+            let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(image.width, dimensions[0]); XCTAssertEqual(image.height, dimensions[1])
+            var data = Data(count: image.width * image.height * 4)
+            data.withUnsafeMutableBytes { bytes in
+                let context = CGContext(data: bytes.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
+            return data
+        }
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectation(for: NSPredicate { _, _ in
+            let sample = self.editorPixels(in: app); return Int(sample[2]) > Int(sample[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let artwork = editorPixels(in: app)
+        command("save_document_as", "Save As…"); savePanel(to: project)
+        let firstSave = try Data(contentsOf: project)
+        editorMenu(in: app, menu: "Layer", id: "add_layer", label: "New layer")
+        expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
+        waitForExpectations(timeout: 10)
+        command("save_document", "Save")
+        expectation(for: NSPredicate { _, _ in (try? Data(contentsOf: project)) != firstSave }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let saved = try Data(contentsOf: project)
+        export(to: png)
+        let before = try pixels(png)
+        var allBlue = true
+        for offset in stride(from: 0, to: before.count, by: 4) {
+            let red = Int(before[offset]), blue = Int(before[offset + 2])
+            if blue <= red + 50 || before[offset + 3] != 255 { allBlue = false; break }
+        }
+        XCTAssertTrue(allBlue, "The exported image must contain the opaque blue artwork")
+        attachEditor(in: app, name: "native-project-saved")
+        app.terminate(); app.launch()
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        XCTAssertTrue(titleText().hasPrefix("Untitled · "))
+        XCTAssertEqual(layers.count, 2, "Reopen must load the saved file, independently of in-memory artwork")
+        command("open_document", "Open…")
+        let open = app.windows.buttons["OKButton"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        goTo(project); workspaceActivate(open)
+        XCTAssertTrue(open.waitForNonExistence(timeout: 15))
+        expectation(for: NSPredicate { _, _ in titleText().hasPrefix("RoundTrip.capy · ") }, evaluatedWith: app)
+        expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
+        waitForExpectations(timeout: 30)
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == artwork }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        export(to: reopenedPNG)
+        XCTAssertEqual(try pixels(reopenedPNG), before, "Every decoded export pixel must survive project save/reopen")
+        XCTAssertEqual(try Data(contentsOf: project), saved, "Opening and exporting must preserve the editable project bytes")
+        XCTAssertFalse(app.alerts.firstMatch.exists); XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "native-project-reopened-and-exported")
+    }
+}
+#endif
 
 extension XCTestCase {
     @MainActor func checkNewDrawingAndExportCancellation(in app: XCUIApplication) {

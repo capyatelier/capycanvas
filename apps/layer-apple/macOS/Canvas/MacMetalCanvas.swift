@@ -38,6 +38,10 @@ final class MacCanvasView: NSView {
         setAccessibilityLabel("Canvas")
         setAccessibilityValue("Initializing")
         store.wake = { [weak self] in self?.wake() }
+        store.focusCanvas = { [weak self] in
+            guard let self, self.window?.isKeyWindow == true, self.window?.attachedSheet == nil else { return }
+            self.window?.makeFirstResponder(self)
+        }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
         frames.submittedViewport = { [weak self] in self?.setAccessibilityValue("Metal ready") }
     }

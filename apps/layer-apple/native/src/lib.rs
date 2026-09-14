@@ -378,6 +378,17 @@ pub unsafe extern "C" fn capy_apple_resize(
         .map_or(-1, |_| 0)
 }
 /// # Safety
+/// Valid exclusively owned handle. Request presentation after native exposure
+/// without changing document, camera or history.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_redraw(app: *mut CapyApple) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.host.dirty = true;
+    0
+}
+/// # Safety
 /// Valid exclusively owned handle; detach before releasing its native layer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_detach(app: *mut CapyApple) -> i32 {

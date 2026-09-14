@@ -317,7 +317,7 @@ workspace IDs are synthetic; the inventory never opens user storage. The
 `--gpu` mode seeds a disposable drawing through shared fill actions so transform
 controls can be enumerated with a real hardware renderer.
 
-The [command review](command-coverage.json) classifies all 62 commands, nine
+The [command review](command-coverage.json) classifies all 63 commands, nine
 workspace service commands, 14 panel control types, six preference kinds and
 six property kinds,
 with Apple handler/check references. The audit detects catalog and availability
@@ -337,7 +337,7 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/nativ
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-menu-keyboard.swift
 ```
 
-The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
+The current graph contains 90 tool choices and 28 setting IDs per Apple preset;
 the workspace scenarios include 133 context menus per preset. Without `--gpu`,
 renderer-dependent tool failures remain explicit and fail the expanded audit.
 Schema 4 also records paint, paper, groups and every shipped filter: currently

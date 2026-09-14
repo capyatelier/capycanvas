@@ -38,6 +38,12 @@ qualifies the same sampled migration cases against the old algorithms on one
 Intel D3D12/Vulkan device. Both versions still differ from this Linux PNG; the
 reference and ordinary comparison gate remain unchanged.
 
+The [Metal comparison](../../../../docs/development/apple-filter-qualification.md)
+finds exact sampled agreement with the independent algorithms on one Mac. Across
+all 160 full-size images, thirteen pixels differ, with maximum raw error two;
+the reviewed artwork is perceptually equivalent. This does not change the
+Linux fixture or establish physical iPad, browser or arbitrary-parameter parity.
+
 All artwork is original project test data under MIT OR Apache-2.0.
 
 PNG SHA-256: `9319d81ad1dff090d97afba43e268864ef1bfce0fcb96aa91cee6717178e5f1a`.

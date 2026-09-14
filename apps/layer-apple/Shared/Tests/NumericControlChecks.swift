@@ -43,11 +43,12 @@ extension XCTestCase {
         expect("100")
         workspaceActivate(value); entry.typeText("7 +")
         #if os(iOS)
-        // The keyboard covers the lower layer rows. Dismiss it while retaining
-        // the invalid draft, then switch targets through the visible thumbnail.
-        let hideKeyboard = app.buttons["Hide keyboard"]
-        XCTAssertTrue(hideKeyboard.waitForExistence(timeout: 5)); workspaceActivate(hideKeyboard)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertFalse(keyboard.frame.intersects(entry.frame), "Layer opacity must stay above the keyboard")
+        XCTAssertFalse(keyboard.frame.intersects(original.frame), "Layer switching must stay available while editing")
         XCTAssertEqual(entry.value as? String, "7 +")
+        attachEditor(in: app, name: "layer-opacity-draft-switch")
         #endif
         workspaceActivate(original); expect("42")
         XCTAssertFalse(entry.exists, "An unfinished draft must not move to another layer")
@@ -110,6 +111,12 @@ extension XCTestCase {
             XCTAssertTrue(control.waitForExistence(timeout: 10),
                 "The complete default workspace must expose \(panel)")
         }
+        let opacity = app.buttons["number-value-layer-opacity"]
+        XCTAssertTrue(opacity.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in
+            (opacity.value as? String)?.isEmpty == false
+        }, evaluatedWith: opacity)
+        waitForExpectations(timeout: 10)
         let overview = app.descendants(matching: .any)["navigator-overview"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Live preview"), evaluatedWith: overview)
         waitForExpectations(timeout: 10)

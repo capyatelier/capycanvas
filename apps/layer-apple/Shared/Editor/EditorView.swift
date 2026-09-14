@@ -22,7 +22,8 @@ struct EditorView<Canvas: View>: View {
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }
-            if !store.state.isNull {
+            // Controls need both the live values and their shared specifications.
+            if !store.state.isNull && !store.catalog.isNull {
                 if !store.snapshot["chrome_hidden"].bool { EditorHeader(store: store) }
                 WorkspacePanels(store: store, workspace: store.workspace)
                 if !store.snapshot["chrome_hidden"].bool && store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
@@ -92,7 +93,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(ProjectFilesModifier(files: store.projectFiles))
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
-        .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
+        .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } }), onDismiss: { store.focusCanvas?() }) {
             SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
                 .foregroundStyle(.primary).presentationBackground(.background)
                 .modifier(EditorPresentationAppearance())

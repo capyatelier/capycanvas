@@ -21,6 +21,7 @@ import SwiftUI
     var wake: (() -> Void)?
     var interruptInput: (() -> Void)?
     var focusWindow: (() -> Void)?
+    var focusCanvas: (() -> Void)?
     var systemSceneID: String?
     private(set) var native: NativeOwner?
     private(set) var workspaceLibrary: WorkspaceLibrary?

@@ -655,6 +655,12 @@ fn spatial_filters_match_linear_sampling_oracles() {
 #[test]
 fn runtime_filter_pixel_reference() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
+    let capture_directory = std::env::var_os("CAPY_FILTER_CAPTURE").map(std::path::PathBuf::from);
+    let capture = |name: &str, extent, pixels: &[u8]| {
+        if let Some(directory) = &capture_directory {
+            png(directory.join(name).to_str().unwrap(), extent, pixels);
+        }
+    };
     let base = setup(&mut r, EXTENT);
     submit(
         &mut r,
@@ -666,7 +672,10 @@ fn runtime_filter_pixel_reference() {
         None,
     );
     let input = image(&mut r);
-    assert_import_pixels(&artwork(EXTENT), &input);
+    let source = artwork(EXTENT);
+    assert_import_pixels(&source, &input);
+    capture("source.png", EXTENT, &source);
+    capture("input.png", EXTENT, &input);
     let sample = [64usize, 48usize];
     let columns = 8;
     let rows = (fixtures().len() * 4).div_ceil(columns);
@@ -697,6 +706,7 @@ fn runtime_filter_pixel_reference() {
                 None,
             );
             let output = image(&mut r);
+            capture(&format!("{}-{scope}.png", id.id()), EXTENT, &output);
             let index = i * 4 + scope;
             for y in 0..sample[1] {
                 for x in 0..sample[0] {
@@ -711,6 +721,23 @@ fn runtime_filter_pixel_reference() {
                 }
             }
         }
+    }
+    capture("actual.png", extent, &pixels);
+    if let Some(directory) = &capture_directory {
+        std::fs::write(
+            directory.join("filters.txt"),
+            fixtures()
+                .iter()
+                .map(|id| id.id())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("adapter.txt"),
+            format!("{:?}\n", r.adapter().get_info()),
+        )
+        .unwrap();
     }
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),

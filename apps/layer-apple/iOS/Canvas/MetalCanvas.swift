@@ -17,6 +17,7 @@ final class CanvasView: UIView {
     private var attached = false
     private var drawableExtent = CGSize.zero
     private var sceneGeometry: NSKeyValueObservation?
+    private var workspaceBottom: CGFloat = -1
     var contacts: [ObjectIdentifier: PencilContact] = [:]
     var nextContact: UInt64 = 0
     var ignoredContacts: Set<ObjectIdentifier> = []
@@ -41,9 +42,16 @@ final class CanvasView: UIView {
         hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         addGestureRecognizer(hover)
         store.wake = { [weak self] in self?.wake() }
+        store.focusCanvas = { [weak self] in
+            guard let self, self.window?.isKeyWindow == true,
+                self.window?.rootViewController?.presentedViewController == nil else { return }
+            self.becomeFirstResponder()
+        }
         store.interruptInput = { [weak self] in self?.interruptContacts() }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
         frames.submittedViewport = { [weak self] in self?.accessibilityValue = "Metal ready" }
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
     }
     required init?(coder: NSCoder) { fatalError("Use init(store:)") }
     override var canBecomeFirstResponder: Bool { true }
@@ -52,13 +60,7 @@ final class CanvasView: UIView {
         super.didMoveToWindow()
         sceneGeometry = nil
         if let window {
-            // iPadOS window resizing owns bottom-corner drags even when UIKit
-            // reports zero safe-area insets. Reserve one editor tile of control
-            // clearance; Rust applies it to docks, drawers and floating bounds.
-            // The Metal drawable and canvas coordinates retain the full window.
-            if #available(iOS 26.0, *), traitCollection.userInterfaceIdiom == .pad {
-                store.dispatch(["type": "measure_workspace_bottom", "inset": 36])
-            }
+            measureWorkspaceBottom()
             store.systemSceneID = window.windowScene?.session.persistentIdentifier
             store.focusWindow = { [weak window] in
                 guard let scene = window?.windowScene else { return }
@@ -97,6 +99,7 @@ final class CanvasView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         guard window != nil, bounds.width > 0, bounds.height > 0 else { return }
+        measureWorkspaceBottom()
         let extent = CGSize(width: (bounds.width * contentScaleFactor).rounded(), height: (bounds.height * contentScaleFactor).rounded())
         guard extent != drawableExtent || !attached else { return }
         drawableExtent = extent
@@ -112,6 +115,24 @@ final class CanvasView: UIView {
             frames.activate()
         } else { store.native?.resize(width: width, height: height, scale: Float(contentScaleFactor)) }
         wake()
+    }
+    @objc private func keyboardChanged(_ notification: Notification) {
+        // Read UIKit's per-window guide after its layout update. Shared workspace
+        // clearance moves controls above the keyboard without resizing the canvas.
+        DispatchQueue.main.async { [weak self] in
+            self?.window?.layoutIfNeeded()
+            self?.measureWorkspaceBottom()
+        }
+    }
+    private func measureWorkspaceBottom() {
+        guard window != nil, bounds.height > 0 else { return }
+        var minimum: CGFloat = 0
+        if #available(iOS 26.0, *), traitCollection.userInterfaceIdiom == .pad { minimum = 36 }
+        let keyboard = bounds.intersection(keyboardLayoutGuide.layoutFrame)
+        let inset = max(minimum, keyboard.isNull ? 0 : keyboard.height)
+        guard inset != workspaceBottom else { return }
+        workspaceBottom = inset
+        store.dispatch(["type": "measure_workspace_bottom", "inset": Double(inset)])
     }
     func stop() {
         frames.deactivate()

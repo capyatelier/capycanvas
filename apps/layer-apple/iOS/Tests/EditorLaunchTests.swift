@@ -3,7 +3,96 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testEditorKeyboardFocus() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkEditorKeyboardFocus(in: editorCaptureApplication())
+    }
+    @MainActor func testNumericTextHistory() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkNumericTextHistory(in: editorCaptureApplication())
+    }
+
+    @MainActor func testBlendAndLiquify() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkBlendAndLiquify(in: editorCaptureApplication())
+    }
+
+    @MainActor func testPaintingBrushes() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkPaintingBrushes(in: editorCaptureApplication())
+    }
+
+    @MainActor func testMaskTransforms() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkMaskTransforms(in: editorCaptureApplication())
+    }
+
+    @MainActor func testGroupArtworkWorkflow() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkGroupArtworkWorkflow(in: editorCaptureApplication())
+    }
+
+    @MainActor func testMoveAndTransformCancellation() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkMoveAndTransformCancellation(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTransformFieldRetainsScroll() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkTransformFieldRetainsScroll(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTransformRotationAndHandles() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkTransformRotationAndHandles(in: editorCaptureApplication())
+    }
+
+    @MainActor func testLassoControls() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkLassoControls(in: editorCaptureApplication())
+    }
+
+    @MainActor func testHandAndEyedropper() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkHandAndEyedropper(in: editorCaptureApplication())
+    }
+
+    @MainActor func testRegionSelectionAndFill() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkRegionSelectionAndFill(in: editorCaptureApplication())
+    }
+
+    @MainActor func testSelectionInversion() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSelectionInversion(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeWorkspaceContextAction() { checkNativeWorkspaceContextAction() }
+
+    @MainActor func testRulerWorkflow() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkRulerWorkflow(in: editorCaptureApplication())
+    }
+
+    @MainActor func testFiguresAndGradients() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkFiguresAndGradients(in: editorCaptureApplication())
+    }
+
+    @MainActor func testAboutAndApplicationMenus() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkAboutAndApplicationMenus(in: editorCaptureApplication())
+    }
+
+    @MainActor func testApplicationLinkHandoff() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkApplicationLinkHandoff(in: editorCaptureApplication())
+    }
+
+    @MainActor func testSelectionAndTransform() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSelectionAndTransform(in: editorCaptureApplication())
+    }
 
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
@@ -169,6 +258,20 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testTitleBarCustomization() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkTitleBarCustomization(in: editorTestApplication())
+    }
+
+    @MainActor func testCanvasContactKeepsWindow() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        app.launch()
+        workspaceActivate(app.buttons["workspace-switch-builtin:workspace:painter"])
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        let before = app.frame
+        let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+        start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 150, dy: -100)))
+        XCTAssertEqual(app.frame, before, "A canvas contact must not move or resize the OS window")
     }
 
     @MainActor func testTitleBarToolDrawers() {

@@ -20,9 +20,15 @@ extension FocusedValues {
 
 struct MacEditorCommands: Commands {
     @FocusedValue(\.editorStore) private var store
+    @Environment(\.openWindow) private var openWindow
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             if let store { CatalogMenuItems(store: store, id: "file") }
+            else {
+                // A windowless app must still open an editor. Keeping New
+                // present also retains File before the first scene gains focus.
+                Button("New Window") { openWindow(id: "editor") }.keyboardShortcut("n")
+            }
         }
         CommandGroup(replacing: .undoRedo) {
             if let store { CatalogMenuItems(store: store, id: "edit", excluding: ["settings"]) }

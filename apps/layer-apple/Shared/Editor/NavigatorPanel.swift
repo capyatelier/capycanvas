@@ -13,7 +13,6 @@ struct NavigatorPanel: View {
                     IconTile(icon: command["icon"].string, label: command["tooltip"].string,
                         selected: command["selected"].bool, enabled: command["enabled"].bool) { store.invoke(id) }
                         .frame(height: 32).accessibilityIdentifier("navigator-" + id)
-                        .accessibilityAddTraits(command["selected"].bool ? .isSelected : [])
                 }
             }
         }.padding(8)

@@ -137,13 +137,19 @@ struct NumberControl: View {
                 .allowsHitTesting(false))
             .onAppear { if showsEntry { editing = true } }
     }
-    private func finish() -> Bool {
+    private func finish(returnToCanvas: Bool) -> Bool {
         guard commit() else { return false }
-        showsEntry = false; editing = false
+        endEditing(returnToCanvas: returnToCanvas)
         return true
     }
     private func cancel() {
-        field.dirty = false; field.error = nil; showsEntry = false; editing = false; format()
+        field.dirty = false; field.error = nil; endEditing(returnToCanvas: true); format()
+    }
+    private func endEditing(returnToCanvas: Bool) {
+        showsEntry = false; editing = false
+        // Resume canvas keys after SwiftUI removes or resigns the text field.
+        // Tab keeps the native focus traversal instead.
+        if returnToCanvas { DispatchQueue.main.async { store.focusCanvas?() } }
     }
     private func stepButton(_ direction: Int) -> some View {
         let active = enabled && (direction < 0 ? field.value > control["min"].number : field.value < control["max"].number)

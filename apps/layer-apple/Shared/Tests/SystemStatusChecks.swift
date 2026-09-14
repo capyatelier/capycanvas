@@ -16,7 +16,8 @@ extension XCTestCase {
         #endif
         workspaceActivate(app.buttons["Brush color"])
         XCTAssertTrue(wheel.waitForExistence(timeout: 10))
-        XCTAssertTrue(workspaceViewport(in: app).frame.contains(drawer.frame))
+        XCTAssertTrue(workspaceViewport(in: app).frame.contains(drawer.frame),
+            "Drawer \(drawer.frame) must fit the editor \(workspaceViewport(in: app).frame)")
         workspaceActivate(app.buttons["Brush"])
         XCTAssertTrue(wheel.waitForNonExistence(timeout: 10), "Another header tool switches the drawer in one click")
         XCTAssertTrue(drawer.exists)
@@ -106,7 +107,9 @@ extension XCTestCase {
         XCTAssertFalse(item("Space").exists, "A bank click is inert")
         drag(component("space"), to: title.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
         XCTAssertTrue(item("Space").waitForExistence(timeout: 10))
+        let editorBeforeDrag = workspaceViewport(in: app).frame
         drag(item("Space"), to: workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+        XCTAssertEqual(workspaceViewport(in: app).frame, editorBeforeDrag, "Editing the title bar must not move or resize the OS window")
         XCTAssertTrue(item("Space").waitForNonExistence(timeout: 10), "Outside release removes the item")
         let target = title.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
         drag(component("tools"), to: target)

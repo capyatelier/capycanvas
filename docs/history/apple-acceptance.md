@@ -108,6 +108,48 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Native editor workflows and current hardware drawing — 2026-09-14
+
+This major milestone groups the native control, document and artwork workflows
+following the editor-fit milestone. Shared Apple controls retain the selected
+Web header surfaces and workspace pill, readable tool labels and mask-link hit
+targets. Keyboard clearance follows UIKit's per-window guide, canvas shortcuts
+resume after numeric editing and Settings, and a shared redraw request restores
+artwork after background return. Mac retains a working File menu and opens a
+new editor after its last window closes. Startup waits for both state and catalog
+before constructing controls, fixing the blank opacity readout.
+
+Native Mac/simulator workflows cover all thirty painting/erasing presets,
+figures/gradients, fill/selection sources, rulers, navigation, mask/group transforms,
+history and controls. Mac adds real artwork checks, full-screen transitions and
+native Save/Save As/restart/Open with exact decoded PNG equality. The independent
+Metal filter comparison meets the user's perceptual criterion. These retained
+results have distinct scopes; simulator controls do not establish Pencil behavior.
+
+Final integration catches and fixes Pencil painting on masks in the shared
+engine by removing paper material together with its texture, preserving contact
+geometry. Workspace comparisons retain exact JSON wire values. Sensor-correction
+comparison permits one encoding level after full-image review finds only five
+changed G-Pen bytes per Apple preset; raster structure, watercolor state and each
+result's Undo/Redo remain exact. Temporary diagnostics are removed. The integrated
+Apple/engine/host/UI suite passes 523 tests, with one host benchmark ignored.
+All seven Metal contact/project checks and both Release builds pass after
+integrating main through `1fd753a`; command and property-evidence audits pass.
+
+Both physical hosts complete ten-minute eight-layer 4K ink workloads without
+renderer errors, rejected input or missing/zero-time measured presentations.
+Cadence still fails: 909 long intervals on Mac and 727 on iPad. All owned workload
+processes are closed, the disposable iPad app is removed, its test runner is
+restored, and both existing editor descriptors are unchanged. Measurements remain
+distinct from the final mask-only repair and subsequent shader-expression grouping.
+
+The [current handoff](../development/apple-handoff.md) records native evidence,
+retained failures and remaining work. [Performance observations](../../apps/layer-apple/PERFORMANCE.md)
+retain full timing and memory figures. Physical Pencil/keyboard/provider/lifecycle,
+remaining native feature and visual cases, calibrated latency/overhead, memory
+attribution and sustained 90/120 Hz acceptance remain open. The overall goal is
+incomplete. All eleven recovery stashes and private evidence remain local.
+
 ## Editor fit, footer grips and gray title-bar backgrounds — 2026-09-13
 
 Apple now fits docked Color wheels to available height, retaining the shared
