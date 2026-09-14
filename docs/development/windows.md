@@ -195,6 +195,10 @@ local files; export does not mark the editable project as saved.
 
 ## Validate
 
+The [independent filter comparison](windows-filter-qualification.md) records
+D3D12/Vulkan migration checks and distinguishes them from the still-failing
+Linux PNG reference comparison.
+
 ```powershell
 cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib
 ./apps/layer-windows/scripts/exercise-persistence.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe

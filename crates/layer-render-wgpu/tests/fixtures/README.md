@@ -33,6 +33,11 @@ quantizer. Neither changes the strict independent PNG comparison.
 This qualification is Vulkan on the Linux reference GPU. It does not establish
 Metal, D3D12 or browser parity. No renderer test overwrites reference fixtures.
 
+A separate [Windows independent comparison](../../../../docs/development/windows-filter-qualification.md)
+qualifies the same sampled migration cases against the old algorithms on one
+Intel D3D12/Vulkan device. Both versions still differ from this Linux PNG; the
+reference and ordinary comparison gate remain unchanged.
+
 All artwork is original project test data under MIT OR Apache-2.0.
 
 PNG SHA-256: `9319d81ad1dff090d97afba43e268864ef1bfce0fcb96aa91cee6717178e5f1a`.
