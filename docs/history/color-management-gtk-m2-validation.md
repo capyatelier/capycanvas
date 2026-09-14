@@ -14,7 +14,8 @@ historical research document's descriptions of linear8 painting and stroke
 archives do not describe this checkout. Current painting and physical effect
 boundaries use `Rgba8UnormSrgb`, with linear-premultiplied Float32 shader values.
 
-Remaining prerequisites before enabling large integer16 documents:
+Initial prerequisite audit (completed work and remaining limits are recorded
+in the implementation sections below):
 
 - Pixel descriptors, plane validation, source stride calculations, GPU formats,
   sampling and export accept only sRGB8/R8. Extend the complete precision path;
@@ -1060,3 +1061,168 @@ workflow passes. Logs: `source-thumbnail-native-build.log`,
 `source-thumbnail-gtk-{files,recovery}{,-run}.log`. Ordinary drawing shaders and
 paint-only thumbnail behavior are unchanged; final sustained frame and native
 input-to-present qualification remains required with the complete GTK workflow.
+
+## Tiled photo transforms and capture reuse
+
+Ordered and live transforms now read immutable paint/source tiles directly.
+The production rectangular-capture allocator and its full-image copy path are
+removed. Each output region binds at most sixteen source tiles and evaluates
+four-tap interpolation explicitly in Float32. A conservative inverse footprint
+includes Float32 coordinate rounding; larger footprints split into smaller output
+regions before any destination mutation. Planning rejects noninvertible input,
+unrepresentable coordinates or more than 65,536 regions per channel.
+
+Original photo data stays in the existing bounded decoded-source cache. A new
+paint override first receives the untouched original tile, then the transformed
+scissor, so a partial selection does not erase pixels elsewhere in the page.
+Existing paint surfaces share the snapshot until their first overwrite; that
+first overwrite copies them into reusable per-coordinate snapshot tiles. All
+copies for a channel precede its draws. This keeps live target identities stable
+and avoids allocating replacement textures on each committed transform. Reuse
+also applies to existing texture views. Active copies follow the overwritten
+paint footprint; after a transaction, each channel retains at most 64 snapshot
+tiles. This is **not yet a bounded working-residency implementation for dense
+edited integer16 photographs**. Disposable preview pages follow peak visited
+footprints and are released on cancel or commit.
+
+Source metadata and transform parameters upload in batches, with independent
+aligned dynamic offsets. A 256-entry binding cache uses resource identities and
+retains only views owned by the reusable snapshot pool between transactions.
+Pool pruning releases coordinates absent from the next paint snapshot. Buffer
+growth clears bindings, and allocation accounting avoids counting shared buffers
+or unchanged paint surfaces twice. There is no retained full-resolution Float32
+capture of the original photograph.
+
+The new physical-GPU test uses a 1537×1025 integer16 source (35 tiles) inside a
+1792×1280 document, versus an equivalent materialized endpoint-color reference.
+Eight full-image comparisons cover full/fractional selections, fractional
+translation, strong rotated downscale, flipped rotation and identity. Maximum
+per-channel integer8 difference is one code. Cancel restores exact displayed
+pixels and releases all photo paint overrides; a matching preview commit has
+no jump, and undo/redo restore exact captured raster states. Source tile hashes
+remain unchanged. This endpoint test qualifies source integration into the
+currently exposed sRGB8 renderer; it **does not qualify integer16 edit precision**.
+Existing primitive, masks, linked-mask, wetness, preview-page reuse and ordered
+transform tests also pass.
+
+### Existing transform performance
+
+The fresh parent is `317acfd`; the fresh fixed reference is `e46f271`. The
+unchanged 2048×1536 harness runs 160 frames per case, discarding 40 warm-up frames.
+Each comparison arm runs five repetitions; the sequence is current, fixed,
+parent, parent, fixed, current. Values below are ranges of the two arms' median
+per-run p95 values, in milliseconds. Each version contributes 12,000 measured
+frames across six live and four ordered cases. These measure CPU construction,
+GPU timestamps and GPU completion, not native input-to-present latency.
+
+| Case | Fixed CPU p95 | Parent CPU p95 | Current CPU p95 | Parent completed p95 | Current completed p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ordered GPen, full | 0.365–0.424 | 0.370–0.443 | 0.443–0.444 | 0.736–0.809 | 0.791–0.795 |
+| Ordered GPen, selected | 0.393–0.410 | 0.394–0.464 | 0.501–0.505 | 0.800–0.874 | 0.816–0.833 |
+| Ordered WetRound, selected | 0.725–0.791 | 0.717–0.755 | 0.899–0.929 | 1.456–1.481 | 1.511–1.557 |
+| Ordered watercolor, selected | 0.889–0.937 | 0.935–0.984 | 1.068–1.125 | 1.694–1.755 | 1.715–1.771 |
+| Live GPen, full | 0.275–0.283 | 0.270–0.280 | 0.344–0.363 | 0.440–0.459 | 0.519–0.544 |
+| Live GPen, selected | 0.266–0.316 | 0.270–0.275 | 0.347–0.360 | 0.435–0.436 | 0.533–0.540 |
+| Live WetRound, selected | 0.429–0.444 | 0.438–0.443 | 0.558–0.585 | 0.696–0.722 | 0.812–0.851 |
+| Live watercolor, selected | 0.624 | 0.598–0.643 | 0.720–0.754 | 0.882–0.963 | 1.020–1.071 |
+| Live GPen, linked mask | 0.898–0.941 | 0.935–0.960 | 1.057–1.066 | 1.562–1.605 | 1.702–1.717 |
+| Live watercolor, linked mask | 3.165–3.207 | 3.110–3.181 | 3.491–3.653 | 4.712–4.779 | 5.167–5.193 |
+
+All runs pass the existing completed-p99 <8.333 ms assertion. **The linked-mask
+watercolor regression remains above the relative investigation trigger**:
+current CPU p99 arm medians 4.395–4.722 ms versus parent 3.920–3.931 and fixed
+3.867–3.888; completed p99 5.472–5.511 versus parent 4.942–5.063 and fixed
+5.069–5.317. Some WetRound tail measurements also trigger, with overlapping
+parent noise. These are retained concerns for the final sustained native
+qualification, not a declaration that the unchanged-path gate has passed.
+
+The initial correct prototype interleaved per-region metadata copies with draws
+and allocated replacement target textures repeatedly. For example, selected
+ordered WetRound used CPU p95 2.179 ms and completed p95 3.726 ms, versus final
+0.899–0.929 and 1.511–1.557. Batched metadata restored GPU p95 to the parent's
+level or better; reusable snapshots and views removed most allocation overhead.
+Final ordered GPU p95 is approximately 0.307/0.245/0.542/0.558 ms for the four
+cases, versus parent 0.317/0.351/0.647/0.664. Live GPU p95 remains approximately
+0.126/0.123/0.203/0.218/0.544/1.400 ms.
+
+Temporary phase probes locate planning at 7–18 μs and typical complete transform
+encoding at 54–123 μs. Much of the remaining CPU cost is outside that encoder,
+consistent with validation/submission of the expanded source bindings. That is
+an inference, not a driver profile. A reusable render-bundle experiment passed
+correctness but did not improve the measured workloads enough to retain; it was
+removed. Diagnostic runs are excluded from the paired qualification measurements.
+
+Capture/uniform storage grows by only 49,968–148,272 bytes in these cases for
+batched metadata; snapshot pool coordinates do not accumulate across unrelated
+workloads. For example full GPen uses 12,649,408 bytes versus parent's 12,599,440;
+live linked-mask watercolor uses 19,282,464 versus 19,134,192, excluding its
+2,621,440-byte preview spare footprint. Transform snapshot storage follows
+modified paint, not source-photo dimensions.
+
+Saved executables and logs use `tiled-transform-{parent,fixed,view-reuse}-gpu-tests`
+and `tiled-transform-final-paired-*`; the machine-readable arm summary is
+`tiled-transform-final-paired-summary.json`. Reproduce with the printed release
+GPU test executable, `LAYER_GPU_INDEX=0`, and the ignored filters
+`layer_tests::transforms::{live_transform_latency,ordered_transform_latency}`
+(one filter per invocation, `--nocapture --test-threads=1`). Intermediate,
+instrumented and discarded-experiment logs remain under `tiled-transform-*`.
+
+### Photo transform limits before viewport residency
+
+`photo_transform_workloads` uses the same deterministic ProPhoto16 ramps,
+stripes and low-alpha codes as the thumbnail workload. It constructs a fresh
+renderer and source, renders into the current sRGB8 document path, and sets a
+1920×1080 fit view. Source construction and renderer initialization precede the
+startup timer. It then measures a moving 1024×1024 polygon selection and a
+full-photo transform, each with 20 warm-up and 100 measured updates. Cancel
+releases every preview paint override and source tile hashes remain unchanged.
+The memory figures include the full current compositor, paint overrides,
+transform state, source cache and explicit staging; they exclude driver-private
+allocations. Process high-water includes fixture construction and initialization.
+
+| Measurement | 24 MP (6000×4000) | 45 MP (8192×5504) | 60 MP (8192×7324) |
+| --- | ---: | ---: | ---: |
+| Initial source composition completed ms | 273.978 | 472.444 | 618.907 |
+| First 1 MP selection CPU / completed ms | 22.760 / 24.477 | 21.556 / 22.210 | 21.648 / 22.373 |
+| Warm 1 MP selection CPU p95 / p99 ms | 16.426 / 16.583 | 19.688 / 20.049 | 19.708 / 20.480 |
+| Warm 1 MP selection completed p95 / p99 ms | 17.898 / 18.085 | 20.336 / 20.540 | 20.291 / 20.540 |
+| First full-photo CPU / completed ms | 397.752 / 401.343 | 979.886 / 980.977 | 978.672 / 981.613 |
+| Warm full-photo CPU p95 / p99 ms | 509.474 / 522.939 | 941.705 / 948.919 | 1227.490 / 1232.763 |
+| Warm full-photo completed p95 / p99 ms | 513.082 / 526.307 | 945.671 / 952.811 | 1230.485 / 1235.784 |
+| Initial renderer residency bytes | 181230528 | 266109888 | 325747648 |
+| Peak full-preview renderer residency bytes | 283477024 | 452766752 | 571124768 |
+| Full-preview paint bytes | 100663296 | 184549376 | 243269632 |
+| Full-preview transform storage bytes | 1054704 | 1578992 | 1578992 |
+| Peak source upload bytes | 8388608 | 8388608 | 8388608 |
+| Process high-water KiB | 413148 | 356544 | 354516 |
+
+These measurements **fail the interactive frame budget**. Original-photo
+sampling is bounded in memory, but a moving 1 MP selection decodes 2,500/3,000/
+3,000 source tiles over 100 updates; full-photo updates decode 77,380/141,760/
+186,386. The source cache is smaller than even that selected footprint, and
+full-resolution preview/composite processing remains proportional to document
+area despite the fit view. Increasing the number of full-resolution working
+copies is not an accepted fix. Before enabling the workflow, viewport/mip
+residency must serve previews, and full-resolution committed work must be
+scheduled independently with explicit cancellation/publication boundaries.
+These runs establish the blocker and its current cost, not a supported device
+or workload envelope. No GTK photo mode was enabled by this checkpoint.
+
+Reproduce with `cargo test --offline --release -p layer-render-wgpu --lib
+--no-run`, then `/usr/bin/time -v env LAYER_GPU_INDEX=0
+LAYER_PHOTO_BENCH_EXTENT=6000x4000 TEST_BINARY
+layer_tests::transforms::photo_transform_workloads --ignored --nocapture
+--test-threads=1`. Repeat for the other extents. The default is 100 measured
+samples; `LAYER_PHOTO_BENCH_SAMPLES` permits explicitly labeled exploratory runs
+of at least 20. The reported runs all use the default. Saved executable:
+`tiled-transform-final-gpu-tests`; logs: `tiled-transform-photo-{24,45,60}.log`.
+Source and executable hashes are in `tiled-transform-artifact-sha256.json`.
+
+The final GTK build passes **140 GPU tests / 20 benchmark tests ignored**, all
+four project round trips, and isolated native GTK file and diagnostics/GPU
+recovery workflows. The recovery test's injected GPU validation failure is
+expected; recovery completes. Logs: `tiled-transform-native-build.log`,
+`tiled-transform-{gpu-tests,project-tests}.log`, and
+`tiled-transform-gtk-{files,recovery}{,-run}.log`. Formatting checks for the
+changed Rust modules and `git diff --check` pass. Other platform hosts were not
+integrated or qualified in this checkpoint.

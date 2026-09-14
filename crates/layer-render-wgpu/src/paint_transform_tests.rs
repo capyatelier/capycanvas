@@ -1196,3 +1196,395 @@ fn measure_transform_latency(live: bool) {
         assert!(completed[2] < 8.333);
     }
 }
+
+#[test]
+fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_history() {
+    use layer_core::color::{IntegerDepth, source::*};
+    use layer_core::raster::RasterRevision;
+    use std::sync::Arc;
+    let size = [1537, 1025]; // Thirty-five original tiles, beyond cache capacity.
+    let extent = [1792, 1280];
+    let mut builder = SourceBuilder::new(
+        size,
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            profile: Default::default(),
+            profile_assumed: false,
+        },
+        32 * 1024 * 1024,
+    )
+    .unwrap();
+    let mut pixels = Vec::new();
+    for y in 0..size[1] {
+        let mut row = Vec::new();
+        for x in 0..size[0] {
+            let pixel = [
+                if (x / 97 + y / 131) % 2 == 0 {
+                    255u8
+                } else {
+                    0
+                },
+                if (x / 197 + y / 67) % 3 == 0 { 255 } else { 0 },
+                if (x / 256 + y / 256) % 2 == 0 { 255 } else { 0 },
+                if (x / 311 + y / 173) % 5 == 0 { 0 } else { 255 },
+            ];
+            pixels.extend_from_slice(&pixel);
+            row.extend(
+                pixel
+                    .into_iter()
+                    .flat_map(|v| (u16::from(v) * 257).to_le_bytes()),
+            );
+        }
+        builder.push_row(&row).unwrap();
+    }
+    let source = Arc::new(builder.finish().unwrap());
+    let digests: Vec<_> = source.tiles.values().map(|t| t.digest).collect();
+    let asset = AssetId::from("test:transform-materialized-original");
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut reference = WgpuRasterizer::from_wgpu_inner(
+        r.adapter.clone(),
+        r.device.clone(),
+        r.queue.clone(),
+        false,
+    )
+    .unwrap();
+    reference
+        .prepare_asset(
+            &asset,
+            HostImage {
+                width: size[0],
+                height: size[1],
+                stride: size[0] * 4,
+                format: PixelFormat::Rgba8Srgb,
+                bytes: &pixels,
+            },
+        )
+        .unwrap();
+    let mut layer = Layer::paint(LayerId(1), "original photo");
+    layer.source = Some(source.clone());
+    let mut baked = Layer::paint(layer.id, "materialized photo");
+    baked.asset = Some(asset);
+    let frame = |r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset| {
+        r.submit(FramePacket {
+            view: ViewState {
+                width_px: extent[0],
+                height_px: extent[1],
+                ..view()
+            },
+            document_extent: extent,
+            layers: std::slice::from_ref(layer),
+            dabs: &[],
+            dab_batches: batches,
+            restore_rasters: &[],
+            reset_layers: reset,
+            time_seconds: 0.,
+            composite_all: reset,
+        })
+        .unwrap();
+    };
+    frame(&mut r, &layer, &[], true);
+    frame(&mut reference, &baked, &[], true);
+    let display = |r: &WgpuRasterizer| page_bytes(r, r.composite_texture.as_ref().unwrap());
+    let original = display(&r);
+    let selection = Selection::polygon(vec![
+        Point {
+            x: 200.25,
+            y: 254.5,
+        },
+        Point {
+            x: 1450.75,
+            y: 254.5,
+        },
+        Point {
+            x: 1450.75,
+            y: 770.25,
+        },
+        Point {
+            x: 200.25,
+            y: 770.25,
+        },
+    ])
+    .unwrap();
+    let mut preview = layer_render::TransformPreview {
+        transaction: 1,
+        layer: layer.id,
+        selection: None,
+        transform: Default::default(),
+    };
+    for selected in [None, Some(selection)] {
+        preview.transaction += 1;
+        preview.selection = selected;
+        for affine in [
+            Affine::translation(Point {
+                x: 137.25,
+                y: -93.75,
+            }),
+            Affine::around(
+                Point { x: 768., y: 512. },
+                [0.11, 0.09],
+                0.7,
+                Point { x: -100., y: 50. },
+            ),
+            Affine::around(
+                Point { x: 768., y: 512. },
+                [-0.9, 1.1],
+                -0.17,
+                Point { x: 31.5, y: 27.25 },
+            ),
+            Affine::IDENTITY,
+        ] {
+            preview.transform = ImageTransform {
+                affine,
+                interpolation: Interpolation::Linear,
+            };
+            for (renderer, layer) in [(&mut r, &layer), (&mut reference, &baked)] {
+                renderer.set_transform_preview(Some(&preview)).unwrap();
+                frame(renderer, layer, &[], false);
+            }
+            let actual = display(&r);
+            let expected = display(&reference);
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(
+                error <= 1,
+                "original/materialized transform error {error}, {affine:?}"
+            );
+            assert!(
+                r.transforms.as_ref().unwrap().storage_bytes()
+                    - r.transforms.as_ref().unwrap().spare_page_bytes()
+                    < 1024 * 1024,
+                "original photo transform must not capture a full rectangular image"
+            );
+        }
+        for (renderer, layer) in [(&mut r, &layer), (&mut reference, &baked)] {
+            renderer.set_transform_preview(None).unwrap();
+            frame(renderer, layer, &[], false);
+        }
+        assert!(
+            display(&r) == original,
+            "cancel preserves original photo exactly"
+        );
+        assert!(
+            r.paint_layers[0].pages.is_empty(),
+            "cancel releases all disposable photo overrides"
+        );
+    }
+    // A matching preview commits its existing tiles, then raster history alone
+    // restores them. No transform reconstruction is needed by undo or redo.
+    preview.transaction += 1;
+    preview.transform.affine = Affine::translation(Point { x: 83.25, y: 127.5 });
+    r.set_transform_preview(Some(&preview)).unwrap();
+    frame(&mut r, &layer, &[], false);
+    let transformed = display(&r);
+    assert!(transformed != original);
+    let before = layer.raster.clone();
+    layer.raster = RasterRevision::pending();
+    let mut op = operation(999, preview.transform.affine, preview.selection.clone());
+    op.kind = LayerOperationKind::Transform(preview.transform);
+    let batch = DabBatch {
+        damage: op.bounds(extent),
+        ..op_batch(0, &op)
+    };
+    layer.pending_operations.push(op);
+    r.set_transform_preview(None).unwrap();
+    frame(&mut r, &layer, &[batch], false);
+    layer.raster.wait_data().unwrap();
+    let after = layer.raster.clone();
+    layer.pending_operations.clear();
+    assert!(display(&r) == transformed, "commit does not jump");
+    layer.raster = before;
+    frame(&mut r, &layer, &[], false);
+    assert!(display(&r) == original, "undo restores original source");
+    layer.raster = after;
+    frame(&mut r, &layer, &[], false);
+    assert!(
+        display(&r) == transformed,
+        "redo restores committed tiles exactly"
+    );
+    assert_eq!(
+        source.tiles.values().map(|t| t.digest).collect::<Vec<_>>(),
+        digests
+    );
+}
+
+#[test]
+#[ignore = "physical GPU source-backed photo transform latency and residency"]
+fn photo_transform_workloads() {
+    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+    use std::{sync::Arc, time::Instant};
+    let size = std::env::var("LAYER_PHOTO_BENCH_EXTENT").unwrap_or_else(|_| "6000x4000".into());
+    let (width, height) = size.split_once('x').unwrap();
+    let extent = [
+        width.parse::<u32>().unwrap(),
+        height.parse::<u32>().unwrap(),
+    ];
+    let samples: usize = std::env::var("LAYER_PHOTO_BENCH_SAMPLES")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(100);
+    assert!(samples >= 20);
+    let mut builder = SourceBuilder::new(
+        extent,
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
+            profile_assumed: false,
+        },
+        512 * 1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..extent[1] {
+        let row: Vec<_> = (0..extent[0])
+            .flat_map(|x| {
+                [
+                    ((x * 8191 + y * 31) % 65536) as u16,
+                    ((x * 17 + y * 16381) % 65536) as u16,
+                    if (x / 173 + y / 111) % 2 == 0 {
+                        65535
+                    } else {
+                        0
+                    },
+                    [0, 1, 257, 32768, 65535][((x + y * 3) % 5) as usize],
+                ]
+            })
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        builder.push_row(&row).unwrap();
+    }
+    let source = Arc::new(builder.finish().unwrap());
+    let digests: Vec<_> = source.tiles.values().map(|t| t.digest).collect();
+    let mut layer = Layer::paint(LayerId(1), "photo transform benchmark");
+    layer.source = Some(source.clone());
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let zoom = (1920. / extent[0] as f32).min(1080. / extent[1] as f32);
+    let frame = |r: &mut WgpuRasterizer, reset| {
+        r.submit(FramePacket {
+            view: ViewState {
+                width_px: 1920,
+                height_px: 1080,
+                document_to_surface: [zoom, 0., 0., zoom, 0., 0.],
+                ..view()
+            },
+            document_extent: extent,
+            layers: std::slice::from_ref(&layer),
+            dabs: &[],
+            dab_batches: &[],
+            restore_rasters: &[],
+            reset_layers: reset,
+            composite_all: reset,
+            time_seconds: 0.,
+        })
+        .unwrap();
+    };
+    let start = Instant::now();
+    frame(&mut r, true);
+    r.wait_idle().unwrap();
+    println!(
+        "PHOTO_TRANSFORM startup extent={extent:?} complete_ms={:.4} resident={}",
+        start.elapsed().as_secs_f64() * 1000.,
+        r.telemetry().resident_bytes
+    );
+    for selected in [true, false] {
+        let center = Point {
+            x: extent[0] as f32 * 0.5,
+            y: extent[1] as f32 * 0.5,
+        };
+        let selection = selected.then(|| {
+            Selection::polygon(vec![
+                Point {
+                    x: center.x - 512.,
+                    y: center.y - 512.,
+                },
+                Point {
+                    x: center.x + 512.,
+                    y: center.y - 512.,
+                },
+                Point {
+                    x: center.x + 512.,
+                    y: center.y + 512.,
+                },
+                Point {
+                    x: center.x - 512.,
+                    y: center.y + 512.,
+                },
+            ])
+            .unwrap()
+        });
+        let mut times = Vec::new();
+        let mut peak_resident = 0;
+        let mut peak_transform = 0;
+        let mut work_before = [0; 2];
+        for i in 0..samples + 20 {
+            if i == 20 {
+                work_before = r.scene.as_ref().unwrap().source_cache_work();
+            }
+            let start = Instant::now();
+            let t = i as f32 * 0.04;
+            r.set_transform_preview(Some(&layer_render::TransformPreview {
+                transaction: if selected { 1 } else { 2 },
+                layer: layer.id,
+                selection: selection.clone(),
+                transform: ImageTransform {
+                    affine: Affine::around(
+                        center,
+                        [1. + t.sin() * 0.02; 2],
+                        t.cos() * 0.01,
+                        Point {
+                            x: t.sin() * 5.,
+                            y: t.cos() * 3.,
+                        },
+                    ),
+                    interpolation: Interpolation::Linear,
+                },
+            }))
+            .unwrap();
+            frame(&mut r, false);
+            let cpu = start.elapsed().as_secs_f64() * 1000.;
+            r.wait_idle().unwrap();
+            let completed = start.elapsed().as_secs_f64() * 1000.;
+            peak_resident = peak_resident.max(r.telemetry().resident_bytes);
+            peak_transform = peak_transform.max(r.transforms.as_ref().unwrap().storage_bytes());
+            if i == 0 {
+                println!(
+                    "PHOTO_TRANSFORM cold selected={selected} cpu_ms={cpu:.4} complete_ms={completed:.4}"
+                );
+            }
+            if i >= 20 {
+                times.push([cpu, completed]);
+            }
+        }
+        for axis in 0..2 {
+            times.sort_by(|a, b| a[axis].total_cmp(&b[axis]));
+            println!(
+                "PHOTO_TRANSFORM warm selected={selected} samples={samples} kind={} p95_ms={:.4} p99_ms={:.4}",
+                ["cpu", "complete"][axis],
+                times[(samples as f64 * 0.95).ceil() as usize - 1][axis],
+                times[(samples as f64 * 0.99).ceil() as usize - 1][axis]
+            );
+        }
+        let work = r.scene.as_ref().unwrap().source_cache_work();
+        println!(
+            "PHOTO_TRANSFORM memory selected={selected} resident={peak_resident} transform={peak_transform} paint={} source_peak_upload={} warm_source_work={:?}",
+            r.metrics.paint_storage_bytes,
+            r.metrics.source_upload_peak_bytes,
+            [work[0] - work_before[0], work[1] - work_before[1]]
+        );
+        assert!(r.metrics.source_upload_peak_bytes <= 16 * 1024 * 1024);
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, false);
+        r.wait_idle().unwrap();
+        assert!(r.paint_layers[0].pages.is_empty());
+        assert!(
+            source
+                .tiles
+                .values()
+                .map(|t| t.digest)
+                .eq(digests.iter().copied())
+        );
+    }
+}

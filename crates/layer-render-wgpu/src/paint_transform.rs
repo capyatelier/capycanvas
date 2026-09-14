@@ -3,6 +3,8 @@
 //! Linked paint and mask targets run the same transaction with separate origins.
 use super::*;
 use pixel_transform::{PixelTransform, TransformSource, TransformTarget};
+mod snapshot;
+use snapshot::TileSnapshot;
 
 pub(super) struct PaintTransforms([ImageTransformState; 2]);
 impl PaintTransforms {
@@ -20,12 +22,17 @@ impl PaintTransforms {
         }
     }
     pub fn storage_bytes(&self) -> u64 {
-        // The three empty selection bindings are shared by both targets.
+        // Empty selection and ordered source-record buffers are shared by both targets.
         self.0
             .iter()
             .map(ImageTransformState::storage_bytes)
             .sum::<u64>()
             - 3 * 48
+            - self.0[0].color.shared_source_bytes(&self.0[1].color)
+            - self.0[0].scalar.shared_source_bytes(&self.0[1].scalar)
+            - self.0[0]
+                .visibility
+                .shared_source_bytes(&self.0[1].visibility)
     }
     pub fn has_preview(&self) -> bool {
         self.0.iter().any(ImageTransformState::has_preview)
@@ -101,9 +108,10 @@ struct ImageTransformState {
     scalar: PixelTransform,
     visibility: PixelTransform,
     background: Option<f32>,
-    captures: [Option<wgpu::Texture>; 3],
-    sources: [Option<TransformSource>; 3],
+    sources: [Option<TileSnapshot>; 3],
+    captures: [std::collections::BTreeMap<[u32; 2], snapshot::SnapshotPage>; 3],
     selection: Option<wgpu::Buffer>,
+    has_selection: bool,
     cut: layer_core::Rect,
     original_pages: [Vec<[u32; 2]>; 3],
     source_bounds: [PixelRect; 3],
@@ -165,9 +173,10 @@ impl ImageTransformState {
             scalar,
             visibility,
             background: None,
-            captures: Default::default(),
             sources: Default::default(),
+            captures: Default::default(),
             selection: None,
+            has_selection: false,
             cut: layer_core::Rect::EMPTY,
             original_pages: Default::default(),
             source_bounds: [PixelRect::EMPTY; 3],
@@ -199,11 +208,11 @@ impl ImageTransformState {
             + self
                 .captures
                 .iter()
-                .flatten()
-                .map(|t| {
-                    u64::from(t.width())
-                        * u64::from(t.height())
-                        * if t.format() == COLOR_FORMAT { 4 } else { 1 }
+                .flat_map(|pages| pages.values())
+                .map(|p| {
+                    u64::from(p.texture.width())
+                        * u64::from(p.texture.height())
+                        * u64::from(p.texture.format().block_copy_size(None).unwrap())
                 })
                 .sum::<u64>()
     }
@@ -231,7 +240,9 @@ impl ImageTransformState {
         let regions = transform
             .affected_regions(self.cut)
             .map(|b| pixel_rect(b, extent));
-        self.render_source(r, encoder, layer, transform, &regions)
+        let result = self.render_source(r, encoder, layer, transform, &regions);
+        self.release_snapshot();
+        result
     }
     fn capture_source(
         &mut self,
@@ -242,9 +253,14 @@ impl ImageTransformState {
         extent: [u32; 2],
     ) -> Result<(), GpuRasterError> {
         self.spares.clear();
-        self.sources = Default::default();
+        self.release_snapshot();
+        self.has_selection = selection.is_some();
         self.cut = layer_core::Rect::EMPTY;
         let (background, pages) = source_pages(r, layer)?;
+        let original = background
+            .is_none()
+            .then(|| r.tiled_sources.get(&layer).cloned())
+            .flatten();
         self.background = background;
         self.original_pages = std::array::from_fn(|i| pages[i].iter().map(|(c, _)| *c).collect());
         self.source_bounds = std::array::from_fn(|i| {
@@ -253,6 +269,10 @@ impl ImageTransformState {
                 .fold(PixelRect::EMPTY, |b, (c, _)| b.union(page_rect(*c)))
                 .intersect(PixelRect::full(extent))
         });
+        if let Some(original) = &original {
+            self.source_bounds[0] = self.source_bounds[0]
+                .union(PixelRect::full(original.extent).intersect(PixelRect::full(extent)));
+        }
         let source_bounds = self
             .source_bounds
             .into_iter()
@@ -300,97 +320,30 @@ impl ImageTransformState {
             }
             encoder.copy_buffer_to_buffer(source, 0, target, 0, source.size());
         }
-        let material = !pages[1].is_empty();
-        let watercolor = !pages[2].is_empty();
-        // Capture every channel before overwriting any destination. Reuse the
-        // textures across operations; encoder ordering keeps consecutive edits
-        // independent even when they share the capture resources.
-        for (channel, enabled) in [true, material, watercolor].into_iter().enumerate() {
-            if !enabled {
-                self.captures[channel] = None;
-                continue;
+        for (channel, pages) in pages.into_iter().enumerate() {
+            if channel == 0 || !pages.is_empty() {
+                let bounds = if self.source_bounds[channel].is_empty() {
+                    source_bounds
+                } else {
+                    self.source_bounds[channel]
+                };
+                self.sources[channel] = Some(TileSnapshot::new(
+                    pages,
+                    if channel == 0 { original.clone() } else { None },
+                    bounds,
+                ));
             }
-            // Each scalar field may occupy much less area than the pigment.
-            // Capturing their union would allocate and transform dry canvas too.
-            let source_bounds = if self.source_bounds[channel].is_empty() {
-                source_bounds
-            } else {
-                self.source_bounds[channel]
-            };
-            let size = [source_bounds.width(), source_bounds.height()];
-            if size
-                .iter()
-                .any(|v| *v > r.device.limits().max_texture_dimension_2d)
-            {
-                return Err(GpuRasterError::SizeOverflow);
-            }
-            let format = if channel == 0 && background.is_none() {
-                COLOR_FORMAT
-            } else {
-                wgpu::TextureFormat::R8Unorm
-            };
-            let capture =
-                self.captures[channel].get_or_insert_with(|| capture(&r.device, size, format));
-            if [capture.width(), capture.height()] != size || capture.format() != format {
-                *capture = self::capture(&r.device, size, format);
-            }
-            r.encode_clear_value(
-                encoder,
-                &capture.create_view(&Default::default()),
-                "clear transform source",
-                background.unwrap_or(0.),
-            );
-            let mut copy = |coordinate: [u32; 2], source: &wgpu::Texture| {
-                let region = page_rect(coordinate).intersect(source_bounds);
-                if region.is_empty() {
-                    return;
-                }
-                let local = region.page_local(coordinate);
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        origin: wgpu::Origin3d {
-                            x: local.min_x(),
-                            y: local.min_y(),
-                            z: 0,
-                        },
-                        ..source.as_image_copy()
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        origin: wgpu::Origin3d {
-                            x: region.min_x() - source_bounds.min_x(),
-                            y: region.min_y() - source_bounds.min_y(),
-                            z: 0,
-                        },
-                        ..capture.as_image_copy()
-                    },
-                    wgpu::Extent3d {
-                        width: region.width(),
-                        height: region.height(),
-                        depth_or_array_layers: 1,
-                    },
-                );
-            };
-            for (coordinate, texture) in &pages[channel] {
-                copy(*coordinate, texture);
-            }
-            let pass = if background.is_some() {
-                &mut self.visibility
-            } else if channel == 0 {
-                &mut self.color
-            } else {
-                &mut self.scalar
-            };
-            self.sources[channel] = Some(
-                pass.source(
-                    &r.device,
-                    capture,
-                    [source_bounds.min_x() as i32, source_bounds.min_y() as i32],
-                    selection.and(self.selection.as_ref()),
-                )
-                .map_err(GpuRasterError::InvalidTransform)?,
-            );
-            self.sources[channel].as_mut().unwrap().background = background.unwrap_or(0.);
         }
+        for (channel, pages) in self.captures.iter_mut().enumerate() {
+            pages.retain(|c, p| {
+                self.sources[channel].as_ref().is_some_and(|s| {
+                    s.pages
+                        .get(c)
+                        .is_some_and(|source| source.texture.format() == p.texture.format())
+                })
+            });
+        }
+        self.retain_pool_bindings();
         Ok(())
     }
     fn render_source(
@@ -414,6 +367,23 @@ impl ImageTransformState {
             .filter(|b| !b.is_empty())
             .flat_map(page_coordinates)
             .collect();
+        let mut plans: [Vec<snapshot::RegionJob>; 3] = Default::default();
+        for (channel, snapshot) in self.sources.iter().enumerate() {
+            if let Some(snapshot) = snapshot {
+                plans[channel] = snapshot.jobs(
+                    transform,
+                    coordinates.iter().copied().filter(|c| {
+                        channel == 0
+                            || destination(r, layer, channel, false, *c).is_some()
+                            || support[channel]
+                                .iter()
+                                .any(|b| !b.page_local(*c).is_empty())
+                    }),
+                    regions,
+                )?;
+            }
+        }
+        let mut initialize_original = std::collections::BTreeSet::new();
         for c in coordinates {
             if let Some(background) = self.background {
                 if !r.layer_masks.pages.contains_key(&(layer, c)) {
@@ -449,6 +419,17 @@ impl ImageTransformState {
                 r.encode_clear(encoder, &page.primary.view, "initialize transformed paint");
                 page.primary_needs_clear = false;
                 r.paint_layers[index].pages.push(page);
+                if self.sources[0]
+                    .as_ref()
+                    .unwrap()
+                    .original
+                    .as_ref()
+                    .is_some_and(|s| {
+                        c[0] * PAGE_SIZE < s.extent[0] && c[1] * PAGE_SIZE < s.extent[1]
+                    })
+                {
+                    initialize_original.insert(c);
+                }
             }
             if material
                 && support[1].iter().any(|b| !b.page_local(c).is_empty())
@@ -513,11 +494,21 @@ impl ImageTransformState {
                 r.paint_layers[index].watercolor_wetness_pages.push(page);
             }
         }
-        let stored = index.map(|i| &r.paint_layers[i]);
-        for (channel, enabled) in [true, material, watercolor].into_iter().enumerate() {
-            if !enabled {
+        for (channel, jobs) in plans.into_iter().enumerate() {
+            if jobs.is_empty() {
                 continue;
             }
+            // Complete copies before sampling any original in this channel.
+            for job in &jobs {
+                self.capture_destination(r, encoder, layer, channel, job.coordinate);
+            }
+            let snapshot = self.sources[channel].as_ref().unwrap();
+            let bounds = [
+                snapshot.bounds.min_x() as i32,
+                snapshot.bounds.min_y() as i32,
+                snapshot.bounds.width() as i32,
+                snapshot.bounds.height() as i32,
+            ];
             let pass = if self.background.is_some() {
                 &mut self.visibility
             } else if channel == 0 {
@@ -525,62 +516,68 @@ impl ImageTransformState {
             } else {
                 &mut self.scalar
             };
-            let source = self.sources[channel].as_ref().unwrap();
-            let pages: Vec<_> = if self.background.is_some() {
-                r.layer_masks
-                    .pages
-                    .iter()
-                    .filter(|((id, _), _)| *id == layer)
-                    .map(|((_, c), p)| (*c, &p.view))
-                    .collect()
-            } else {
-                match channel {
-                    0 => stored
-                        .unwrap()
-                        .pages
-                        .iter()
-                        .map(|p| (p.coordinate, &p.active().view))
-                        .collect(),
-                    1 => stored
-                        .unwrap()
-                        .material_pages
-                        .iter()
-                        .map(|p| (p.coordinate, &p.wetness.view))
-                        .collect(),
-                    _ => stored
-                        .unwrap()
-                        .watercolor_wetness_pages
-                        .iter()
-                        .map(|p| (p.coordinate, &p.active().view))
-                        .collect(),
-                }
-            };
-            let targets: Vec<_> = pages
-                .into_iter()
-                .filter_map(|(c, view)| {
-                    let rect = regions
-                        .iter()
-                        .copied()
-                        .map(|b| b.page_local(c))
-                        .fold(PixelRect::EMPTY, PixelRect::union);
-                    (!rect.is_empty()).then(|| TransformTarget {
-                        view,
-                        extent: [PAGE_SIZE; 2],
-                        origin: c.map(|v| (v * PAGE_SIZE) as i32),
-                        region: [rect.min_x(), rect.min_y(), rect.width(), rect.height()],
-                    })
+            let records: Vec<_> = jobs
+                .iter()
+                .map(|job| pixel_transform::TiledTransformRecord {
+                    target: job.coordinate,
+                    sources: &job.sources,
                 })
                 .collect();
-            pass.encode(
-                &r.device,
-                &r.queue,
-                &mut r.uploads,
-                encoder,
-                source,
-                transform,
-                &targets,
-            )
-            .map_err(GpuRasterError::InvalidTransform)?;
+            let offsets = pass
+                .prepare_tiled(
+                    &r.device,
+                    &r.queue,
+                    &mut r.uploads,
+                    encoder,
+                    bounds,
+                    self.background.unwrap_or(0.),
+                    transform,
+                    &records,
+                )
+                .map_err(GpuRasterError::InvalidTransform)?;
+            for (job_index, job) in jobs.into_iter().enumerate() {
+                let Some((_, view)) =
+                    destination(r, layer, channel, self.background.is_some(), job.coordinate)
+                else {
+                    continue;
+                };
+                let view = view.clone();
+                let pass = if self.background.is_some() {
+                    &mut self.visibility
+                } else if channel == 0 {
+                    &mut self.color
+                } else {
+                    &mut self.scalar
+                };
+                let snapshot = self.sources[channel].as_ref().unwrap();
+                let source = snapshot.binding(
+                    r,
+                    pass,
+                    &job,
+                    self.has_selection
+                        .then_some(self.selection.as_ref())
+                        .flatten(),
+                    encoder,
+                )?;
+                let mut target = TransformTarget {
+                    view: &view,
+                    extent: [PAGE_SIZE; 2],
+                    origin: job.coordinate.map(|v| (v * PAGE_SIZE) as i32),
+                    region: [
+                        job.region.min_x(),
+                        job.region.min_y(),
+                        job.region.width(),
+                        job.region.height(),
+                    ],
+                };
+                if channel == 0 && initialize_original.remove(&job.coordinate) {
+                    let region = target.region;
+                    target.region = [0, 0, PAGE_SIZE, PAGE_SIZE];
+                    pass.encode_prepared(encoder, &source, offsets, job_index, true, &target);
+                    target.region = region;
+                }
+                pass.encode_prepared(encoder, &source, offsets, job_index, false, &target);
+            }
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
         // persistent wetness and the layer-level watercolor edge style intact.
@@ -592,10 +589,73 @@ impl ImageTransformState {
         Ok(())
     }
 
+    fn capture_destination(
+        &mut self,
+        r: &WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        layer: LayerId,
+        channel: usize,
+        coordinate: [u32; 2],
+    ) {
+        let Some((texture, _)) =
+            destination(r, layer, channel, self.background.is_some(), coordinate)
+        else {
+            return;
+        };
+        let snapshot = self.sources[channel].as_mut().unwrap();
+        if !snapshot.aliases(coordinate, texture) {
+            return;
+        }
+        let capture = self.captures[channel]
+            .entry(coordinate)
+            .or_insert_with(|| snapshot_page(&r.device, texture.format()));
+        if capture.texture.format() != texture.format() {
+            *capture = snapshot_page(&r.device, texture.format());
+        }
+        encoder.copy_texture_to_texture(
+            texture.as_image_copy(),
+            capture.texture.as_image_copy(),
+            texture.size(),
+        );
+        snapshot.pages.insert(
+            coordinate,
+            snapshot::SnapshotPage {
+                texture: capture.texture.clone(),
+                view: capture.view.clone(),
+            },
+        );
+    }
+    fn release_snapshot(&mut self) {
+        self.sources = Default::default();
+        // Active copies follow the overwritten paint footprint. After the
+        // transaction, retain only a small reusable pool, never every area
+        // visited by unrelated transforms. Originals themselves stay tiled.
+        for pages in &mut self.captures {
+            while pages.len() > 64 {
+                pages.pop_last();
+            }
+        }
+        self.retain_pool_bindings();
+    }
+    fn retain_pool_bindings(&mut self) {
+        let color: Vec<_> = self.captures[0].values().map(|p| &p.view).collect();
+        let scalar: Vec<_> = self.captures[1..]
+            .iter()
+            .flat_map(|p| p.values().map(|p| &p.view))
+            .collect();
+        self.color
+            .retain_source_bindings(&color, self.selection.as_ref());
+        self.visibility
+            .retain_source_bindings(&color, self.selection.as_ref());
+        self.scalar
+            .retain_source_bindings(&scalar, self.selection.as_ref());
+    }
+
     pub fn discard_preview(&mut self) {
         self.preview = None;
         self.preview_regions = [PixelRect::EMPTY; 2];
         self.spares.clear();
+        self.release_snapshot();
     }
     pub fn has_preview(&self) -> bool {
         self.preview.is_some()
@@ -654,6 +714,7 @@ impl ImageTransformState {
         self.retain_pages(r, previous.layer, &[], None);
         self.preview_regions = [PixelRect::EMPTY; 2];
         self.spares.clear();
+        self.release_snapshot();
         Ok(Some((previous.layer, regions[0].union(regions[1]))))
     }
     pub fn update_preview(
@@ -760,7 +821,63 @@ impl ImageTransformState {
         }
     }
 }
-type TexturePages = [Vec<([u32; 2], wgpu::Texture)>; 3];
+fn snapshot_page(device: &wgpu::Device, format: wgpu::TextureFormat) -> snapshot::SnapshotPage {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("reusable transform copy before overwrite"),
+        size: wgpu::Extent3d {
+            width: PAGE_SIZE,
+            height: PAGE_SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    snapshot::SnapshotPage { texture, view }
+}
+
+fn destination(
+    r: &WgpuRasterizer,
+    id: LayerId,
+    channel: usize,
+    mask: bool,
+    coordinate: [u32; 2],
+) -> Option<(&wgpu::Texture, &wgpu::TextureView)> {
+    if mask {
+        return r
+            .layer_masks
+            .pages
+            .get(&(id, coordinate))
+            .map(|p| (&p.texture, &p.view));
+    }
+    let layer = r.paint_layers.iter().find(|l| l.id == id)?;
+    let surface = match channel {
+        0 => layer
+            .pages
+            .iter()
+            .find(|p| p.coordinate == coordinate)?
+            .active(),
+        1 => {
+            &layer
+                .material_pages
+                .iter()
+                .find(|p| p.coordinate == coordinate)?
+                .wetness
+        }
+        _ => layer
+            .watercolor_wetness_pages
+            .iter()
+            .find(|p| p.coordinate == coordinate)?
+            .active(),
+    };
+    Some((&surface.texture, &surface.view))
+}
+
+type TexturePages = [Vec<([u32; 2], snapshot::SnapshotPage)>; 3];
 fn source_pages(
     r: &WgpuRasterizer,
     id: LayerId,
@@ -773,7 +890,15 @@ fn source_pages(
                     .pages
                     .iter()
                     .filter(|((target, _), _)| *target == id)
-                    .map(|((_, c), p)| (*c, p.texture.clone()))
+                    .map(|((_, c), p)| {
+                        (
+                            *c,
+                            snapshot::SnapshotPage {
+                                texture: p.texture.clone(),
+                                view: p.view.clone(),
+                            },
+                        )
+                    })
                     .collect(),
                 Vec::new(),
                 Vec::new(),
@@ -790,15 +915,39 @@ fn source_pages(
         [
             l.pages
                 .iter()
-                .map(|p| (p.coordinate, p.active().texture.clone()))
+                .map(|p| {
+                    (
+                        p.coordinate,
+                        snapshot::SnapshotPage {
+                            texture: p.active().texture.clone(),
+                            view: p.active().view.clone(),
+                        },
+                    )
+                })
                 .collect(),
             l.material_pages
                 .iter()
-                .map(|p| (p.coordinate, p.wetness.texture.clone()))
+                .map(|p| {
+                    (
+                        p.coordinate,
+                        snapshot::SnapshotPage {
+                            texture: p.wetness.texture.clone(),
+                            view: p.wetness.view.clone(),
+                        },
+                    )
+                })
                 .collect(),
             l.watercolor_wetness_pages
                 .iter()
-                .map(|p| (p.coordinate, p.active().texture.clone()))
+                .map(|p| {
+                    (
+                        p.coordinate,
+                        snapshot::SnapshotPage {
+                            texture: p.active().texture.clone(),
+                            view: p.active().view.clone(),
+                        },
+                    )
+                })
                 .collect(),
         ],
     ))
@@ -809,23 +958,5 @@ fn selection_capture(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
-    })
-}
-fn capture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("immutable transform capture"),
-        size: wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
     })
 }

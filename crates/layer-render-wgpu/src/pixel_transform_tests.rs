@@ -175,7 +175,7 @@ fn visibility_transform_matches_scalar_replacement_oracle() {
             let mut source = pass
                 .source(r.device(), &input, origin, (mode != 0).then_some(&buffer))
                 .unwrap();
-            source.background = background;
+            source.flat.as_mut().unwrap().background = background;
             let coverage = |x: i32, y: i32| -> f64 {
                 if mode == 0 {
                     return 1.;
@@ -479,9 +479,8 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     )
     .unwrap();
     assert_eq!(
-        p.storage_bytes(),
-        48,
-        "empty work does not allocate uniforms"
+        p.capacity, 0,
+        "empty work does not allocate region uniforms"
     );
     assert!(p.records.is_empty());
     let transform = ImageTransform {
