@@ -72,6 +72,11 @@ class AndroidTitleBarTest {
         fail("Timed out: $label; ${view()}")
     }
     private fun idle() {
+        // A settled workspace-manager view alone does not mean that a queued
+        // header edit and its snapshot have reached the native owner and UI.
+        val published = CountDownLatch(1)
+        instrumentation.runOnMainSync { host.query(obj("type" to "catalog")) { published.countDown() } }
+        assertTrue("Native UI publication", published.await(15, TimeUnit.SECONDS))
         SystemClock.sleep(220)
         waitFor("workspace idle") { !view().optBoolean("busy") && !view().optBoolean("switcher_busy") && !view().optBoolean("dirty") }
         assertTrue(view().toString(), view().isNull("error")); assertTrue(view().toString(), view().isNull("switcher_error"))
@@ -255,6 +260,7 @@ class AndroidTitleBarTest {
                 action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(baseline, model().toString())
                 action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(committed, model().toString())
                 startEditor(); tap("header-size-large"); tap("header-show-footer"); tap("header-edit-cancel")
+                waitFor("Cancel leaves editor") { !editing() }
                 assertEquals(committed, model().toString())
             }
     }
@@ -431,6 +437,8 @@ class AndroidTitleBarTest {
             event(MotionEvent.ACTION_MOVE, center())
             waitFor("drag dismisses held context") { node("workspace-menu") == null }
             event(MotionEvent.ACTION_CANCEL)
+            waitFor("held contact releases native focus") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
+            idle()
             assertEquals(baseline, model().toString())
         }
         tool = MotionEvent.TOOL_TYPE_MOUSE
