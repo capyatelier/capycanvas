@@ -696,3 +696,66 @@ original. A separate cache-key test verifies source replacement invalidation and
 release of historical raster maps. All 134 GPU library tests, four GPU project
 tests and native GTK file and injected GPU-failure/recovery tests pass. Logs:
 `source-cache-{build,host-build,keys,mask,gpu,project,gtk-files,gtk-recovery}.log`.
+
+## Ninth implementation stage: source-aware connected regions
+
+Raw-layer connected-region queries classify paint overrides and untouched source
+tiles directly into packed eligibility bits. The previous full-document integer8
+raw-query texture and copy path are deleted. Existing GPU morphology, connected
+components, selection limits and immutable history coverage consume that mask.
+The comparison domain remains the current sRGB8 document's alpha-weighted encoded
+color; document working-space integration is still outstanding.
+
+Classification uses up to sixteen existing texture views per dispatch, fitting
+both the source-cache capacity and portable texture-binding limit. Each batch is
+consumed before source slots can be reused. Query parameters are reused, with a
+host copy of 64 bytes per tile plus an aligned seed block; at 60 MP this is about
+59 KiB each on host and GPU. Four cached bind groups are cleared on the next
+document submission so they cannot retain retired paint pages. The packed mask
+uses one bit per document pixel; connected-component labels remain four bytes
+per pixel, preflighted against the existing device allocation limits. This stage
+does not yet replace full composition/filter captures for reference-layer queries.
+
+The 2305×513 integer16 source in a 2560×768 document distinguishes adjacent codes
+32768/32769 that would collapse in integer8. Tests cross more than sixteen source
+tiles, combine an integer8 paint override, reuse/change query parameters and
+selection limits, and check every coverage pixel including connected transparent
+padding. No paint pages or composite revisions are created by queries. Clearing
+the document releases source ownership and query bindings. All 135 GPU library
+tests, four GPU project tests, and native GTK file and injected-failure/recovery
+checks pass: `region-accepted-{build,gpu,project,gtk-files,gtk-recovery}.log`.
+
+The initial one-tile-per-dispatch implementation saved memory but increased the
+3 MP raw-query GPU p95 from 0.373 to 0.872 ms. Batching reduced it to 0.269 ms.
+Fresh-parent comparisons then exposed repeatable CPU tails. Reusing tile views,
+parameter buffers and bounded bindings reduced normal CPU work; the final matched
+runs do not reproduce the earlier warm p99 regression. Query-owned GPU buffers
+fall from **27,132,016 to 14,946,480 bytes** (25.88 to 14.25 MiB). This count excludes
+the artwork textures already owned by the renderer and the small host parameter
+copy; it is not a whole-process memory measurement.
+
+Two final serial current/parent/parent/current cycles, with a fresh `a93b799`
+parent build, produce these ranges across four runs of each binary:
+
+| Raw-query refinement | Parent CPU p95 / p99 ms | Current CPU p95 / p99 ms | Parent completed p95 / p99 ms | Current completed p95 / p99 ms |
+| --- | --- | --- | --- | --- |
+| Plain | 0.077–0.137 / 0.091–0.184 | 0.060–0.089 / 0.089–0.226 | 0.760–0.981 / 0.895–1.049 | 0.695–0.910 / 0.784–1.026 |
+| Antialias | 0.098–0.169 / 0.116–0.199 | 0.057–0.088 / 0.074–0.159 | 0.913–1.121 / 1.026–1.155 | 0.882–0.952 / 0.951–1.033 |
+| All refinements | 0.126–0.172 / 0.137–0.242 | 0.065–0.099 / 0.074–0.317 | 0.969–1.174 / 1.030–1.297 | 0.919–0.980 / 0.979–1.160 |
+
+The established harness issues 150 requests per case and reports its last 120
+observations, plus the first request separately. Logs now additionally identify
+all CPU submissions over 0.6 ms. Occasional roughly 2.1 ms raw-query spikes remain;
+phase instrumentation locates them in `wgpu::Queue::submit` (about 2.08 ms), with
+source preparation about 0.008 ms and command finalization about 0.03 ms. The
+underlying wgpu/driver cause is not established. Do not claim these spikes were
+eliminated or infer native input latency from this microbenchmark. Final sustained
+GTK qualification still needs them included alongside drawing and other queries.
+
+Reproduce with the release GPU library test executable, `LAYER_GPU_INDEX=0`, and
+`region_request_latency --ignored --nocapture --test-threads=1`. The parent was
+compiled from `git archive a93b799` in `/tmp/capy-region-parent`; saved binaries
+are `region-parent-gpu-tests` and `region-reused-gpu-tests` under the artifact
+directory. Final logs: `region-reused-abba-*`. Intermediate investigation logs
+are `region-{source,batch,tail,phase,views,reuse,submit}*`. The source-backed mode
+remains disabled pending the complete editing, color and GTK integration.

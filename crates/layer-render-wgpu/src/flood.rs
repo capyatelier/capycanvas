@@ -46,6 +46,7 @@ impl Flood {
             label: Some("connected region"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                 include_str!("flood.wgsl"),
+                include_str!("region_color.wgsl"),
                 include_str!("region_refine.wgsl"),
                 &include_str!("selection_clip.wgsl")
                     .replace("@group(1) @binding(1)", "@group(0) @binding(4)"),
@@ -137,7 +138,8 @@ impl Flood {
         }
         ready
     }
-    #[allow(clippy::too_many_arguments)] // Explicit GPU resources and region operands.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)] // Primitive test harness without tiled inputs.
     pub fn encode(
         &mut self,
         device: &PipelineDevice,
@@ -148,6 +150,23 @@ impl Flood {
         tolerance: f32,
         selection: Option<&wgpu::Buffer>,
         refinement: RegionRefinement,
+    ) -> Result<Region, GpuRasterError> {
+        self.encode_input(device, encoder, source, extent, seed, tolerance, selection, refinement, None)
+    }
+    /// A tiled classifier can populate eligibility without a full color image.
+    /// The packed mask is reused by the existing morphology/connected components.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_input(
+        &mut self,
+        device: &PipelineDevice,
+        encoder: &mut crate::submission::CommandEncoder,
+        source: &wgpu::TextureView,
+        extent: [u32; 2],
+        seed: [u32; 2],
+        tolerance: f32,
+        selection: Option<&wgpu::Buffer>,
+        refinement: RegionRefinement,
+        classified: Option<&wgpu::Buffer>,
     ) -> Result<Region, GpuRasterError> {
         let [w, h] = extent;
         if w == 0
@@ -185,7 +204,10 @@ impl Flood {
             self.capacity = bytes;
         }
         let mask_bytes = u64::from(w.div_ceil(32)) * u64::from(h) * 4;
-        if refinement.needs_mask() && self.mask.size() < mask_bytes {
+        if classified.is_some_and(|mask| mask.size() < mask_bytes) {
+            return Err(GpuRasterError::SizeOverflow);
+        }
+        if classified.is_none() && refinement.needs_mask() && self.mask.size() < mask_bytes {
             self.mask = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("region reusable packed morphology"),
                 size: mask_bytes,
@@ -211,6 +233,7 @@ impl Flood {
             (refinement.gap_closing as f32).to_bits(),
             (refinement.expansion as f32).to_bits(),
             refinement.smoothing.to_bits(),
+            u32::from(classified.is_some()), 0, 0, 0,
         ];
         let data: Vec<_> = params.into_iter().flat_map(u32::to_ne_bytes).collect();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -228,7 +251,7 @@ impl Flood {
                 self.parents.as_ref().unwrap(),
                 &region.coverage,
                 selection.unwrap_or(&self.empty),
-                &self.mask,
+                classified.unwrap_or(&self.mask),
             ]
             .into_iter()
             .enumerate()
@@ -252,7 +275,7 @@ impl Flood {
             timestamp_writes: None,
         });
         pass.set_bind_group(0, &group, &[]);
-        for entry in stages(refinement) {
+        for entry in stages(refinement).filter(|entry| classified.is_none() || *entry != "classify") {
             pass.set_pipeline(&self.pipelines[entry]);
             if entry == "initialize" {
                 pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);

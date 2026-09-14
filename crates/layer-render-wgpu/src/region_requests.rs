@@ -6,6 +6,7 @@ use layer_render::{RegionRequest, RegionResult, RegionSource};
 
 pub(super) struct RegionRequests {
     pub(super) flood: Flood,
+    pub(super) raw: region_sources::RawRegions,
     source: Option<(wgpu::Texture, wgpu::TextureView)>,
     scene: Option<scene::Scene>,
     readback: Option<wgpu::Buffer>,
@@ -19,6 +20,7 @@ pub(super) struct RegionRequests {
 impl RegionRequests {
     pub fn storage_bytes(&self) -> u64 {
         self.flood.storage_bytes()
+            + self.raw.storage_bytes()
             + self
                 .source
                 .as_ref()
@@ -31,6 +33,7 @@ impl RegionRequests {
         let (tx, rx) = mpsc::channel();
         Self {
             flood: Flood::new(device),
+            raw: region_sources::RawRegions::new(device),
             source: None,
             scene: None,
             readback: None,
@@ -47,6 +50,8 @@ impl RegionRequests {
         r: &mut WgpuRasterizer,
         request: RegionRequest,
     ) -> Result<bool, GpuRasterError> {
+        #[cfg(test)]
+        let trace = self.timing.as_ref().map(|_| std::time::Instant::now());
         if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
@@ -63,6 +68,9 @@ impl RegionRequests {
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
             let mut ready = self.flood.prepare(&startup.compiler, request.refinement);
+            if matches!(request.source, RegionSource::Layer(_)) {
+                ready &= self.raw.prepare(&startup.compiler);
+            }
             if request.limit.is_some() {
                 for pipeline in [
                     &r.selection_clip.crossings,
@@ -88,7 +96,7 @@ impl RegionRequests {
         if let Some(t) = &mut self.timing {
             t.begin(&r.device, &mut encoder);
         }
-        if !matches!(request.source, RegionSource::Composite)
+        if matches!(request.source, RegionSource::Layers(_))
             && self
                 .source
                 .as_ref()
@@ -96,6 +104,10 @@ impl RegionRequests {
         {
             self.source = Some(create_color_target(&r.device, extent, "region source"));
         }
+        if let Some(selection) = &request.limit {
+            r.selection_clip.prepare(&r.device, &mut encoder, extent, selection)?;
+        }
+        let mut classified = None;
         let source = match &request.source {
             RegionSource::Composite => r
                 .composite_view
@@ -138,63 +150,13 @@ impl RegionRequests {
                 view.clone()
             }
             RegionSource::Layer(id) => {
-                let (texture, view) = self.source.as_ref().unwrap();
-                let color = r
-                    .thumbnails
-                    .paper
-                    .filter(|(paper, _)| paper == id)
-                    .map_or([0.; 4], |(_, c)| c);
-                {
-                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("region source clear"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: (color[0] * color[3]) as f64,
-                                    g: (color[1] * color[3]) as f64,
-                                    b: (color[2] * color[3]) as f64,
-                                    a: color[3] as f64,
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                }
-                if let Some(layer) = r.paint_layers.iter().find(|l| l.id == *id) {
-                    for page in &layer.pages {
-                        let [x, y] = page.coordinate.map(|v| v * PAGE_SIZE);
-                        if x >= extent[0] || y >= extent[1] {
-                            continue;
-                        }
-                        encoder.copy_texture_to_texture(
-                            page.active().texture.as_image_copy(),
-                            wgpu::TexelCopyTextureInfo {
-                                origin: wgpu::Origin3d { x, y, z: 0 },
-                                ..texture.as_image_copy()
-                            },
-                            wgpu::Extent3d {
-                                width: PAGE_SIZE.min(extent[0] - x),
-                                height: PAGE_SIZE.min(extent[1] - y),
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    }
-                }
-                view.clone()
+                classified = Some(self.raw.encode(r, *id, &request, &mut encoder)?);
+                r.empty_view.clone()
             }
         };
-        if let Some(selection) = &request.limit {
-            r.selection_clip
-                .prepare(&r.device, &mut encoder, extent, selection)?;
-        }
-        let region = self.flood.encode(
+        #[cfg(test)]
+        let source_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
+        let region = self.flood.encode_input(
             &r.device,
             &mut encoder,
             &source,
@@ -203,7 +165,10 @@ impl RegionRequests {
             request.tolerance,
             request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
             request.refinement,
+            classified.as_ref(),
         )?;
+        #[cfg(test)]
+        let flood_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         let coverage_size = region.bounds_offset;
         let size = coverage_size + 32;
         if self.readback.as_ref().is_none_or(|b| b.size() < size) {
@@ -221,7 +186,21 @@ impl RegionRequests {
             t.end(&mut encoder);
         }
         r.uploads.finish(&encoder);
+        #[cfg(test)]
+        let encode_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
+        #[cfg(test)]
+        let submission = if trace.is_some() { encoder.submit_timed(&r.queue) }
+            else { encoder.submit(&r.queue); [0.; 2] };
+        #[cfg(not(test))]
         encoder.submit(&r.queue);
+        #[cfg(test)]
+        if let Some(trace) = trace {
+            let total = trace.elapsed().as_secs_f64() * 1000.;
+            if total > 0.6 {
+                eprintln!("region timing request={} cumulative source/flood/encode/submit={:.3}/{:.3}/{:.3}/{:.3}ms; finish/queue={:.3}/{:.3}",
+                    request.request_id, source_ms.unwrap(), flood_ms.unwrap(), encode_ms.unwrap(), total, submission[0], submission[1]);
+            }
+        }
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
             t.submitted();

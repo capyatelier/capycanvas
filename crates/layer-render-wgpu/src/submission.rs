@@ -59,6 +59,19 @@ impl CommandEncoder {
         }
         queue.submit([self.current.finish()])
     }
+    #[cfg(test)]
+    pub fn submit_timed(self, queue: &wgpu::Queue) -> [f64; 2] {
+        let mut timing = [0.; 2];
+        for encoder in self.earlier.into_iter().chain(std::iter::once(self.current)) {
+            let start = std::time::Instant::now();
+            let commands = encoder.finish();
+            timing[0] += start.elapsed().as_secs_f64() * 1000.;
+            let start = std::time::Instant::now();
+            queue.submit([commands]);
+            timing[1] += start.elapsed().as_secs_f64() * 1000.;
+        }
+        timing
+    }
 }
 
 // Copies, upload callbacks and query commands do not start render/compute

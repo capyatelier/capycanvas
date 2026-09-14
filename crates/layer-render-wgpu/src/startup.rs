@@ -361,7 +361,7 @@ impl WgpuRasterizer {
             let regions = self
                 .regions
                 .get_or_insert_with(|| region_requests::RegionRequests::new(&self.device));
-            for p in regions.flood.pipelines() {
+            for p in regions.flood.pipelines().chain(regions.raw.pipelines()) {
                 startup.compiler.pipeline(p, OTHER);
             }
             startup.others_queued = true;
@@ -580,10 +580,11 @@ mod gpu_tests {
         );
         let regions = renderer.regions.as_ref().unwrap();
         assert!(regions.flood.pipelines().all(|p| !p.ready()));
+        assert!(regions.raw.pipelines().all(|p| !p.ready()));
         assert_eq!(
             regions.storage_bytes(),
-            52,
-            "only the two tiny empty bindings exist"
+            116,
+            "only empty bindings and the seed color exist"
         );
         assert!(renderer.region_pending());
         release.send(()).unwrap();

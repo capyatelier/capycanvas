@@ -2,6 +2,7 @@
 //! ordered upload; eviction never creates another retained GPU tile. Built-in
 //! profiles decode on the GPU, while embedded profiles use the native CMM.
 use super::*;
+use crate::source_access::RawTile;
 use layer_core::color::{
     ColorProfile, IntegerDepth, RgbSpace,
     source::{SourceChannels, SourceImage},
@@ -14,7 +15,6 @@ use std::{
     },
 };
 
-pub(super) const SOURCE_SLOTS: usize = 16;
 pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 const DECODERS: usize = 4;
 
@@ -24,10 +24,6 @@ struct Slot {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     used: u64,
-}
-pub(super) struct SourceTile {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
 }
 pub(super) struct PendingSource {
     pub source: Arc<SourceImage>,
@@ -96,7 +92,7 @@ impl SourceTiles {
         r: &WgpuRasterizer,
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
-    ) -> Result<(SourceTile, Option<PendingSource>), GpuRasterError> {
+    ) -> Result<(RawTile, Option<PendingSource>), GpuRasterError> {
         if !r
             .device
             .features()
@@ -116,7 +112,7 @@ impl SourceTiles {
             slot.used = self.clock;
             self.hits += 1;
             return Ok((
-                SourceTile {
+                RawTile {
                     texture: slot.texture.clone(),
                     view: slot.view.clone(),
                 },
@@ -165,7 +161,7 @@ impl SourceTiles {
         slot.coordinate = coordinate;
         slot.used = self.clock;
         Ok((
-            SourceTile {
+            RawTile {
                 texture: slot.texture.clone(),
                 view: slot.view.clone(),
             },

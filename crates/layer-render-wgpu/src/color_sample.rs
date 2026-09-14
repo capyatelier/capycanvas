@@ -118,7 +118,9 @@ impl WgpuRasterizer {
                     }
                     ColorSampleSource::Layer(id) => {
                         let coordinate = [column / PAGE_SIZE, row / PAGE_SIZE];
-                        let source = self.raw_layer_tile(id, coordinate, &mut encoder)?;
+                        let source = self
+                            .raw_layer_tile(id, coordinate, &mut encoder)?
+                            .map(|tile| tile.texture);
                         (
                             source,
                             [column % PAGE_SIZE, row % PAGE_SIZE],

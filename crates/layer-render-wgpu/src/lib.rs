@@ -54,6 +54,7 @@ mod layer_masks;
 mod layer_tests;
 mod present;
 mod region_requests;
+mod region_sources;
 mod scene;
 mod selection_clip;
 mod telemetry;
@@ -71,6 +72,9 @@ const INITIAL_TARGET_RECORDS: usize = 257;
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const WHITE_MASK_ASSET: &str = "builtin:brush-tip/solid-white-v1";
 const PAGE_SIZE: u32 = 256;
+// Queries consume each group before its source slots can be reused. This also
+// fits the portable sixteen sampled-texture bindings per shader stage.
+const SOURCE_SLOTS: usize = 16;
 const PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4;
 const SCALAR_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64;
 const RESERVOIR_SIZE: u32 = 64;
@@ -1361,6 +1365,7 @@ impl WgpuRasterizer {
         extent: [u32; 2],
         layers: &[Layer],
     ) -> Result<bool, GpuRasterError> {
+        if let Some(regions) = &mut self.regions { regions.raw.clear_bindings(); }
         if extent[0] == 0 || extent[1] == 0 {
             return Err(GpuRasterError::InvalidExtent);
         }

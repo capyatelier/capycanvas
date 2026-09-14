@@ -504,7 +504,7 @@ fn region_request_latency() {
     // The primitive benchmark separately retains an unprepared first request.
     let preparation = std::time::Instant::now();
     let regions = region_requests::RegionRequests::new(&r.device);
-    for pipeline in regions.flood.pipelines() {
+    for pipeline in regions.flood.pipelines().chain(regions.raw.pipelines()) {
         pipeline.compile();
     }
     r.regions = Some(regions);
@@ -558,7 +558,11 @@ fn region_request_latency() {
                 })
                 .unwrap()
             );
-            cpu.push(start.elapsed().as_secs_f32() * 1000.);
+            let submitted_ms = start.elapsed().as_secs_f32() * 1000.;
+            if submitted_ms > 0.6 {
+                eprintln!("region CPU outlier {name} request={i} submit={submitted_ms:.3}ms");
+            }
+            cpu.push(submitted_ms);
             r.device
                 .poll(wgpu::PollType::Wait {
                     submission_index: None,

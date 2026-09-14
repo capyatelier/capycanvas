@@ -332,13 +332,13 @@ impl Scene {
     }
     /// The caller must encode its read/copy before requesting another tile:
     /// these textures belong to the fixed, queue-ordered source cache.
-    pub fn source_texture(
+    pub fn source_tile_for_query(
         &mut self,
         r: &mut WgpuRasterizer,
         source: &std::sync::Arc<layer_core::color::source::SourceImage>,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<wgpu::Texture, GpuRasterError> {
+    ) -> Result<crate::source_access::RawTile, GpuRasterError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             debug_assert!(self.jobs.is_empty());
@@ -350,7 +350,7 @@ impl Scene {
                 self.jobs.push(Job::TiledSource(std::sync::Arc::new(pending)));
                 self.encode_jobs(r, encoder)?;
             }
-            Ok(tile.texture)
+            Ok(tile)
         }
         #[cfg(target_arch = "wasm32")]
         Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))

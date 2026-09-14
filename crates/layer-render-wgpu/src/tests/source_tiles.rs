@@ -2,6 +2,126 @@ use super::*;
 use layer_core::color::{IntegerDepth, source::*};
 
 #[test]
+fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_cache() {
+    use layer_core::{color::PixelDescriptor, raster::*};
+    use layer_render::{RegionRequest, RegionSource};
+    let extent = [2560, 768];
+    let mut builder = SourceBuilder::new(
+        [2305, 513],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            profile: Default::default(),
+            profile_assumed: false,
+        },
+        16 * 1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..513 {
+        let row: Vec<_> = (0..2305)
+            .flat_map(|x| {
+                let rgba: [u16; 4] = if x == 1024 || y == 256 {
+                    [0, 0, 65535, 65535]
+                } else {
+                    [if x < 640 { 32768 } else { 32769 }, 0, 0, 65535]
+                };
+                rgba.into_iter().flat_map(u16::to_le_bytes)
+            })
+            .collect();
+        builder.push_row(&row).unwrap();
+    }
+    let mut layer = Layer::paint(LayerId(1), "integer16 original");
+    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let source = Arc::downgrade(layer.source.as_ref().unwrap());
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.ensure_document(extent, &[layer]).unwrap();
+    let mut raster = RasterData::default();
+    raster.tiles.insert(
+        TileKey {
+            plane: RasterPlane::Color,
+            coordinate: [0, 0],
+        },
+        RasterTile::backed(
+            TileBlob::encode(
+                PixelDescriptor::SRGB8_PAINT,
+                &[0, 0, 255, 255].repeat(256 * 256),
+            )
+            .unwrap(),
+        ),
+    );
+    r.restore_raster(LayerId(1), &RasterData::default(), &raster)
+        .unwrap();
+    let revision = r.composite_revision;
+    for (seed, bounds, limited) in [
+        ([300, 100], [256, 0, 640, 256], false),
+        ([700, 100], [640, 0, 1024, 256], false),
+        ([350, 100], [320, 0, 640, 200], true),
+        ([350, 100], [320, 0, 640, 200], true),
+        ([2400, 700], [0, 0, 2560, 768], false),
+    ] {
+        let limit = limited.then(|| {
+            layer_core::Selection::polygon(vec![
+                Point { x: 320., y: 0. },
+                Point { x: 900., y: 0. },
+                Point { x: 900., y: 200. },
+                Point { x: 320., y: 200. },
+            ])
+            .unwrap()
+        });
+        assert!(
+            r.request_region(RegionRequest {
+                request_id: 1,
+                source: RegionSource::Layer(LayerId(1)),
+                position: seed,
+                tolerance: 0.,
+                refinement: Default::default(),
+                limit: limit.map(Arc::new),
+            })
+            .unwrap()
+        );
+        r.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(READBACK_TIMEOUT),
+            })
+            .unwrap();
+        let pixels = r.take_region().unwrap().unwrap().pixels;
+        // Transparent document padding connects below and to the right of the
+        // partial source. Its bounding rectangle includes opaque source pixels.
+        let padding = seed[0] == 2400;
+        let expected_bounds = if padding { [0, 0, 2560, 768] } else { bounds };
+        assert_eq!(pixels.bounds(), expected_bounds);
+        for y in 0..extent[1] {
+            for x in 0..extent[0] {
+                let expected = if padding {
+                    x >= 2305 || y >= 513
+                } else {
+                    x >= bounds[0] && x < bounds[2] && y >= bounds[1] && y < bounds[3]
+                };
+                let word = pixels.words()[(y * extent[0].div_ceil(8) + x / 8) as usize];
+                let actual = (word >> ((x % 8) * 4)) & 15;
+                assert_eq!(actual, if expected { 4 } else { 0 }, "{seed:?} at {x},{y}");
+            }
+        }
+        assert_eq!(
+            r.paint_layers[0].pages.len(),
+            1,
+            "query must not rasterize originals"
+        );
+        assert_eq!(r.composite_revision, revision);
+    }
+    assert!(r.scene.as_ref().unwrap().source_cache_work()[1] > 30);
+    assert!(
+        r.regions.as_ref().unwrap().storage_bytes() < 11 * 1024 * 1024,
+        "raw query owns packed labels/coverage, not a full color image"
+    );
+    assert!((1..=4).contains(&r.regions.as_ref().unwrap().raw.binding_count()));
+    r.ensure_document(extent, &[]).unwrap();
+    assert_eq!(r.regions.as_ref().unwrap().raw.binding_count(), 0);
+    assert_eq!(source.strong_count(), 0);
+}
+
+#[test]
 fn raw_sampling_combines_integer_paint_and_unmaterialized_sixteen_bit_source() {
     use layer_core::{color::PixelDescriptor, raster::*};
     use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};

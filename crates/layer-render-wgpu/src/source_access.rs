@@ -2,6 +2,11 @@
 //! override an immutable original; absent pages are not always transparent.
 use super::*;
 
+pub(super) struct RawTile {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+}
+
 impl WgpuRasterizer {
     /// Consume this texture in queue order before requesting more source tiles.
     /// It can be encoded sRGB8 paint or linear Float32 original-source data.
@@ -10,14 +15,17 @@ impl WgpuRasterizer {
         layer: LayerId,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<Option<wgpu::Texture>, GpuRasterError> {
+    ) -> Result<Option<RawTile>, GpuRasterError> {
         if let Some(page) = self
             .paint_layers
             .iter()
             .find(|l| l.id == layer)
             .and_then(|l| l.pages.iter().find(|p| p.coordinate == coordinate))
         {
-            return Ok(Some(page.active().texture.clone()));
+            return Ok(Some(RawTile {
+                texture: page.active().texture.clone(),
+                view: page.active().view.clone(),
+            }));
         }
         let Some(source) = self.tiled_sources.get(&layer).cloned() else {
             return Ok(None);
@@ -28,7 +36,7 @@ impl WgpuRasterizer {
             return Ok(None);
         }
         let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-        let result = scene.source_texture(self, &source, coordinate, encoder);
+        let result = scene.source_tile_for_query(self, &source, coordinate, encoder);
         self.scene = Some(scene);
         result.map(Some)
     }

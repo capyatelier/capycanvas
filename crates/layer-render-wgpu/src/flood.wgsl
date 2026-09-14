@@ -1,6 +1,6 @@
 // Four-connected, fixed-seed color region. Original WGSL implementation;
 // local union-find, boundary merge, then packed coverage/bounds reduction.
-struct Params { extent_seed: vec4<u32>, options: vec4<f32> }
+struct Params { extent_seed: vec4<u32>, options: vec4<f32>, input: vec4<u32> }
 // Bounds/count occupy eight extra words after the coverage, sharing one
 // allocation/binding and keeping the portable four-storage-buffer limit.
 struct Coverage { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
@@ -15,13 +15,6 @@ fn summary_index(field: u32) -> u32 {
 }
 var<workgroup> local_parent: array<atomic<u32>, 256>;
 
-fn comparison_color(value: vec4<f32>) -> vec4<f32> {
-    // Ignore hidden RGB in transparent pixels; tolerance includes opacity.
-    let straight = value.rgb / max(value.a, .000001);
-    let srgb = select(1.055 * pow(max(straight, vec3<f32>(0.)), vec3<f32>(1./2.4)) - .055,
-        straight * 12.92, straight <= vec3<f32>(.0031308));
-    return vec4<f32>(srgb * value.a, value.a);
-}
 fn color_eligible(p: vec2<u32>, seed: vec4<f32>) -> bool {
     let color = comparison_color(textureLoad(source, vec2<i32>(p), 0));
     return all(abs(color-seed) <= vec4<f32>(params.options.x))
@@ -62,7 +55,7 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>,
     let inside = all(id.xy < extent);
     var eligible = false;
     if inside {
-        if params.options.y > 0. { eligible = mask_bit(vec2<i32>(id.xy)); }
+        if params.options.y > 0. || params.input.x != 0u { eligible = mask_bit(vec2<i32>(id.xy)); }
         else {
             let seed = comparison_color(textureLoad(source, vec2<i32>(params.extent_seed.zw), 0));
             eligible = color_eligible(id.xy, seed);
