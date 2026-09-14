@@ -102,10 +102,17 @@ import QuartzCore
                 finishAtLastSample(timestamp: event.timestamp)
             } else { return }
         }
+        // AppKit tracking areas also receive movement beneath SwiftUI controls.
+        // Only the actual canvas hit target owns a brush hover; active contacts
+        // above still complete normally when the pointer leaves the canvas.
+        guard let view, let root = view.window?.contentView,
+            root.hitTest(view.convert(view.convert(event.locationInWindow, from: nil), to: root.superview)) === view else {
+            clearHover(); return
+        }
         let tool: UInt32 = tablet(event) ? tools[event.deviceID] ?? 0 : 1
         store.native?.pointer(id: 0, tool: tool, button: 0, records: pack(event, phase: 0),
             predicted: false, revision: store.cameraRevision)
-        view?.wake()
+        view.wake()
     }
     private func finishAtLastSample(timestamp: TimeInterval) {
         guard let value = contact else { return }

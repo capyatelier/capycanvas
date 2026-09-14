@@ -47,9 +47,6 @@ struct DeviceBattery: Equatable, Sendable {
         let source = source
         Task { @MainActor in source.stop() }
     }
-    static func visible(policy: String, fullscreen: Bool) -> Bool {
-        policy == "always" || (policy != "never" && fullscreen)
-    }
     static func nextMinute(after date: Date) -> Date {
         Date(timeIntervalSince1970: (floor(date.timeIntervalSince1970 / 60) + 1) * 60 + 0.02)
     }

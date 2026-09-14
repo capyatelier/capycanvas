@@ -29,6 +29,7 @@ import SwiftUI
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
+    lazy var header = HeaderPresentation(store: self)
     lazy var panelMeasurements = PanelMeasurements(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
@@ -254,6 +255,11 @@ import SwiftUI
     func query(_ value: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
         guard let native else { completion(JSON()); return }
         native.submit(2, JSON(value)) { result in DispatchQueue.main.async { completion(result ?? JSON()) } }
+    }
+    func headerAction(_ value: [String: Any], completion: @escaping @MainActor () -> Void) {
+        guard let native else { completion(); return }
+        native.headerAction(JSON(value)) { DispatchQueue.main.async { completion() } }
+        wake?()
     }
     func numeric(_ control: JSON, value: Double, operation: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
         do { completion(try resolveNumber(control, value: value, operation: operation)) }

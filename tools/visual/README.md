@@ -370,7 +370,8 @@ cost rather than editor frame rate or input latency.
 This fast fixture renders the actual shared Apple header in an invisible AppKit
 host, with a temporary workspace library and the three default task workspaces.
 It captures both Apple presets at 744 and 1200 logical points, both themes,
-clock/battery shown and hidden, and paper/surround backgrounds: 96 images.
+all three title-bar sizes and paper/surround backgrounds: 144 images.
+The schema-2 manifest records the projected model and shared item allocations.
 The clock and battery use deterministic inputs through the real status view.
 Optional geometry readers are disabled in ordinary editor views.
 
@@ -381,19 +382,23 @@ CAPY_HEADER_CAPTURES="$PWD/artifacts/apple-headers" \
 node tools/visual/chrome-capture.mjs 1200 870 2 artifacts/apple-headers light header-controls \
   artifacts/apple-headers/fixtures.json
 artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
-  artifacts/apple-headers/web-0-painter-1200-light-clock-paper.png \
-  artifacts/apple-headers/native-0-painter-1200-light-clock-paper.png \
-  --output artifacts/apple-headers/diff-0-painter-1200-light-clock-paper
+  artifacts/apple-headers/web-0-sketch-1200-light-medium-paper.png \
+  artifacts/apple-headers/native-0-sketch-1200-light-medium-paper.png \
+  --output artifacts/apple-headers/diff-0-sketch-1200-light-medium-paper
 ```
 
 Compare every corresponding pair in the manifest with the same comparator.
-Chrome switches the real workspace identities and captures the full 48-point header
+Chrome switches the real workspace identities and captures the full 48-, 60- or 72-point header
 at the native scale. Geometry reports retain position, size and edge errors
 separately; an edge bound is not a waiver for a larger size error. Captures use
 the actual menu, title, workspace, clock, battery, settings and Zen components.
 The Mac reference explicitly reserves window-control space and removes in-app
-menus. The browser fullscreen button is excluded to reflect Apple's different
-capabilities; the iPad fullscreen action remains an open feature gate.
+menus. The projected Apple model excludes the browser fullscreen tile. Deterministic
+status inputs model an observed fullscreen scene; actual fullscreen transitions
+remain covered by native tests. Web styling is preserved, and unmatched controls
+and geometry differences are reported for inspection rather than masked. Current
+GTK title-bar contrast and Web styling can differ; this capture alone does not
+establish perceptual acceptance.
 
 Chrome reports the resolved platform font and each workspace label's computed
 CSS font and canvas advance alongside its measured control rectangle. Use those

@@ -99,6 +99,7 @@ impl NativeHost {
     }
     /// Invalidate host input and snapshot caches after shared document adoption.
     pub fn document_adopted(&mut self) {
+        self.header_drag = None;
         self.deferred_contacts.clear();
         self.last_pen = None;
         self.last_snapshot = None;
@@ -110,7 +111,11 @@ impl NativeHost {
         if width == 0 || height == 0 || !density.is_finite() || density <= 0.0 {
             return Err("Invalid native surface dimensions".into());
         }
-        self.logical = [width as f32 / density, height as f32 / density];
+        let logical = [width as f32 / density, height as f32 / density];
+        if self.logical != logical {
+            self.header_drag = None;
+        }
+        self.logical = logical;
         self.session.set_viewport(self.logical, [width, height])?;
         self.dirty = true;
         Ok(())
@@ -187,6 +192,9 @@ impl NativeHost {
         Ok(())
     }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
+        if matches!(action, UiAction::RestoreWorkspace { .. }) {
+            self.header_drag = None;
+        }
         let previous = self.session.state().revision;
         let change = self.session.dispatch(action)?;
         self.apply_change(previous, change);
@@ -246,6 +254,9 @@ impl NativeHost {
         }
     }
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
+        if matches!(input, UiInput::Blur) {
+            self.header_drag = None;
+        }
         let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;

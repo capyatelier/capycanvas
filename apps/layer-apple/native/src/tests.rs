@@ -4,6 +4,8 @@ use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
+#[path = "header_tests.rs"]
+mod header;
 #[path = "input_tests.rs"]
 mod input;
 #[path = "navigator_tests.rs"]
@@ -822,28 +824,28 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
-        app.draw_frame();
+        app.draw_until_idle();
         app.stroke();
-        app.draw_frame();
+        app.draw_until_idle();
         let ink = app.pixels();
         let clear = item(&app, "clear_layer");
         assert_eq!(clear["enabled"], true);
         app.action(clear["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         assert_ne!(app.pixels(), ink);
         app.action(item(&app, "undo")["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         assert_eq!(app.pixels(), ink);
         app.action(item(&app, "select_all")["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         app.action(item(&app, "fill_selection")["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         assert_ne!(app.pixels(), ink);
         app.action(item(&app, "undo")["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         assert_eq!(app.pixels(), ink);
         app.action(item(&app, "deselect")["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         assert_eq!(item(&app, "deselect")["enabled"], false);
         let filters = app
             .request(2, json!({"type":"application_menu","menu":"filter"}))
@@ -857,10 +859,10 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
             .unwrap()["action"]
             .clone();
         app.action(action);
-        app.draw_frame();
+        app.draw_until_idle();
         assert_ne!(app.pixels(), ink);
         app.action(item(&app, "undo")["action"].clone());
-        app.draw_frame();
+        app.draw_until_idle();
         assert_eq!(app.pixels(), ink);
     }
 }
@@ -1217,20 +1219,20 @@ fn apple_paint_undo_redo_restores_exact_document_pixels() {
             Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
         app.action(json!({"type": "set_color", "rgba": [0,0,0,1]}));
         app.action(json!({"type": "set_brush_size", "value": 32}));
-        app.draw_frame();
+        app.draw_until_idle();
         let initial = app.pixels();
         app.stroke();
-        app.draw_frame();
+        app.draw_until_idle();
         let painted = app.pixels();
         assert!(painted != initial, "Pen-up must leave real document pixels");
         app.invoke("undo");
-        app.draw_frame();
+        app.draw_until_idle();
         assert!(
             app.pixels() == initial,
             "Undo must restore every document byte"
         );
         app.invoke("redo");
-        app.draw_frame();
+        app.draw_until_idle();
         assert!(
             app.pixels() == painted,
             "Redo must reproduce the committed stroke exactly"
@@ -1398,7 +1400,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
-        app.draw_frame();
+        app.draw_until_idle();
         let paper = app.pixels();
         let name = CString::new("Test image").unwrap();
         let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 128, 0, 0, 0, 0];
@@ -1422,7 +1424,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
             .as_u64()
             .unwrap();
         assert_eq!(app.layer(id)["label"], "Test image");
-        app.draw_frame();
+        app.draw_until_idle();
         let imported = app.pixels();
         assert!(imported != paper, "Import must reach the GPU document");
         let mut reply = app
@@ -1444,10 +1446,10 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
             image[1].as_u64().unwrap() as usize * image[2].as_u64().unwrap() as usize * 4
         );
         app.invoke("undo");
-        app.draw_frame();
+        app.draw_until_idle();
         assert!(app.pixels() == paper);
         app.invoke("redo");
-        app.draw_frame();
+        app.draw_until_idle();
         assert!(app.pixels() == imported);
     }
 }

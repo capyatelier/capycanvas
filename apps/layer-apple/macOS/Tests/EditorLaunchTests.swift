@@ -25,10 +25,14 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarStylesAndActions(in: app)
     }
 
-    @MainActor func testSystemStatusSetting() {
+    @MainActor func testTitleBarCustomization() { checkTitleBarCustomization(in: editorTestApplication()) }
+
+    @MainActor func testTitleBarToolDrawers() { checkTitleBarToolDrawers(in: editorCaptureApplication()) }
+
+    @MainActor func testTitleBarSystemStatus() {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        checkSystemStatusSetting(in: app)
+        checkTitleBarSystemStatus(in: app)
     }
 
     @MainActor func testIndependentEditorWindows() {

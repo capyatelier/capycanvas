@@ -88,16 +88,18 @@ struct PanelConfiguration: View {
 
 /// Intrinsic-width wrapping matches the web flex row and Android FlowRow.
 /// Rust still supplies every preset/action and resolves the measured drawer.
-private struct ConfigurationFlow: Layout {
+struct ConfigurationFlow: Layout {
     let spacing: CGFloat
+    var trailingLast = false
     private func positions(_ subviews: Subviews, width: CGFloat) -> (CGSize, [CGPoint]) {
         var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
         var points: [CGPoint] = []
-        for view in subviews {
+        for (index, view) in subviews.enumerated() {
             let size = view.sizeThatFits(.unspecified)
             if x > 0 && x + size.width > width {
                 x = 0; y += rowHeight + spacing; rowHeight = 0
             }
+            if trailingLast && index == subviews.count - 1 { x = max(x, width - size.width) }
             points.append(CGPoint(x: x, y: y))
             x += size.width + spacing; rowHeight = max(rowHeight, size.height)
         }

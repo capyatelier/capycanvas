@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 /// Migrate only the untouched shipped Painter, while holding its lease. An
 /// edited history (even after Undo), a custom baseline or a copy is never reset.
 pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Option<ItemContent> {
-    if !matches!(platform, Platform::Gtk | Platform::Web | Platform::Android)
+    if !layer_ui::CommandId::CustomizeWorkspaceUi.available_on(platform)
         || entity.id != DEFAULT_WORKSPACES[0].0
         || !entity.metadata.builtin
     {
@@ -60,7 +60,13 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
 #[cfg(test)]
 #[test]
 fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [
+        Platform::Gtk,
+        Platform::Web,
+        Platform::Android,
+        Platform::Ios,
+        Platform::Mac,
+    ] {
         let old = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
         let mut working = layer_ui::WorkspacePreset::Painter.working_state();
         working.colors.foreground = [0.2, 0.4, 0.6, 1.];

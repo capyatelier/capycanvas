@@ -97,6 +97,9 @@ records required Apple tile gating and whole-row pickup work. Earlier successful
 workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
+The explicit Customize Title Bar surface follows the shared editor exception:
+whole editable items and component-bank chips drag immediately after movement
+slop with every device; bank placement is drag-only.
 
 Editor menus remain vertical, anchored to their source, and permit a held
 finger/Pencil contact to transition directly into dragging. Horizontal edit
@@ -104,6 +107,79 @@ bars are not acceptable. The 2026-09-13 productivity review supersedes the
 blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
+
+## Shared native title bar — 2026-09-13
+
+Apple now consumes the shared typed title-bar projection and native drag protocol
+also used by Android. Both hosts expose Customize Title Bar, three shared sizes,
+all three placement zones, footer visibility, component-bank dragging, multi-select
+tool insertion, hidden-item overflow, context/keyboard movement, Cancel and one
+Done history entry. Rust owns the frozen geometry, validation, placement and
+history; AppKit/UIKit own timing, slop and contact capture. The native owner
+resolves and applies release actions together on its serial queue. Mac menus
+remain in the OS menu bar; unavailable controls are projected out of portable
+saved models and rejected as bank sources.
+
+Fresh Sketch uses individual header tools without the old toolbar bands or
+footer. The established untouched-default update preserves working values and
+edited histories. Apple's fixed header, separate Zen fallback, global clock
+visibility view, unused workspace-switcher sizing mode and duplicate Main Menu
+assembly are removed. Controls keep the live canvas underneath, with contrasting
+ink, live foreground/background paints and shared drawer anchors. Menu-label
+measurement follows the actual native font and shared spacing. Removing Web's
+obsolete narrow workspace-pill padding rule aligns its allocation with Apple.
+
+Native checks found two presentation defects: proportional measurement of a
+monospaced clock changed geometry during a minute tick and canceled a held drag;
+an inactive outer context wrapper replaced nested popup requests. Measurement
+now uses the displayed monospaced digits, and the shared popup preference helper
+appends active requests while preserving children. iPad fullscreen observation
+compares effective scene and display coordinates. A final Mac capture exposed
+brush hover underneath transparent title-bar controls. Native hit testing now
+clears idle canvas hover over UI, while preserving active-contact completion.
+The corrected capture retains the textured brush cursor on canvas and removes
+it over the Layers opener; no renderer or visual workaround was added.
+
+Integration through `ba77f9b` passes 483 Apple/core/host/UI tests, with one existing
+host benchmark ignored. The separate workspace default-update test passes on
+all five supported header platforms. Pixel regressions wait for the shared
+asynchronous raster restore before exact comparisons; active-input checks still
+advance individual frames. Web Wasm checking, header-menu and workspace-switcher
+interaction checks pass. Native AppKit input iteration 9 covers both presets at
+all sizes, inert bank clicks/holds, immediate mouse/pen pickup, held item menus,
+same-contact movement, detach/re-entry, minute changes, cancellation, keyboard
+movement and narrow overflow. Six managed persistence cases pass Done, workspace
+switching, unfinished-preview close/restart and persisted Undo/Redo.
+
+Both signed iteration-65 builds pass. Native iteration 64 passes Metal launch,
+customization and fullscreen status on both hosts. The iPad journey includes
+Main Menu → File → Recovered Drawings and Window → Customize Title Bar.
+Iteration 65 corrects stale test button names and passes fresh Sketch drawer
+switching/toggling on both hosts. Mac iteration 66 reproduces the hover issue;
+signed build 68 and its native drawer workflow establish the fix. Native Mac
+iteration 69 passes drawing and Undo/Redo afterward. The iPad review namespace
+is restored and the artist app descriptor is unchanged; Files has no remaining
+authentication blocker.
+
+The visual matrix includes 144 native and 144 Web captures. Native item allocation
+matches shared geometry within 0.5 logical pixels. After menu and switcher spacing
+fixes, the comparison has no unmatched items and a largest geometry difference
+of 4.14 logical pixels, attributable to clock padding/measurement. Native capture
+iteration 6 preserves all header PNG bytes and geometry after shared API/default
+integration. Normal-size captures verify readable ink, selection backgrounds,
+live paints and the open Sketch drawer on both hosts. Web still has solid tile
+backgrounds while GTK/Apple use transparent controls; full-editor visual acceptance
+remains open. These AppKit event streams do not establish physical Pencil coverage.
+
+The final integration through `1c83a95` changes Android header rendering,
+Android/Windows validation and documentation, leaving the tested Apple and shared
+Rust source unaffected. All ten recovery stashes remain. Evidence, integration
+snapshots and failed iterations stay ignored under `artifacts/apple-titlebar-v1/`
+and the named Apple main-integration folders. The overall goal remains incomplete:
+full feature/menu/panel inventory, Apple column stacks, retained renderer replacement
+and durable lifecycle recovery, provider/interruption cases, physical Pencil and
+keyboard input, full-editor visual review and sustained Mac 90 Hz/iPad 120 Hz
+workloads with current encoded-sRGB8 raster baselines are still required.
 
 ## Native Files, full Zen and raster integration — 2026-09-13
 

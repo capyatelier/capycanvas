@@ -23,11 +23,7 @@ import Foundation
         precondition(DeviceBattery(level: 1, charging: true)?.percent == 100)
         precondition(DeviceBattery(level: 0.15, charging: true)!.description.hasSuffix(", charging"))
         precondition(DeviceBattery(level: 0.4, charging: false, low: true)!.low, "Honor a native low-battery warning")
-        for fullscreen in [false, true] {
-            precondition(SystemStatus.visible(policy: "always", fullscreen: fullscreen))
-            precondition(!SystemStatus.visible(policy: "never", fullscreen: fullscreen))
-            precondition(SystemStatus.visible(policy: "fullscreen", fullscreen: fullscreen) == fullscreen)
-        }
+
         let before = Date(timeIntervalSince1970: 1234.5)
         precondition(abs(SystemStatus.nextMinute(after: before).timeIntervalSince1970 - 1260.02) < 0.001)
         precondition(SystemStatus.nextMinute(after: Date(timeIntervalSince1970: 1260)).timeIntervalSince1970 > 1319)
@@ -64,6 +60,6 @@ import Foundation
         precondition(status.battery == low)
         status.release(replacement)
         precondition(source.stops == 2 && status.battery == nil)
-        print("PASS: clock policy, minute scheduling, native battery normalization, shared window lifetime and late replies")
+        print("PASS: minute scheduling, native battery normalization, shared window lifetime and late replies")
     }
 }

@@ -404,22 +404,27 @@ expose orientation changes but no equivalent iPad window toggle. That shared
 command capability remains explicitly unavailable on iPad and open in the review.
 Full-screen editor layout/rendering remains an open acceptance item.
 
-Both Apple headers implement **Show battery and clock** from Appearance settings:
-Always, In fullscreen mode, or Never. The shared Swift component uses the editor
-palette and the browser/Android battery geometry. Desktops without an internal
-battery show only the clock; unavailable readings never become a fabricated
-percentage. Mac full-screen notifications and iPad scene geometry observations
-control the fullscreen-only policy. Observing an iPad scene does not add the
-still-unavailable full-screen toggle.
+Both Apple hosts project the shared [workspace title bar](../../docs/ui/window-bar.md).
+Window → Customize Title Bar… opens the inline editor. Whole items and bank
+chips use native slop with immediate mouse/touch/pen pickup; shared Rust owns
+placement, overflow, removal and the single Done history entry. Hidden overflow
+items remain editable. The existing multi-select tool picker handles Add Tools.
+Cancel restores the arrangement and footer, and closing an unfinished edit does
+not save its preview. Mac application menus remain in the OS menu bar.
 
-Menu labels, the title and clock use the shared six-point side padding. Compact
-iPad headers hide the title and preserve all menus in an overflow control when
-the workspace pill and status controls need the space. Mac keeps its OS menus,
-document title and window-control reservation. Workspace labels use natural
-widths with truncation, a 34-point capsule and the shared app accent. Clock and
-battery backgrounds stay transparent over the canvas. See the
-[complete header comparison](../../tools/visual/README.md#complete-header-components)
-for fast native/Chrome captures and explicit platform adaptations.
+Clock and Battery are workspace components, replacing the former Apple global
+visibility preference. They occupy space only in fullscreen and have editable
+placeholders while windowed or when battery data is unavailable. iPad observes
+[effective scene geometry](https://developer.apple.com/documentation/uikit/uiwindowscene/effectivegeometry)
+and compares its coordinate space with its display; Mac observes native window
+fullscreen notifications. Neither observation requests an iPad fullscreen change.
+
+Small, Medium and Large use shared tile/icon dimensions and six-point gaps.
+The selector retains its pill background and compacts to a menu when necessary.
+Transparent controls use contrasting ink over artwork, and Color shows the live
+foreground/background paints. See the
+[header comparison](../../tools/visual/README.md#complete-header-components)
+for native/Web captures and recorded host differences.
 
 Visible headers share one native battery subscription and one minute-aligned
 clock timer. The last hidden/background header stops monitoring; minute and
@@ -436,9 +441,24 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
 /tmp/capy-system-status-tests
 ```
 
-`testSystemStatusSetting` exercises preference and Zen effects in the editor.
-Exact component rasterization and the complete full-screen/window-layout matrix
-remain part of visual acceptance; implementation is not a pixel-parity pass.
+`testTitleBarToolDrawers` exercises fresh Sketch Color/Brush/Layers switching and
+toggling. Mac captures verify that native hit testing retains the brush cursor
+on canvas and clears it beneath title-bar controls.
+`testTitleBarSystemStatus` exercises removal/Cancel and actual fullscreen status.
+`testTitleBarCustomization` exercises native bank dragging, multi-selection across
+searches, Done and nested picker cancellation. Mac also checks picker Escape;
+physical iPad Escape remains an input acceptance item. Focused native-owner checks:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/header-native-input.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/header-persistence.swift
+```
+
+The first uses owned AppKit windows for both presets and mouse/pen event streams,
+including a minute update during a held drag with stable monospaced clock geometry;
+the second uses temporary workspace libraries for switching, reopening and
+persisted history. Neither establishes physical Pencil coverage or full visual
+acceptance. Inspect current captures at normal viewing size.
 
 Launch a local Mac build with:
 

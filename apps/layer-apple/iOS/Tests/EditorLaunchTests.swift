@@ -166,9 +166,19 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarStylesAndActions(in: editorTestApplication())
     }
 
-    @MainActor func testSystemStatusSetting() {
+    @MainActor func testTitleBarCustomization() {
         XCUIDevice.shared.orientation = .landscapeLeft
-        checkSystemStatusSetting(in: editorTestApplication())
+        checkTitleBarCustomization(in: editorTestApplication())
+    }
+
+    @MainActor func testTitleBarToolDrawers() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkTitleBarToolDrawers(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTitleBarSystemStatus() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkTitleBarSystemStatus(in: editorTestApplication())
     }
 
     @MainActor func testIndependentEditorWindows() {
