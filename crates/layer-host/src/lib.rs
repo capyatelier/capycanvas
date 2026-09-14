@@ -1004,7 +1004,6 @@ mod tests {
             .unwrap();
         app.dispatch(serde_json::from_value(json!({"type":"move_panel", "panel":"toolbar", "target":{"kind":"tab","group":group}, "viewport":app.logical})).unwrap()).unwrap();
         app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"set_column_collapsed","group":group,"collapsed":true}})).unwrap()).unwrap();
-        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
         let column = app
             .session
             .state()
@@ -1012,6 +1011,8 @@ mod tests {
             .layout
             .collapsed_column_for_group(group)
             .unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"set_column_drawers","column":column,"drawers":true}})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
         let tile = app
             .session
             .state()

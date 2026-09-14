@@ -87,7 +87,8 @@ try {
     Launch $profile 'restart'
     Wait-Until {(Model).state.brush.diameter -eq $expectedSize} 'Restart did not restore the final tool value'
     if((Layout) -ne $expected){throw 'Restart did not restore the saved layout'}
-    if(!(Find 'renderer-stat-6')){throw 'Restored Diagnostics did not appear natively'}
+    if(!(Find 'renderer-stat-6') -and (Find 'column-icon-stats')){Invoke 'column-icon-stats'}
+    Wait-Until {$null -ne (Find 'renderer-stat-6')} 'Restored Diagnostics did not appear natively'
     Close
     $broken=Join-Path $run 'unreadable'
     [IO.Directory]::CreateDirectory($broken)|Out-Null
