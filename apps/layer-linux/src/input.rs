@@ -552,6 +552,11 @@ impl Input {
     pub fn has_pending(&self) -> bool {
         !self.pending.borrow().is_empty()
     }
+    pub fn discard(&self) {
+        self.pending.borrow_mut().clear();
+        self.deferred_contacts.borrow_mut().clear();
+        self.last.set(None);
+    }
     pub fn flush(&self, workspace: &Rc<Workspace>) {
         let mut gpu = workspace.gpu.borrow_mut();
         if let Some(gpu) = gpu.as_mut() {

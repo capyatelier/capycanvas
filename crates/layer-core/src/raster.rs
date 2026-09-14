@@ -310,6 +310,18 @@ impl PartialEq for RasterRevision {
     }
 }
 impl RasterRevision {
+    /// Pending work may still succeed. Only an explicit producer failure makes
+    /// a revision unusable for restoration or history navigation.
+    pub fn failed(&self) -> bool {
+        match self.try_data() {
+            Some(Err(_)) => true,
+            Some(Ok(data)) => data
+                .tiles
+                .values()
+                .any(|t| matches!(t.try_backing(), Some(Err(_)))),
+            None => false,
+        }
+    }
     pub fn identity(&self) -> u64 {
         self.0.id
     }
@@ -341,6 +353,91 @@ impl RasterRevision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_raster_suffix_recovers_atomically_without_redoing_lost_pixels() {
+        use crate::{Document, Edit, Editor, LayerId};
+        for tile_failure in [false, true] {
+            let mut editor = Editor::new(Document::new("recovery", 256, 256));
+            let first = RasterRevision::backed(RasterData::default());
+            editor
+                .perform(Edit::SetRaster {
+                    target: LayerId(1),
+                    revision: first.clone(),
+                })
+                .unwrap();
+            let checkpoint = editor.checkpoint();
+            let pending = RasterRevision::pending();
+            editor
+                .perform(Edit::SetRaster {
+                    target: LayerId(1),
+                    revision: pending.clone(),
+                })
+                .unwrap();
+            assert_eq!(
+                editor.recover_failed_rasters().unwrap(),
+                0,
+                "pending is not failed"
+            );
+            if tile_failure {
+                let tile = RasterTile::default();
+                tile.publish(Err("readback failed".into())).unwrap();
+                pending
+                    .publish(Ok(RasterData {
+                        tiles: BTreeMap::from([(
+                            TileKey {
+                                plane: RasterPlane::Color,
+                                coordinate: [0, 0],
+                            },
+                            tile,
+                        )]),
+                        ..Default::default()
+                    }))
+                    .unwrap();
+            } else {
+                pending.publish(Err("encoding failed".into())).unwrap();
+            }
+            assert_eq!(editor.recover_failed_rasters().unwrap(), 1);
+            assert_eq!(editor.checkpoint(), checkpoint);
+            assert_eq!(editor.document().layers[0].raster, first);
+            assert!(!editor.can_redo());
+            assert!(editor.undo().unwrap());
+            assert!(editor.redo().unwrap());
+            assert_eq!(editor.document().layers[0].raster, first);
+            assert_eq!(editor.recover_failed_rasters().unwrap(), 0);
+        }
+        let mut document = Document::new("no retained boundary", 256, 256);
+        document.layers[0].raster = RasterRevision::pending();
+        document.layers[0]
+            .raster
+            .publish(Err("lost source".into()))
+            .unwrap();
+        let mut editor = Editor::new(document.clone());
+        assert!(editor.recover_failed_rasters().is_err());
+        assert_eq!(
+            editor.document(),
+            &document,
+            "failure cannot partially roll back"
+        );
+
+        let mut editor = Editor::new(Document::new("failure after undo", 256, 256));
+        let pending = RasterRevision::pending();
+        editor
+            .perform(Edit::SetRaster {
+                target: LayerId(1),
+                revision: pending.clone(),
+            })
+            .unwrap();
+        editor.undo().unwrap();
+        pending
+            .publish(Err("abandoned queued frame".into()))
+            .unwrap();
+        assert!(editor.can_redo());
+        assert_eq!(editor.recover_failed_rasters().unwrap(), 0);
+        assert!(
+            !editor.can_redo(),
+            "late failure cannot be restored through redo"
+        );
+    }
     #[test]
     fn exact_backing_reuses_unchanged_tiles_and_preserves_snapshot() {
         let bytes: Vec<_> = (0..MAX_TILE_BYTES).map(|i| (i % 251) as u8).collect();

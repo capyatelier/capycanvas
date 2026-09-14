@@ -134,6 +134,111 @@ fn submit(
 fn image(r: &mut WgpuRasterizer) -> Vec<u8> {
     r.readback_srgb_rgba8().unwrap()
 }
+
+#[test]
+fn large_transparent_effect_mask_brush_crosses_canvas_edges() {
+    let extent = [1537, 769]; // Partial edge tiles, including column five from the crash report.
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
+    let mut layers = vec![
+        Layer::paint(LayerId(3), "Top raster"),
+        Layer::paint(LayerId(1), "Bottom raster"),
+    ];
+    submit(
+        &mut r,
+        extent,
+        &layers,
+        0.,
+        true,
+        true,
+        Some(([950., 350.], 650.)),
+    );
+    layers.swap(0, 1);
+    let mut effect = filter(fixture("domain_warp"));
+    effect.mask = Some(layer_core::LayerMask::reveal_all(
+        LayerId(4),
+        Point::default(),
+    ));
+    layers.insert(0, effect);
+    submit(&mut r, extent, &layers, 0., false, true, None);
+    let original = image(&mut r);
+    let paint = |r: &mut WgpuRasterizer, center: [f32; 2]| {
+        let radius = 350.;
+        let mut dab = test_dab(center, [1.; 4], 0.7);
+        dab.radii = [radius; 2];
+        let mut style = test_style(BrushExecution::Dry);
+        style.mode = DabMode::Erase;
+        let batch = DabBatch {
+            material_update: 0,
+            stroke_id: StrokeId(99),
+            layer_id: LayerId(4),
+            kind: DabBatchKind::Persistent,
+            stroke_start: true,
+            stroke_end: true,
+            first_dab: 0,
+            dab_count: 1,
+            style,
+            damage: Rect {
+                min: Point {
+                    x: center[0] - radius - 1.,
+                    y: center[1] - radius - 1.,
+                },
+                max: Point {
+                    x: center[0] + radius + 1.,
+                    y: center[1] + radius + 1.,
+                },
+            },
+        };
+        r.submit(FramePacket {
+            view: ViewState {
+                width_px: extent[0],
+                height_px: extent[1],
+                background_rgba_linear: [0.; 4],
+                ..test_view()
+            },
+            document_extent: extent,
+            layers: &layers,
+            dabs: &[dab],
+            dab_batches: &[batch],
+            restore_rasters: &[],
+            reset_layers: false,
+            time_seconds: 0.,
+            composite_all: false,
+        })
+        .unwrap();
+    };
+    paint(&mut r, [1400., 100.]);
+    let erased = image(&mut r);
+    assert_ne!(
+        erased, original,
+        "transparency painting changes the effect mask"
+    );
+    let pages = r.layer_masks.pages.len();
+    for center in [
+        [1660., -360.],
+        [-360., 400.],
+        [1900., 400.],
+        [800., 1130.],
+        [-360., -360.],
+    ] {
+        paint(&mut r, center);
+        assert_eq!(
+            image(&mut r),
+            erased,
+            "outside-canvas brush must be a no-op: {center:?}"
+        );
+        assert_eq!(
+            r.layer_masks.pages.len(),
+            pages,
+            "empty damage must allocate no pages"
+        );
+    }
+    paint(&mut r, [1400., 100.]);
+    assert_ne!(
+        image(&mut r),
+        erased,
+        "painting remains usable after leaving the canvas"
+    );
+}
 fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
     let path = std::path::Path::new(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1280,12 +1385,12 @@ fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() 
             let local = image(&mut r);
             let after = r.scene.as_ref().unwrap().composition_work();
             assert_eq!(after[0] - work[0], 1, "refresh backdrop once per update");
-            let rect = PixelRect {
-                min_x: (point[0] - 9.).max(0.) as u32,
-                min_y: (point[1] - 9.).max(0.) as u32,
-                max_x: (point[0] + 9.) as u32,
-                max_y: (point[1] + 9.) as u32,
-            }
+            let rect = PixelRect::new(
+                (point[0] - 9.).max(0.) as u32,
+                (point[1] - 9.).max(0.) as u32,
+                (point[0] + 9.) as u32,
+                (point[1] + 9.) as u32,
+            )
             .intersect(PixelRect::full(EXTENT));
             let tile_pixels: u64 = page_coordinates(rect)
                 .map(|p| page_rect(p).intersect(PixelRect::full(EXTENT)).area())

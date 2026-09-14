@@ -1030,6 +1030,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.estimates.clear();
     }
 
+    /// Retired asynchronous frame producers have published their failures.
+    /// Discard only the affected history suffix and restore the surviving roots.
+    pub fn recover_failed_rasters(&mut self) -> Result<usize, DocumentError> {
+        let discarded = self.editor.recover_failed_rasters()?;
+        self.rebuild_all = true;
+        self.composite_all = true;
+        Ok(discarded)
+    }
+
     fn process_input(&mut self) -> Result<(), EngineError<B::Error>> {
         for _ in 0..INPUT_BATCH {
             if self.input.peek().is_some_and(|e| {

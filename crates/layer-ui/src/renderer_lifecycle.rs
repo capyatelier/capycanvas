@@ -61,9 +61,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some("Filter validation stopped because painting is unavailable".into());
         }
         self.rendering_suspended = true;
+        let recovered = self.engine.recover_failed_rasters().map_err(error);
         self.refresh_document();
         self.poll_document_close();
         self.refresh_commands();
+        if recovered? > 0 {
+            self.state.host_error = Some("Painting stopped. Edits whose pixels could not be recovered were canceled; earlier edits are retained.".into());
+        }
         Ok(self.changed(
             retired_regions
                 | regions::DOCUMENT
@@ -89,10 +93,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("The replacement GPU could not resume filter validation".into());
         }
+        // Capture failures can arrive after suspension, while the old GPU is
+        // being retired. Recheck before allowing its history onto a new device.
+        if self.rendering_suspended {
+            self.engine.recover_failed_rasters().map_err(error)?;
+        }
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
         self.input_pending = self.engine.has_pending_input();
         self.refresh_file_state();
         self.sync_renderer_telemetry();
+        if self.rendering_suspended {
+            self.state.host_error = None;
+        }
         self.rendering_suspended = false;
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();

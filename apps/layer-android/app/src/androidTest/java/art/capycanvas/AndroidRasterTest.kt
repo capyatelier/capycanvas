@@ -54,6 +54,36 @@ class AndroidRasterTest {
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
+    @Test fun diagnosticsSampleInOpenColumns() {
+        fun action(value: JSONObject) {
+            val done = java.util.concurrent.CountDownLatch(1)
+            compose.runOnIdle { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
+            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            compose.waitForIdle()
+            assertNull(host.actionError)
+        }
+        fun customize(value: JSONObject) = action(obj("type" to "customize", "action" to value))
+        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "stats" in it.array("panels").values() }.getInt("id")
+        customize(obj("type" to "set_column_collapsed", "group" to group, "collapsed" to true))
+        val column = host.snapshot!!.getJSONObject("layout").array("collapsed").objects()
+            .first { c -> c.array("groups").objects().any { it.getInt("group") == group } }.getInt("id")
+        customize(obj("type" to "set_column_drawers", "column" to column, "drawers" to false))
+        customize(obj("type" to "toggle_column_drawer", "group" to group, "panel" to "stats"))
+        compose.onNodeWithTag("renderer-stats").assertIsDisplayed()
+        repeat(8) {
+            action(obj("type" to "set_layer_opacity", "opacity" to (.8 + it*.02)))
+            SystemClock.sleep(30)
+        }
+        compose.waitUntil(10_000) {
+            val stats = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
+            stats.getJSONArray("samples").length() > 0 &&
+                stats.array("rows").objects().filter { it.getString("label") in listOf("CPU · ms", "GPU · ms") }
+                    .all { it.getString("value") !in listOf("—", "Unavailable") }
+        }
+        assertNull(host.failure)
+    }
     private fun state(handle: Long): JSONObject {
         // Explicit invalidation through a harmless host presentation action.
         Native.dispatch(handle,obj("type" to "close_settings").toString())

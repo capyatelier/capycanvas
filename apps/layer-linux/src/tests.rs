@@ -9,6 +9,8 @@ mod column_drop;
 mod column_stack_tests;
 #[path = "drag_pickup_tests.rs"]
 mod drag_pickup;
+#[path = "gpu_recovery_tests.rs"]
+mod gpu_recovery;
 #[path = "icon_tests.rs"]
 mod icons;
 #[path = "layer_hold_tests.rs"]

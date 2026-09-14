@@ -128,7 +128,12 @@ impl ImageComposition {
         pass.set_pipeline(&scene.pipeline[0]);
         pass.set_bind_group(0, &self.binding, &[0]);
         pass.set_bind_group(1, &self.inputs, &[]);
-        pass.set_scissor_rect(region.min_x, region.min_y, region.width(), region.height());
+        pass.set_scissor_rect(
+            region.min_x(),
+            region.min_y(),
+            region.width(),
+            region.height(),
+        );
         pass.draw(0..3, 0..1);
         self.valid = true;
     }
@@ -427,8 +432,8 @@ impl Scene {
             let region = page_rect(tile).intersect(PixelRect::full(extent));
             let mut fill = [0.; 24];
             fill[..6].copy_from_slice(&[
-                region.min_x as f32,
-                region.min_y as f32,
+                region.min_x() as f32,
+                region.min_y() as f32,
                 region.width() as f32,
                 region.height() as f32,
                 extent[0] as f32,
@@ -455,8 +460,8 @@ impl Scene {
                     unreachable!()
                 };
                 *target = destination.view.clone();
-                data[0] += region.min_x as f32;
-                data[1] += region.min_y as f32;
+                data[0] += region.min_x() as f32;
+                data[1] += region.min_y() as f32;
                 data[4] = extent[0] as f32;
                 data[5] = extent[1] as f32;
                 *clip = Some(region);
@@ -818,8 +823,8 @@ impl Scene {
                         .unwrap_or(PixelRect::full(extent));
                     let mut data = [0.; 24];
                     data[..6].copy_from_slice(&[
-                        region.min_x as f32,
-                        region.min_y as f32,
+                        region.min_x() as f32,
+                        region.min_y() as f32,
                         region.width() as f32,
                         region.height() as f32,
                         extent[0] as f32,

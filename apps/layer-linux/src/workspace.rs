@@ -820,6 +820,7 @@ pub struct Workspace {
     tab: gtk::Label,
     view_info: gtk::Label,
     status: gtk::Label,
+    restart_canvas: gtk::Button,
     pub(crate) preferences: crate::preferences::Preferences,
     pub(crate) workspaces: manager::NativeWorkspaces,
     pub(crate) servicing: Cell<bool>,
@@ -937,6 +938,11 @@ impl Workspace {
         status.set_visible(false);
         status.add_css_class("error");
         status.add_css_class("workspace-notice");
+        status.set_wrap(true);
+        let restart_canvas = gtk::Button::with_label("Restart canvas");
+        restart_canvas.set_widget_name("restart-canvas");
+        restart_canvas.set_halign(gtk::Align::Center);
+        restart_canvas.set_visible(false);
         let content = gtk::Overlay::new();
         let workspaces = manager::NativeWorkspaces::new();
         workspaces.root.add_css_class("workspace-notice");
@@ -946,6 +952,7 @@ impl Workspace {
         let notices = gtk::Box::new(gtk::Orientation::Vertical, 0);
         notices.set_valign(gtk::Align::End);
         notices.append(&status);
+        notices.append(&restart_canvas);
         notices.append(&workspaces.root);
         content.add_overlay(&notices);
         window.set_content(Some(&content));
@@ -996,6 +1003,7 @@ impl Workspace {
             tab,
             view_info,
             status,
+            restart_canvas,
             preferences: crate::preferences::Preferences::new(),
             workspaces,
             servicing: Cell::new(false),
@@ -1030,6 +1038,11 @@ impl Workspace {
         this.tooltips.install(&this.window);
         crate::input::install(&this);
         this.install_gpu();
+        this.restart_canvas.connect_clicked(glib::clone!(
+            #[weak]
+            this,
+            move |_| this.restart_gpu()
+        ));
         this.install_document_close();
         crate::recovery::install(&this);
         this.reconcile_layout(&DockLayout::default());
@@ -1693,11 +1706,9 @@ impl Workspace {
                 }
                 self.refresh_cursor();
                 if self.status.is_visible()
-                    && self
-                        .gpu
-                        .borrow()
-                        .as_ref()
-                        .is_none_or(|g| g.session.state().host_error.is_none())
+                    && self.gpu.borrow().as_ref().is_none_or(|g| {
+                        !g.session.rendering_suspended() && g.session.state().host_error.is_none()
+                    })
                 {
                     self.status.set_visible(false);
                 }
@@ -1721,7 +1732,14 @@ impl Workspace {
                     self.wake();
                 }
                 if change.regions & regions::HOST != 0 {
-                    self.status.set_visible(false);
+                    if !self
+                        .gpu
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|g| g.session.rendering_suspended())
+                    {
+                        self.status.set_visible(false);
+                    }
                     if let Some(error) = self
                         .gpu
                         .borrow()
@@ -1743,6 +1761,14 @@ impl Workspace {
         }
     }
     pub fn wake(self: &Rc<Self>) {
+        if self
+            .gpu
+            .borrow()
+            .as_ref()
+            .is_some_and(|g| g.session.rendering_suspended())
+        {
+            return;
+        }
         if self.ticking.replace(true) {
             return;
         }
@@ -1855,6 +1881,15 @@ impl Workspace {
         self.frame_deadline.set(first);
     }
     fn install_gpu(self: &Rc<Self>) {
+        let actions = gtk::gio::SimpleActionGroup::new();
+        let stopped = gtk::gio::SimpleAction::new("worker-stopped", None);
+        stopped.connect_activate(glib::clone!(
+            #[weak(rename_to = this)]
+            self,
+            move |_, _| this.wake()
+        ));
+        actions.add_action(&stopped);
+        self.area.insert_action_group("canvas", Some(&actions));
         self.area.connect_realize(glib::clone!(
             #[weak(rename_to = this)]
             self,
@@ -1903,10 +1938,59 @@ impl Workspace {
             }
         ));
     }
-    fn gpu_error(&self, error: &str) {
+    fn gpu_error(self: &Rc<Self>, error: &str) {
+        if self
+            .gpu
+            .borrow()
+            .as_ref()
+            .is_some_and(|g| g.session.rendering_suspended())
+        {
+            return;
+        }
         eprintln!("Canvas failed: {error}");
-        self.status.set_text(&format!("Canvas failed: {error}"));
+        self.input.discard();
+        let change = self.gpu.borrow_mut().as_mut().map(|g| {
+            g.needs_present = false;
+            g.session.suspend_renderer()
+        });
+        if let Some(change) = change {
+            match change {
+                Ok(change) => {
+                    self.changed(Ok(change));
+                    self.restart_canvas.set_visible(true);
+                }
+                Err(error) => {
+                    eprintln!("Canvas recovery failed: {error}");
+                    self.refresh(regions::ALL);
+                    self.status.set_text("Canvas stopped. Automatic recovery failed. Reopen a saved drawing or recovery copy.");
+                    self.status.set_visible(true);
+                    return;
+                }
+            }
+        }
+        self.status.set_text("Canvas stopped. The interrupted work was canceled. Save the drawing or restart the canvas to continue.");
         self.status.set_visible(true);
+    }
+    fn restart_gpu(self: &Rc<Self>) {
+        let result = self
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .map(|g| g.reattach(&self.area));
+        match result {
+            Some(Ok(())) => {
+                self.restart_canvas.set_visible(false);
+                self.status.set_visible(false);
+                self.refresh(regions::ALL);
+                self.wake();
+            }
+            Some(Err(error)) => {
+                eprintln!("Canvas restart failed: {error}");
+                self.status
+                    .set_text("Canvas could not restart. Save your drawing, then reopen it.");
+            }
+            None => (),
+        }
     }
     fn refresh(self: &Rc<Self>, regions: u32) {
         self.publication.content_revision.set(

@@ -3861,7 +3861,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .workspace
                             .layout
                             .collapsed_column_for_group(g)
-                            .is_none()
+                            .is_none_or(|column| {
+                                self.state.workspace.layout.column_stack(column).open_column
+                                    == Some(column)
+                            })
                     }))
                 || self
                     .state
@@ -4110,6 +4113,7 @@ mod tests {
     /// Protocol recorder only: no canvas storage or software rasterization.
     #[derive(Default)]
     struct Recorder {
+        telemetry_enabled: bool,
         pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
         last_style: Option<layer_render::DabStyle>,
         recorded_dabs: Vec<layer_render::Dab>,
@@ -4127,6 +4131,9 @@ mod tests {
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn set_telemetry_enabled(&mut self, enabled: bool) {
+            self.telemetry_enabled = enabled;
+        }
         fn set_transform_preview(
             &mut self,
             preview: Option<&layer_render::TransformPreview>,
@@ -4252,6 +4259,63 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn diagnostics_sample_in_open_columns_and_stop_when_hidden() {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+            for drawers in [false, true] {
+                let mut s = session();
+                s.set_platform(platform);
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetPanelVisible {
+                        panel: Panel::Stats,
+                        visible: true,
+                    },
+                })
+                .unwrap();
+                let group = s.state.workspace.layout.panel_group(Panel::Stats).unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetColumnCollapsed {
+                        group,
+                        collapsed: true,
+                    },
+                })
+                .unwrap();
+                let column = s
+                    .state
+                    .workspace
+                    .layout
+                    .collapsed_column_for_group(group)
+                    .unwrap();
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetColumnDrawers { column, drawers },
+                })
+                .unwrap();
+                assert!(!s.engine.backend().telemetry_enabled);
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::ToggleColumnDrawer {
+                        group,
+                        panel: Panel::Stats,
+                    },
+                })
+                .unwrap();
+                assert!(
+                    s.engine.backend().telemetry_enabled,
+                    "{platform:?}, drawers={drawers}"
+                );
+                s.replace_renderer(Recorder::default()).unwrap();
+                assert!(
+                    s.engine.backend().telemetry_enabled,
+                    "replacement retains sampling"
+                );
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::CloseColumn { column },
+                })
+                .unwrap();
+                assert!(!s.engine.backend().telemetry_enabled);
+            }
+        }
     }
 
     #[test]

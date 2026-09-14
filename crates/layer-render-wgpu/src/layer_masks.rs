@@ -351,7 +351,7 @@ impl WgpuRasterizer {
                 let local = damage
                     .intersect(page_rect(coordinate))
                     .page_local(coordinate);
-                pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
+                pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(
                     0,
