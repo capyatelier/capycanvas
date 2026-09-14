@@ -6,6 +6,7 @@
 //! readbacks. Destination-aware brush stages can be added beside this
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
+pub mod native_tiles;
 mod pixel_rect;
 mod submission;
 use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};

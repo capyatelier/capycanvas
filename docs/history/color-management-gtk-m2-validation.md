@@ -1397,3 +1397,133 @@ workflows. Logs: `native-transfer-native-build.log`,
 error is expected. Changed Rust formatting and `git diff --check` pass. Native
 integer paint writeback and viewport residency remain unfinished; this change
 does not enable a new document mode or integrate another platform host.
+
+## Batched native integer writeback and canonical working pixels
+
+Parent: `cfc48ce`. This stage adds a shared GPU publication primitive; the
+application still exposes its existing sRGB8 document mode. It does not yet
+connect integer16 paint to the raster worker, history, cache eviction or GTK UI.
+
+`native_tiles` writes at most sixteen 256×256 tiles per prepared batch. It takes
+linear premultiplied RGBA32Float working pixels, emits RGBA8Uint or RGBA16Uint
+native bytes, and emits a separate RGBA32Float working candidate decoded from
+those final integer codes in the same compute pass. Publishing the canonical
+candidate prevents live committed pixels from retaining precision absent from
+save/reopen. Caller-owned source and destination tiles, queues and publication
+lifetimes remain explicit. The ordinary submission owner opens the compute pass,
+so its command chunking and cancellation also apply to this work.
+
+RGB uses the previously qualified table-verified estimate with a bounded binary
+fallback. Source decode and writeback now share `NativeTransfer` and its table
+pool; the old source-private transfer module was moved and replaced. Both native
+depths and straight/premultiplied-linear storage are supported. SDR range clipping
+occurs only at this native publication boundary, is counted, and happens before
+unassociation to prevent finite extended RGB overflowing at low alpha. Coverage
+is independent. A final alpha code of zero produces canonical transparent black
+inside the changed region. Original native bytes outside that region, including
+hidden RGB, are left intact; callers initialize both destination candidates.
+
+The first floating-point alpha-boundary correction failed on the GPU: coverage
+`0.50392157` selected integer8 alpha 129 when the Float64 reference selected 128.
+It was removed. Alpha now uses the input Float32 significand and exponent to
+form an exact 40-bit integer product in two uint32 words and round it to native
+coverage. This avoids relying on floating-point reassociation or multiplication
+at half-code thresholds. WGSL explicitly permits floating-point reassociation
+and does not require universal IEEE-754 nonfinite behavior; these are relevant
+constraints, not a promise that a CPU compensation expression survives a GPU
+compiler. [WGSL floating-point rules](https://www.w3.org/TR/WGSL/#floating-point-evaluation),
+[reassociation and fusion](https://www.w3.org/TR/WGSL/#reassociation-and-fusion).
+
+A shared eight-byte GPU status records invalid values/coverage and clipped pixel
+count. Each publication resets it once, all its batches contribute, and the
+capture owner must read and accept it before publishing any candidate. Integer
+exponent/sign inspection detects nonfinite values and invalid coverage on the
+qualified Vulkan device, including a negative subnormal alpha. This hardware
+check is not evidence for an untested backend's handling of nonfinite WGSL input.
+Whole-batch validation rejects invalid dimensions, mip/array counts, texture
+formats/usages, working/output aliasing, alpha representation and overflowing
+regions before creating bindings or recording writes. Empty batches allocate no
+parameters; zero regions dispatch no work. Dropping recorded commands changes
+neither native output nor a live source.
+
+Physical GPU validation:
+
+- 160 space/depth/association/input cases: 10,485,760 pixels with **zero native
+  RGB or alpha code error** against Float64 transfer/rounding after the declared
+  Float32 unassociation. Inputs include all native codes, nearest Float32 values
+  around RGB and alpha half-code thresholds, zero/sub-half-code/low alpha, and
+  finite extended RGB. Canonical working output matches a separately computed
+  decode within a relative 0.00000024 tolerance (with a 0.0000001 scale floor).
+- Eight space/depth cases, all native codes with seven coverage values, retain
+  **zero code drift after 64 successive physical publications**, alternating
+  working textures. This tests the fused canonical output feeding later edits.
+- Mixed sixteen-tile batches preserve sentinel bytes outside partial regions;
+  source working pixels remain byte-identical. A later batch containing NaN,
+  either infinity or invalid coverage makes the shared status fail after an
+  earlier valid batch. Reset/retry succeeds. These tests validate the primitive's
+  status contract; transactional raster-worker integration is still pending.
+
+Reproduce with a release GPU-test build and `LAYER_GPU_INDEX=0 TEST_BINARY
+native_tiles::tests:: --test-threads=1 --nocapture`. Numerical log:
+`native-writeback-tests.log`.
+
+The ignored `native_tiles::tests::native_writeback_workloads` benchmark covers
+sRGB, Adobe RGB and ProPhoto (P3 shares the sRGB curve), both depths, in-range and
+clipped inputs, one/sixteen tiles, and 32×32/full-tile regions. Each of 96 cases
+has 20 warm-up and 100 measured batches; two final runs give 19,200 measured
+batches. CPU time includes command creation/submission, optionally rebuilding
+all texture views/bindings/parameters. Completion uses an explicit device wait
+for that submitted work. Initial texture preparation/upload, preservation copies,
+readback, compression, history publication and display are **not timed**. This
+is not input-to-present or the complete pen-up path. No builds ran concurrently.
+
+Across curves and clipping cases, full sixteen-tile results on the same
+reference Vulkan GPU and unchanged power settings:
+
+| Preparation | Depth | Completed p95 range, ms | Completed p99 range, ms |
+| --- | --- | ---: | ---: |
+| Recreate bindings | integer8 | 0.3032–0.3588 | 0.3082–0.6135 |
+| Recreate bindings | integer16 | 0.3114–0.3655 | 0.3166–0.4770 |
+| Reuse bindings | integer8 | 0.1248–0.1401 | 0.1273–0.2634 |
+| Reuse bindings | integer16 | 0.1315–0.1479 | 0.1347–0.1769 |
+
+Maximum full-batch CPU p95 is 0.1701 ms with reconstruction and 0.0423 ms with
+reuse. Some other reconstructed-binding cases have CPU/completed p99 around
+2.0–2.18 ms; the same tail occurred in the initial implementation. Its cause is
+unestablished. Stable pool bindings should be reused during cache integration,
+and the complete commit path still needs frame-level measurement. Pipeline
+creation is 1.69–1.74 ms with the existing driver cache; each curve's CPU table
+creation/upload preparation is 2.02–2.46 ms. These belong to mode preparation,
+not a warm input callback. First-use times are retained separately in the logs.
+
+The initial prototype emitted native bytes alone. Adding the canonical output
+raises full-batch reconstructed completed p95 from roughly 0.24–0.30 ms to
+0.30–0.37 ms; reused bindings go from roughly 0.11–0.13 to 0.12–0.15 ms. The
+prototype is not an equal-work baseline and was superseded. Parent `cfc48ce`
+and fixed baseline `e46f271` have no native writeback operation; unchanged-path
+frame comparisons remain the earlier reports and outstanding final GTK suite.
+
+The benchmark preallocates sixteen working and sixteen canonical Float32 tiles
+(16 MiB each), plus sixteen native tiles (4 MiB integer8 / 8 MiB integer16).
+One batch has at most 4 KiB of uniform parameters at this device's 256-byte
+alignment, plus eight-byte status and up to 1.5 MiB shared transfer tables across
+curves. Table initialization retains its separately budgeted mapped-upload
+cost. This is a bounded 36/40 MiB texture pool, not per-document duplication.
+Peak process RSS is 221,112–221,220 KiB in the final benchmark runs; compiler and
+driver allocations are included in that process measurement. Capture staging
+and existing source/composite residency are additional budgets for integration.
+
+Artifacts: `native-writeback-{first,final-bench-1,final-bench-2}*.log`, saved first
+and final GPU test executables, and `native-writeback-measurements.json` with
+per-case results and binary hashes. The first executable omits canonical output;
+only the final executable represents the retained implementation.
+
+The retained implementation passes **143 GPU tests / 22 benchmarks ignored**,
+four project round trips, and isolated GTK file and diagnostics/recovery checks.
+The recovery test's injected wgpu validation panic is expected and recovered.
+Logs: `native-writeback-native-build.log`, `native-writeback-full-gpu-tests.log`,
+`native-writeback-project-tests.log`, and `native-writeback-gtk-{files,recovery}`
+logs. Changed Rust formatting and `git diff --check` pass. No other platform
+host was integrated. The existing raster worker still needs explicit native
+entry descriptors and status-before-backing publication; viewport residency,
+complete precision editing and the GTK SDR journeys remain outstanding.

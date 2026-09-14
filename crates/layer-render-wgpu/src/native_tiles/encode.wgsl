@@ -1,0 +1,84 @@
+struct Settings { maximum:u32, scale:u32, curve:u32, straight:u32, region:vec4<u32> }
+struct Status { invalid:atomic<u32>, clipped:atomic<u32> }
+@group(0) @binding(0) var working:texture_2d<f32>;
+@group(0) @binding(1) var encoded:texture_storage_2d<OUTPUT_FORMAT,write>;
+@group(0) @binding(2) var<storage,read> transfer:array<vec2<f32>>;
+@group(0) @binding(3) var<uniform> settings:Settings;
+@group(0) @binding(4) var<storage,read_write> status:Status;
+@group(0) @binding(5) var canonical:texture_storage_2d<rgba32float,write>;
+fn store_result(pixel:vec2<u32>, result:vec4<u32>) {
+    textureStore(encoded,pixel,result);
+    let alpha=select(f32(result.a)/f32(settings.maximum),1.,result.a==settings.maximum);
+    let code=result.rgb*settings.scale;
+    var linear=vec3(transfer[code.r].x,transfer[code.g].x,transfer[code.b].x);
+    if settings.straight!=0u {linear*=alpha;}
+    textureStore(canonical,pixel,vec4(linear,alpha));
+}
+fn boundary(code:u32)->f32 {
+    return transfer[code*settings.scale+(settings.scale-1u)/2u].y;
+}
+fn bracket(value:f32,code:u32)->bool {
+    if code>0u && value<boundary(code-1u) {return false;}
+    return code==settings.maximum || value<boundary(code);
+}
+fn quantize(value:f32)->u32 {
+    var code=u32(floor(clamp(sdr_encode_component(value,settings.curve),0.,1.)*f32(settings.maximum)+0.5));
+    for(var step=0u;step<2u;step++) {
+        if bracket(value,code) {return code;}
+        if code>0u && value<boundary(code-1u) {code--;} else {code++;}
+    }
+    if bracket(value,code) {return code;}
+    var low=0u;var high=settings.maximum;
+    for(var step=0u;step<16u && low<high;step++) {
+        let mid=(low+high)/2u;
+        if value>=boundary(mid) {low=mid+1u;} else {high=mid;}
+    }
+    return low;
+}
+fn quantize_alpha(value:f32)->u32 {
+    // Exact integer rounding of the submitted Float32 coverage. Form the
+    // 40-bit product significand*(2^depth-1) as two uint32 words; ordinary float
+    // multiplication can round a value just below a half-code up to the tie.
+    let bits=bitcast<u32>(value);
+    let exponent=(bits>>23u)&255u;
+    let shift=150u-exponent;
+    if shift>40u {return 0u;}
+    let mantissa=(bits&0x7fffffu)|0x800000u;
+    let depth=select(16u,8u,settings.maximum==255u);
+    let upper=mantissa>>(32u-depth);
+    let lower=mantissa<<depth;
+    let low=lower-mantissa;
+    let high=upper-u32(lower<mantissa);
+    if shift>32u {
+        return (high>>(shift-32u))+((high>>(shift-33u))&1u);
+    }
+    if shift==32u {return high+(low>>31u);}
+    return ((low>>shift)|(high<<(32u-shift)))+((low>>(shift-1u))&1u);
+}
+@compute @workgroup_size(8,8)
+fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
+    if any(invocation.xy>=settings.region.zw) {return;}
+    let pixel=invocation.xy+settings.region.xy;
+    let value=textureLoad(working,vec2<i32>(pixel),0);
+    // Integer exponent inspection avoids using floating comparisons to detect
+    // NaN, and runs before arithmetic on the submitted working values.
+    let bits=bitcast<vec4<u32>>(value);
+    if any((bits & vec4(0x7f800000u))==vec4(0x7f800000u)) {
+        atomicOr(&status.invalid,1u);store_result(pixel,vec4(0u));return;
+    }
+    let coverage_bits=bits.a&0x7fffffffu;
+    if coverage_bits>0x3f800000u || ((bits.a>>31u)!=0u && coverage_bits!=0u) {
+        atomicOr(&status.invalid,2u);store_result(pixel,vec4(0u));return;
+    }
+    let alpha=quantize_alpha(value.a);
+    if alpha==0u {store_result(pixel,vec4(0u));return;}
+    var rgb=value.rgb;
+    let limit=select(1.,value.a,settings.straight!=0u);
+    if any(rgb<vec3(0.)) || any(rgb>vec3(limit)) {atomicAdd(&status.clipped,1u);}
+    // Clamp only at the declared native SDR publication boundary. Clamp before
+    // division so finite extended RGB cannot overflow while unassociating.
+    rgb=clamp(rgb,vec3(0.),vec3(limit));
+    if settings.straight!=0u {rgb/=value.a;}
+    let result=vec4(quantize(rgb.r),quantize(rgb.g),quantize(rgb.b),alpha);
+    store_result(pixel,result);
+}

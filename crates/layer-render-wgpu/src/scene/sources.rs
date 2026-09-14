@@ -17,7 +17,7 @@ use std::{
 
 pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 const DECODERS: usize = 4;
-mod transfer;
+use crate::native_tiles::transfer;
 
 struct Slot {
     source: Weak<SourceImage>,
