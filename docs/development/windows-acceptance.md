@@ -11,29 +11,40 @@ checkpoints; their earlier lists of missing features are not the current backlog
 
 ## Validated application and packages
 
-The reviewed Release application and both packages contain `f051e61`, including
-upstream swept-contact pencil/ink brushes. The later `bf95a48` changes only the
-canvas-editing fixture and documentation. Those tests ran against the same
-executable and Rust DLL hashes; they do not require a package rebuild.
+The reviewed Release application and both packages contain `f20611a`, including
+upstream swept-contact brushes and the shared light header surfaces. Portable
+assembly and extracted runtime checks pass; unsigned MSIX assembly and archive
+guards pass. Both packages were built from the clean published source.
 
-The integrated selected Rust suites passed 632 ordinary tests, with 12 explicit
-hardware/manual cases ignored. Seven additional hardware D3D12 functional tests
-passed: contact brush behavior and project/painting recovery, including all twelve
-contact presets. These are functional results, not painting-performance results.
-Earlier acceptance below identifies its narrower scope and source checkpoint;
-it is not a claim that every older fixture was rerun after brush integration.
+This change passes the full native header catalog/Preferences journey, 26 menu
+checks across mouse, injected pen/touch and keyboard, three hardware D3D12 contact
+brush tests, Release compilation and strict Windows Clippy. The current Web GPU
+raster journey passes painting, exact save/reopen/history, corrupt-file retention,
+GPU replacement and IndexedDB reload recovery. Explicit grouping fixes the contact
+shader's browser WGSL validation failure; Navigator reflow now defers during GPU
+suspension, with a regression check in that recovery journey.
+
+Strict Web Clippy on Rust 1.98 reports two `arc_with_non_send_sync` warnings in
+unchanged renderer code. An initial browser raster attempt timed out after archive
+export; the final run passed with the existing 30-second gates and better wait
+error context. No timeout relaxation or production timeout fix is claimed.
+
+At `f051e61`, the selected integrated Rust suites passed 632 ordinary tests, with
+12 hardware/manual cases ignored, plus seven D3D12 functional tests covering
+contact brushes and project/painting recovery. Those broader suites were not all
+rerun for this header change. None of these results establish painting performance.
 
 | Area | Recorded result | Remaining limit |
 | --- | --- | --- |
 | Workspace/header/docking | Shared title-bar customization, tools picker, drawers, floating panels, workspace history and persistence pass their native journeys. Collapsed columns have the corrected footer grip, blank-space menu, double-click/tap expansion and drag-out resize (`f99507a`); docking targets follow Web/Android (`d4877e3`). | Physical device acceptance and complete visual review remain open. The previously qualified synthetic cross-canvas capture failure is not a reason to change production capture without new evidence. |
-| Matched workspace design | Paint, Sketch and Photo each have twelve native/Web scene pairs: three widths, both themes, fitted and paper-under-header cameras. Camera values match. Sketch's measured header passes; Paint Tool Set/Layers and Photo Layers measurements pass. Disabled header contrast is corrected (`9529ec2`). | Paint/Photo full comparisons still report a 21-physical-pixel header width difference and compact control-set differences. Full images are preserved; geometry passes do not mean whole-image identity. Color-wheel polish is closed under the imperceptible-difference/clean-code requirement. |
+| Matched workspace design | Paint, Sketch and Photo each have twelve native/Web scene pairs: three widths, both themes, fitted and paper-under-header cameras. Camera values match. Sketch's measured header passes; Paint Tool Set/Layers and Photo Layers measurements pass. Disabled header contrast is corrected (`9529ec2`). At `f20611a`, eight fresh Photo pairs cover both themes, two widths and both cameras. Five sampled light header backgrounds match Web exactly: menu/title/settings RGB 219, switcher RGB 222. | Paint/Photo full comparisons still report a 21-physical-pixel header width difference and compact control-set differences. Full images are preserved; geometry passes do not mean whole-image identity. Color-wheel polish is closed under the imperceptible-difference/clean-code requirement. |
 | Tools and canvas editing | Seventeen-tool projection, expressions, retained drafts/controls, subtools and cancellation pass. On `f051e61`, mouse and injected pen each pass figure/lasso, move/scale/rotation preview and Cancel, applied move and one-step raster Undo/Redo: fourteen checks. | Applied native history checks cover translation; scale/rotation cover preview and Cancel. Raster checks sample three 16×16 artwork interiors, not every pixel or affine combination. |
 | Keyboard and text | Canvas shortcuts work after toolbar clicks; fields, sliders, menus, Tab and button activation retain native behavior (`509833e`). Actual Microsoft Japanese IME composition, conversion, Enter/Escape arbitration and layer-name Undo/Redo pass on `f051e61`. | UIA names, values, patterns and focus are exercised. A complete screen-reader review, other IMEs and candidate-popup geometry remain unverified. |
 | Touch and pen routing | Eighteen native injected-contact checks pass on `f051e61`: pan/pinch/rotation anchoring, third-contact pause, contact replacement, cancellation/restart, single-finger Hand and a later pen stroke with independent Undo. | Physical pressure/history, tilt, eraser, hover, cancellation and comprehensive physical touch are still required. Synthetic input and renderer pressure/tilt tests do not establish digitizer behavior. |
 | Documents, storage and windows | Import/export, Unicode project paths, embedded assets, save/replacement/close decisions and two GPU reconstructions pass the document journey (`575345b`). Preference failure/retry and multiwindow isolation pass. Snap, minimize/restore, maximize/restore and painting history pass on the available 60 Hz display (`05cbdb5`). | Mixed-display/DPI and system suspend/resume remain unverified. Forced GPU reconstruction is separate from those transitions. |
 | Filters | The pinned `50e3acd` renderer matches independent pre-migration algorithms on the same Windows GPU: D3D12 within one byte, Vulkan exact, across 160 sampled cases. | The original Linux PNG reference still fails for both implementations. This qualifies the sampled migration comparison; it does not establish cross-platform perceptual equivalence or newly retest filters after brush integration. |
-| Portable ZIP | `f051e61`: repeated assembly produces identical bytes. Extracted payload inventory/hashes, app-local runtime origins, paths with spaces, unrelated working directory, filters, drawing/history, pan/resize and zero-exit close pass. | The exercise ran on the development host. Clean-machine acceptance remains open; deterministic archive assembly does not imply identical compiler output across machines. |
-| MSIX | `f051e61`: repeated unsigned assembly, complete inventory, MakeAppx unpack, activation metadata, logos and archive validation pass. Lock retry and signature/invalid-input guards pass. | Distribution signing and installed launch/update/uninstall remain open. No signing or installation is implied by these archive checks. |
+| Portable ZIP | `f20611a`: repeated assembly produces identical bytes. Extracted payload inventory/hashes, app-local runtime origins, paths with spaces, unrelated working directory, filters, drawing/history, pan/resize and zero-exit close pass. | The exercise ran on the development host. Clean-machine acceptance remains open; deterministic archive assembly does not imply identical compiler output across machines. |
+| MSIX | `f20611a`: repeated unsigned assembly, complete inventory, MakeAppx unpack, activation metadata, logos and archive validation pass. Lock retry and signature/invalid-input guards pass. | Distribution signing and installed launch/update/uninstall remain open. No signing or installation is implied by these archive checks. |
 | 120 Hz painting | Input/presentation instrumentation and analysis tools exist. | Sustained actual ≥120 Hz painting and input-to-present p99 <8.33 ms are unmeasured. The available panel is 60 Hz; offscreen timings cannot close this gate. |
 
 See the [title-bar record](title-bar-windows-acceptance.md),

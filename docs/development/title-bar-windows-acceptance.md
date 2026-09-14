@@ -38,6 +38,23 @@ pass. Captures are reviewed for geometry, spacing, corners and bank visibility.
 These use OS-delivered synthetic pointers and native UI Automation, not physical
 stylus measurements.
 
+## Shared header surfaces
+
+At `f20611a`, light menus share one rounded half-opacity background; the title,
+buttons and status tiles use the same surface. The workspace switcher uses the
+shared palette's tab-bar color. Eight full Photo scene pairs cover 744 and 1200
+logical pixels, both themes and fitted/paper-under-header cameras at scale 1.5.
+Five sampled backgrounds match the current Web output exactly: menu/title/settings
+RGB 219 and switcher RGB 222. The native captures preceded only the integrated
+shader syntax rebuild; the full Release header fixture used the final runtime.
+
+All eight menus open and dismiss with mouse and injected pen/touch; File also
+passes Space/Enter activation, for 26 checks with the document preserved. The full
+Release Paint catalog/Preferences and header customization journey passes.
+The strict image comparison still reports the existing 21-physical-pixel header
+width difference and compact control-set differences. Full captures are retained;
+these sample and interaction results do not establish whole-editor pixel parity.
+
 ## Reproduce
 
 Run native GUI fixtures serially. Each run owns a disposable profile and its app
@@ -52,7 +69,8 @@ cargo test --locked -p layer-core -p layer-engine -p layer-ui -p layer-host -p l
 cargo clippy --locked -p layer-core -p layer-engine -p layer-ui -p layer-host -p layer-workspace -p layer-windows --all-targets -- -D warnings
 ~~~
 
-The integrated ordinary Rust suites pass 678 tests; hardware/diagnostic cases
+At the original title-bar checkpoint, ordinary Rust suites passed 678 tests;
+hardware/diagnostic cases
 remain explicitly ignored. Strict Clippy, Release compilation, native input
 queue tests and presentation-analysis tests pass. Existing SDK library-search
 warnings are environmental.
