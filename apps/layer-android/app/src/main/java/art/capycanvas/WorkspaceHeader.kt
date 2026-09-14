@@ -96,8 +96,10 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         else host.headerEdit(obj("type" to "cancel"))
     }
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
+        // The canvas extends behind the title bar. Empty chrome owns input,
+        // but must not paint an opaque strip over the drawing.
         Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
-            .background(colors.surround).headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
+            .headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
         val width = maxWidth.value
         val geometryKey = "$width:$modelKey:$editing:$metrics"
         SideEffect { input.width = width; input.metrics = metrics }
