@@ -26,7 +26,7 @@ adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w \
 
 ## Journeys
 
-The final attached-device run reports **OK (5 tests)** in 225.222 seconds.
+The final attached-device run reports **OK (6 tests)** in 240.771 seconds.
 UI-action waits synchronize with native snapshot publication, and consecutive
 popup/held-contact journeys wait for native window focus to settle.
 
@@ -56,6 +56,15 @@ popup/held-contact journeys wait for native window focus to settle.
 The tablet tests deliver typed native mouse/touch/stylus `MotionEvent`s through
 Compose's actual Android views and system keyboard dispatch. They establish
 native UI behavior, not hand-held pen accuracy or digitizer latency.
+
+The layout-feedback regression checks the final glyph of every menu label at
+all three sizes and the native screen coordinates of all eight dropdowns.
+Menu metrics include individually pixel-rounded padding, each label owns its
+popup anchor, and the size/footer/Cancel/Done group stays at the editor's right
+edge. Its native layout wraps below the bank when both groups cannot fit beside
+each other. Captures are named `anchored-*` and `aligned-editor-*`.
+The feedback run and its captures are retained under ignored
+`artifacts/android/title-bar/feedback-2026-09-13/`.
 
 ## Regressions and artifacts
 

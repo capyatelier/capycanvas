@@ -27,6 +27,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import org.json.JSONArray
@@ -59,7 +61,10 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     fun measure(label: String, bold: Boolean = false): Float = text.measure(label,
         style = textStyle.copy(fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal), maxLines = 1).size.width / density
     val menus = snapshot.array("application_menus").objects()
-    val menuWidth = menus.sumOf { (measure(it.getString("label"), true) + 12f).toDouble() }.toFloat()
+    // Compose rounds each side's padding separately. Summing logical widths
+    // first loses pixels at fractional scale and clips the final menu label.
+    val menuPadding = (6f * density).roundToInt()
+    val menuWidth = menus.sumOf { (measure(it.getString("label"), true) * density).roundToInt() + 2 * menuPadding } / density
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
@@ -74,7 +79,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
             "space" -> tile * .5f
             else -> tile
         }
-        val grip = if (editing) 20f else 0f
+        val grip = if (editing) (20f * density).roundToInt() / density else 0f
         obj("id" to entry.getInt("id"), "width" to natural + grip,
             "compact" to (if (kind in listOf("menu_labels", "workspaces", "document_title")) tile else natural) + grip)
     })
@@ -215,6 +220,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         if (editing && input.selected == id) focus.requestFocus()
     }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
+    var menuLabel by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(compact, editing) { menu = null }
     DisposableEffect(menu != null) {
         val ownsPopup = menu != null
@@ -240,12 +246,14 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
-                            HeaderButton(application.getString("label"), false, !editing, false,
+                            val menuId = application.getString("id")
+                            HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
                                 Modifier.fillMaxHeight().testTag("application-menu-${application.getString("id")}"),
                                 fillWidth = false,
-                                onClick = { menu = application.getJSONObject("model") }) {
+                                onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
                                 Text(application.getString("label"), Modifier.padding(horizontal = 6.dp), fontWeight = FontWeight.Bold, maxLines = 1)
                             }
+                            if (menuLabel == menuId) menu?.let { WorkspaceMenu(host, it) { menu = null } }
                         }
                     }
                 }
@@ -267,7 +275,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     SharedIcon(icon, label, Modifier.size(size.number("icon").dp), fill = fill)
                 }
             }
-            menu?.let { WorkspaceMenu(host, it) { menu = null } }
+            if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, it) { menu = null } }
         }
     }
 }
@@ -296,34 +304,52 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val colors = LocalPalette.current
     val entries = view.getJSONObject("model").headerEntries()
     val components = listOf(obj("item" to obj("kind" to "tools"), "label" to "Add Tools…")) + view.array("components").objects()
-    FlowRow(modifier.heightIn(max = 230.dp).zIndex(20f).shadow(6.dp, RoundedCornerShape(8.dp))
+    Layout(modifier = modifier.heightIn(max = 230.dp).zIndex(20f).shadow(6.dp, RoundedCornerShape(8.dp))
         .background(colors.panel, RoundedCornerShape(8.dp)).chromeRegion(input.dock).verticalScroll(rememberScrollState())
-        .padding(6.dp).testTag("header-editor"), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        components.filter { component -> !component.optBoolean("singleton") || entries.none { it.getJSONObject("item").toString() == component.getJSONObject("item").toString() } }.forEach { component ->
-            val kind = component.getJSONObject("item").getString("kind")
-            val label = component.getString("label")
-            val source = if (kind == "tools") obj("kind" to "tools") else obj("kind" to "component", "value" to component.getJSONObject("item"))
-            key(kind) {
-                Row(Modifier.height(36.dp).background(colors.button, RoundedCornerShape(6.dp))
-                    .headerSource(input, source, label, 1).testTag("header-component-$kind").semantics { contentDescription = label }
-                    .padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
-                    Text(label, maxLines = 1)
+        .padding(6.dp).testTag("header-editor"), content = {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            components.filter { component -> !component.optBoolean("singleton") || entries.none { it.getJSONObject("item").toString() == component.getJSONObject("item").toString() } }.forEach { component ->
+                val kind = component.getJSONObject("item").getString("kind")
+                val label = component.getString("label")
+                val source = if (kind == "tools") obj("kind" to "tools") else obj("kind" to "component", "value" to component.getJSONObject("item"))
+                key(kind) {
+                    Row(Modifier.height(36.dp).background(colors.button, RoundedCornerShape(6.dp))
+                        .headerSource(input, source, label, 1).testTag("header-component-$kind").semantics { contentDescription = label }
+                        .padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
+                        Text(label, maxLines = 1)
+                    }
                 }
             }
         }
-        Row(Modifier.height(36.dp).background(colors.button, RoundedCornerShape(6.dp))) {
-            view.array("sizes").objects().forEach { size ->
-                val selected = size.getString("id") == view.getJSONObject("model").getString("size")
-                TextButton({ host.headerEdit(obj("type" to "set_size", "size" to size.getString("id"))) },
-                    Modifier.testTag("header-size-${size.getString("id")}").background(if (selected) colors.active else Color.Transparent, RoundedCornerShape(6.dp)), contentPadding = PaddingValues(horizontal = 8.dp)) { Text(size.getString("label")) }
+        FlowRow(Modifier.testTag("header-editor-actions"), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.height(36.dp).background(colors.button, RoundedCornerShape(6.dp))) {
+                view.array("sizes").objects().forEach { size ->
+                    val selected = size.getString("id") == view.getJSONObject("model").getString("size")
+                    TextButton({ host.headerEdit(obj("type" to "set_size", "size" to size.getString("id"))) },
+                        Modifier.height(36.dp).testTag("header-size-${size.getString("id")}").background(if (selected) colors.active else Color.Transparent, RoundedCornerShape(6.dp)), contentPadding = PaddingValues(horizontal = 8.dp)) { Text(size.getString("label")) }
+                }
             }
+            val footer = state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")
+            Row(Modifier.height(36.dp).testTag("header-show-footer").clickable { host.headerEdit(obj("type" to "canvas_info", "visible" to !footer)) }, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(footer, null, Modifier.size(32.dp)); Text("Show footer")
+            }
+            TextButton({ host.headerEdit(obj("type" to "cancel")) }, Modifier.height(36.dp).testTag("header-edit-cancel")) { Text("Cancel") }
+            Button({ host.headerEdit(obj("type" to "edit", "editing" to false)) }, Modifier.height(36.dp).testTag("header-edit-done")) { Text("Done") }
         }
-        val footer = state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")
-        Row(Modifier.height(36.dp).testTag("header-show-footer").clickable { host.headerEdit(obj("type" to "canvas_info", "visible" to !footer)) }, verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(footer, null, Modifier.size(32.dp)); Text("Show footer")
+    }) { children, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val actions = children[1].measure(loose)
+        val gap = 6.dp.roundToPx()
+        val remaining = (constraints.maxWidth - actions.width - gap).coerceAtLeast(0)
+        // Keep controls at the trailing edge. If the bank cannot fit even its
+        // widest chip beside them, wrap the controls below the full-width bank.
+        val inline = remaining >= children[0].minIntrinsicWidth(Constraints.Infinity)
+        val bank = children[0].measure(loose.copy(maxWidth = if (inline) remaining else constraints.maxWidth))
+        val actionsY = if (inline) 0 else bank.height + gap
+        layout(constraints.maxWidth, maxOf(bank.height, actionsY + actions.height)) {
+            bank.placeRelative(0, 0)
+            actions.placeRelative(constraints.maxWidth - actions.width, actionsY)
         }
-        TextButton({ host.headerEdit(obj("type" to "cancel")) }, Modifier.height(36.dp).testTag("header-edit-cancel")) { Text("Cancel") }
-        Button({ host.headerEdit(obj("type" to "edit", "editing" to false)) }, Modifier.height(36.dp).testTag("header-edit-done")) { Text("Done") }
     }
 }

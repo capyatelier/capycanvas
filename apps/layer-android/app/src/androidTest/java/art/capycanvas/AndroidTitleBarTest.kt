@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +56,15 @@ class AndroidTitleBarTest {
         var result: Rect? = null
         instrumentation.runOnMainSync { result = node(tag)?.second?.boundsInRoot }
         return checkNotNull(result) { "Missing $tag" }
+    }
+    private fun screenBounds(tag: String): Rect {
+        var result: Rect? = null
+        instrumentation.runOnMainSync {
+            val (root, node) = checkNotNull(node(tag))
+            val screen = IntArray(2); root.view.getLocationOnScreen(screen)
+            result = node.boundsInRoot.translate(Offset(screen[0].toFloat(), screen[1].toFloat()))
+        }
+        return checkNotNull(result)
     }
     private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) {
         val until = SystemClock.uptimeMillis() + timeout
@@ -301,6 +311,49 @@ class AndroidTitleBarTest {
             drag("header-overflow-item-$hidden", center())
             assertTrue(model().array("zones").getJSONArray(1).objects().any { it.getInt("id") == hidden })
             tap("header-edit-done")
+        }
+    }
+
+    @Test fun fullLabelsFitAndMenusAnchorToEachLabelAndEditorActionsAlignRight() {
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        for (size in listOf("small", "medium", "large")) {
+            restore(size)
+            for (menu in snapshot().array("application_menus").objects()) {
+                val tag = "application-menu-${menu.getString("id")}"
+                instrumentation.runOnMainSync {
+                    fun textNode(node: SemanticsNode): SemanticsNode? =
+                        if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == menu.getString("label") } == true) node
+                        else node.children.firstNotNullOfOrNull(::textNode)
+                    val label = checkNotNull(textNode(checkNotNull(node(tag)).second))
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    assertTrue(label.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts))
+                    val text = layouts.single()
+                    val lastGlyph = text.getBoundingBox(text.layoutInput.text.lastIndex)
+                    assertTrue("Final letter of ${menu.getString("label")} fits at $size: glyph=$lastGlyph, size=${text.size}", lastGlyph.right <= text.size.width + .5f)
+                    assertEquals("Text is not clipped by its enclosing item", layouts.single().size.width.toFloat(), label.boundsInRoot.width, 1f)
+                }
+                if (size == "small") {
+                    val anchor = screenBounds(tag)
+                    tap(tag)
+                    waitFor("${menu.getString("id")} popup focus") { node("workspace-menu")?.first?.view?.hasWindowFocus() == true }
+                    val popup = screenBounds("workspace-menu")
+                    assertEquals("Menu starts under its own label", anchor.left, popup.left, 2 * density)
+                    assertTrue("Menu is below its label", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    shot("anchored-${menu.getString("id")}")
+                    key(KeyEvent.KEYCODE_BACK)
+                    waitFor("menu dismissed") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
+                    idle()
+                }
+            }
+            startEditor()
+            val actions = bounds("header-editor-actions")
+            assertEquals("Editor actions end at the right padding", bounds("title-bar").right - 12 * density, actions.right, density)
+            assertEquals("Done is the trailing control", actions.right, bounds("header-edit-done").right, density)
+            for (tag in listOf("header-size-small", "header-size-medium", "header-size-large", "header-show-footer", "header-edit-cancel", "header-edit-done")) {
+                assertEquals("Controls share a row", bounds("header-edit-done").center.y, bounds(tag).center.y, density)
+            }
+            shot("aligned-editor-$size")
+            tap("header-edit-cancel"); waitFor("Cancel") { !editing() }
         }
     }
 
