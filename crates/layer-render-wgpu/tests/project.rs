@@ -424,8 +424,26 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
 
 #[test]
 fn every_contact_preset_survives_save_reopen_and_exact_undo_redo() {
-    let initial = fixture(false);
+    contact_preset_history(false);
+}
+
+#[test]
+fn every_contact_preset_paints_masks_and_survives_save_reopen_and_exact_undo_redo() {
+    contact_preset_history(true);
+}
+
+fn contact_preset_history(masked: bool) {
+    let mut initial = fixture(false);
+    if masked {
+        let mut mask =
+            LayerMask::reveal_all(initial.document.allocate_layer_id(), Point::default());
+        mask.default_coverage = 0.;
+        initial.document.layers[0].mask = Some(mask);
+    }
     let (mut live, mut input) = engine(&initial);
+    if masked {
+        live.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+    }
     let mut before = image(&mut live, 0);
     for (index, preset) in CONTACT_BRUSH_PRESETS.into_iter().enumerate() {
         let time = (index as u64 + 1) * 100_000_000;
