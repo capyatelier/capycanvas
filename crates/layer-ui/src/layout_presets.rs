@@ -36,7 +36,7 @@ impl WorkspacePreset {
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         self.layout_with_header_tools(
             platform,
-            matches!(platform, crate::Platform::Gtk | crate::Platform::Web),
+            matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android),
         )
     }
 
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn painter_has_only_two_medium_toolbars_with_essential_drawers() {
         // Hosts without the new header projection keep their existing controls.
-        let layout = WorkspacePreset::Painter.layout(crate::Platform::Android);
+        let layout = WorkspacePreset::Painter.layout(crate::Platform::Ios);
         assert_eq!(
             layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
             [Edge::Left, Edge::Top]
@@ -409,8 +409,8 @@ mod tests {
     }
 
     #[test]
-    fn gtk_and_web_sketch_have_only_individual_header_tools() {
-        for platform in [crate::Platform::Gtk, crate::Platform::Web] {
+    fn projected_sketch_has_only_individual_header_tools() {
+        for platform in [crate::Platform::Gtk, crate::Platform::Web, crate::Platform::Android] {
             let layout = WorkspacePreset::Painter.layout(platform);
             assert!(layout.bands.is_empty() && layout.floating.is_empty());
             assert_eq!(

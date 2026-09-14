@@ -1,9 +1,6 @@
 //! Browser measurements and capture feed the same title-bar policy as GTK.
 use super::*;
-use layer_ui::{
-    HeaderDrag, HeaderDragSource, HeaderDragStart, HeaderItem, HeaderMetric, HeaderSize, Platform,
-};
-use serde_json::json;
+use layer_ui::{HeaderDrag, HeaderDragSource, HeaderDragStart, HeaderMetric, Platform};
 
 #[derive(Deserialize)]
 struct DragQuery {
@@ -18,30 +15,7 @@ struct DragQuery {
 #[wasm_bindgen]
 impl WebApp {
     pub fn header_view(&self) -> Result<JsValue, JsValue> {
-        let state = self.session.state();
-        let model = state.workspace.layout.header.projected_for(Platform::Web);
-        let items = model
-            .entries()
-            .map(|entry| {
-                let (enabled, selected, icon) = match entry.item {
-                    HeaderItem::Tool { control } => {
-                        let (enabled, selected) = layer_ui::tool_state(state, control);
-                        (enabled, selected, layer_ui::tool_choice(control).icon)
-                    }
-                    HeaderItem::Capy => (true, state.workspace.zen_mode, ""),
-                    _ => (true, false, ""),
-                };
-                json!({"id":entry.id, "label":entry.item.label(), "enabled":enabled,
-                "selected":selected, "icon":icon})
-            })
-            .collect::<Vec<_>>();
-        js_sys::JSON::parse(&serde_json::to_string(&json!({"model":model, "items":items,
-            "editing":state.customization.header_editing,
-            "sizes":HeaderSize::ALL.map(|size| json!({"id":size,"label":size.label(),
-                "tile":size.tile(),"icon":size.icon(),"height":size.height()})),
-            "components":HeaderItem::COMPONENTS.into_iter().filter(|item| item.available_on(Platform::Web))
-                .map(|item| json!({"item":item,"label":item.label(),"singleton":item.singleton()})).collect::<Vec<_>>(),
-            "primary_menu":self.session.application_menu(layer_ui::ApplicationMenu::Primary)})).map_err(js)?)
+        js_sys::JSON::parse(&serde_json::to_string(&self.session.header_view()).map_err(js)?)
     }
 
     pub fn header_geometry(
