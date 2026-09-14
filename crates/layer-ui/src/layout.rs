@@ -3757,7 +3757,7 @@ impl ResolvedLayout {
             } else {
                 b
             };
-            // GTK extends every tab strip into the former upper body split
+            // Extend every tab strip into the former upper body split
             // zone. The horizontal position still selects the exact tab slot.
             let tab_reach = if prepend_body { body.height * 0.2 } else { 0. };
             if group.tabs_visible && y < body.y + tab_reach {

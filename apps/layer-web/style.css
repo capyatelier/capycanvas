@@ -376,6 +376,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .divider.horizontal { cursor: col-resize; }
 .divider.vertical { cursor: row-resize; }
 .drop-indicator { position: absolute; z-index: 3000; background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 1px #0003; pointer-events: none; }
+.drop-indicator.drop-body { background: color-mix(in srgb, var(--accent) 25%, transparent); border: 2px solid var(--accent); border-radius: 0; box-shadow: none; }
 .chrome, .dock-group { transition: opacity 180ms ease-out; }
 .floating-resize { position: absolute; touch-action: none; user-select: none; -webkit-user-select: none; }
 .floating-resize[data-edge="left"], .floating-resize[data-edge="right"] { cursor: ew-resize; }

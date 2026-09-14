@@ -1360,7 +1360,11 @@ function draggedItem(e) {
 }
 function showDropHint(hint) {
   dropIndicator.hidden = !hint;
-  if (hint) { place(dropIndicator, hint.bounds); dropIndicator.dataset.kind = hint.target.kind; }
+  if (hint) {
+    place(dropIndicator, hint.bounds);
+    dropIndicator.dataset.kind = hint.target.kind;
+    dropIndicator.classList.toggle("drop-body", hint.target.kind === "tab" && hint.bounds.width > 3 && hint.bounds.height > 3);
+  }
 }
 function dropItem(item, hint) {
   if (hint && item.kind === "tile")

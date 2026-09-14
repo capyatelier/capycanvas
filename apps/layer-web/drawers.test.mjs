@@ -77,6 +77,7 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
     }
     await send({type:'move_panel',panel:'toolbar',target:{kind:'tab',group:41,index:null}});
     await send({type:'customize',action:{type:'set_column_collapsed',group:41,collapsed:true}});
+    await send({type:'customize',action:{type:'set_column_drawers',column:41,drawers:true}});
     await send({type:'customize',action:{type:'toggle_column_drawer',group:41,panel:'toolbar'}});
     await click(2);await check(2);await click(1,2);await check(1);await click(0,1);await check(0);
     console.log('PASS: first-click drawer switching on all toolbar edges and inside a collapsed drawer; mouse/touch/pen outside dismissal, menu activation and no canvas marks');
@@ -152,6 +153,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       await send({type:'set_theme',theme});await send({type:'restore_workspace',workspace:fixture});
       for(const [group,panel] of [[41,'brushes'],[43,'layers']]) {
         await customize({type:'set_column_collapsed',group,collapsed:true});
+        await customize({type:'set_column_drawers',column:group,drawers:true});
         const expandSelector=`.collapsed-column[data-column="${group}"] .column-expand`;
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)})`),null,'Expand caret is retired');
         const selector=`.collapsed-column [data-panel="${panel}"]`;
@@ -175,6 +177,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         await customize({type:'set_column_collapsed',group,collapsed:false});
         assert.equal(await evaluate(`document.querySelector('.collapsed-column[data-column="${group}"]')`),null,'Shared expand action opens the column');
         await customize({type:'set_column_collapsed',group,collapsed:true});
+        await customize({type:'set_column_drawers',column:group,drawers:true});
       }
       for(const edge of ['top','bottom','left','right']) {
         await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge,outer:true}});
@@ -203,6 +206,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
     for(const theme of ['light','dark']) {
       await send({type:'set_theme',theme});await send({type:'restore_workspace',workspace:divided});
       await customize({type:'set_column_collapsed',group:46,collapsed:true});
+      await customize({type:'set_column_drawers',column:46,drawers:true});
       const a=await rect('.column-tab[data-panel="brushes"]'),b=await rect('.column-tab[data-panel="sizes"]');
       const strip=await rect('.collapsed-column[data-column="46"]');
       assert.ok(Math.abs(a.top-strip.top-6)<.01,'First tile retains the standard top padding');
@@ -256,7 +260,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
     else {await evaluate("document.querySelector('#workspace').dispatchEvent(new PointerEvent('pointercancel',{pointerId:1,bubbles:true}))");await release();}
     held=false;await wait();
   };
-  const open=async()=>{await customize({type:"set_column_collapsed",group:41,collapsed:true});await click(center(await rect('.collapsed-column [data-panel="brushes"]')));await wait();assert.ok(await evaluate(`!!document.querySelector('${drawer} .drawer-tabs')`));};
+  const open=async()=>{await customize({type:"set_column_collapsed",group:41,collapsed:true});await customize({type:"set_column_drawers",column:41,drawers:true});await click(center(await rect('.collapsed-column [data-panel="brushes"]')));await wait();assert.ok(await evaluate(`!!document.querySelector('${drawer} .drawer-tabs')`));};
   const history=async before=>{const after=await snap();assert.notDeepEqual(after,before);await send({type:"invoke",command:"undo_workspace"});assert.deepEqual(await snap(),before);await send({type:"invoke",command:"redo_workspace"});assert.deepEqual(await snap(),after);};
   await evaluate(`window.__drawerActions=[];window.__drawerDispatch=layerApp.app.dispatch.bind(layerApp.app);layerApp.app.dispatch=a=>{if(a.type==='measure_column_drawers'||a.type==='drag_workspace')window.__drawerActions.push(structuredClone(a));return window.__drawerDispatch(a)};`);
   try {
@@ -338,7 +342,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
       assert.equal(hits[0].index,1,"Hidden tab is excluded and indices are preserved");
       for(const hit of hits)assert.ok(hit.bounds.x>=clip.x&&hit.bounds.x+hit.bounds.width<=clip.x+clip.width+.01,"Tab hit is clipped to the scroll viewport");
       await release();assert.deepEqual((await group("layers")).panels,["brushes","layers","sizes","tool_settings","navigator","stats"]);await history(before);
-      // Drops onto an open drawer use shared tab, merge and split targets.
+      // Drops onto an open drawer use shared tab, body-prepend and bottom-split targets.
       for(const zone of ["tab","merge","top","bottom"]) {
         console.log(`Checking ${pointer} drawer drop ${zone}`);
         await send({type:"restore_workspace",workspace:fixture});await open();before=await snap();
@@ -346,20 +350,20 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         const sourcePoint=zone==="merge"?await evaluate("(()=>{const n=[...document.querySelectorAll('.dock-group')].find(n=>n.dataset.group==='43'||n.querySelector('.dock-tab[data-panel=layers]'));const r=n.querySelector('.dock-tabs > .panel-grip').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()"):center(await rect('.dock-group .dock-tab[data-panel="layers"]'));
         await press(sourcePoint);await move(await evaluate("({x:innerWidth*.5,y:innerHeight*.6})"));
         b=await rect(drawer);
-        const destination=zone==="tab"?{x:b.x+3,y:b.y+18}:zone==="top"?{x:b.x+b.width/2,y:b.y+40}:zone==="bottom"?{x:b.x+b.width/2,y:b.y+b.height-4}:center(b);
+        const destination=zone==="tab"?{x:b.x+3,y:b.y+18}:zone==="top"?{x:b.x+3,y:b.y+40}:zone==="bottom"?{x:b.x+b.width/2,y:b.y+b.height-4}:center(b);
         await move(destination);
         const hint=await evaluate("(()=>{const n=document.querySelector('.drop-indicator');return{hidden:n.hidden,status:document.querySelector('#status').textContent}})()");
         assert.equal(hint.hidden,false,`${pointer} ${zone}: ${JSON.stringify(hint)}`);
         await release();const target=await group("layers");
         assert.deepEqual((await snap()).layout.panels,before.layout.panels,"Dropping preserves tab preferences");
-        if(["top","bottom"].includes(zone))assert.notEqual(target.id,41);else assert.equal(target.id,41);
-        if(zone==="tab")assert.equal(target.panels[0],"layers");
+        if(zone==="bottom")assert.notEqual(target.id,41);else assert.equal(target.id,41);
+        if(zone!=="bottom")assert.equal(target.panels[0],"layers");
         if(zone==="merge")assert.equal(target.panels.length,6);
         assert.equal((await snap()).layout.floating.length,0);await history(before);
       }
       const shot=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${dir}/${pointer}.png`,Buffer.from(shot.data,"base64"));
       assert.equal(await evaluate("document.querySelector('#status').textContent"),"");
-      console.log(`PASS: ${pointer} drawer panel/group drag, tab reorder, insertion, merge, top/bottom splits, clipped tab hits, preserved tab visibility, cancel, undo/redo`);
+      console.log(`PASS: ${pointer} drawer panel/group drag, tab reorder, insertion, body prepend, extended tabs, bottom splits, clipped tab hits, preserved tab visibility, cancel, undo/redo`);
     }
   } finally {await evaluate("layerApp.app.dispatch=window.__drawerDispatch;delete window.__drawerDispatch;delete window.__drawerActions");if(held)await release();await send({type:"restore_workspace",workspace:saved});}
 }

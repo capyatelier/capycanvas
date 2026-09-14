@@ -1604,8 +1604,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let gtk_body = self.state.platform == Platform::Gtk;
-        let menubar = (gtk_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
+        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web);
+        let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
         let mut hint = if let Some(hint) = menubar {
             hint
@@ -1636,7 +1636,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             (matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) && !docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
-                .or_else(|| resolved.drop_hint_with_group_body(position[0], position[1], tabs, !docks_hidden, gtk_body))?
+                .or_else(|| resolved.drop_hint_with_group_body(position[0], position[1], tabs, !docks_hidden, group_body))?
         };
         // The attached preview and the committed drop use the same frozen
         // switch points, including a release between pointer-motion events.
@@ -9455,7 +9455,7 @@ mod tests {
                     .bounds;
                 let destination = [
                     neighbor.x + neighbor.width * 0.5,
-                    if platform == Platform::Gtk { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
+                    if matches!(platform, Platform::Gtk | Platform::Web) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
                 ];
                 drag(&mut app, ContactPhase::Move, destination);
                 drag(&mut app, ContactPhase::Up, destination);
@@ -12684,7 +12684,7 @@ mod tests {
                         .target,
                     DockTarget::Tab {
                         group: target,
-                        index: if platform == Platform::Gtk && point[1] < 830. { Some(0) } else { None }
+                        index: if matches!(platform, Platform::Gtk | Platform::Web) && point[1] < 830. { Some(0) } else { None }
                     }
                 );
             }
@@ -15831,6 +15831,12 @@ mod tests {
     }
     mod layout_drop_tests {
         use super::*;
+        const PLATFORM: Platform = Platform::Gtk;
+        include!("layout_drop_tests.rs");
+    }
+    mod layout_drop_web_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Web;
         include!("layout_drop_tests.rs");
     }
 }

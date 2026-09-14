@@ -56,7 +56,10 @@ export async function checkDragPickup({call,evaluate,settle}) {
           await send({type:"restore_workspace",workspace:fixture});
           if(source==="drawer-tile")await send({type:"move_panel",panel:"toolbar",target:{kind:"tab",group:43,index:null},viewport:await evaluate("[innerWidth,innerHeight]")});
           if(source!=="tile")await send({type:"customize",action:{type:"set_column_collapsed",group:43,collapsed:true}});
-          if(source==="drawer-tile")await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"toolbar"}});
+          if(source==="drawer-tile") {
+            await send({type:"customize",action:{type:"set_column_drawers",column:43,drawers:true}});
+            await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"toolbar"}});
+          }
           const selector=source==="drawer-tile"?'.content-drawer .toolbar-controls [data-drag-pickup=hold]':source==="tile"?'.toolbar-controls [data-drag-pickup=hold]':'.column-tab[data-panel=properties]';
           const start=center(await rect(selector));
           const target=source.endsWith("tile")?await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});const r=n.parentElement.children[2].getBoundingClientRect();return{x:r.x+r.width*.8,y:r.y+r.height*.8}})()`):await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
