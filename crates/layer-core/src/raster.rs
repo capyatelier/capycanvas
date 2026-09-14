@@ -77,11 +77,11 @@ pub enum RasterPlane {
     WatercolorWetness,
 }
 impl RasterPlane {
-    pub fn descriptor(self) -> PixelDescriptor {
+    pub fn descriptor(self, color: crate::color::DocumentColor) -> PixelDescriptor {
         if self == Self::Color {
-            PixelDescriptor::SRGB8_PAINT
+            color.paint_descriptor()
         } else {
-            PixelDescriptor::COVERAGE8
+            color.coverage_descriptor()
         }
     }
 }
@@ -144,7 +144,11 @@ impl TileBlob {
     pub fn encode_source(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
         Self::encode_at_level(descriptor, bytes, 1)
     }
-    fn encode_at_level(descriptor: PixelDescriptor, bytes: &[u8], level: i32) -> Result<Self, String> {
+    fn encode_at_level(
+        descriptor: PixelDescriptor,
+        bytes: &[u8],
+        level: i32,
+    ) -> Result<Self, String> {
         let expected = descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
@@ -190,7 +194,8 @@ impl TileBlob {
         if frame_size != self.compressed.len() {
             return Err("Trailing compressed raster data".into());
         }
-        let mut bytes = zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
+        let mut bytes =
+            zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
         if bytes.len() == size && self.descriptor.bits_per_channel == 16 {
             bytes = unshuffle16(self.descriptor, &bytes);
         }
@@ -241,25 +246,49 @@ impl TileBlob {
 
 /// A dirty tile's queue-ordered capture. Its CPU data is published once by the
 /// readback/compression worker. Cloning a revision only clones these handles.
-#[derive(Clone, Debug, Default)]
-pub struct RasterTile(Arc<Publication<TileBlob>>);
+#[derive(Debug)]
+struct TilePublication {
+    data: Publication<TileBlob>,
+    descriptor: PixelDescriptor,
+}
+#[derive(Clone, Debug)]
+pub struct RasterTile(Arc<TilePublication>);
 impl RasterTile {
+    /// The native layout is known before readback completes. History can charge
+    /// the correct pending payload even while document precision is changing.
+    pub fn pending(descriptor: PixelDescriptor) -> Self {
+        Self(Arc::new(TilePublication {
+            data: Publication::default(),
+            descriptor,
+        }))
+    }
+    pub fn descriptor(&self) -> PixelDescriptor {
+        self.0.descriptor
+    }
     pub fn identity(&self) -> u64 {
-        self.0.id
+        self.0.data.id
     }
     pub fn backed(blob: TileBlob) -> Self {
-        let tile = Self::default();
+        let tile = Self::pending(blob.descriptor);
         tile.publish(Ok(blob)).expect("new tile");
         tile
     }
     pub fn publish(&self, value: Result<TileBlob, String>) -> Result<(), String> {
-        self.0.publish(value.map(Arc::new))
+        if value
+            .as_ref()
+            .is_ok_and(|blob| blob.descriptor != self.0.descriptor)
+        {
+            let error = "Raster capture changed its declared pixel representation".to_string();
+            self.0.data.publish(Err(error.clone()))?;
+            return Err(error);
+        }
+        self.0.data.publish(value.map(Arc::new))
     }
     pub fn try_backing(&self) -> Option<Result<Arc<TileBlob>, String>> {
-        self.0.get()
+        self.0.data.get()
     }
     pub fn wait_backing(&self) -> Result<Arc<TileBlob>, String> {
-        self.0.wait()
+        self.0.data.wait()
     }
     pub fn same_capture(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -295,10 +324,15 @@ impl RasterData {
             .map(|blob| blob.resident_bytes())
             .sum()
     }
-    pub fn validate(&self, extent: [u32; 2], mask: bool) -> Result<(), String> {
-        self.validate_index(extent, mask)?;
+    pub fn validate(
+        &self,
+        extent: [u32; 2],
+        mask: bool,
+        color: crate::color::DocumentColor,
+    ) -> Result<(), String> {
+        self.validate_index(extent, mask, color)?;
         for (key, tile) in &self.tiles {
-            if tile.wait_backing()?.descriptor != key.plane.descriptor() {
+            if tile.wait_backing()?.descriptor != key.plane.descriptor(color) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }
@@ -306,7 +340,12 @@ impl RasterData {
     }
     /// Validate topology without awaiting unrelated tile captures. Restoration
     /// checks each replacement's representation when it decodes that tile.
-    pub fn validate_index(&self, extent: [u32; 2], mask: bool) -> Result<(), String> {
+    pub fn validate_index(
+        &self,
+        extent: [u32; 2],
+        mask: bool,
+        color: crate::color::DocumentColor,
+    ) -> Result<(), String> {
         if let Some(w) = self.watercolor
             && (mask
                 || ![w.wet_edge, w.burnt_edge, w.edge_width]
@@ -318,12 +357,15 @@ impl RasterData {
         {
             return Err("Invalid raster watercolor state".into());
         }
-        for key in self.tiles.keys() {
+        for (key, tile) in &self.tiles {
             if key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)
                 || key.coordinate[1] >= extent[1].div_ceil(TILE_SIZE)
                 || mask != (key.plane == RasterPlane::Mask)
             {
                 return Err("Invalid raster tile coordinates or plane".into());
+            }
+            if tile.descriptor() != key.plane.descriptor(color) {
+                return Err("Raster plane has the wrong pixel representation".into());
             }
         }
         Ok(())
@@ -396,6 +438,95 @@ impl RasterRevision {
 mod tests {
     use super::*;
     #[test]
+    fn pending_history_charges_each_retained_tiles_own_precision() {
+        use crate::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use crate::{Document, Edit, Editor, LayerId};
+        for (bits, expected_undo) in [(8, 4), (16, 2), (32, 2)] {
+            // Even while the current document is still sRGB8, old revision
+            // tickets own their layout. No pixel allocation/readback is needed
+            // to enforce the 512 MiB history ceiling.
+            let mut editor = Editor::new(Document::new("pending history", 6400, 5120));
+            let descriptor = PixelDescriptor {
+                bits_per_channel: bits,
+                ..DocumentColor {
+                    space: RgbSpace::ProPhoto,
+                    depth: IntegerDepth::U16,
+                }
+                .paint_descriptor()
+            };
+            for _ in 0..3 {
+                let data = RasterData {
+                    tiles: (0..500)
+                        .map(|i| {
+                            (
+                                TileKey {
+                                    plane: RasterPlane::Color,
+                                    coordinate: [i % 25, i / 25],
+                                },
+                                RasterTile::pending(descriptor),
+                            )
+                        })
+                        .collect(),
+                    watercolor: None,
+                };
+                editor
+                    .perform(Edit::SetRaster {
+                        target: LayerId(1),
+                        revision: RasterRevision::backed(data),
+                    })
+                    .unwrap();
+            }
+            editor
+                .perform(Edit::SetRaster {
+                    target: LayerId(1),
+                    revision: RasterRevision::backed(RasterData::default()),
+                })
+                .unwrap();
+            let mut restored = 0;
+            while editor.undo().unwrap() {
+                restored += 1;
+            }
+            assert_eq!(restored, expected_undo, "{bits}-bit ticket accounting");
+        }
+    }
+    #[test]
+    fn pending_native_layout_is_stable_and_rejects_mismatched_publication() {
+        use crate::color::{DocumentColor, IntegerDepth, RgbSpace};
+        let color = DocumentColor {
+            space: RgbSpace::ProPhoto,
+            depth: IntegerDepth::U16,
+        };
+        let descriptor = RasterPlane::Color.descriptor(color);
+        let tile = RasterTile::pending(descriptor);
+        assert_eq!(tile.descriptor().byte_len([TILE_SIZE; 2]), Some(524288));
+        let data = RasterData {
+            tiles: BTreeMap::from([(
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [0, 0],
+                },
+                tile.clone(),
+            )]),
+            watercolor: None,
+        };
+        data.validate_index([256; 2], false, color).unwrap();
+        assert!(
+            data.validate_index(
+                [256; 2],
+                false,
+                DocumentColor {
+                    depth: IntegerDepth::U8,
+                    ..color
+                }
+            )
+            .is_err()
+        );
+        let wrong = TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &vec![0; 262144]).unwrap();
+        assert!(tile.publish(Ok(wrong)).is_err());
+        assert!(matches!(tile.try_backing(), Some(Err(_))));
+        assert_eq!(tile.descriptor(), descriptor);
+    }
+    #[test]
     fn failed_raster_suffix_recovers_atomically_without_redoing_lost_pixels() {
         use crate::{Document, Edit, Editor, LayerId};
         for tile_failure in [false, true] {
@@ -421,7 +552,7 @@ mod tests {
                 "pending is not failed"
             );
             if tile_failure {
-                let tile = RasterTile::default();
+                let tile = RasterTile::pending(PixelDescriptor::SRGB8_PAINT);
                 tile.publish(Err("readback failed".into())).unwrap();
                 pending
                     .publish(Ok(RasterData {
@@ -482,7 +613,9 @@ mod tests {
     }
     #[test]
     fn exact_backing_reuses_unchanged_tiles_and_preserves_snapshot() {
-        let size = PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap();
+        let size = PixelDescriptor::SRGB8_PAINT
+            .byte_len([TILE_SIZE; 2])
+            .unwrap();
         let bytes: Vec<_> = (0..size).map(|i| (i % 251) as u8).collect();
         let tile =
             RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap());
@@ -500,7 +633,8 @@ mod tests {
             coordinate: [1, 0],
             ..key
         };
-        next.tiles.insert(changed, RasterTile::default());
+        next.tiles
+            .insert(changed, RasterTile::pending(PixelDescriptor::SRGB8_PAINT));
         assert!(next.tiles[&key].same_capture(&revision.wait_data().unwrap().tiles[&key]));
         assert!(!next.host_backed());
         assert!(revision.host_backed());
@@ -509,7 +643,7 @@ mod tests {
     }
     #[test]
     fn capture_failure_is_shared_and_publication_is_single_assignment() {
-        let tile = RasterTile::default();
+        let tile = RasterTile::pending(PixelDescriptor::SRGB8_PAINT);
         let snapshot = tile.clone();
         tile.publish(Err("Device lost before capture".into()))
             .unwrap();

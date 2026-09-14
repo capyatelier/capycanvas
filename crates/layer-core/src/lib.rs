@@ -1794,15 +1794,18 @@ impl Editor {
                     match revision.try_data() {
                         Some(Ok(data)) => {
                             bytes = bytes.saturating_add(data.tiles.len().saturating_mul(96));
-                            for (key, tile) in &data.tiles {
+                            for tile in data.tiles.values() {
                                 if seen_tiles.insert(tile.identity()) {
                                     bytes = bytes.saturating_add(match tile.try_backing() {
                                         Some(Ok(blob)) => blob.resident_bytes(),
                                         _ => {
-                                            key.plane
-                                                .descriptor()
+                                            tile.descriptor()
                                                 .byte_len([raster::TILE_SIZE; 2])
-                                                .unwrap()
+                                                // An invalid pending descriptor is
+                                                // rejected before adoption. Charge
+                                                // the largest supported tile until
+                                                // then instead of panicking here.
+                                                .unwrap_or(raster::MAX_TILE_BYTES)
                                                 + 1024
                                         }
                                     });

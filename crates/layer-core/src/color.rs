@@ -6,12 +6,42 @@ mod profile;
 pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, RenderingIntent};
 pub mod source;
 
-/// IEC sRGB primaries, D65 white, SDR range, standard piecewise transfer.
-/// Versioned built-in definition; display state never changes this identity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DocumentColor {
-    #[default]
-    Srgb8V1,
+/// Native SDR coordinates and committed integer precision. Working math and
+/// per-operation blend domains are independent of these storage choices.
+/// The archive version fixes the built-in RGB definitions; monitor state never
+/// changes the permanent interpretation of artwork.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentColor {
+    pub space: RgbSpace,
+    pub depth: IntegerDepth,
+}
+impl DocumentColor {
+    pub fn paint_descriptor(self) -> PixelDescriptor {
+        PixelDescriptor {
+            channels: 4,
+            bits_per_channel: self.depth.bits(),
+            encoding: if self == Self::default() {
+                TransferEncoding::Srgb
+            } else {
+                TransferEncoding::Profile
+            },
+            // New native modes retain straight RGB codes at low coverage.
+            // The currently exposed sRGB8 renderer still stores encoded linear
+            // premultiplication; its replacement is a separate mode adoption.
+            alpha: if self == Self::default() {
+                AlphaAssociation::PremultipliedLinear
+            } else {
+                AlphaAssociation::Straight
+            },
+        }
+    }
+    pub fn coverage_descriptor(self) -> PixelDescriptor {
+        PixelDescriptor {
+            bits_per_channel: self.depth.bits(),
+            ..PixelDescriptor::COVERAGE8
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

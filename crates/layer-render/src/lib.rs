@@ -352,6 +352,12 @@ impl TransformPreview {
 /// into GPU resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Native interpretation configured on this renderer. Adoption/recovery
+    /// rejects a document with different coordinates or depth before resize or
+    /// input consumption. Hosts explicitly prepare a qualified mode to change it.
+    fn document_color(&self) -> layer_core::color::DocumentColor {
+        Default::default()
+    }
     /// Expose source-backed documents only when the renderer can interpret and
     /// compose their retained samples. Unsupported hosts must reject adoption.
     fn supports_tiled_sources(&self) -> bool {

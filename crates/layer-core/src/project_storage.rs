@@ -7,8 +7,10 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 mod sources;
 use sources::SourceIndex;
+#[cfg(test)]
+mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x02\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x03\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,7 +72,11 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
             .chain(layer.mask.iter().map(|m| (m.id, &m.raster, true)))
         {
             let data = raster.wait_data()?;
-            data.validate([project.document.width, project.document.height], mask)?;
+            data.validate(
+                [project.document.width, project.document.height],
+                mask,
+                project.document.color,
+            )?;
             let mut tiles = Vec::new();
             for (key, tile) in &data.tiles {
                 tile_count += 1;
@@ -254,7 +260,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         for tile in &raster.tiles {
             let blob = manifest.blobs.get(tile.blob).ok_or("Missing raster blob")?;
             if !keys.insert(tile.key)
-                || blob.descriptor != tile.key.plane.descriptor()
+                || blob.descriptor != tile.key.plane.descriptor(manifest.document.color)
                 || mask != (tile.key.plane == RasterPlane::Mask)
                 || tile.key.coordinate[0] >= manifest.document.width.div_ceil(TILE_SIZE)
                 || tile.key.coordinate[1] >= manifest.document.height.div_ceil(TILE_SIZE)
@@ -301,7 +307,11 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
                 .collect(),
             watercolor: raster.watercolor,
         };
-        data.validate([manifest.document.width, manifest.document.height], mask)?;
+        data.validate(
+            [manifest.document.width, manifest.document.height],
+            mask,
+            manifest.document.color,
+        )?;
         let revision = if let Some(layer) = manifest
             .document
             .layers

@@ -5,6 +5,16 @@ this report is not a declaration that the new modes are qualified. Scope is
 shared implementation and GTK integration. Other host integration requires the
 user's approval after GTK qualification.
 
+Current delivery status: retained source/ICC/output and native tile precision
+primitives are implemented, but the complete GTK SDR/photo workflows are **not
+enabled or qualified**. Native document edit publication, extended tool/effect
+precision, bounded mutable/composite/filter residency and mips, managed GTK
+viewing, color/photo controls and remaining interchange are still required.
+Large-photo transforms fail the latency gate. Existing drawing, project files,
+diagnostics and GPU recovery continue to receive regression checks; these do not
+substitute for qualification of the new workflows. The implementation sections
+below distinguish each measured primitive from an integrated user journey.
+
 ## Independently checked prerequisites
 
 The milestone 1 archive/replay replacement is present: immutable compressed
@@ -1984,3 +1994,113 @@ focused runs will distinguish copy/capture costs from the prior variable tails.
 The absolute pass and matching images do not clear these relative investigations,
 or the earlier transform/prediction and full-photo failures. Native document
 publication and the complete GTK color/photo journeys remain unimplemented.
+
+
+## Document interpretation and typed pending backing (parent `ed0faad`)
+
+Document interpretation now records independent built-in RGB space and committed
+integer depth. Version 3 of the archive fixes the built-in definitions and checks
+color, mask, wetness and watercolor-wetness layouts against that interpretation.
+The old version 2 reader is removed. Nondefault native modes use straight RGB
+codes so very low coverage does not destroy unassociated integer16 precision.
+The currently exposed sRGB8 renderer retains its existing encoded linear
+premultiplication until common-pipeline adoption; that transitional special case
+is not a final precision qualification for native sRGB8.
+
+Each pending raster tile now owns its declared pixel descriptor in the shared
+publication allocation. Cheap revision clones still copy an Arc-sized handle.
+Readback requests derive their descriptor from that ticket; the redundant capture
+field and untyped default constructor are deleted. Publishing a different layout
+fails and wakes waiters with an error. Index validation checks pending layouts
+without waiting for CPU backing. History charges each retained ticket's own
+precision, including old revisions whose layout differs from the current
+document. Invalid pending layouts receive the conservative maximum tile charge
+until rejected by adoption/storage, rather than panicking during history trim.
+
+The renderer declares its prepared document interpretation. Engine construction
+and device replacement reject a mismatch before resizing, consuming input or
+changing history. The exposed GPU/GTK constructors still declare sRGB8; this
+change does not enable a native editing mode. Tests cover all eight built-in
+space/depth combinations, failed replacement retaining queued input/checkpoint,
+and successful replacement with matching interpretation.
+
+Archive tests round-trip every code at both depths in four spaces, all four
+persisted raster planes, exact descriptor/digest/bytes, shared color-tile identity
+and byte-identical resave. Wrong color/scalar depth and the previous archive
+version fail. A history test retains three 500-tile pending revisions: the 512 MiB
+limit keeps all three integer8 revisions but only two integer16 revisions, even
+with a current sRGB8 document. It also exercises malformed-layout accounting
+without allocating any pixel payload.
+
+Validation: **56 core, 50 engine and 370 UI tests pass**. The final additional
+history test is in `document-color-history-tests.log`; earlier combined output is
+`document-color-shared-tests.log`. GTK test compilation passes. The saved
+`document-color-ticket-gpu-tests` executable passes **159 GPU tests, 25 ignored**,
+in 102.52 seconds (`document-color-full-gpu-tests.log`). Production GTK native
+files and diagnostics/device-failure/recovery tests both pass using
+`document-color-ticket-gtk-tests` under private Mutter at 120 Hz/GSK Vulkan.
+Reproduce with `bash tools/performance/gtk-raster.sh BINARY FILTER PREFIX` and
+filters `native_document_files` and `native_diagnostics_and_gpu_failure_recovery`.
+Build JSON/logs and `document-color-gtk-*-run.log` retain provenance. The GPU/GTK
+executables precede only the final conservative invalid-layout history charge
+and its core test; `document-color-production-frame` includes them.
+
+The scalar-stage phase investigation uses isolated `d2195b8`/`ed0faad` probes,
+created by `tools/performance/trace-raster-commit.py`. Each of wet-round Oklab and
+natural blender runs 30 repetitions in parent/current/parent order. The last one
+or four traced stroke ends per repetition, respectively, are the measured
+window; setup and the first warm-up stroke are excluded. Raw phase records and
+summaries are `native-scalar-trace/phase-measurements.json`, with all original
+logs/reports retained. These instrumented runs diagnose costs; production
+comparisons determine qualification.
+
+Warm capture allocation time is zero at p99 in all six arms. Natural-blender
+capture p99 is 0.320 ms current versus 0.323/0.383 parent, with similar copy
+finishing/submission costs. Wet-round capture p99 is 0.704 ms versus 0.543/0.437;
+its copy-command finish p99 is 0.326 versus 0.235/0.213, and copy submission p99 is
+0.126 versus 0.051/0.037. Frame encoding p99 is 0.594 versus 0.622/0.604. This
+localizes that observed increase to capture command finishing/submission and
+related overhead, without identifying a reproducible driver or code cause.
+These observations do not clear every relative trigger from the preceding stage.
+No compilation ran during any phase or production measurement.
+
+Fresh production ten-repetition parent/current/fixed runs measure **109,200
+frames**. All 36,400 current frames pass the 8.33 ms Move/Pen-up gate and all
+25 PNGs are byte-identical across all three arms. Maximum CPU Move p95/p99 is
+**2.193/2.940 ms parent**, **2.168/2.845 current**, and **2.403/3.123 fixed**.
+The parent has one loaded-oil completed Move deadline miss; fixed has one
+watercolor-wash completed Move miss. These samples remain in their reports.
+The entire baseline runs therefore do not receive an absolute pass.
+
+Remaining relative triggers in this comparison are opaque-gouache Pen-up
+completion and palette-knife Move CPU/completion against parent; wet-round
+Pen-up CPU/completion and palette-knife Pen-up CPU/Move completion against
+fixed. Raw values, sample counts, PNG hashes and all triggers are in
+`document-color-frame-measurements.json`; executable hashes and elapsed run
+times are in `document-color-frame-runs.json`. Reproduce each saved executable
+with `--scenario all --repeats 10 --output-dir PREFIX --report PREFIX.md` and
+`LAYER_GPU_INDEX=0`. Focused paired runs remain necessary to assess these tails;
+the preceding phase diagnosis alone does not clear them. Native color/depth
+adoption stays disabled, and dense-photo/transform memory and latency failures
+remain outstanding.
+
+## GTK display integration audit (implementation still outstanding)
+
+The GTK canvas is a Vulkan WSI surface on an application-owned Wayland child
+subsurface (`wayland.rs` and `render_thread.rs`), not a GTK-managed image texture.
+Applying a GTK widget color state alone therefore does not establish the canvas's
+image description. Current creation selects a non-sRGB swap-chain format and
+leaves the surface color space at its automatic default. Native drawing/recovery
+checks do not verify wide-gamut presentation or monitor transitions.
+
+The pinned wgpu 30.0.1 source already exposes per-format color-space capabilities
+and explicit `SurfaceConfiguration.color_space`; Auto does not select a wide
+space for ordinary integer formats. The pinned Wayland color-management v3 XML
+specifies commit-buffered surface image descriptions and implementation-defined
+behavior for an untagged surface. The compositor performs output conversion for
+tagged surfaces, including surfaces spanning outputs, as described in the
+[official Wayland color-management overview](https://wayland.freedesktop.org/docs/book/Color.html).
+A future integration must first inspect actual WSI/compositor capabilities and
+protocol ownership: independently installing a second surface-color object may
+conflict with Vulkan WSI's own object. No profile/fallback/monitor behavior is
+claimed from this source audit alone, and no display code is changed here.

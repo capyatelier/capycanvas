@@ -132,7 +132,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         input: InputConsumer<PenEvent>,
         view: ViewState,
         input_transform: ViewTransform,
-    ) -> Result<Self, B::Error> {
+    ) -> Result<Self, EngineError<B::Error>> {
         Self::with_capacity(
             backend,
             document,
@@ -150,13 +150,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         view: ViewState,
         input_transform: ViewTransform,
         capacity: EngineCapacity,
-    ) -> Result<Self, B::Error> {
+    ) -> Result<Self, EngineError<B::Error>> {
+        if backend.document_color() != document.color {
+            return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
+                "The renderer is not configured for this document's color space and precision",
+            )));
+        }
         for layer in &mut document.layers {
             if layer.asset.is_some() && layer.raster.is_empty() {
                 layer.raster = layer_core::raster::RasterRevision::pending();
             }
         }
-        backend.resize_surface(view.width_px, view.height_px)?;
+        backend
+            .resize_surface(view.width_px, view.height_px)
+            .map_err(EngineError::Backend)?;
         let mut transforms = VecDeque::with_capacity(TRANSFORM_HISTORY);
         transforms.push_back(input_transform);
         Ok(Self {
@@ -219,6 +226,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// The active builder and queued samples survive; completed history restores
     /// immutable rasters without replaying historical strokes.
     pub fn replace_backend(&mut self, mut backend: B) -> Result<B, EngineError<B::Error>> {
+        if backend.document_color() != self.editor.document().color {
+            return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
+                "The replacement renderer is not configured for this document's color space and precision",
+            )));
+        }
         if self.pending_frame.is_some() {
             return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
                 "Raster restoration is busy; retry renderer replacement",
@@ -1929,6 +1941,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingRenderer {
+        color: layer_core::color::DocumentColor,
         capture_blocked: bool,
         restore_blocked: bool,
         time_seconds: f32,
@@ -1946,6 +1959,9 @@ mod tests {
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn document_color(&self) -> layer_core::color::DocumentColor {
+            self.color
+        }
         fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
             !self.restore_blocked
         }
@@ -2804,6 +2820,80 @@ mod tests {
             height_px,
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             background_rgba_linear: [1.0; 4],
+        }
+    }
+
+    #[test]
+    fn native_document_adoption_and_recovery_require_matching_renderer_interpretation() {
+        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        for space in RgbSpace::ALL {
+            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+                let color = DocumentColor { space, depth };
+                let mut document = Document::new("native adoption", 64, 64);
+                document.color = color;
+                if color != Default::default() {
+                    let (_, consumer) = input_queue(8);
+                    let result = CanvasEngine::new(
+                        RecordingRenderer {
+                            fail_resize: true,
+                            ..Default::default()
+                        },
+                        document.clone(),
+                        consumer,
+                        view(64, 64),
+                        ViewTransform::IDENTITY,
+                    );
+                    assert!(
+                        matches!(result, Err(EngineError::Document(_))),
+                        "color mismatch must fail before resize"
+                    );
+                }
+                let (mut input, consumer) = input_queue(8);
+                let mut engine = CanvasEngine::new(
+                    RecordingRenderer {
+                        color,
+                        ..Default::default()
+                    },
+                    document,
+                    consumer,
+                    view(64, 64),
+                    ViewTransform::IDENTITY,
+                )
+                .unwrap();
+                engine.render_frame().unwrap();
+                input.push(event(1, PenPhase::Down, 8.)).unwrap();
+                input.push(event(2, PenPhase::Up, 24.)).unwrap();
+                let wrong = DocumentColor {
+                    space,
+                    depth: if depth == IntegerDepth::U8 {
+                        IntegerDepth::U16
+                    } else {
+                        IntegerDepth::U8
+                    },
+                };
+                let before = engine.checkpoint();
+                assert!(matches!(
+                    engine.replace_backend(RecordingRenderer {
+                        color: wrong,
+                        fail_resize: true,
+                        ..Default::default()
+                    }),
+                    Err(EngineError::Document(_))
+                ));
+                assert_eq!(engine.document().color, color);
+                assert_eq!(engine.backend().color, color);
+                assert_eq!(engine.checkpoint(), before);
+                assert_eq!(engine.metrics().input_events, 0);
+                engine.render_frame().unwrap();
+                assert_eq!(engine.metrics().input_events, 2);
+                engine
+                    .replace_backend(RecordingRenderer {
+                        color,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                assert_eq!(engine.document().color, color);
+            }
         }
     }
 

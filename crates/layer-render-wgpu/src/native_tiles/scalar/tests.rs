@@ -69,10 +69,9 @@ fn capture(
     descriptor: PixelDescriptor,
     status: &NativeEncodeStatus,
 ) -> Vec<u8> {
-    let tile = RasterTile::default();
+    let tile = RasterTile::pending(descriptor);
     r.capture_tiles(
         &[TileCapture {
-            descriptor,
             source: CaptureSource::Packed(buffer),
             tile: tile.clone(),
         }],
@@ -211,9 +210,8 @@ fn scalar_native_capture_rejects_entire_mixed_publication_on_invalid_coverage() 
         let copies: Vec<_> = requests
             .iter()
             .map(|r| TileCapture {
-                descriptor: r.descriptor(),
                 source: CaptureSource::Packed(r.encoded),
-                tile: RasterTile::default(),
+                tile: RasterTile::pending(r.descriptor()),
             })
             .collect();
         let capture = r.capture_tiles(&copies, Some(&status)).unwrap();
@@ -236,11 +234,10 @@ fn scalar_native_capture_rejects_entire_mixed_publication_on_invalid_coverage() 
                 .all(|b| *b == 0)
         );
     }
-    let cancelled = RasterTile::default();
+    let cancelled = RasterTile::pending(requests[0].descriptor());
     drop(
         r.capture_tiles(
             &[TileCapture {
-                descriptor: requests[0].descriptor(),
                 source: CaptureSource::Packed(&buffers[0]),
                 tile: cancelled.clone(),
             }],
@@ -292,11 +289,10 @@ fn scalar_native_preflights_shapes_aliases_depth_and_capture_descriptor() {
     let mut request = make();
     request.depth = IntegerDepth::U8;
     assert!(encoder.prepare(&r.device, &[request], &status).is_err());
-    let tile = RasterTile::default();
+    let tile = RasterTile::pending(PixelDescriptor::COVERAGE8);
     assert!(
         r.capture_tiles(
             &[TileCapture {
-                descriptor: PixelDescriptor::COVERAGE8,
                 source: CaptureSource::Packed(&encoded),
                 tile: tile.clone()
             }],
@@ -370,9 +366,8 @@ fn scalar_native_restore_capture_cycles_preserve_codes_and_bound_uploads() {
         let copies: Vec<_> = requests
             .iter()
             .map(|r| TileCapture {
-                descriptor: r.descriptor(),
                 source: CaptureSource::Packed(r.encoded),
-                tile: RasterTile::default(),
+                tile: RasterTile::pending(r.descriptor()),
             })
             .collect();
         r.capture_tiles(&copies, Some(&status))

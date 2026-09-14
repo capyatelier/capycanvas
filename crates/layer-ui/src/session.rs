@@ -4263,7 +4263,7 @@ mod tests {
                         } else {
                             RasterPlane::Color
                         };
-                        let bytes = vec![128; plane.descriptor().byte_len([TILE_SIZE; 2]).unwrap()];
+                        let bytes = vec![128; plane.descriptor(self.document_color()).byte_len([TILE_SIZE; 2]).unwrap()];
                         let mut data = RasterData::default();
                         data.tiles.insert(
                             TileKey {
@@ -4271,7 +4271,7 @@ mod tests {
                                 coordinate: [0, 0],
                             },
                             RasterTile::backed(
-                                TileBlob::encode(plane.descriptor(), &bytes).unwrap(),
+                                TileBlob::encode(plane.descriptor(self.document_color()), &bytes).unwrap(),
                             ),
                         );
                         revision.publish(Ok(data)).unwrap();

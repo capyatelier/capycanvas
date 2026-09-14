@@ -283,13 +283,12 @@ pub enum CaptureSource<'a> {
 /// One unpublished backing ticket and its queue-ordered native samples. The
 /// descriptor is validated against the source before any copies are recorded.
 pub struct TileCapture<'a> {
-    pub descriptor: PixelDescriptor,
     pub source: CaptureSource<'a>,
     pub tile: RasterTile,
 }
 impl TileCapture<'_> {
     fn byte_len(&self) -> Result<u64, GpuRasterError> {
-        let d = self.descriptor;
+        let d = self.tile.descriptor();
         let t = match self.source {
             CaptureSource::Texture(t) => t,
             CaptureSource::Packed(buffer) => {
@@ -767,8 +766,11 @@ impl WgpuRasterizer {
                         if !current.data.tiles.contains_key(key)
                             || current.changed.contains(&key.coordinate)
                         {
-                            target_bytes +=
-                                key.plane.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64;
+                            target_bytes += key
+                                .plane
+                                .descriptor(self.document_color())
+                                .byte_len([PAGE_SIZE; 2])
+                                .unwrap() as u64;
                         }
                     }
                     staging += capture_allocation(target_bytes);
@@ -918,17 +920,20 @@ impl WgpuRasterizer {
             {
                 data.tiles.insert(key, tile.clone());
             } else {
-                let size = key.plane.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64;
+                let size = key
+                    .plane
+                    .descriptor(self.document_color())
+                    .byte_len([PAGE_SIZE; 2])
+                    .unwrap() as u64;
                 total += size;
                 if total > MAX_CAPTURE_BYTES {
                     return Err(GpuRasterError::Effect(
                         "Raster capture exceeds the 256 MiB staging budget".into(),
                     ));
                 }
-                let tile = RasterTile::default();
+                let tile = RasterTile::pending(key.plane.descriptor(self.document_color()));
                 data.tiles.insert(key, tile.clone());
                 copies.push(TileCapture {
-                    descriptor: key.plane.descriptor(),
                     source: crate::raster::CaptureSource::Texture(texture),
                     tile,
                 });
@@ -1023,7 +1028,7 @@ impl WgpuRasterizer {
                     #[cfg(not(target_arch = "wasm32"))]
                     offset,
                     size,
-                    descriptor: copy.descriptor,
+                    descriptor: copy.tile.descriptor(),
                     tile: copy.tile.clone(),
                 });
                 offset += size;
@@ -1057,7 +1062,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         let index = self.paint_layers.iter().position(|l| l.id == target);
         let mask = index.is_none();
-        data.validate_index(self.document_extent, mask)
+        data.validate_index(self.document_extent, mask, self.document_color())
             .map_err(GpuRasterError::Effect)?;
         // Stage GPU pages before publishing the revision. Keep only one decoded
         // tile on the CPU, rather than a second full decoded document. A failed
@@ -1078,7 +1083,7 @@ impl WgpuRasterizer {
                 continue;
             }
             let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
-            if blob.descriptor != key.plane.descriptor() {
+            if blob.descriptor != key.plane.descriptor(self.document_color()) {
                 return Err(GpuRasterError::Effect(
                     "Raster plane has the wrong pixel representation".into(),
                 ));

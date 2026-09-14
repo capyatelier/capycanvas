@@ -217,7 +217,7 @@ mod tests {
         let discarded = AtomicBool::new(false);
         publish(&path, project.clone(), &discarded).unwrap();
         let previous = std::fs::read(&path).unwrap();
-        let tile = RasterTile::default();
+        let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         tile.publish(Err("Device lost before host capture".into()))
             .unwrap();
         project.document.layers[0].raster = RasterRevision::backed(RasterData {
@@ -250,7 +250,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("capy-recovery-close-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("drawing.capy");
-        let tile = RasterTile::default();
+        let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         let mut project = Project {
             document: Document::new("recovery", 256, 256),
             assets: Default::default(),
@@ -278,7 +278,7 @@ mod tests {
         }
         discarded.store(true, Ordering::Release);
         tile.publish(TileBlob::encode(
-            RasterPlane::Color.descriptor(),
+            RasterPlane::Color.descriptor(Default::default()),
             &vec![0; 256 * 256 * 4],
         ))
         .unwrap();

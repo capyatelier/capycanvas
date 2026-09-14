@@ -793,11 +793,10 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
                 let mut first = None;
                 for cycle in 0..4 {
                     submit(&r, &encoder, &status, std::slice::from_ref(&batch), true);
-                    let ticket = RasterTile::default();
+                    let ticket = RasterTile::pending(descriptor);
                     let capture = r
                         .capture_tiles(
                             &[TileCapture {
-                                descriptor,
                                 source: crate::raster::CaptureSource::Texture(encoded),
                                 tile: ticket.clone(),
                             }],
