@@ -1417,10 +1417,13 @@ The isolated mouse and injected-pen journeys each draw a filled rectangle and
 lasso part of it, then drag the transform body, scale corner and rotation handle.
 Previews preserve document/layer revisions; Cancel restores the sampled artwork.
 Applying a move empties the selected source, copies its pixels to the destination
-and preserves an unselected region. One Undo/Redo restores those samples exactly;
-separate Undo steps remove the selection and figure and return to a clean drawing.
-All 14 checks pass before a normal zero-exit close. Each sample is a 16x16 artwork
-interior away from cursor endpoints; full client captures remain unmasked.
-The fixture waits for reported canvas/brush readiness after activating tools.
-This covers native input, controls and sampled raster behavior; physical pen,
-complete-image equivalence and performance acceptance remain separate.
+and preserves an unselected region. One Undo/Redo restores those samples exactly.
+Applying 1.5x scale and 90-degree rotation also changes the drawing; one Undo
+restores the exact original 2048x1536 PNG, and one Redo restores the exact applied
+PNG. Exports use the native Save picker and leave the document checkpoint intact.
+Separate Undo steps remove the selection and figure and return to a clean drawing.
+All 18 checks pass before a normal zero-exit close. Translation samples are 16x16
+artwork interiors away from cursor endpoints; scale/rotation history compares
+complete exports. Full client captures remain unmasked. The fixture waits for
+reported canvas/brush readiness after activating tools. Physical pen, arbitrary
+affine combinations, cross-platform image equivalence and performance remain separate.

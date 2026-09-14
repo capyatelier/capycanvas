@@ -12,6 +12,19 @@ public static class CapyEditingCapture {
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h,ref Point p);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr result);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,System.Text.StringBuilder text,uint flags,uint timeout,out UIntPtr result);
+ [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint message,UIntPtr w,IntPtr l);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint process);
+ public static void TypePath(IntPtr edit,uint owner,string path) {
+  uint process;GetWindowThreadProcessId(edit,out process);if(process!=owner)throw new Exception("Wrong export filename owner");
+  UIntPtr result;
+  if(SendMessageTimeout(edit,0xB1,UIntPtr.Zero,new IntPtr(-1),2,2000,out result)==IntPtr.Zero)throw new Exception("Cannot select picker text");
+  if(SendMessageTimeout(edit,0x303,UIntPtr.Zero,IntPtr.Zero,2,2000,out result)==IntPtr.Zero)throw new Exception("Cannot clear picker text");
+  foreach(char c in path)if(SendMessageTimeout(edit,0x102,new UIntPtr(c),IntPtr.Zero,2,2000,out result)==IntPtr.Zero)throw new Exception("Cannot type picker text");
+  var actual=new System.Text.StringBuilder(32768);
+  if(SendMessageTimeout(edit,13,new UIntPtr((uint)actual.Capacity),actual,2,2000,out result)==IntPtr.Zero||actual.ToString()!=path)throw new Exception("Export filename did not match the owned path");
+ }
 }
 "@
 [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -67,18 +80,74 @@ function Stable-Pixels {
  do{Start-Sleep -Milliseconds 100;$next=Pixels;if($next -eq $last){$stable++}else{$stable=0};$last=$next;if($stable -ge 3){return $last}}while($watch.Elapsed.TotalSeconds -lt 6)
  throw 'Artwork samples did not settle'
 }
+function Export-Png([string]$Name) {
+ if($Name -notmatch '^[a-z0-9-]+$'){throw 'Invalid owned export name'}
+ $path=Join-Path $run ($Name+'.png');if(Test-Path -LiteralPath $path){throw 'Export must use a fresh artifact path'}
+ # Export waits for pending raster work; its cache identity can change without a new edit.
+ $before=(Model).state.document_file|ConvertTo-Json -Compress
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Export stayed disabled'
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'export_document'
+ $picker=Control 'Save As' -Name
+ if($picker.Current.ClassName -ne '#32770' -or $picker.Current.ProcessId -ne $app.Id){throw 'Export picker is not owned'}
+ $entry=@{value=$null};Wait-Until {
+  $entry.value=$picker.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
+   [System.Windows.Automation.OrCondition]::new(
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1001'),
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1148')),
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'Edit')))
+  $null -ne $entry.value
+ } 'Export filename field did not appear'
+ [CapyEditingCapture]::TypePath([IntPtr]$entry.value.Current.NativeWindowHandle,[uint32]$app.Id,$path)
+ $save=@{value=$null};Wait-Until {
+  $save.value=$picker.FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
+  $save.value -and $save.value.Current.IsEnabled -and $save.value.Current.ClassName -eq 'Button'
+ } 'Export Save button did not become ready'
+ $owner=[uint32]0;$button=[IntPtr]$save.value.Current.NativeWindowHandle
+ [CapyEditingCapture]::GetWindowThreadProcessId($button,[ref]$owner)|Out-Null
+ if($owner -ne $app.Id -or ![CapyEditingCapture]::PostMessage($button,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke owned export Save button'}
+ Wait-Until {(Test-Path -LiteralPath $path) -and !(Model).state.document_file.busy -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'PNG export did not complete' 45
+ if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'PNG export changed the document checkpoint'}
+ $bitmap=[Drawing.Bitmap]::new($path)
+ try{
+  $document=(Model).state.tabs[0]
+  if($bitmap.Width -ne $document.width -or $bitmap.Height -ne $document.height){throw 'Export dimensions differ from the drawing'}
+  $hash=(Get-FileHash -LiteralPath $path).Hash
+  $exports.Add(@{name=$Name;path=$path;sha256=$hash;width=$bitmap.Width;height=$bitmap.Height})
+  $hash
+ }finally{$bitmap.Dispose()}
+}
 function Drag([string]$Device,[array]$Points){
  [CapyRowPointer]::Down($Device,$Points[0][0],$Points[0][1])
  try{for($segment=1;$segment -lt $Points.Count;$segment++){$a=$Points[$segment-1];$b=$Points[$segment];for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move([int]($a[0]+($b[0]-$a[0])*$step/12),[int]($a[1]+($b[1]-$a[1])*$step/12));Start-Sleep -Milliseconds 12}}}finally{[CapyRowPointer]::Up()}
  Start-Sleep -Milliseconds 180
 }
 $checks=[Collections.Generic.List[object]]::new()
+$exports=[Collections.Generic.List[object]]::new()
 function Pass([string]$Name){$checks.Add(@{name="$device $Name";document=(Model).state.document_file});Write-Output "$device $Name passed"}
 function Cancel-Preview([string]$Name){
  Invoke 'tool-action-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
  if((Signature) -ne $selected -or (Stable-Pixels) -ne $baseline){throw "Cancel did not restore selection artwork: $Name"};Pass $Name
 }
+function Apply-Preview([string]$Name) {
+ if((Signature) -ne $selected){throw "$Name preview committed early"}
+ $revision=(Model).state.document_file.revision;Invoke 'tool-action-apply_transform'
+ Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} "$Name Apply did not commit"
+ $applied=Export-Png ($device+'-'+$Name+'-applied-raster')
+ if($applied -eq $baselinePng){throw "$Name Apply left the drawing unchanged"}
+ Capture ($device+'-'+$Name+'-applied')
+ foreach($step in @(
+  @{command='Undo';name='undo';expected=$baselinePng},
+  @{command='Redo';name='redo';expected=$applied},
+  @{command='Undo';name='restore';expected=$baselinePng}
+ )){
+  $revision=(Model).state.document_file.revision;Invoke $step.command -Name
+  Wait-Until {(Model).state.document_file.revision -ne $revision} "$Name $($step.command) did not finish"
+  if((Export-Png ($device+'-'+$Name+'-'+$step.name+'-raster')) -ne $step.expected){throw "$Name $($step.command) did not restore the exact full drawing"}
+ }
+ Pass ($Name+' Apply and full-drawing Undo/Redo')
+}
 try{
+ if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated editing review'}
  foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
  $app=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$app.Handle
@@ -108,6 +177,7 @@ try{
   Drag $device @(@(($cx-100),($cy-60)),@(($cx-20),($cy-60)),@(($cx-20),($cy+60)),@(($cx-100),($cy+60)),@(($cx-100),($cy-60)))
   Wait-Until {(Model).state.layer_tools.has_selection} 'Lasso did not select artwork'
   $selected=Signature;$baseline=Stable-Pixels
+  $baselinePng=Export-Png ($device+'-selected-raster')
   if($baseline -ne $rectangle){throw 'Selection changed sampled artwork'};Pass 'lasso selects without painting'
   Select-Tool 'scale_rotate'
   Drag $device @(@($sx,$cy),@(($sx+300),$cy))
@@ -126,6 +196,18 @@ try{
   Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Rotation handle did not turn selection'
   if((Signature) -ne $selected){throw 'Rotation preview committed early'}
   Capture ($device+'-rotate-preview');Cancel-Preview 'rotation handle and cancel'
+  foreach($mode in @('scale','rotate')){
+   Select-Tool 'scale_rotate'
+   if($mode -eq 'scale'){
+    Drag $device @(@(($cx-20),($cy+60)),@(($cx+20),($cy+120)))
+    Wait-Until {[Math]::Abs((Value 'transform_width')-1.5) -lt .02 -and [Math]::Abs((Value 'transform_height')-1.5) -lt .02} 'Applied scale preview did not settle'
+   }else{
+    Drag $device @(@($sx,([int]($cy-$radius))),@(([int]($sx+$radius)),$cy))
+    Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Applied rotation preview did not settle'
+   }
+   Apply-Preview $mode
+   $selected=Signature
+  }
   Select-Tool 'scale_rotate';Drag $device @(@($sx,$cy),@(($sx+300),$cy))
   Wait-Until {[Math]::Abs((Value 'transform_x')-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
   $revision=(Model).state.document_file.revision;Invoke 'tool-action-apply_transform'
@@ -142,7 +224,7 @@ try{
  [CapyRowPointer]::Dispose();$app.CloseMainWindow()|Out-Null
  if(!$app.WaitForExit(5000) -or $app.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}
- @{checks=$checks;close='zero exit within five seconds';pixel_scope='three 16x16 artwork interiors, full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
+ @{checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='scale/rotation: exact full exported PNG history; translation: three 16x16 artwork interiors; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas editing acceptance passed: $run"
 }catch{
  if($app -and !$app.HasExited -and $root){try{Capture 'failure';@{model=Model;checks=$checks}|ConvertTo-Json -Depth 80|Set-Content -LiteralPath (Join-Path $run 'failure-state.json')}catch{}}
