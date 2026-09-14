@@ -1304,3 +1304,96 @@ without optional features. `final` contains the same full-table/adversarial
 corpus with the example's older feature request. Both pass. The initial `first`
 run has depth-sized tables and no adversarial boundary corpus. Only example and
 reporting code changed in this qualification; the GTK renderer is unchanged.
+
+## Shared transfer tables in the source decoder
+
+Built-in RGB/gray source decoding now uses the qualified native transfer values
+instead of evaluating the transfer function in the source shader. Native-depth
+samples address the shared integer16 table directly (integer8 uses stride 257).
+The existing Float32 primary/white conversion and independent coverage remain.
+Embedded profiles continue through the CMM. The unused shader transfer-function
+include and source-space selector were removed from this path.
+
+Each renderer lazily retains at most three 512 KiB table bodies; sRGB and P3
+share one buffer across depths. The integer input bindings reuse the same two
+input textures and those three table identities. The persistent maximum is
+**1.5 MiB**, included in source-cache GPU telemetry. Table construction uses at
+most **512 KiB** of temporary CPU bytes. Also budget up to **1.5 MiB** for the
+three tables' initial mapped-buffer uploads; these are separate from ordinary
+source-tile upload telemetry and are not per-frame allocations. Original source
+objects and history generations are not retained by the tables.
+
+All 96 source-decoder cases pass. Native built-in space/depth combinations now
+require **zero integer-code error**; cross-space and embedded-profile cases have
+observed maximum error **one code**, with maximum absolute linear error
+0.00000023841858 (existing limits remain two codes and 0.000003). Coverage is
+independent, including exact opaque coverage. A shared-buffer check verifies
+sRGB/P3 identity and the three-table allocation ceiling. Log:
+`native-transfer-current-accuracy.log`.
+
+The fresh parent is `8e48430`. An identical added benchmark in the parent archive
+and current checkout measures 16 forced source-cache misses per batch, cycling
+through twenty aligned tiles of a 1280×1024 deterministic image. It includes
+decompression/integrity checks, native channel upload, decode passes and explicit
+GPU completion. Each space/depth case has one cold batch, 20 warm-up batches
+(including that cold batch), and 100 measured batches. This is a source loading
+workload, not a complete drawing or presentation frame. The new integer source
+path has no equivalent at fixed baseline `e46f271`; the full-program baseline
+comparisons remain the earlier drawing/photo reports and final GTK qualification.
+
+Current/parent/parent/current runs with normal scheduling show two repeatable
+CPU-speed bands, approximately 2.9/4.0 ms for integer8 and 7.0/9.8 ms for integer16
+batches. The bands occur in both versions. A second sequence pins only the
+benchmark thread to CPU 4 after GPU workers start, then restores its affinity;
+the band transition still occurs. The CPU is AMD Ryzen Threadripper PRO 9995WX,
+96 cores/192 threads, `amd-pstate-epp` with the existing `powersave` governor.
+No system power settings were changed. The cause of the band transition is not
+established, so differently timed transitions are not attributed to the lookup.
+
+Representative pinned completed p95 ranges in matching stable bands:
+
+| Source case | Parent ms | Current ms |
+| --- | ---: | ---: |
+| sRGB integer8, earlier slow band | 4.205–4.325 | 4.278–4.346 |
+| sRGB integer16, earlier slow band | 9.952–10.150 | 10.067–10.105 |
+| Adobe RGB integer8, later fast band | 3.115–3.126 | 3.180–3.254 |
+| Adobe RGB integer16, later fast band | 7.297–7.342 | 7.300–7.358 |
+| ProPhoto integer8, later fast band | 3.127–3.142 | 3.141–3.147 |
+| ProPhoto integer16, later fast band | 7.299–7.345 | 7.262–7.297 |
+
+Warm p95 changes in these matching bands remain below the relative trigger.
+Some individual p99 tails still exceed it, without a stable increase across
+both arms; complete distributions and the P3 transition cases are retained in
+the logs. Cold batches add roughly 1.4–3.5 ms in the pinned comparisons, including
+table preparation and other cold work. Table preparation belongs in cancellable
+photo loading. A sixteen-tile miss batch itself can exceed 8.33 ms in both
+versions: source decoding must be scheduled independently of input frames.
+This is further evidence for the outstanding scheduling/residency work, not
+qualification of cache-miss interaction latency.
+
+A single active curve raises the benchmark's retained source GPU bytes by
+524,288: integer8 uses 17,563,648 bytes; integer16 uses 17,825,792. Ordinary tile
+upload peaks remain 4/8 MiB respectively (plus the separately budgeted table
+initialization). Across all curves and both input depths, retained source
+storage has a fixed 18.25 MiB ceiling. Pinned process high-water is
+138,876–140,256 KiB current and 141,408–141,608 KiB parent; this small difference
+is not claimed as a memory saving.
+
+Reproduce after a release GPU-test build with `LAYER_GPU_INDEX=0 TEST_BINARY
+scene::sources::tests::native_source_decode_workloads --ignored --nocapture
+--test-threads=1`; add `LAYER_BENCH_CPU=4` for the pinned-thread diagnostic.
+Reports: `native-transfer-abba-*`, `native-transfer-pinned-*`, and
+`native-transfer-source-measurements.json`. The earlier
+`native-transfer-unwaited-abba-*` runs are **excluded**: the initial harness used
+`wait_idle` without a renderer-owned submission, so its completion timer did not
+wait for the directly submitted GPU commands. The corrected harness explicitly
+polls the device to completion; numerical readback tests were unaffected.
+
+The production decoder build passes **140 GPU tests / 21 benchmarks ignored**,
+all four project round trips, and isolated GTK file and diagnostics/GPU-recovery
+workflows. Logs: `native-transfer-native-build.log`,
+`native-transfer-{gpu-tests,project-tests}.log`, and
+`native-transfer-gtk-{files,recovery}{,-run}.log`. The injected recovery validation
+error is expected. Changed Rust formatting and `git diff --check` pass. Native
+integer paint writeback and viewport residency remain unfinished; this change
+does not enable a new document mode or integrate another platform host.

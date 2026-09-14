@@ -17,6 +17,7 @@ use std::{
 
 pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 const DECODERS: usize = 4;
+mod transfer;
 
 struct Slot {
     source: Weak<SourceImage>,
@@ -35,7 +36,7 @@ pub(super) struct PendingSource {
 }
 struct EncodedInput {
     texture: wgpu::Texture,
-    binding: wgpu::BindGroup,
+    bindings: [Option<wgpu::BindGroup>; 3],
 }
 #[derive(Default)]
 struct InFlight {
@@ -59,6 +60,7 @@ pub(super) struct SourceTiles {
     decoders: VecDeque<(Weak<SourceImage>, layer_color::WorkingDecoder)>,
     pixels: Vec<[f32; 4]>,
     inputs: [Option<EncodedInput>; 2],
+    transfer: transfer::Tables,
     in_flight: Arc<InFlight>,
     pub hits: u64,
     pub misses: u64,
@@ -92,6 +94,7 @@ impl SourceTiles {
     }
     pub fn gpu_bytes(&self) -> u64 {
         self.slots.len() as u64 * FLOAT_TILE_BYTES
+            + self.transfer.gpu_bytes()
             + self
                 .inputs
                 .iter()
@@ -219,17 +222,32 @@ impl SourceTiles {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
-                let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("integer source decoder"),
+                EncodedInput {
+                    texture,
+                    bindings: Default::default(),
+                }
+            });
+            let ColorProfile::Builtin(space) = interpretation.profile else {
+                unreachable!()
+            };
+            let table = self.transfer.prepare(&r.device, space)?;
+            let binding = input.bindings[transfer::Tables::index(space)].get_or_insert_with(|| {
+                r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("native integer source and shared transfer"),
                     layout: &pipelines.layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(
-                            &texture.create_view(&Default::default()),
-                        ),
-                    }],
-                });
-                EncodedInput { texture, binding }
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(
+                                &input.texture.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: table.as_entire_binding(),
+                        },
+                    ],
+                })
             });
             let tile = pending
                 .source
@@ -303,7 +321,7 @@ impl SourceTiles {
             let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
             pass.set_pipeline(pipelines.pipeline.compile());
             pass.set_bind_group(0, uniforms, &[offset]);
-            pass.set_bind_group(1, &input.binding, &[]);
+            pass.set_bind_group(1, &*binding, &[]);
             pass.draw(0..3, 0..1);
             bytes as u64
         } else {
@@ -413,7 +431,6 @@ fn builtin_settings(
     for (i, row) in space.linear_transform(destination).iter().enumerate() {
         data[i * 4..i * 4 + 3].copy_from_slice(&row.map(|v| v as f32));
     }
-    data[12] = RgbSpace::ALL.iter().position(|s| *s == space).unwrap() as f32;
     data[13] = source.interpretation.depth.maximum() as f32;
     data[14] = source.extent[0]
         .saturating_sub(coordinate[0] * PAGE_SIZE)
@@ -433,16 +450,28 @@ impl Pipelines {
     pub fn new(device: &PipelineDevice, uniforms: &wgpu::BindGroupLayout) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("integer source samples"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Uint,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(transfer::TABLE_BYTES),
+                    },
+                    count: None,
+                },
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("source decode"),
@@ -453,14 +482,7 @@ impl Pipelines {
         let pipeline = Deferred::new(move || {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("integer SDR to Float32"),
-                source: wgpu::ShaderSource::Wgsl(
-                    format!(
-                        "{}\n{}",
-                        include_str!("../sdr_color.wgsl"),
-                        include_str!("source_decode.wgsl")
-                    )
-                    .into(),
-                ),
+                source: wgpu::ShaderSource::Wgsl(include_str!("source_decode.wgsl").into()),
             });
             fullscreen_pipeline(
                 &device,
