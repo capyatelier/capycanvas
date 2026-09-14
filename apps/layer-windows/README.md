@@ -1161,10 +1161,22 @@ command returns failure; geometry tolerances and required control sets remain
 strict.
 
 The native capture fixture requires an isolated settings directory and
-CAPY_TRACE_UI=1. It uses actual Preferences, View and Navigator controls, then
-captures light/dark initial and zoomed paper-under-titlebar states. The drawing
-surface is sized to an exact logical viewport and scale; camera diagnostics
-include incremental updates and must agree with the native zoom readout.
+CAPY_TRACE_UI=1. Select Sketch, Paint or Photo in the owned editor before
+invoking it; the capture preserves that workspace. It uses Edit > Preferences
+and View commands, plus the footer Fit action when visible, to capture both
+themes with fitted and zoomed paper-under-titlebar states. The drawing surface
+is sized to an exact logical viewport and scale; camera diagnostics include
+incremental updates and must agree with the native zoom readout when shown.
+
+Tool Set, Layers previews and the footer must match the shared layout
+visibility, including their intentional absence in Sketch. Visible panels keep
+the same required controls and geometry tolerances. The header comparison
+identifies the standalone Main Menu separately from compact menu labels.
+
+Disabled titlebar buttons retain their themed background under the existing
+muted opacity, keeping them visible when white artwork reaches the header.
+Injected mouse, pen and touch taps leave the disabled Transform command inactive;
+a mouse stroke enables it and one Undo restores the disabled state.
 
 ~~~powershell
 $env:CAPY_SETTINGS_DIRECTORY=Join-Path (Get-Location) ('artifacts/windows/parity-profile/'+[Guid]::NewGuid().ToString('N'))

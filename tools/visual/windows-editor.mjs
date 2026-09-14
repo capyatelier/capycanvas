@@ -62,7 +62,8 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
         const previews=[...document.querySelectorAll('.layer-thumbnail canvas')].filter(c=>{
           const b=c.getBoundingClientRect();return b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight;
         });
-        return previews.length>0&&previews.every(c=>c.getContext('2d').getImageData(0,0,c.width,c.height).data.every((v,i)=>i%4!==3||v===255));
+        const layersVisible=layerApp.app.layout(innerWidth,innerHeight).groups.some(g=>g.active==='layers');
+        return (layersVisible?previews.length>0:previews.length===0)&&previews.every(c=>c.getContext('2d').getImageData(0,0,c.width,c.height).data.every((v,i)=>i%4!==3||v===255));
       },'Visible layer previews did not settle');
       layerApp.canvas.focus();
       let previous,stable=0;
@@ -100,6 +101,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
         if(n.matches('.workspace-switcher button'))return 'workspace-switch-'+workspaceKeys[n.dataset.workspaceId];
         if(n.matches('#header-workspace-selector > summary'))return 'header-workspace-menu';
         if(n.matches('.header-overflow > summary'))return n.parentElement.id;
+        if(n.matches('.header-menu-overflow > summary'))return 'application-primary-menu';
         if(n.matches('.header-menu > summary'))return n.parentElement.dataset.menu&&n.parentElement.dataset.menu!=='all'?'application-menu-'+n.parentElement.dataset.menu:'application-menus';
         if(n.dataset.command==='settings')return 'settings-button';
         return n.id;
@@ -127,8 +129,8 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
     // Keep every capture and report even when one area differs. A failed
     // comparison still fails the command after the remaining pairs are saved.
     const issues=[];
-    function compare(label,expected,actual,limit,checkNames=false){
-      assert.ok(expected?.length,`Native ${label} measurements are required`);
+    function compare(label,expected,actual,limit,checkNames=false,visible=true){
+      assert.ok(Array.isArray(expected)&&Boolean(expected.length)===visible,`Native ${label} measurements must match shared visibility`);
       const expectedIds=expected.map(e=>e.id).sort(),actualIds=actual.map(e=>e.id).sort();
       if(JSON.stringify(expectedIds)!==JSON.stringify(actualIds))issues.push(label+' exposes different controls');
       const entries=expected.map(native=>{
@@ -143,12 +145,13 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
       if(!Number.isFinite(maximum)||maximum>limit)issues.push(`${label} geometry differs by ${maximum} physical pixels (limit ${limit})`);
       return{entries,maximum};
     }
-    const toolSet=compare('Tool Set',fixture.tool_set,metrics.elements.filter(e=>/^tool-(group|subtool)-/.test(e.id)),1.01,true);
-    const isHeader=id=>/^(application-menu[s-]|workspace-switch|header-workspace-menu$|header-overflow-[0-2]$|document-title$|zen-button$|fullscreen$|settings-button$)/.test(id);
+    const panelVisible=id=>fixture.layout.groups.some(g=>g.active===id);
+    const toolSet=compare('Tool Set',fixture.tool_set,metrics.elements.filter(e=>/^tool-(group|subtool)-/.test(e.id)),1.01,true,panelVisible('brushes'));
+    const isHeader=id=>/^(application-(menu[s-]|primary-menu$)|workspace-switch|header-workspace-menu$|header-overflow-[0-2]$|document-title$|zen-button$|fullscreen$|settings-button$)/.test(id);
     const header=compare('Header',fixture.header,metrics.elements.filter(e=>isHeader(e.id)),2.01);
     const layerId=id=>/^layer-(row-[0-9]+|[0-9]+-(content|mask|thumbnail|mask-thumbnail|visibility|selection|label|meta|drag)|controls|options|flags|footer|blend)$/.test(id);
-    assert.ok(fixture.layers?.some(e=>e.id.startsWith('layer-row-')),'Native Layers row measurements are required');
-    const layers=compare('Layers',fixture.layers,metrics.elements.filter(e=>layerId(e.id)),2.01);
+    assert.equal(fixture.layers?.some(e=>e.id.startsWith('layer-row-')),panelVisible('layers'),'Native Layers rows must match shared visibility');
+    const layers=compare('Layers',fixture.layers,metrics.elements.filter(e=>layerId(e.id)),2.01,false,panelVisible('layers'));
     const dom=await call('DOM.getDocument');
     const workspaceNode=await call('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'.workspace-switcher button'});
     const headerFonts=workspaceNode.nodeId?await call('CSS.getPlatformFontsForNode',{nodeId:workspaceNode.nodeId}):{fonts:[]};

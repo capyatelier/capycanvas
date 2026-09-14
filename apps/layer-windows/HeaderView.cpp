@@ -23,6 +23,7 @@ void style(Button const& item,std::shared_ptr<WorkspaceData> const& data){
     item.Background(fill(bg));item.Height(36);item.Padding({6,0,6,0});item.UseLayoutRounding(false);
     item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(blend(bg,ink,.08f)));
     item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(blend(bg,ink,.16f)));
+    item.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),fill(bg));
 }
 }
 struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
