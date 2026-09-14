@@ -11,12 +11,19 @@ checkpoints; their earlier lists of missing features are not the current backlog
 
 ## Validated application and packages
 
-The reviewed Release application and both packages contain `457174e`, including
+The previously reviewed Release application and both packages contain `457174e`, including
 shared header surfaces, native layer keyboard actions, contact-brush mask painting,
 Preferences accessibility and the curve transactions described below. Portable
 assembly and extracted runtime checks pass; unsigned MSIX assembly and archive
 guards pass. Both packages use the clean published source. The extracted portable
 app also passes the full effects journey, including all three curve input devices.
+
+The current native Release additionally includes the shared stationary-lasso fix
+from `dd98ed3`; the packages above do not yet include it. The integrated build
+passes 399 shared UI and 110 Windows tests (11 hardware/manual tests ignored),
+and the expanded native canvas journey passes all 22 checks. A stationary lasso
+tap preserves the existing selection, full PNG export and pending Redo after
+Undoing either a scale or rotation. Native mouse and injected pen both pass.
 
 Native curve drags now preview in one shared transaction. Release commits one
 Undo step; Escape, capture loss and hiding Properties restore the original curve.
@@ -65,7 +72,7 @@ rerun for this header change. None of these results establish painting performan
 | --- | --- | --- |
 | Workspace/header/docking | Shared title-bar customization, tools picker, drawers, floating panels, workspace history and persistence pass their native journeys. Collapsed columns have the corrected footer grip, blank-space menu, double-click/tap expansion and drag-out resize (`f99507a`); docking targets follow Web/Android (`d4877e3`). | Physical device acceptance and complete visual review remain open. The previously qualified synthetic cross-canvas capture failure is not a reason to change production capture without new evidence. |
 | Matched workspace design | Paint, Sketch and Photo each have twelve native/Web scene pairs: three widths, both themes, fitted and paper-under-header cameras. Camera values match. Sketch's measured header passes; Paint Tool Set/Layers and Photo Layers measurements pass. Disabled header contrast is corrected (`9529ec2`). At `f20611a`, eight fresh Photo pairs cover both themes, two widths and both cameras. Five sampled light header backgrounds match Web exactly: menu/title/settings RGB 219, switcher RGB 222. | Paint/Photo full comparisons still report a 21-physical-pixel header width difference and compact control-set differences. Full images are preserved; geometry passes do not mean whole-image identity. Color-wheel polish is closed under the imperceptible-difference/clean-code requirement. |
-| Tools and canvas editing | Seventeen-tool projection, expressions, retained drafts/controls, subtools and cancellation pass. On `457174e`, mouse and injected pen each pass figure/lasso, move/scale/rotation preview and Cancel, and applied translation, 1.5x scale and 90-degree rotation: eighteen checks. Scale/rotation Undo/Redo restores exact full 2048×1536 PNG exports; native export preserves the checkpoint. | Translation checks sample three 16×16 artwork interiors. Complete exports verify scale/rotation history for these cases; arbitrary affine combinations, cross-platform image equivalence and physical devices remain separate. |
+| Tools and canvas editing | Seventeen-tool projection, expressions, retained drafts/controls, subtools and cancellation pass. With the shared `dd98ed3` lasso fix, mouse and injected pen each pass figure/lasso, move/scale/rotation preview and Cancel, and applied translation, 1.5x scale and 90-degree rotation: twenty-two checks. Scale/rotation Undo/Redo restores exact full 2048×1536 PNG exports; native export preserves the checkpoint, and stationary lasso taps preserve selection and Redo. | Translation checks sample three 16×16 artwork interiors. Complete exports verify scale/rotation history for these cases; arbitrary affine combinations, cross-platform image equivalence and physical devices remain separate. |
 | Keyboard and text | Canvas shortcuts work after toolbar clicks; fields, sliders, menus, Tab and button activation retain native behavior (`509833e`). Actual Microsoft Japanese IME composition, conversion, Enter/Escape arbitration and layer-name Undo/Redo pass on `f051e61`. Native layer keyboard actions and exposed toggle states pass at `483ad16`. | UIA names, values, patterns and focus are exercised. The bounded Narrator journey below passes, including theme focus and selected values. Complete screen-reader review, other IMEs and candidate-popup geometry remain unverified. |
 | Touch and pen routing | Eighteen native injected-contact checks pass on `f051e61`: pan/pinch/rotation anchoring, third-contact pause, contact replacement, cancellation/restart, single-finger Hand and a later pen stroke with independent Undo. | Physical pressure/history, tilt, eraser, hover, cancellation and comprehensive physical touch are still required. Synthetic input and renderer pressure/tilt tests do not establish digitizer behavior. |
 | Documents, storage and windows | Import/export, Unicode project paths, embedded assets, save/replacement/close decisions and two GPU reconstructions pass the document journey (`575345b`). Preference failure/retry and multiwindow isolation pass. Snap, minimize/restore, maximize/restore and painting history pass on the available 60 Hz display (`05cbdb5`). | Mixed-display/DPI and system suspend/resume remain unverified. Forced GPU reconstruction is separate from those transitions. |

@@ -15118,6 +15118,7 @@ mod tests {
             Platform::Ios,
             Platform::Web,
             Platform::Android,
+            Platform::Windows,
         ] {
             for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
                 let mut s = session();

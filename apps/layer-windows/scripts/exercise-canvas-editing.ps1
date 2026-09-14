@@ -142,9 +142,15 @@ function Apply-Preview([string]$Name) {
  )){
   $revision=(Model).state.document_file.revision;Invoke $step.command -Name
   Wait-Until {(Model).state.document_file.revision -ne $revision} "$Name $($step.command) did not finish"
+  if($step.name -eq 'undo'){
+   Select-Tool 'lasso';$checkpoint=(Model).state.document_file|ConvertTo-Json -Compress
+   [CapyRowPointer]::Down($device,$sx,$cy);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 180
+   if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $checkpoint -or !(Model).state.layer_tools.has_selection){throw 'Stationary lasso changed the selection checkpoint'}
+  }
   if((Export-Png ($device+'-'+$Name+'-'+$step.name+'-raster')) -ne $step.expected){throw "$Name $($step.command) did not restore the exact full drawing"}
  }
  Pass ($Name+' Apply and full-drawing Undo/Redo')
+ Pass ($Name+' stationary lasso preserves selection, export and Redo')
 }
 try{
  if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated editing review'}

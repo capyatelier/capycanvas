@@ -1420,9 +1420,11 @@ Applying a move empties the selected source, copies its pixels to the destinatio
 and preserves an unselected region. One Undo/Redo restores those samples exactly.
 Applying 1.5x scale and 90-degree rotation also changes the drawing; one Undo
 restores the exact original 2048x1536 PNG, and one Redo restores the exact applied
-PNG. Exports use the native Save picker and leave the document checkpoint intact.
+PNG. A stationary lasso tap after Undo preserves the selection, export readiness
+and pending Redo. Exports use the native Save picker and leave the document
+checkpoint intact.
 Separate Undo steps remove the selection and figure and return to a clean drawing.
-All 18 checks pass before a normal zero-exit close. Translation samples are 16x16
+All 22 checks pass before a normal zero-exit close. Translation samples are 16x16
 artwork interiors away from cursor endpoints; scale/rotation history compares
 complete exports. Full client captures remain unmasked. The fixture waits for
 reported canvas/brush readiness after activating tools. Physical pen, arbitrary
