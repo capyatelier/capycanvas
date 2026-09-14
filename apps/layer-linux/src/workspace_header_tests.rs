@@ -1976,6 +1976,189 @@ fn native_header_editor_short_window_input() {
 }
 
 #[test]
+#[ignore = "640px isolated compositor, --native-test=native_header_compact_switcher_input --native-storage"]
+fn native_header_compact_switcher_input() {
+    let mut d = Driver::managed("art.capycanvas.HeaderCompactSwitcher");
+    assert!(
+        d.w.surface.width() <= 800,
+        "use LAYER_MOTION_VIEWPORT=640x600"
+    );
+    let manager = d.w.workspaces.manager.as_ref().unwrap().clone();
+    let ids = manager.switcher_display_ids();
+    glib::MainContext::default()
+        .block_on(manager.edit_switcher(layer_workspace::SwitcherEdit::Move {
+            id: ids[2].clone(),
+            before: Some(ids[0].clone()),
+        }))
+        .unwrap();
+    d.w.workspaces.update_status();
+
+    for theme in [Theme::Dark, Theme::Light] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (input, size) in HeaderSize::ALL.into_iter().enumerate() {
+            let mut workspace = state(&d.w).workspace;
+            workspace.layout.header = HeaderLayout::painter();
+            workspace.layout.header.size = size;
+            d.w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(workspace),
+            });
+            pump(250);
+            let selector = d.named("header-workspace-selector");
+            assert!(selector.is_mapped(), "compact selector at {size:?}");
+            assert_eq!(
+                selector.downcast_ref::<gtk::MenuButton>().unwrap().label(),
+                manager.active_name().map(Into::into)
+            );
+            let mut overflow_count = 0;
+            for zone in HeaderZone::ALL {
+                let button = d.named(&format!("header-overflow-{}", zone.index()));
+                if button.is_mapped() {
+                    overflow_count += 1;
+                    let image = button
+                        .downcast_ref::<gtk::MenuButton>()
+                        .unwrap()
+                        .child()
+                        .and_downcast::<gtk::Image>()
+                        .unwrap();
+                    assert_eq!(image.pixel_size(), size.icon());
+                    assert_eq!(
+                        image.measure(gtk::Orientation::Horizontal, -1).1,
+                        size.icon()
+                    );
+                    assert_eq!(image.measure(gtk::Orientation::Vertical, -1).1, size.icon());
+                    let bounds = image.compute_bounds(&button).unwrap();
+                    assert!(bounds.width() >= size.icon() as f32);
+                    assert!(bounds.height() >= size.icon() as f32);
+                    assert!(
+                        (bounds.x() + bounds.width() / 2. - button.width() as f32 / 2.).abs() < 1.
+                    );
+                    assert!(
+                        (bounds.y() + bounds.height() / 2. - button.height() as f32 / 2.).abs()
+                            < 1.
+                    );
+                }
+            }
+            assert!(overflow_count > 0);
+            d.click(&selector);
+            let popup = d.named("workspace-switcher-popup");
+            let model = popup
+                .downcast_ref::<gtk::PopoverMenu>()
+                .unwrap()
+                .menu_model()
+                .unwrap();
+            let choices = manager.switcher_display_ids();
+            assert_eq!(model.n_items() as usize, choices.len());
+            for (index, id) in choices.iter().enumerate() {
+                assert_eq!(
+                    model
+                        .item_attribute_value(index as i32, "target", None)
+                        .unwrap()
+                        .get::<String>()
+                        .as_ref(),
+                    Some(id),
+                    "dropdown follows the pill's configured order"
+                );
+            }
+            crate::capture(
+                &d.w,
+                d.dir
+                    .join(format!("compact-{theme:?}-{size:?}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            capture_popover(
+                popup
+                    .downcast_ref::<gtk::PopoverMenu>()
+                    .unwrap()
+                    .upcast_ref(),
+                d.dir
+                    .join(format!("choices-{theme:?}-{size:?}.png"))
+                    .to_str()
+                    .unwrap(),
+            );
+            let target = choices
+                .iter()
+                .find(|id| Some(*id) != manager.active_id().as_ref())
+                .unwrap()
+                .clone();
+            let name = manager
+                .items()
+                .into_iter()
+                .find(|item| item.id == target)
+                .unwrap()
+                .metadata
+                .name;
+            let label = d.label(&name);
+            match input {
+                0 => d.click(&label),
+                1 => {
+                    let point = d.point(&label);
+                    d.perform(serde_json::json!([
+                        { "touch": "down", "point": point }, { "touch": "up" }
+                    ]));
+                }
+                _ => {
+                    let mut row = label;
+                    while !row.is_focusable() {
+                        row = row.parent().unwrap();
+                    }
+                    assert!(row.grab_focus());
+                    d.key(0xff0d);
+                }
+            }
+            Driver::wait_ready(&d.w);
+            assert_eq!(manager.active_id().as_ref(), Some(&target));
+            assert!(!popup.is_visible());
+        }
+    }
+
+    // A switcher moved into a crowded zone uses the same choices from overflow.
+    let mut workspace = state(&d.w).workspace;
+    workspace.layout.header = HeaderLayout::painter();
+    workspace.layout.header.size = HeaderSize::Large;
+    d.w.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(workspace),
+    });
+    let id = state(&d.w)
+        .workspace
+        .layout
+        .header
+        .entries()
+        .find(|entry| entry.item == HeaderItem::Workspaces)
+        .unwrap()
+        .id;
+    d.w.dispatch(
+        HeaderAction::Move {
+            id,
+            zone: HeaderZone::Right,
+            before: None,
+        }
+        .action(),
+    );
+    pump(250);
+    assert!(!d.named(&format!("header-item-{id}")).is_mapped());
+    d.click_name("header-overflow-2");
+    d.click_name(&format!("header-overflow-item-{id}"));
+    assert!(d.named("workspace-switcher-popup").is_mapped());
+    let target = manager
+        .switcher_display_ids()
+        .into_iter()
+        .find(|id| Some(id) != manager.active_id().as_ref())
+        .unwrap();
+    let name = manager
+        .items()
+        .into_iter()
+        .find(|item| item.id == target)
+        .unwrap()
+        .metadata
+        .name;
+    d.click_label(&name);
+    Driver::wait_ready(&d.w);
+    assert_eq!(manager.active_id().as_ref(), Some(&target));
+    d.finish();
+}
+
+#[test]
 #[ignore = "640px isolated compositor, --native-test=native_header_overflow_input"]
 fn native_header_overflow_input() {
     let mut d = Driver::new("art.capycanvas.HeaderOverflow");

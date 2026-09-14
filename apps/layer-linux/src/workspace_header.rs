@@ -445,6 +445,11 @@ impl Header {
                 self.root.remove_css_class(&class);
             }
         }
+        for menu in self.overflow.iter().chain(std::iter::once(&self.recovery)) {
+            if let Some(image) = menu.child().and_downcast::<gtk::Image>() {
+                image.set_pixel_size(model.size.icon());
+            }
+        }
         let clock = model.entries().any(|e| e.item == HeaderItem::Clock);
         let battery = model.entries().any(|e| e.item == HeaderItem::Battery);
         w.system_status.set_components(clock, battery);
@@ -657,9 +662,20 @@ impl Header {
                 stack.set_vhomogeneous(false);
                 w.workspaces.switcher.set_halign(gtk::Align::Center);
                 stack.add_named(&w.workspaces.switcher, Some("full"));
-                let menu = w.chrome_menu(ApplicationMenu::Window);
-                menu.set_label("Workspaces");
+                let menu = gtk::MenuButton::builder()
+                    .label("Workspaces")
+                    .tooltip_text("Switch workspace")
+                    .build();
+                menu.add_css_class("flat");
+                menu.add_css_class("chrome-control");
                 menu.set_widget_name("header-workspace-selector");
+                menu.set_create_popup_func(glib::clone!(
+                    #[weak]
+                    w,
+                    move |button| {
+                        button.set_popover(Some(&w.workspaces.switcher_popup(&w)));
+                    }
+                ));
                 stack.add_named(&menu, Some("compact"));
                 stack.set_visible_child_name("full");
                 compact = Some(menu);
@@ -1129,20 +1145,16 @@ impl Header {
                     .and_then(|m| m.location(id))
                     .map(|(z, _)| z.index())
                     .unwrap_or(0);
-                if matches!(
-                    entry.item,
-                    HeaderItem::Menu | HeaderItem::MenuLabels | HeaderItem::Workspaces
-                ) {
-                    let menu = if entry.item == HeaderItem::Workspaces {
-                        ApplicationMenu::Window
-                    } else {
-                        ApplicationMenu::Primary
-                    };
+                if entry.item == HeaderItem::Workspaces {
+                    let popup = w.workspaces.switcher_popup(w);
+                    self.overflow[zone].set_popover(Some(&popup));
+                    popup.popup();
+                } else if matches!(entry.item, HeaderItem::Menu | HeaderItem::MenuLabels) {
                     let model = w
                         .gpu
                         .borrow()
                         .as_ref()
-                        .map(|g| g.session.application_menu(menu));
+                        .map(|g| g.session.application_menu(ApplicationMenu::Primary));
                     if let Some(model) = model {
                         // A transient nested menu is anchored to the visible overflow
                         // control, never to the unallocated hidden component.
