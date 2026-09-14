@@ -347,6 +347,47 @@ impl TileCapture<'_> {
     }
 }
 
+/// Copies recorded in an owner's command stream. Mapping starts only after
+/// that stream has been submitted; dropping an unsubmitted frame wakes waiters.
+pub(super) struct PreparedCapture {
+    chunks: Vec<(wgpu::Buffer, Vec<Entry>)>,
+    validation: Option<wgpu::Buffer>,
+    pub staging_bytes: u64,
+    pool: Arc<BufferPool>,
+}
+impl PreparedCapture {
+    pub fn submitted(
+        mut self,
+        r: &WgpuRasterizer,
+        submission: wgpu::SubmissionIndex,
+    ) -> RasterCapture {
+        RasterCapture {
+            #[cfg(not(target_arch = "wasm32"))]
+            device: (*r.device).clone(),
+            submission,
+            chunks: self
+                .chunks
+                .drain(..)
+                .map(|(b, e)| Chunk::map(b, e))
+                .collect(),
+            validation: self.validation.take().map(|b| Chunk::map(b, Vec::new())),
+            staging_bytes: self.staging_bytes,
+            pool: self.pool.clone(),
+        }
+    }
+}
+impl Drop for PreparedCapture {
+    fn drop(&mut self) {
+        for (_, entries) in &self.chunks {
+            for entry in entries {
+                let _ = entry
+                    .tile
+                    .publish(Err("Raster frame was abandoned before submission".into()));
+            }
+        }
+    }
+}
+
 pub struct RasterCapture {
     #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
@@ -957,6 +998,22 @@ impl WgpuRasterizer {
         copies: &[TileCapture<'_>],
         status: Option<&NativeEncodeStatus>,
     ) -> Result<RasterCapture, GpuRasterError> {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("immutable raster revision capture"),
+            });
+        let capture = self.prepare_capture(&mut encoder, copies, status)?;
+        let submission = self.queue.submit([encoder.finish()]);
+        Ok(capture.submitted(self, submission))
+    }
+
+    pub(super) fn prepare_capture(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        copies: &[TileCapture<'_>],
+        status: Option<&NativeEncodeStatus>,
+    ) -> Result<PreparedCapture, GpuRasterError> {
         if copies.is_empty() || copies.len() as u64 > MAX_CAPTURE_BYTES / SCALAR_PAGE_BYTES {
             return Err(GpuRasterError::Color(
                 "Invalid raster capture tile count".into(),
@@ -994,11 +1051,6 @@ impl WgpuRasterizer {
             ranges.push((start..end, allocation));
             start = end;
         }
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("immutable raster revision capture"),
-            });
         let mut chunks = Vec::with_capacity(ranges.len());
         for (range, allocation) in ranges {
             let buffer = self.raster_buffers.take(&self.device, allocation);
@@ -1040,13 +1092,9 @@ impl WgpuRasterizer {
             encoder.copy_buffer_to_buffer(status.buffer(), 0, &buffer, 0, STATUS_BYTES);
             buffer
         });
-        let submission = self.queue.submit([encoder.finish()]);
-        Ok(RasterCapture {
-            #[cfg(not(target_arch = "wasm32"))]
-            device: (*self.device).clone(),
-            submission,
-            chunks: chunks.into_iter().map(|(b, e)| Chunk::map(b, e)).collect(),
-            validation: validation.map(|b| Chunk::map(b, Vec::new())),
+        Ok(PreparedCapture {
+            chunks,
+            validation,
             staging_bytes,
             pool: self.raster_buffers.clone(),
         })
@@ -1088,7 +1136,6 @@ impl WgpuRasterizer {
                     "Raster plane has the wrong pixel representation".into(),
                 ));
             }
-            let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
             let (replacement, texture) = match key.plane {
                 RasterPlane::Color => {
                     let mut page = self.create_page(key.coordinate, "restored raster tile");
@@ -1130,6 +1177,28 @@ impl WgpuRasterizer {
                     )
                 }
             };
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.native_edit.is_some() {
+                let color = self.document_color();
+                if key.plane == RasterPlane::Color {
+                    self.restore_native_tiles(&[crate::native_tiles::NativeTileRestore {
+                        blob: &blob,
+                        space: color.space,
+                        destination: color.space,
+                        working: &texture,
+                    }])?;
+                } else {
+                    self.restore_native_scalars(&[
+                        crate::native_tiles::scalar::NativeScalarRestore {
+                            blob: &blob,
+                            working: &texture,
+                        },
+                    ])?;
+                }
+                replacements.push(replacement);
+                continue;
+            }
+            let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
             self.queue.write_texture(
                 texture.as_image_copy(),
                 &bytes,
@@ -1213,3 +1282,6 @@ impl WgpuRasterizer {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod native_tests;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod native_edit;

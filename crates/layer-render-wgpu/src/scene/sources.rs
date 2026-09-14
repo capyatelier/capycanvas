@@ -123,6 +123,12 @@ pub(super) struct DecodedTiles {
     pub misses: u64,
 }
 impl DecodedTiles {
+    pub fn new(destination: RgbSpace) -> Self {
+        Self {
+            destination,
+            ..Self::default()
+        }
+    }
     pub fn prepare_transfer(
         &mut self,
         device: &wgpu::Device,
@@ -440,8 +446,7 @@ impl DecodedTiles {
         let index = if let Some(index) = self.decoders.iter().position(|(s, _)| s.ptr_eq(&weak)) {
             index
         } else {
-            // Current exposed documents are sRGB8. The source stays native;
-            // future document working-space selection supplies this destination.
+            // Keep the source native; decode into the document's working primaries.
             let decoder = layer_color::WorkingDecoder::new(
                 &source.interpretation,
                 self.destination,

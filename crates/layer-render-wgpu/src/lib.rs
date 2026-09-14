@@ -694,6 +694,9 @@ pub struct WgpuRasterizer {
     document_extent: [u32; 2],
     paint_layers: Vec<PaintLayer>,
     raster: Option<raster::RasterRuntime>,
+    document_color: layer_core::color::DocumentColor,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_edit: Option<raster::native_edit::NativeEdit>,
     raster_buffers: std::sync::Arc<raster::BufferPool>,
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
@@ -1064,6 +1067,9 @@ impl WgpuRasterizer {
             tiled_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
             raster: None,
+            document_color: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            native_edit: None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::default()),
             composite_texture: None,
             composite_view: None,
@@ -3804,6 +3810,7 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn document_color(&self) -> layer_core::color::DocumentColor { self.document_color }
     fn supports_raster_damage(&self) -> bool { true }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.raster_restore_ready(packet)
@@ -3890,6 +3897,10 @@ impl CanvasRenderer for WgpuRasterizer {
             t.effect_passes = scene.effect_passes;
             t.compiled_effects = scene.effects.compilations;
             t.resident_bytes += scene.scratch_bytes();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(native) = &self.native_edit {
+            t.resident_bytes += native.storage_bytes();
         }
         if let Some(previews) = &self.filter_previews {
             t.resident_bytes += previews.storage_bytes();
@@ -4539,6 +4550,9 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let native_commit = self.encode_native_rasters(packet.layers, &mut encoder)?;
+
         self.preview_damage = new_preview_damage;
         if let Some(layer_id) = new_preview_layer
             && !new_preview_direct_to_composite
@@ -5119,7 +5133,11 @@ impl CanvasRenderer for WgpuRasterizer {
         self.telemetry.end(&mut encoder);
         let submission = encoder.submit(&self.queue);
         self.telemetry.submitted();
-        self.last_submission = Some(submission);
+        self.last_submission = Some(submission.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(commit) = native_commit {
+            self.finish_native_rasters(commit, submission)?;
+        }
         self.commit_rasters(packet.layers)?;
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();

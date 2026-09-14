@@ -22,6 +22,9 @@ impl NativePromotionBatch {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    pub(crate) fn pass_count(&self) -> usize {
+        self.0.len()
+    }
 }
 
 pub struct NativePromoter {

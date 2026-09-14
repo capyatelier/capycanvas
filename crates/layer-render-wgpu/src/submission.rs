@@ -70,7 +70,13 @@ impl CommandEncoder {
         }
     }
     fn begin_pass(&mut self) {
-        if self.passes == Self::PASSES_PER_SUBMISSION {
+        self.reserve_passes(1);
+    }
+    /// Account for a bounded helper that records raw wgpu passes. Rotate before
+    /// the helper so its complete batch fits the same command-buffer ceiling.
+    pub fn reserve_passes(&mut self, count: usize) {
+        assert!(count <= Self::PASSES_PER_SUBMISSION);
+        if self.passes + count > Self::PASSES_PER_SUBMISSION {
             let next = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -80,7 +86,7 @@ impl CommandEncoder {
                 .push(std::mem::replace(&mut self.current, next));
             self.passes = 0;
         }
-        self.passes += 1;
+        self.passes += count;
     }
     pub fn begin_render_pass<'a>(
         &'a mut self,

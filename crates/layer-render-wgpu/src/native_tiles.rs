@@ -241,8 +241,9 @@ impl NativeTileEncoder {
         });
         let pipelines = std::array::from_fn(|index| {
             let source = format!(
-                "{}\n{}\n{}",
+                "{}\n{}\n{}\n{}",
                 include_str!("sdr_color.wgsl"),
+                include_str!("native_tiles/validity.wgsl"),
                 include_str!("native_tiles/coverage.wgsl"),
                 include_str!("native_tiles/encode.wgsl").replace(
                     "OUTPUT_FORMAT",
@@ -407,7 +408,7 @@ impl NativeTileEncoder {
         }
     }
 }
-fn buffer_entry(
+pub(crate) fn buffer_entry(
     binding: u32,
     ty: wgpu::BufferBindingType,
     dynamic: bool,

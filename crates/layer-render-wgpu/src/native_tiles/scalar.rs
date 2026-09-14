@@ -192,8 +192,9 @@ impl NativeScalarEncoder {
             ],
         });
         let source = format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             include_str!("coverage.wgsl"),
+            include_str!("validity.wgsl"),
             include_str!("scalar.wgsl")
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

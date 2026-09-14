@@ -7,13 +7,20 @@ user's approval after GTK qualification.
 
 Current delivery status: retained source/ICC/output and native tile precision
 primitives are implemented, but the complete GTK SDR/photo workflows are **not
-enabled or qualified**. Native document edit publication, extended tool/effect
+enabled or qualified**. Native document edit publication is now connected and
+qualified in the headless paint/history fixtures below. Extended tool/effect
 precision, bounded mutable/composite/filter residency and mips, managed GTK
 viewing, color/photo controls and remaining interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
 diagnostics and GPU recovery continue to receive regression checks; these do not
 substitute for qualification of the new workflows. The implementation sections
 below distinguish each measured primitive from an integrated user journey.
+
+**Current work order (user instruction, 2026-09-14):** finish functional milestone 2
+implementation and correctness/recovery validation first. Further benchmarking,
+regression investigation and optimization are deferred to the final qualification
+phase. The earlier measured failures remain open and must be resolved before GTK
+mode enablement; this sequencing does not waive any performance or memory gate.
 
 ## Independently checked prerequisites
 
@@ -2231,3 +2238,107 @@ all frame records and slow-frame diagnostics are retained under
 `document-color-trace/`, including build provenance and
 `all-frames-measurements.json`. Traced timing is diagnostic evidence only;
 the production sustained failure remains open.
+
+
+## Connected native edit publication and history (2026-09-14)
+
+The Float32 renderer now has a native document constructor for headless workflow
+qualification, `WgpuRasterizer::new_native_headless(DocumentColor)`. It declares
+the same profile/depth to the engine, decodes retained sources and native tiles
+into the document's linear RGB coordinates, and prepares native pipelines and
+scratch before editing. This constructor does not enable a GTK mode or claim
+managed viewing. Existing interactive factories still select the qualified
+sRGB8 path. The default sRGB8 archive descriptor still has its previously
+recorded premultiplied-linear association; the other native modes use straight
+encoded RGB. Final common-mode cleanup and low-alpha source policy remain part
+of adoption, rather than a compatibility promise.
+
+Pending raster roots now trigger native commit encoding after persistent dabs,
+mask edits and stroke-edge work, before preview copies and composition. Every
+changed color and scalar page is validated before any canonical value is adopted.
+Validation and the encoders share the same bit-based non-finite/coverage checks.
+After that scan, batches of at most sixteen pages quantize into reusable scratch,
+promote canonical Float32 samples, and record exact native copies before reusing
+the scratch. A later bad color or mask therefore cannot leave an earlier batch
+quantized while the publication fails. Finite extended RGB clips only at this
+native write boundary; invalid coverage/non-finite data rejects the publication.
+Failure still requires the existing checkpoint/recovery owner to discard the
+provisional edit; promotion does not roll back preceding dabs.
+
+Capture preparation now records into the owning frame's command stream. Mapping
+starts only after submission, then the existing bounded worker compresses and
+publishes the typed tickets. Dropped prepared captures fail their tile tickets;
+dropped native frames also fail their pending roots. Undo/open/replacement decode
+native color and scalar backing into private candidates before replacing live
+pages. Unchanged tile tickets are reused. The command wrapper accounts for native
+promotion passes in its existing submission ceiling.
+
+The owner reserves sixteen RGBA32 canonical/color-encoded slots and sixteen R32
+canonical/scalar-encoded slots. Their payload plus the shared status is
+25 MiB + 8 bytes at U8 and 30 MiB + 8 bytes at U16; transfer curves remain owned
+by the shared decoder cache. This scratch is included in renderer telemetry.
+Readback checks aggregate rounded chunks plus each validation copy against the
+existing 256 MiB frame ceiling; worker and spare-pool budgets are unchanged.
+These are allocation contracts, **not measured photo-memory qualification**.
+Full-photo operations that exceed the capture ceiling still need scheduled,
+streamed publication; mutable/composite/filter residency remains unfinished.
+
+Connected correctness fixtures cover:
+
+- All four built-in spaces at both integer depths, through actual `CanvasEngine`
+  pen input, two committed strokes, undo/redo, native save/reopen, matching
+  continued painting, renderer replacement and undo after replacement. Stored
+  native bytes and canonical Float32 working bytes match exactly between these
+  states. Replacement retains the checkpoint and history; this test destroys
+  the retired device after replacement and does not simulate every device-loss
+  timing during active input.
+- Seventeen tiles each of color, wetness, watercolor wetness and a layer mask
+  (**68 pages**) crossing five mixed capture batches. Color uses alpha 17/65535;
+  scalar ramps cover all 65,536 codes. Three recommits preserve exact native
+  bytes, scratch allocation stays fixed, and an unchanged revision reuses tickets.
+- A deliberately invalid seventeenth color page, or the final mask page, rejects
+  all captures and leaves every provisional working byte unchanged. An earlier
+  valid noncanonical pixel detects accidental partial promotion. The last backed
+  checkpoint remains independently restorable on a replacement renderer.
+- Abandoning an encoded but unsubmitted frame fails both roots and all tile
+  waiters, and leaves live working bytes unchanged.
+
+The first two connected tests passed, followed by all four expanded fixtures.
+Reproducible final build/test artifacts and broader validation are recorded below.
+No benchmarks or optimization experiments were run for this intermediate step;
+the user's requested final-phase ordering applies.
+
+Final validation of this change: **166 GPU tests pass, 26 benchmark/large-workload
+tests remain ignored**. `cargo check --offline -p layer-linux --tests` passes.
+The existing GTK `native_document_files` and
+`native_diagnostics_and_gpu_failure_recovery` tests both pass under the isolated
+120 Hz Mutter/GSK Vulkan harness on the previously recorded NVIDIA device.
+This verifies the existing host route; native color mode is not yet exposed in
+that host. The GPU correctness suite overlapped GTK compilation; test elapsed
+time is not used as latency evidence.
+
+Reproduce from this implementation using:
+
+```sh
+cargo test --offline --release -p layer-render-wgpu --lib -- --test-threads=1
+cargo test --offline --release -p layer-linux --bin layer-linux --no-run --message-format=json
+# Select the executable from the successful Cargo compiler-artifact message:
+bash tools/performance/gtk-raster.sh "$GTK_TEST_BINARY" native_document_files artifacts/color-m2/native-edit-files
+bash tools/performance/gtk-raster.sh "$GTK_TEST_BINARY" native_diagnostics_and_gpu_failure_recovery artifacts/color-m2/native-edit-recovery
+```
+
+Saved executables are `artifacts/color-m2/native-edit-final-tests` and
+`native-edit-gtk-tests`; SHA-256 hashes and parent revision are in
+`native-edit-provenance.json`. Cargo JSON/build logs use `native-edit-final-build`
+and `native-edit-gtk-build`; results are `native-edit-full-gpu-tests.log`,
+`native-edit-gtk-check.log`, `native-edit-files.log` and `native-edit-recovery.log`.
+Earlier focused runs used the intermediate `native-edit-tests` executable and
+are recorded in `native-edit-focused.log`; final GPU results include all four
+fixtures plus the command-wrapper accounting change.
+
+Next functional work is the extended Float32 tool/effect contract, bounded large
+operations/residency and the remaining connected GTK color/photo journeys. The
+68-page fixture is not a dense-photo throughput or memory pass. Managed viewing,
+profile/depth actions, inspection/UI, remaining interchange and final hardware
+qualification are still required. Other platform hosts remain untouched and
+require the user's later approval.

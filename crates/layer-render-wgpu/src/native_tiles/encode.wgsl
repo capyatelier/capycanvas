@@ -40,16 +40,8 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
     if any(invocation.xy>=settings.region.zw) {return;}
     let pixel=invocation.xy+settings.region.xy;
     let value=textureLoad(working,vec2<i32>(pixel),0);
-    // Integer exponent inspection avoids using floating comparisons to detect
-    // NaN, and runs before arithmetic on the submitted working values.
-    let bits=bitcast<vec4<u32>>(value);
-    if any((bits & vec4(0x7f800000u))==vec4(0x7f800000u)) {
-        atomicOr(&status.invalid,1u);store_result(pixel,vec4(0u));return;
-    }
-    let coverage_bits=bits.a&0x7fffffffu;
-    if coverage_bits>0x3f800000u || ((bits.a>>31u)!=0u && coverage_bits!=0u) {
-        atomicOr(&status.invalid,2u);store_result(pixel,vec4(0u));return;
-    }
+    let error=color_error(value);
+    if error!=0u {atomicOr(&status.invalid,error);store_result(pixel,vec4(0u));return;}
     let alpha=quantize_coverage(value.a,settings.maximum);
     if alpha==0u {store_result(pixel,vec4(0u));return;}
     var rgb=value.rgb;

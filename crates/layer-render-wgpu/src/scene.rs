@@ -308,7 +308,7 @@ impl Scene {
         let effects = effects::Effects::new(r, &uniforms, &layout);
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            source_tiles: sources::DecodedTiles::default(),
+            source_tiles: sources::DecodedTiles::new(r.document_color().space),
             style_base: 0,
             pool: Vec::new(),
             used: Vec::new(),

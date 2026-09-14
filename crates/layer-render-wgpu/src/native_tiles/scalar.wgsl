@@ -24,14 +24,9 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
         if x<settings.region.x || x>=settings.region.x+settings.region.z {continue;}
         let pixel=vec2(x,y);
         let value=textureLoad(working,vec2<i32>(pixel),0).r;
-        let bits=bitcast<u32>(value);
-        let magnitude=bits&0x7fffffffu;
+        let error=scalar_error(value);
         var code=0u;
-        if magnitude>=0x7f800000u {
-            atomicOr(&status.invalid,1u);
-        } else if magnitude>0x3f800000u || ((bits>>31u)!=0u && magnitude!=0u) {
-            atomicOr(&status.invalid,2u);
-        } else {
+        if error!=0u {atomicOr(&status.invalid,error);} else {
             code=quantize_coverage(value,settings.maximum);
         }
         let shift=c*depth;
