@@ -1399,3 +1399,21 @@ The driver guards process ownership and keeps every active contact in each frame
 Selecting an already active toolbar tool opens its drawer, so setup selects a
 tool only when needed. Captures/results stay in ignored artifacts/windows.
 These checks do not establish physical digitizer or 120 Hz performance acceptance.
+
+## Native canvas selection and transform acceptance
+
+~~~powershell
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-canvas-editing.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
+~~~
+
+The isolated mouse and injected-pen journeys each draw a filled rectangle and
+lasso part of it, then drag the transform body, scale corner and rotation handle.
+Previews preserve document/layer revisions; Cancel restores the sampled artwork.
+Applying a move empties the selected source, copies its pixels to the destination
+and preserves an unselected region. One Undo/Redo restores those samples exactly;
+separate Undo steps remove the selection and figure and return to a clean drawing.
+All 14 checks pass before a normal zero-exit close. Each sample is a 16x16 artwork
+interior away from cursor endpoints; full client captures remain unmasked.
+The fixture waits for reported canvas/brush readiness after activating tools.
+This covers native input, controls and sampled raster behavior; physical pen,
+complete-image equivalence and performance acceptance remain separate.
