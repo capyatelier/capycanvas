@@ -1381,3 +1381,21 @@ drops, cancellation and one-step history, retained resizing, individual drawers,
 auto-hide, themes, Zen and restart. These are guarded OS-delivered synthetic
 inputs. Physical pen/touch, complete visual acceptance, mixed displays and
 120 Hz painting still require their separate checks.
+
+## Native multi-touch canvas acceptance
+
+~~~powershell
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-canvas-touch.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
+~~~
+
+The isolated fixture seeds a real mouse stroke, then injects simultaneous OS
+contacts to check two-finger pan, anchored pinch/rotation, third-finger pause,
+contact replacement, cancellation/restart and single-finger Hand navigation.
+Navigation preserves document and layer revisions. Expected moving transforms
+must place every document corner within one physical pixel; stationary contact
+changes use tighter camera checks. It then paints with injected pen and verifies
+two independent Undo steps return to a clean drawing before normal shutdown.
+The driver guards process ownership and keeps every active contact in each frame.
+Selecting an already active toolbar tool opens its drawer, so setup selects a
+tool only when needed. Captures/results stay in ignored artifacts/windows.
+These checks do not establish physical digitizer or 120 Hz performance acceptance.
