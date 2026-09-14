@@ -124,7 +124,7 @@ impl SourceThumbnails {
             &shader,
             "fragment_main",
             None,
-            SRGB8_FORMAT,
+            d.working_format(),
             "photo overview display",
         );
         let working = overview_buffer(d);
@@ -270,7 +270,7 @@ impl SourceThumbnails {
             &r.texture_layout,
             &r.sampler,
             [32, 32],
-            SRGB8_FORMAT,
+            r.device.working_format(),
             "photo layer thumbnail",
         );
         {

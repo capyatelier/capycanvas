@@ -30,6 +30,8 @@ mod canvas_preview;
 mod color_sample;
 mod source_access;
 mod export_readback;
+mod view_color;
+pub use view_color::SdrSurfaceColor;
 mod raster;
 pub use export_readback::ExportReadback;
 pub use raster::{CaptureSource, RasterCapture, TileCapture};
@@ -6094,7 +6096,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         Deferred::new(move || {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer export shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("export.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", view_color::shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("export.wgsl")).into()),
             })
         })
     };
@@ -6870,6 +6872,8 @@ mod tests {
     mod working;
     #[cfg(not(target_arch = "wasm32"))]
     mod native_effects;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod view_color;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

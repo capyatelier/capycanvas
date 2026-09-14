@@ -697,6 +697,15 @@ fn runtime_filter_pixel_reference() {
     let mut reference = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut reference).unwrap();
     assert_eq!([info.width, info.height], extent);
+    // This independent fixture predates canonical zero-coverage export. Four
+    // pixels contain hidden RGB from an epsilon unassociation of quantized
+    // premultiplied values. Apply the declared output contract to the reference;
+    // still compare every output channel, including RGB and exact zero alpha.
+    for pixel in reference.chunks_exact_mut(4) {
+        if pixel[3] == 0 {
+            pixel[..3].fill(0);
+        }
+    }
     let error = reference
         .iter()
         .zip(&pixels)

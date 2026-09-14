@@ -894,12 +894,14 @@ impl Worker {
         let mut config = surface
             .get_default_config(&adapter, 1, 1)
             .ok_or("Vulkan Wayland swapchain unavailable")?;
-        config.format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(config.format);
+        // The current host route is explicitly tagged sRGB. Auto can select
+        // linear scRGB for floating surfaces, which requires different shader
+        // encoding. Native wide-color mode will select its matching route.
+        config.color_space = wgpu::SurfaceColorSpace::Srgb;
+        config.format = caps.formats.iter().copied()
+            .filter(|f| caps.color_spaces(*f).contains(wgpu::SurfaceColorSpaces::SRGB))
+            .min_by_key(|f| f.is_srgb())
+            .ok_or("The Wayland canvas requires an explicit sRGB surface")?;
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         if !caps.alpha_modes.contains(&config.alpha_mode) {
             return Err(
@@ -938,7 +940,9 @@ impl Worker {
             .join("shaders");
         let renderer = WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, &cache)
             .map_err(error)?;
-        let mut presenter = ViewportPresenter::for_renderer(&renderer, config.format);
+        eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
+        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, layer_render_wgpu::SdrSurfaceColor::Srgb)
+            .map_err(error)?;
         presenter.prepare_overviews(&renderer);
         Ok(Self {
             paper_submitted: false,
@@ -1145,7 +1149,7 @@ impl Worker {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-        let mut presenter = ViewportPresenter::new(self.renderer.device(), texture.format());
+        let mut presenter = ViewportPresenter::for_renderer(&self.renderer, texture.format());
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         presenter.set_overviews(&self.renderer, &self.overviews);
         let mut encoder = self

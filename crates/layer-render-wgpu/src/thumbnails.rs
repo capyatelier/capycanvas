@@ -304,7 +304,7 @@ impl PreviewPipeline {
             &shader,
             "fragment_main",
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            SRGB8_FORMAT,
+            device.working_format(),
             "cropped thumbnail",
         );
         Self {
@@ -456,7 +456,7 @@ impl PreviewPipeline {
             &r.texture_layout,
             &r.sampler,
             [32, 32],
-            SRGB8_FORMAT,
+            r.device.working_format(),
             "layer thumbnail",
         );
         {

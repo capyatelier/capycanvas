@@ -2423,3 +2423,87 @@ binary is `artifacts/color-m2/native-effects-tests`; hash and parent are in
 `native-effects-gtk-check.log`. Failed strict-tolerance runs are retained as
 `native-effects-rounding-before-{gain,mix}.log`; the final run passes that same
 threshold. Further performance measurement and optimization remain deferred.
+
+
+## Document-to-view color boundaries and explicit GTK sRGB (2026-09-14)
+
+Viewport, sRGB export, Navigator and both paint/source thumbnails now transform
+native document primaries at the output boundary. Native thumbnail intermediates
+retain Float32 until that conversion, avoiding a gamut clamp in working RGB.
+Raw point/average samples remain straight linear document RGB. ReadbackImage
+remains explicitly sRGB8; this does not yet connect profiled native-depth delivery
+to whole-composition export. Viewing leaves document and retained-source bytes
+unchanged.
+
+The presenter accepts an explicit sRGB, Display P3 or extended linear sRGB surface
+contract. Artwork converts from the renderer's space; colored application surround
+and overview outlines convert from their sRGB definitions. Encoded targets and
+linear floating targets select different output transfer behavior. Native
+Float16 display output is permitted, while Float32 document editing is retained.
+This is SDR viewing support, not an HDR editing claim. Primary conversions use the
+previously verified [CSS Color 4 matrices and adaptation](https://www.w3.org/TR/css-color-4/#color-conversion-code).
+
+The pinned wgpu-types 30.0.1 `src/surface.rs` independently establishes the surface
+contract: Auto may select extended linear sRGB for floating targets; sRGB/P3
+transfer encoding still depends on the texture format. GTK now requests explicit
+sRGB and an advertised compatible format. The isolated native session reports
+Rgba8Unorm + sRGB; NVIDIA Vulkan/Mutter also advertises Display P3 for several
+formats, including Rgba16Float, but does **not** advertise extended linear sRGB.
+Those capability bits are not calibrated-monitor or compositor conversion proof.
+GTK wide-surface selection, monitor changes and picker agreement remain work;
+no duplicate Wayland color-management surface is installed over WSI ownership.
+
+Four focused GPU fixtures cover:
+
+- Four working spaces × two native depths, retained ProPhoto16 sources (including
+  out-of-working-gamut colors and coverage 1/65535), sRGB export, Navigator, retained
+  source thumbnails, raw point/Average5 samples and unchanged composite ownership.
+  Output error is at most one 8-bit code; raw RGB uses an absolute 3e-6 threshold.
+- Four working spaces on explicit sRGB/P3 UNORM and sRGB-format attachments, plus
+  extended linear Float32 and Float16 output, with colored UI surround. Float32
+  output uses absolute 3e-6; display-only Float16 permits its independently declared
+  0.05% relative rounding plus 3e-6 arithmetic error. Invalid extended-linear UNORM
+  configuration fails before presenter creation.
+- Native paint thumbnails through the ordinary cropped paint route, checked against
+  the same Float64 profile-conversion reference within one output code.
+- Hidden RGB injected at exactly zero coverage in both attachment modes: export and
+  Navigator must return transparent black, with source composite bytes untouched.
+
+The first full suite failed the independent filter PNG comparison at four pixels:
+all had alpha zero and hidden nonzero RGB from the former epsilon division. The
+PNG/checksum remain unchanged. The comparison now applies the declared canonical
+zero-coverage output contract to the reference and still compares every channel;
+its one-byte tolerance is unchanged. The separate injected-RGB test directly
+checks the contract. This is an explicit correctness correction, not a tolerance
+relaxation. The first full run (171 pass/one failure) and focused failure are kept
+as `view-color-full-gpu.log` and `view-color-filter-recheck.log`.
+
+GTK development test check passes. Real private-Mutter checks pass for sampling
+controls (4.71 s), document files/save/reopen (9.96 s), and diagnostics/GPU recovery
+(1.96 s), using the existing production sRGB8 document factory. These elapsed test
+times are correctness evidence only; the GPU suite overlapped some GTK checks.
+The current four-fixture GPU executable is `view-color-final-tests`; the GTK
+executable is `view-color-gtk-tests`. Successful Cargo JSON/build logs use
+`view-color-final-build` and `view-color-gtk-build`; runtime artifacts use
+`view-color-{sampling,files,recovery}`. Reproduce with the serial release GPU suite
+and the corresponding filters via `bash tools/performance/gtk-raster.sh` as above.
+Final GPU result and executable hashes are recorded in `view-color-provenance.json`.
+Further benchmarking and optimization remain deferred until functional completion.
+
+The added Float16 display check initially failed its fixed tolerance: green was
+1.0048828125 instead of the Float64 reference 1.0057629312917291. The preceding
+Float32 path passed. Vulkan's [floating-point format conversion rule](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fp16)
+does not require nearest rounding; the observed value is the lower adjacent half.
+The main viewport now explicitly selects a nearest-even Float16 value before the
+attachment conversion, including half subnormals and a finite half-range display
+cap. This is confined to Float16 presentation and does not feed artwork, sampling
+or export. The test's original 0.05% relative + 3e-6 bound remains unchanged.
+`view-color-final-full-gpu.log` retains that failed check (172 pass/one failure).
+The final implementation/build uses `view-color-rounded-{tests,build.json,build.log}`;
+`view-color-rounded-focused.log` and `view-color-rounded-full-gpu.log` record its
+checks. GTK runtime evidence above predates only this Float16-specific rounding
+and the final test additions; the exercised GTK surface remains Rgba8Unorm.
+
+Final view-color validation: **173 GPU tests pass, 26 remain ignored** (138.36 s);
+all four focused fixtures pass (15.86 s). These are correctness run durations,
+not frame-creation performance measurements.

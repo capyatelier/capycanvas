@@ -243,7 +243,9 @@ pub struct ColorSampleRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct ColorSample {
     pub request_id: u64,
-    /// Straight linear RGBA. Alpha zero means no paint at the requested point.
+    /// Straight linear RGBA in `CanvasRenderer::document_color().space`.
+    /// Alpha zero means no paint at the requested point. View/output transforms
+    /// never enter this sample.
     pub rgba: [f32; 4],
 }
 

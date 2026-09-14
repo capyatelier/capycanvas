@@ -10,5 +10,5 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     // Sixteen stratified bilinear samples reduce aliasing of fine line art;
     // bounded by preview size, not by document area or layer/filter count.
     let color = sample_overview(source, source_sampler, v.uv, fwidth(v.uv));
-    return vec4(color.rgb/max(color.a,.000001), color.a);
+    return vec4(view_straight(color), color.a);
 }

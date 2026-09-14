@@ -26,6 +26,6 @@ fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let premultiplied = textureSample(source_texture, source_sampler, input.uv);
-    let straight_rgb = premultiplied.rgb / max(premultiplied.a, 0.000001);
+    let straight_rgb = view_straight(premultiplied);
     return vec4<f32>(straight_rgb, premultiplied.a);
 }

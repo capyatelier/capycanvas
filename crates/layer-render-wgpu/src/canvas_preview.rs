@@ -74,9 +74,13 @@ impl WgpuRasterizer {
                     .create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("Navigator downsample"),
                         source: wgpu::ShaderSource::Wgsl(
-                            concat!(
+                            format!(
+                                "{}\n{}\n{}",
+                                view_color::shader(
+                                    self.device.working_space(),
+                                    layer_core::color::RgbSpace::Srgb
+                                ),
                                 include_str!("overview_sample.wgsl"),
-                                "\n",
                                 include_str!("canvas_preview.wgsl")
                             )
                             .into(),

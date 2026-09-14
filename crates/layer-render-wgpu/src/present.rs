@@ -1,6 +1,6 @@
 //! GPU-only viewport presentation shared by toolkit surfaces and WebGPU.
 
-use crate::{GpuRasterError, Uploads, WgpuRasterizer};
+use crate::{GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CursorSegment, ViewState};
 
 /// A native UI's document overview, sampled from the existing GPU image.
@@ -68,12 +68,23 @@ pub struct ViewportPresenter {
 
 impl ViewportPresenter {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        Self::with_device(&device.clone().into(), format)
+        Self::with_device(&device.clone().into(), format, SdrSurfaceColor::Srgb)
     }
 
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
-        Self::with_device(&renderer.device, format)
+        Self::with_device(&renderer.device, format, SdrSurfaceColor::Srgb)
+    }
+
+    /// The host configures its surface with the matching, advertised color space.
+    /// UI overlays are sRGB; artwork is in the renderer's document coordinates.
+    pub fn for_surface(
+        renderer: &WgpuRasterizer,
+        format: wgpu::TextureFormat,
+        color: SdrSurfaceColor,
+    ) -> Result<Self, GpuRasterError> {
+        color.shader_encoding(format)?;
+        Ok(Self::with_device(&renderer.device, format, color))
     }
 
     /// A Navigator canvas owns its coverage instead of preserving the parent
@@ -85,7 +96,11 @@ impl ViewportPresenter {
         }
     }
 
-    fn with_device(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self {
+    fn with_device(
+        device: &crate::PipelineDevice,
+        format: wgpu::TextureFormat,
+        color: SdrSurfaceColor,
+    ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("viewport bindings"),
             entries: &[
@@ -135,9 +150,11 @@ impl ViewportPresenter {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
-                concat!(
+                format!(
+                    "const VIEW_FLOAT16:bool={};\n{}\n{}\n{}",
+                    format == wgpu::TextureFormat::Rgba16Float,
+                    crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("overview_sample.wgsl"),
-                    "\n",
                     include_str!("present.wgsl")
                 )
                 .into(),
@@ -216,7 +233,9 @@ impl ViewportPresenter {
             bind_group: None,
             selection_buffer: None,
             document_extent: [0; 2],
-            encode_srgb: !format.is_srgb(),
+            encode_srgb: color
+                .shader_encoding(format)
+                .expect("view encoding was validated"),
             corner_radius: 0.0,
             cursor_pipeline,
             cursor_buffer,

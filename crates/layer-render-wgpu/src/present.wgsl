@@ -32,6 +32,23 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
 fn display_color(rgb: vec3<f32>) -> vec3<f32> {
     return select(rgb * 12.92, 1.055 * pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, rgb > vec3<f32>(0.0031308));
 }
+// Some attachment conversions truncate instead of rounding to nearest. Select
+// the representable Float16 value explicitly; this is display-only quantization.
+fn view_half(value:f32)->f32 {
+    let magnitude=min(abs(value),65504.);
+    if magnitude<0.00006103515625 {
+        let scaled=magnitude*16777216.;let low=floor(scaled);let fraction=scaled-low;
+        let rounded=low+select(0.,1.,fraction>.5 || (fraction==.5 && (u32(low)&1u)!=0u));
+        return sign(value)*rounded/16777216.;
+    }
+    let bits=bitcast<u32>(magnitude);
+    let rounded=(bits+4095u+((bits>>13u)&1u))&0xffffe000u;
+    return sign(value)*bitcast<f32>(rounded);
+}
+fn view_store(c:vec4<f32>)->vec4<f32> {
+    if VIEW_FLOAT16 {return vec4<f32>(view_half(c.r),view_half(c.g),view_half(c.b),view_half(c.a));}
+    return c;
+}
 fn window_coverage(surface: vec2<f32>) -> f32 {
     let radius = camera.viewport.w;
     let q = abs(surface - camera.viewport.xy * 0.5) - camera.viewport.xy * 0.5 + radius;
@@ -45,8 +62,8 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let paint = textureSampleLevel(canvas, canvas_sampler, p / extent, 0.0);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
-    var rgb = paint.rgb + vec3<f32>(checker) * (1.0 - paint.a);
-    if any(p < vec2<f32>(0.0)) || any(p >= extent) {rgb = camera.surround.rgb;}
+    var rgb = view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a);
+    if any(p < vec2<f32>(0.0)) || any(p >= extent) {rgb = view_ui_rgb(camera.surround.rgb);}
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.
@@ -59,7 +76,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     }
     // Signed distance to the full-window rounded rectangle; no inset/cropping.
     let coverage = window_coverage(surface);
-    return vec4<f32>(rgb * coverage, coverage);
+    return view_store(vec4<f32>(rgb * coverage, coverage));
 }
 
 struct CursorVertex {
@@ -130,12 +147,12 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let p = v.position.xy;
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
     let paint = sample_overview(canvas, canvas_sampler, v.uv, footprint);
-    var rgb = paint.rgb + v.background_scale.rgb * (1.-paint.a);
+    var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
     let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
                    min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));
     let scale = v.background_scale.w;
     rgb = mix(rgb,vec3(v.halo),clamp(1.5*scale+.5-edge,0.,1.));
-    rgb = mix(rgb,v.outline.rgb,clamp(.75*scale+.5-edge,0.,1.));
+    rgb = mix(rgb,view_ui_rgb(v.outline.rgb),clamp(.75*scale+.5-edge,0.,1.));
     if camera.viewport.z > .5 { rgb = display_color(rgb); }
     let opacity = v.outline.a;
     // Keep destination window alpha; only mix color inside its coverage.
