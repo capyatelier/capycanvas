@@ -31,6 +31,11 @@ This project is fully free and open source, and keeps artists in control of thei
 own data. There are no accounts, subscriptions or tracking. Drawing and editing
 happen locally on your device, and the code is licensed under MIT or Apache-2.0.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.webp">
+  <img src="docs/assets/paint-workspace-light.webp" width="1920" height="1080" alt="Capy Canvas in the Paint workspace, with abstract shapes, watercolor shading and editable layers.">
+</picture>
+
 ## Overall architecture
 
 When designing Capy Canvas, we did not want to compromise on UI responsiveness.
