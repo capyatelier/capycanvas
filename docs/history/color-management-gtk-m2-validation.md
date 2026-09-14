@@ -634,3 +634,42 @@ release build and GTK wrapper described above. Logs are
 map synchronization follows the existing submitted-layer scan; this stage adds
 no work to individual brush dabs. Final frame-creation and sustained native
 latency comparisons remain required after the rest of the integration.
+
+## Fractional resampling qualification
+
+Float32 texture storage alone does not establish integer16 resampling precision.
+The [Vulkan limits specification](https://docs.vulkan.org/spec/latest/chapters/limits.html)
+defines `subTexelPrecisionBits`: filtered sample coordinates snap to the device's
+subtexel grid. The earlier `sdr_precision` experiment explicitly mixed neighbors
+at 0.375, so it did not exercise this hardware limit.
+
+`sdr_sampling` now compares physical hardware bilinear sampling with four
+`textureLoad` calls and Float32 interpolation, against a separate Float64 oracle.
+Each method evaluates 65,536 fractional positions on opaque edges, four colors,
+alpha 1/13/17/257 (integer16 codes), and a transparent/opaque edge, in all four
+built-in spaces. Both methods read identical linear premultiplied RGBA32Float
+textures; neither includes a narrowing intermediate. The acceptance threshold
+remains 2 straight RGB codes / 1 alpha code, including low alpha.
+
+On the reference Vulkan GPU, hardware sampling reaches 1,641 RGB codes of error
+on the opaque sRGB/P3 edge, 3,828 in Adobe RGB and 2,032 in ProPhoto. Four-color
+errors reach 487–828 codes; low-alpha errors reach 11,116–12,667 RGB codes and
+2 alpha codes. Snapping a small positive coverage to zero produces up to 128
+alpha-code error on the transparent edge; its lost straight color is also
+reported, rather than hidden by an opaque-only test. These are measured output
+errors, not an inference from the Vulkan minimum limit.
+
+Explicit interpolation passes every case with at most **1 RGB code and 0 alpha
+codes** of error, maximum premultiplied linear error 1.14e-7, and RGB RMS at most
+0.0359 codes. This selects explicit Float32 interpolation for precise artwork
+resampling. Hardware-filtered display caches must not feed edits, exact queries
+or export. Production transform/neighborhood/filter integration and their large
+image cost remain outstanding. The tiny 2×2-source/65,536-output kernel measures
+roughly 0.031–0.046 ms completed p95, with noisy p99 up to 2.07 ms; those timings
+do not qualify a document operation or establish a speed advantage.
+
+Reproduce: `cargo build --offline --release -p layer-render-wgpu --example
+sdr_sampling`, then run `LAYER_GPU_INDEX=0 target/release/examples/sdr_sampling`.
+The harness uses 10 warmups and 100 timed submissions per case, without readback
+inside the timed interval. Logs: `sdr-sampling{,-build}.log`. No production shader
+or enabled GTK workflow changes in this experiment.
