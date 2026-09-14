@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 mod images;
 #[path = "filter_previews.rs"]
 mod previews;
+mod metadata;
 pub(super) use previews::FilterPreviews;
 #[cfg(not(target_arch = "wasm32"))]
 mod sources;
@@ -102,6 +103,10 @@ impl Scene {
     #[cfg(test)]
     pub fn image_pass_pixels(&self) -> u64 {
         self.images.pass_pixels
+    }
+    #[cfg(test)]
+    pub fn image_mask_pixels(&self) -> u64 {
+        self.images.mask_pixels
     }
     #[cfg(test)]
     pub fn image_work(&self) -> [u64; 2] {

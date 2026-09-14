@@ -1,6 +1,7 @@
 //! Idle-time GPU previews: one source capture/probe per revision, one shared
 //! preview pipeline, bounded scratch and small asynchronous image readbacks.
 use super::*;
+use super::metadata::PreviewMetadata;
 use layer_render::{FilterPreviewImage, FilterPreviewRequest};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -17,7 +18,7 @@ pub(crate) struct FilterPreviews {
     mask: Image,
     source: Option<Image>,
     key: Option<(u64, LayerId, [u32; 2], [f32; 4])>,
-    source_layers: Vec<Layer>,
+    source_layers: Vec<PreviewMetadata>,
     point: Option<[u32; 2]>,
     scratch: Vec<Image>,
     scratch_size: [u32; 2],
@@ -154,10 +155,11 @@ impl FilterPreviews {
             self.rows.clear();
             self.size = request.size;
         }
-        let changed = self.key != Some(key) || self.source_layers != request.layers || resized;
+        let source_layers: Vec<_> = request.layers.iter().map(PreviewMetadata::new).collect();
+        let changed = self.key != Some(key) || self.source_layers != source_layers || resized;
         self.request = Some(request);
         if changed {
-            self.source_layers = self.request.as_ref().unwrap().layers.clone();
+            self.source_layers = source_layers;
             self.rows.clear();
             self.key = Some(key);
             self.point = None;

@@ -139,6 +139,7 @@ fn raw_sampling_combines_integer_paint_and_unmaterialized_sixteen_bit_source() {
 
 #[test]
 fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidation() {
+    use layer_core::{color::PixelDescriptor, raster::*};
     let extent = [1024, 768];
     let mut builder = SourceBuilder::new(
         extent,
@@ -159,10 +160,29 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
     }
     let mut paint = Layer::paint(LayerId(1), "source");
     paint.source = Some(Arc::new(builder.finish().unwrap()));
+    let weak_source = Arc::downgrade(paint.source.as_ref().unwrap());
     let original = paint.raster.clone();
     let mut blur = Layer::paint(LayerId(2), "blur");
     blur.kind = LayerKind::Effect;
     blur.effect = Some(Arc::new(fixture("gaussian_blur").preview().unwrap()));
+    let mask_raster = |value| {
+        let mut data = RasterData::default();
+        data.tiles.insert(
+            TileKey {
+                plane: RasterPlane::Mask,
+                coordinate: [0, 0],
+            },
+            RasterTile::backed(
+                TileBlob::encode(PixelDescriptor::COVERAGE8, &vec![value; 256 * 256]).unwrap(),
+            ),
+        );
+        RasterRevision::backed(data)
+    };
+    blur.mask = Some(layer_core::LayerMask::reveal_all(
+        LayerId(3),
+        Point::default(),
+    ));
+    blur.mask.as_mut().unwrap().raster = mask_raster(128);
     let mut layers = [blur, paint];
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let frame =
@@ -190,6 +210,7 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
     };
     frame(&mut r, &layers, &[], &[], true);
     let before = display(&r);
+    let mask_work = r.scene.as_ref().unwrap().image_mask_pixels();
     layers[1].raster = layer_core::raster::RasterRevision::pending();
     let dab = test_dab([100., 100.], [1., 0., 0., 1.], 0.5);
     let batch = DabBatch {
@@ -209,6 +230,11 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
     };
     frame(&mut r, &layers, &[dab], &[batch], false);
     layers[1].raster.wait_data().unwrap();
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_mask_pixels(),
+        mask_work,
+        "painting the input must reuse the unchanged painted mask"
+    );
     assert!(display(&r) != before);
     let work = r.scene.as_ref().unwrap().image_pass_pixels();
     layers[1].raster = original;
@@ -226,6 +252,7 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
         r.scene.as_ref().unwrap().image_pass_pixels() - work
             < u64::from(extent[0]) * u64::from(extent[1])
     );
+    assert_eq!(r.scene.as_ref().unwrap().image_mask_pixels(), mask_work);
     r.scene.as_mut().unwrap().force_image_rebuild();
     frame(&mut r, &layers, &[], &[], true);
     let rebuilt = display(&r);
@@ -237,6 +264,34 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
             .find(|(_, (a, b))| a != b),
         None
     );
+    let mask_work = r.scene.as_ref().unwrap().image_mask_pixels();
+    layers[0].mask.as_mut().unwrap().raster = mask_raster(64);
+    frame(&mut r, &layers, &[], &[], false);
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_mask_pixels() - mask_work,
+        256 * 256,
+        "mask restoration only refreshes the changed page"
+    );
+    let masked = display(&r);
+    assert!(masked != restored);
+    r.scene.as_mut().unwrap().force_image_rebuild();
+    frame(&mut r, &layers, &[], &[], true);
+    assert!(
+        masked == display(&r),
+        "incremental mask restore matches full rebuild"
+    );
+    layers[0].mask.as_mut().unwrap().offset.x = 37.;
+    frame(&mut r, &layers, &[], &[], true);
+    let moved = display(&r);
+    assert!(moved != masked);
+    r.scene.as_mut().unwrap().force_image_rebuild();
+    frame(&mut r, &layers, &[], &[], true);
+    assert!(moved == display(&r), "translated mask matches full rebuild");
+    // Keep the compiled scene/caches, as the staged GTK renderer does when
+    // returning to a paper-only document. Metadata must not pin this original.
+    r.ensure_document(extent, &[]).unwrap();
+    drop(layers);
+    assert_eq!(weak_source.strong_count(), 0);
 }
 
 #[test]

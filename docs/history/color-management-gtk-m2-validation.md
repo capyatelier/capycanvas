@@ -673,3 +673,26 @@ sdr_sampling`, then run `LAYER_GPU_INDEX=0 target/release/examples/sdr_sampling`
 The harness uses 10 warmups and 100 timed submissions per case, without readback
 inside the timed interval. Logs: `sdr-sampling{,-build}.log`. No production shader
 or enabled GTK workflow changes in this experiment.
+
+## Eighth implementation stage: cache ownership and mask damage
+
+Composition metadata now holds weak source identities and omits raster backing
+and submitted mask commands. Filter-preview keys additionally retain numeric
+raster identities, so a new request detects a changed revision without owning
+old tile maps. An active preview request still owns its coherent snapshot until
+completion. This closes a source-retention gap in GTK's retained compiled scene
+when the last photo layer is removed without another scene composition.
+
+Image-boundary effects compare normalized mask metadata, refresh only dirty mask
+tiles on raster restoration/painting, and detect both mask and linked world
+offset changes. Previously comparing a normalized cached mask against its live
+raster root could refresh the entire mask during unrelated input painting.
+
+The extended 1024×768 source/blur fixture has a backed partial-coverage mask. It
+verifies zero mask-copy work during input painting and undo, exactly one tile
+on mask restoration, and equality with forced recomposition after restoration
+and translation. Keeping the scene while removing the source releases the
+original. A separate cache-key test verifies source replacement invalidation and
+release of historical raster maps. All 134 GPU library tests, four GPU project
+tests and native GTK file and injected GPU-failure/recovery tests pass. Logs:
+`source-cache-{build,host-build,keys,mask,gpu,project,gtk-files,gtk-recovery}.log`.

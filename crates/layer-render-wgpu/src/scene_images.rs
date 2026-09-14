@@ -1,6 +1,7 @@
 //! Cached full-resolution boundaries for neighborhood and time-aware WGSL.
 //! Tiled captures feed reusable full-image filter and composition operations.
 use super::*;
+use super::metadata::{Metadata, mask_metadata};
 use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ struct CachedStage {
     input_owned: bool,
     output: Image,
     mask: Option<Image>,
+    mask_offset: layer_core::Point,
     time: f32,
     valid: bool,
     composition: Option<ImageComposition>,
@@ -143,7 +145,7 @@ pub(super) struct ImageStages {
     extent: [u32; 2],
     stages: Vec<CachedStage>,
     scratch: Vec<Image>,
-    metadata: Vec<Layer>,
+    metadata: Vec<Metadata>,
     inputs: Vec<Vec<usize>>,
     clips: Vec<Option<ClipInput>>,
     backdrops: std::collections::HashMap<LayerId, Backdrop>,
@@ -156,6 +158,8 @@ pub(super) struct ImageStages {
     pub backdrop_pixels: u64,
     pub composition_pixels: u64,
     pub composition_builds: u64,
+    #[cfg(test)]
+    pub mask_pixels: u64,
 }
 impl ImageStages {
     pub fn scene_texture(&self, layer: &Layer) -> Option<&wgpu::Texture> {
@@ -218,18 +222,6 @@ impl ImageStages {
     }
 }
 
-// Stroke history does not participate in composition; batches invalidate paint.
-// Mask stroke IDs are already shared. Do not clone stroke/operation vectors.
-fn metadata(l: &Layer) -> Layer {
-    static EMPTY: std::sync::OnceLock<layer_core::raster::RasterRevision> = std::sync::OnceLock::new();
-    let empty = EMPTY.get_or_init(Default::default);
-    let mut result = l.composite_snapshot();
-    // Batches and restoration damage identify changed pixels. A new immutable
-    // root alone must not turn every commit/undo into a full-image filter pass.
-    result.raster = empty.clone();
-    if let Some(mask) = &mut result.mask { mask.raster = empty.clone(); }
-    result
-}
 fn visible(layers: &[Layer], layer: &Layer) -> bool {
     if !layer.visible {
         return false;
@@ -560,7 +552,7 @@ impl Scene {
                 self.images
                     .metadata
                     .get(i)
-                    .is_none_or(|old| *old != metadata(l))
+                    .is_none_or(|old| *old != Metadata::new(l))
             })
             .collect();
         let structure = self.images.metadata.len() != packet.layers.len()
@@ -716,6 +708,7 @@ impl Scene {
                         input_owned: alias.is_none(),
                         output: Image::new(r, extent, "effect result cache"),
                         mask: None,
+                        mask_offset: layer_core::Point { x: f32::NAN, y: f32::NAN },
                         time: f32::NAN,
                         valid: false,
                         composition: None,
@@ -776,30 +769,44 @@ impl Scene {
                 self.jobs.clear();
                 self.used.fill(false);
                 if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
-                    let mask_changed = !cached.valid
+                    let mask_offset = world_offset(packet.layers, layer.id, true);
+                    let mask_reset = !cached.valid
                         || cached.mask.is_none()
+                        || cached.mask_offset != mask_offset
                         || reset
                         || self
                             .images
                             .metadata
                             .get(index)
-                            .is_none_or(|old| old.mask != layer.mask)
-                        || packet.dab_batches.iter().any(|b| b.layer_id == mask.id);
+                            .is_none_or(|old| old.mask != mask_metadata(&layer.mask));
+                    let mask_dirty = if mask_reset {
+                        PixelRect::full(extent)
+                    } else if unidentified_paint
+                        || self.images.preview_layer == Some(mask.id)
+                        || r.preview_layer_id == Some(mask.id)
+                        || r.transform_damage.iter().any(|(id, _)| *id == mask.id)
+                        || packet.dab_batches.iter().any(|b| b.layer_id == mask.id)
+                    {
+                        dirty
+                    } else { PixelRect::EMPTY };
                     let image = cached
                         .mask
                         .get_or_insert_with(|| Image::new(r, extent, "effect mask cache"));
-                    if mask_changed {
-                        for tile in page_coordinates(PixelRect::full(extent)) {
+                    if !mask_dirty.is_empty() {
+                        for tile in page_coordinates(mask_dirty) {
                             let m = self.mask_tile(
                                 r,
                                 mask,
-                                world_offset(packet.layers, layer.id, true),
+                                mask_offset,
                                 tile,
                             );
                             self.copy_tile(m, &image.texture, tile, extent);
+                            #[cfg(test)]
+                            { self.images.mask_pixels += u64::from(PAGE_SIZE).pow(2); }
                         }
                         self.encode_jobs(r, encoder)?;
                     }
+                    cached.mask_offset = mask_offset;
                 } else {
                     cached.mask = None;
                 }
@@ -877,7 +884,7 @@ impl Scene {
             self.images.scratch.clear();
             self.images.backdrops.clear();
         }
-        self.images.metadata = packet.layers.iter().map(metadata).collect();
+        self.images.metadata = packet.layers.iter().map(Metadata::new).collect();
         self.images.background = packet.view.background_rgba_linear;
         self.images.preview_layer = r.preview_layer_id;
         Ok(damage)
