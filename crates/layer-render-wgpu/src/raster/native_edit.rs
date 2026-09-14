@@ -125,6 +125,7 @@ impl WgpuRasterizer {
     pub fn new_native_headless(color: DocumentColor) -> Result<Self, GpuRasterError> {
         let mut r = pollster::block_on(Self::headless_with_working_format(
             wgpu::TextureFormat::Rgba32Float,
+            color.space,
         ))?;
         r.document_color = color;
         r.scene = None;

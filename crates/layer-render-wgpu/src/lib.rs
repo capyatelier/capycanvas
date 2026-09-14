@@ -798,17 +798,17 @@ impl WgpuRasterizer {
     }
 
     pub async fn new_headless_async() -> Result<Self, GpuRasterError> {
-        Self::headless_with_working_format(SRGB8_FORMAT).await
+        Self::headless_with_working_format(SRGB8_FORMAT, Default::default()).await
     }
 
     #[cfg(test)]
     fn new_float32() -> Result<Self, GpuRasterError> {
         pollster::block_on(Self::headless_with_working_format(
-            wgpu::TextureFormat::Rgba32Float,
+            wgpu::TextureFormat::Rgba32Float, Default::default(),
         ))
     }
 
-    async fn headless_with_working_format(format: wgpu::TextureFormat) -> Result<Self, GpuRasterError> {
+    async fn headless_with_working_format(format: wgpu::TextureFormat, space: layer_core::color::RgbSpace) -> Result<Self, GpuRasterError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::PRIMARY;
         // Keep D3D12 shaders optimized even in a Rust debug build. DXC's -Od
@@ -865,7 +865,7 @@ impl WgpuRasterizer {
         // Headless tests/benchmarks explicitly need a fully warmed renderer.
         Self::from_wgpu_inner(
             adapter,
-            PipelineDevice::from(device).with_working_format(format)?,
+            PipelineDevice::from(device).with_working_format(format)?.with_working_space(space),
             queue,
             false,
         )
@@ -6868,6 +6868,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     mod source_brushes;
     mod working;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod native_effects;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

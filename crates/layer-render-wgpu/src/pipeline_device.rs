@@ -27,6 +27,7 @@ impl Drop for CompileTrace<'_> {
 pub(crate) struct PipelineDevice {
     device: wgpu::Device,
     working_format: wgpu::TextureFormat,
+    working_space: layer_core::color::RgbSpace,
     #[cfg(not(target_arch = "wasm32"))]
     cache: Option<std::sync::Arc<super::shader_cache::Cache>>,
 }
@@ -35,6 +36,7 @@ impl From<wgpu::Device> for PipelineDevice {
         Self {
             device,
             working_format: super::SRGB8_FORMAT,
+            working_space: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             cache: None,
         }
@@ -51,6 +53,13 @@ impl PipelineDevice {
     /// document primaries. All deferred recipes retain this same choice.
     pub fn working_format(&self) -> wgpu::TextureFormat {
         self.working_format
+    }
+    pub fn working_space(&self) -> layer_core::color::RgbSpace {
+        self.working_space
+    }
+    pub fn with_working_space(mut self, space: layer_core::color::RgbSpace) -> Self {
+        self.working_space = space;
+        self
     }
     pub fn scalar_format(&self) -> wgpu::TextureFormat {
         if self.working_format == wgpu::TextureFormat::Rgba32Float {
@@ -94,6 +103,7 @@ impl PipelineDevice {
             device,
             cache,
             working_format: super::SRGB8_FORMAT,
+            working_space: Default::default(),
         }
     }
     pub fn create_render_pipeline(

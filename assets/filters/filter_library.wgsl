@@ -3,7 +3,7 @@
 const FX_PI:f32=3.141592653589793;
 fn fx_axis(degrees:f32)->vec2<f32> {let a=degrees*FX_PI/180.;return vec2<f32>(cos(a),sin(a));}
 fn fx_rotate(p:vec2<f32>,axis:vec2<f32>)->vec2<f32> {return vec2<f32>(p.x*axis.x-p.y*axis.y,p.x*axis.y+p.y*axis.x);}
-fn fx_straight(c:vec4<f32>)->vec3<f32> {return c.rgb/max(c.a,.000001);}
+fn fx_straight(c:vec4<f32>)->vec3<f32> {return fx_unassociate(c);}
 fn fx_random(p:vec2<f32>,seed:u32)->f32 {
     let q=vec2<u32>(vec2<i32>(floor(p)));
     var h=q.x*1664525u+q.y*1013904223u+seed*747796405u;
@@ -82,8 +82,12 @@ fn capy_edge_detect(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
 fn capy_white_balance(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let t=fx_parameter(b,0u).x/100.;let tint=fx_parameter(b,1u).x/100.;let original=fx_straight(c);
     var rgb=original*exp2(vec3<f32>(t*.8+tint*.25,-tint*.5,-t*.8+tint*.25));
-    if fx_parameter(b,2u).x>.5{rgb*=fx_luma(original)/max(fx_luma(rgb),.000001);}
-    return vec4<f32>(clamp(rgb,vec3<f32>(0.),vec3<f32>(1.))*c.a,c.a);
+    if fx_parameter(b,2u).x>.5 {
+        let l=fx_luma(rgb);
+        if FX_EXTENDED {if l!=0. {rgb*=fx_luma(original)/l;}}
+        else {rgb*=fx_luma(original)/max(l,.000001);}
+    }
+    return vec4<f32>(fx_output_range(rgb)*c.a,c.a);
 }
 fn capy_split_tone(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let rgb=fx_rgb(c);let l=fx_luma(rgb);let balance=fx_parameter(b,2u).x/250.;

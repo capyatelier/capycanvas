@@ -2342,3 +2342,84 @@ operations/residency and the remaining connected GTK color/photo journeys. The
 profile/depth actions, inspection/UI, remaining interchange and final hardware
 qualification are still required. Other platform hosts remain untouched and
 require the user's later approval.
+
+
+## Native Float32 photo adjustments and editable-master round trips (2026-09-14)
+
+Native effect compilation now retains the document's RGB space along with its
+working attachment format, including compiler-thread contexts. Native helpers
+use the selected space's signed transfer curve and primary-derived luminance
+weights. The definitions continue to match the independently checked
+[CSS Color 4 conversion reference](https://www.w3.org/TR/css-color-4/#color-conversion-code).
+This applies to both native integer depths; profile selection does not follow
+bit depth. Existing interactive sRGB8 factories retain their current effect
+contract until common-mode adoption.
+
+The common Float32 wrapper no longer clamps every adjustment result to bounded
+RGB or divides by an alpha epsilon. Zero coverage returns zero RGB; positive
+coverage retains its color. Native Exposure keeps EV/offset in linear RGB,
+uses a signed extension for non-unit gamma, and retains values outside native
+SDR bounds between live nodes. Unit-gamma EV/offset operates directly on
+premultiplied RGB; integral EV stops use exact binary exponent scaling. Normal
+alpha-preserving adjustments avoid redundant association round trips. Full
+strength and bypass return their selected values directly. White Balance is
+explicitly a rendered-image RGB gain/tint correction, with optional preservation
+of document-space luminance; it is not a RAW/CCT reconstruction. Native image
+passes use four explicit Float32 texel loads for interpolation.
+
+Correctness tests fixed their acceptance threshold at **2e-6 absolute error in
+straight linear RGB with exact coverage** before acceptance. The initial
+24-node inverse-exposure fixture failed at alpha 8e-8: the slider result was
+3.0000024 rather than 3. Eliminating association round trips and enforcing exact
+integral-stop gain did not eliminate this failure. Returning the selected operand
+at interpolation weights zero/one did, with the original tolerance unchanged.
+This is consistent with cancellation in interpolation lowering; no driver ISA
+analysis is claimed. WGSL defines interpolation and its arithmetic accuracy
+separately from exact operand selection; see
+[WGSL mix](https://www.w3.org/TR/WGSL/#mix-builtin) and
+[floating-point accuracy](https://www.w3.org/TR/WGSL/#floating-point-accuracy).
+These changes address numerical correctness, not performance tuning.
+
+Three connected fixtures now pass:
+
+- Twenty-four alternating +5/-5 EV nodes, with fused and explicit image-pass
+  execution, all four spaces and both native depths, and coverage 0, 8e-8,
+  1/65535, 0.5 and 1: **80 cases**, each evaluated initially, after a slider
+  change, and after reset. The constant-color fixture includes negative and
+  greater-than-one RGB. Its inspected Float32 sample meets the threshold;
+  resetting the slider restores the exact prior sample.
+- Rendered white-balance gains, luminance preservation and encoded-domain
+  brightness evaluated against Float64 reference arithmetic in all four spaces,
+  through fused and physical passes, at coverage 8e-8. These meet the same
+  threshold and preserve coverage exactly.
+- Eight profiled retained-photo cases (four spaces × two depths), with Exposure,
+  White Balance, Levels, Curves, Hue/Saturation and Color Balance plus masks,
+  native save and reopen on a fresh renderer. Entire 256×256 Float32 composites
+  match byte-for-byte. Editing the reopened exposure changes the result;
+  restoring its saved value restores the exact composite. Source profile, depth
+  and source-backed ownership survive; no source rasterization is introduced.
+
+This is not a full precision qualification for every brush, blend mode, nonlinear
+control, spatial filter or resampling coordinate. Artistic HSL/Levels/Curves
+clamps and their extended/default behavior still need explicit acceptance;
+non-Normal blend low-alpha handling and other sampling paths remain to be
+completed. The image sampler change is not a large-photo memory/latency pass.
+Photo/file/dialog UI, managed viewing, conversion/depth actions, inspection,
+remaining interchange and bounded global operations are still required.
+
+Final validation: **169 GPU tests pass, 26 remain ignored**; shared suites pass
+**56 core, 50 engine and 370 UI tests**, and the GTK test build check passes.
+The GPU correctness suite overlapped shared compilation/testing; elapsed test
+time is not performance evidence. The prior connected-publication commit's GTK
+file/recovery runtime evidence remains recorded separately above.
+
+Reproduce with `cargo test --offline --release -p layer-render-wgpu --lib --
+--test-threads=1`, `cargo test --offline --release -p layer-core -p layer-engine
+-p layer-ui`, and `cargo check --offline -p layer-linux --tests`. The saved GPU
+binary is `artifacts/color-m2/native-effects-tests`; hash and parent are in
+`native-effects-provenance.json`. Successful Cargo JSON/build logs are
+`native-effects-build.{json,log}`. Results are `native-effects-focused.log`,
+`native-effects-full-gpu.log`, `native-effects-shared-tests.log` and
+`native-effects-gtk-check.log`. Failed strict-tolerance runs are retained as
+`native-effects-rounding-before-{gain,mix}.log`; the final run passes that same
+threshold. Further performance measurement and optimization remain deferred.

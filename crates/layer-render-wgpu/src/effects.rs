@@ -250,7 +250,13 @@ impl Effects {
         {
             pipeline.clone()
         } else {
-            let source = shader_source(&programs, &offsets, stage)?;
+            let source = shader_source(
+                &programs,
+                &offsets,
+                stage,
+                r.device().working_format() == wgpu::TextureFormat::Rgba32Float,
+                r.device().working_space(),
+            )?;
             validate_source(&source)?;
             let module = r
                 .device()
@@ -485,14 +491,26 @@ pub(super) fn validate_namespace(programs: &[Arc<EffectProgram>]) -> Result<(), 
         &[Arc::new(linked)],
         &[0],
         Execution::Preview,
+        false,
+        Default::default(),
     )?)
 }
 fn shader_source(
     programs: &[Arc<EffectProgram>],
     offsets: &[u32],
     stage: Execution,
+    extended: bool,
+    space: layer_core::color::RgbSpace,
 ) -> Result<String, GpuRasterError> {
     let mut source = include_str!("scene.wgsl").to_string();
+    let space_id = layer_core::color::RgbSpace::ALL
+        .iter()
+        .position(|s| *s == space)
+        .unwrap();
+    let y = space.to_xyz()[1];
+    source.push_str(&format!("\nconst FX_EXTENDED:bool={extended};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
+    source.push_str(include_str!("sdr_color.wgsl"));
+    source.push_str(include_str!("effects_color.wgsl"));
     for i in 0..MASK_SLOTS {
         source.push_str(&format!(
             "@group(3) @binding({i}) var effect_mask_{i}:texture_2d<f32>;\n"
@@ -510,11 +528,17 @@ fn fx_time(base:u32)->f32 { return effect_data[base-1u].w; }
 fn fx_extent()->vec2<f32> { return settings.color.zw; }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.source_over.z>0. {return textureSampleLevel(front,sampling,(point-settings.source_over.xy)/settings.source_over.zw,0.);}
+    if settings.source_over.z>0. {
+        if FX_EXTENDED {return fx_sample_float(front,point-settings.source_over.xy);}
+        return textureSampleLevel(front,sampling,(point-settings.source_over.xy)/settings.source_over.zw,0.);
+    }
+    if FX_EXTENDED {return fx_sample_float(front,point);}
     return textureSampleLevel(front,sampling,point/fx_extent(),0.);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
-    return textureSampleLevel(back,sampling,clamp(p,vec2<f32>(.5),fx_extent()-.5)/fx_extent(),0.);
+    let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
+    if FX_EXTENDED {return fx_sample_float(back,point);}
+    return textureSampleLevel(back,sampling,point/fx_extent(),0.);
 }
 fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     let x=clamp(value,0.,1.)*255.; let i=u32(x);
@@ -561,11 +585,11 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
         let last = stage + 1 >= p.passes.len();
         source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
         if last && p.kind == EffectKind::Adjustment {
-            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=clamp(blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)),vec3<f32>(0.),vec3<f32>(1.));");
+            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));");
             if p.alpha == layer_core::EffectAlpha::Filter {
                 source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
             }
-            source.push_str("return vec4<f32>(mix(c.rgb,rgb*c.a,controls.x*coverage),c.a);}");
+            source.push_str("return vec4<f32>(fx_mix_rgb(c.rgb,fx_adjustment_rgb(c,adjusted,u32(controls.y)),controls.x*coverage),c.a);}");
         } else {
             source.push_str("return adjusted;}");
         }
@@ -603,12 +627,12 @@ fn effect_result(v:Vertex)->vec4<f32> {
                 let bit = 1u32 << i;
                 source.push_str(&format!("else if (u32(settings.extent.z)&{bit}u)!=0u {{let m=textureLoad(effect_mask_{i},vec2<i32>(local),0).r;coverage=select(m,1.-m,(u32(settings.extent.w)&{bit}u)!=0u);}}\n"));
             }
-            source.push_str("let rgb=blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)); c=vec4<f32>(mix(c.rgb,clamp(rgb,vec3<f32>(0.),vec3<f32>(1.))*c.a,controls.x*coverage),c.a); }\n");
+            source.push_str("let rgb=fx_adjustment_rgb(c,adjusted,u32(controls.y)); c=vec4<f32>(fx_mix_rgb(c.rgb,rgb,controls.x*coverage),c.a); }\n");
         } else {
             source.push_str("c=adjusted; }\n");
         }
     }
-    source.push_str("if settings.options.x>.5 {let src=c*settings.options.y;let dst=settings.backdrop;let rgb=blend(src.rgb/max(src.a,.000001),dst.rgb/max(dst.a,.000001),u32(settings.options.z));c=vec4<f32>((1.-src.a)*dst.rgb+(1.-dst.a)*src.rgb+src.a*dst.a*rgb,src.a+dst.a*(1.-src.a));} return c; }\n");
+    source.push_str("if settings.options.x>.5 {let src=c*settings.options.y;let dst=settings.backdrop;let rgb=blend(fx_unassociate(src),fx_unassociate(dst),u32(settings.options.z));c=vec4<f32>((1.-src.a)*dst.rgb+(1.-dst.a)*src.rgb+src.a*dst.a*rgb,src.a+dst.a*(1.-src.a));} return c; }\n");
     Ok(source)
 }
 
@@ -651,7 +675,8 @@ mod tests {
         assert!(validate_namespace(&[programs[0].clone(), Arc::new(changed)]).is_err());
     }
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
-        let source = shader_source(p, &vec![0; p.len()], execution).unwrap();
+        let source =
+            shader_source(p, &vec![0; p.len()], execution, false, Default::default()).unwrap();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

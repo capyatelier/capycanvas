@@ -1,16 +1,18 @@
 // ABI 2 library: premultiplied linear input/output, document-pixel position,
 // vec4 parameter base. fx_parameter/fx_lut are supplied by the host wrapper.
 fn fx_encode(c: vec3<f32>) -> vec3<f32> {
+    if FX_EXTENDED {return sdr_encode(c,FX_SPACE);}
     let v=max(c,vec3<f32>(0.));
     return select(1.055*pow(v,vec3<f32>(1./2.4))-.055,12.92*v,v<=vec3<f32>(.0031308));
 }
 fn fx_decode(c: vec3<f32>) -> vec3<f32> {
+    if FX_EXTENDED {return sdr_decode(c,FX_SPACE);}
     let v=clamp(c,vec3<f32>(0.),vec3<f32>(1.));
     return select(pow((v+.055)/1.055,vec3<f32>(2.4)),v/12.92,v<=vec3<f32>(.04045));
 }
-fn fx_rgb(c:vec4<f32>) -> vec3<f32> { return fx_encode(c.rgb/max(c.a,.000001)); }
+fn fx_rgb(c:vec4<f32>) -> vec3<f32> { return fx_encode(fx_unassociate(c)); }
 fn fx_rgba(c:vec3<f32>,a:f32) -> vec4<f32> { return vec4<f32>(fx_decode(c)*a,a); }
-fn fx_luma(c:vec3<f32>) -> f32 { return dot(c,vec3<f32>(.2126,.7152,.0722)); }
+fn fx_luma(c:vec3<f32>) -> f32 { if FX_EXTENDED {return dot(c,FX_LUMA);} return dot(c,vec3<f32>(.2126,.7152,.0722)); }
 fn fx_preserve_luma(c:vec3<f32>,l:f32) -> vec3<f32> {
     var v=c+l-fx_luma(c); let low=min(v.r,min(v.g,v.b));
     if low<0. { v=vec3<f32>(l)+(v-l)*l/max(l-low,.000001); }
@@ -62,9 +64,32 @@ fn capy_color_balance(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
 }
 // Exposure is scene-linear; unlike artistic tone controls it must not operate
 // on encoded sRGB. +1 EV doubles linear radiance, not the byte value.
+fn fx_exposure_gain(ev:f32)->f32 {
+    if FX_EXTENDED {
+        let whole=floor(ev);let fraction=ev-whole;
+        // An integral stop is an exact binary exponent adjustment. Repeated
+        // +N/-N controls must not accumulate transcendental approximation error.
+        if fraction==0. {return ldexp(1.,i32(whole));}
+        return ldexp(exp2(fraction),i32(whole));
+    }
+    return exp2(ev);
+}
 fn capy_exposure(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
-    let linear=c.rgb/max(c.a,.000001)*exp2(fx_parameter(base,0u).x)+fx_parameter(base,1u).x;
-    let out=pow(clamp(linear,vec3<f32>(0.),vec3<f32>(1.)),vec3<f32>(1./fx_parameter(base,2u).x));
+    if FX_EXTENDED && fx_parameter(base,2u).x==1. {
+        if c.a<=0. {return vec4<f32>(0.);}
+        // EV and offset commute with association. Keep this linear case in
+        // premultiplied form so long inverse chains do not accumulate divide/
+        // multiply roundoff at small alpha.
+        return vec4<f32>(c.rgb*fx_exposure_gain(fx_parameter(base,0u).x)+fx_parameter(base,1u).x*c.a,c.a);
+    }
+    let linear=fx_unassociate(c)*fx_exposure_gain(fx_parameter(base,0u).x)+fx_parameter(base,1u).x;
+    // Signed gamma extends the developed-image correction to finite values
+    // outside native SDR range. Gamma 1 is exactly the linear EV/offset control.
+    var out:vec3<f32>;
+    if FX_EXTENDED {
+        out=linear;
+        if fx_parameter(base,2u).x!=1. {out=sign(linear)*pow(abs(linear),vec3<f32>(1./fx_parameter(base,2u).x));}
+    } else {out=pow(clamp(linear,vec3<f32>(0.),vec3<f32>(1.)),vec3<f32>(1./fx_parameter(base,2u).x));}
     return vec4<f32>(out*c.a,c.a);
 }
 fn capy_vibrance(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
