@@ -1243,8 +1243,13 @@ the stack preference. Auto-hide consumes the outside canvas contact.
 
 Paint's shipped default opens its right column on adoption/reset. Stack
 membership, widths and preferences persist, while open columns remain transient.
-Sketch retains its docked tools until the native workspace-owned title bar is
-ported. The accepted Direct2D color wheel is unchanged.
+Sketch uses the shared workspace title bar and hides its docked panels.
+
+Blank strip space opens the shared column menu on secondary click or a pen/touch
+hold; a released hold retains the menu. Double-clicking or double-tapping that
+space expands the column. Resizable column edges show directional cursors and
+can drag out a closed single column. Footer grips match the Web/Android
+orientation and keep immediate pickup; icon tiles still require a hold.
 
 Run the isolated production-editor journey for each device, serially:
 
@@ -1254,8 +1259,10 @@ Run the isolated production-editor journey for each device, serially:
 ./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device touch
 ~~~
 
-The fixture checks geometry, connectors, selected icons, pickup policy,
-stack/member drops, cancellation and one-step history, retained resizing,
-individual drawers, auto-hide, themes, Zen and restart. These are guarded
-OS-delivered synthetic inputs. Physical pen/touch, complete visual acceptance,
-mixed displays and 120 Hz painting still require their separate checks.
+Release journeys pass with mouse, pen and touch. The fixture checks blank-space
+menus and held release, double-click/tap expansion, closed-column drag-out
+resizing, geometry, connectors, selected icons, pickup policy, stack/member
+drops, cancellation and one-step history, retained resizing, individual drawers,
+auto-hide, themes, Zen and restart. These are guarded OS-delivered synthetic
+inputs. Physical pen/touch, complete visual acceptance, mixed displays and
+120 Hz painting still require their separate checks.

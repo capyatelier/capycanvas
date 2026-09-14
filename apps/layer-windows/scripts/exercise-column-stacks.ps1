@@ -21,6 +21,7 @@ function Model {
     try {
         if(!$script:statePath){
             foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
+                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
                 $value=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
                 if($value.process_id -eq $review.Id -and $value.model.windows_isolated_settings){$script:statePath=$path;break}
             }
@@ -56,6 +57,7 @@ function Layout {
     $settled.value
 }
 function At([string]$Id,[switch]$Name){
+    if($Id -match '^collapsed-column-(\d+)$'){return Screen (Column ([int]$Matches[1])).bounds}
     $bounds=(Control $Id -Name:$Name).Current.BoundingRectangle
     if($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0){throw "Control is not arranged: $Id"}
     @{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5)}
@@ -78,6 +80,36 @@ function Same-Bounds($Actual,$Expected){
     if(!$Actual -or !$Expected){return $false}
     foreach($field in 'x','y','width','height'){if([Math]::Abs($Actual.$field-$Expected.$field) -gt .6){return $false}}
     $true
+}
+function Check-ColumnInteractions {
+    foreach($operation in @('menu','double-click','resize')){
+        if((Column 12).open){Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Column did not close'}
+        if($operation -eq 'menu'){
+            if($Device -eq 'mouse'){Context 'collapsed-column-12'}
+            else{
+                $at=At 'collapsed-column-12';[CapyRowPointer]::Down($Device,$at.x,$at.y)
+                Wait-Until {(Gesture).menu_open} 'Holding blank column space did not open its menu'
+                [CapyRowPointer]::Up()
+                Wait-Until {(Gesture).phase -eq 'idle' -and (Gesture).menu_open} 'Released hold did not retain its menu'
+            }
+            Invoke 'Expand column' -Name
+        }elseif($operation -eq 'double-click'){
+            $at=At 'collapsed-column-12'
+            [CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()
+            Start-Sleep -Milliseconds 60
+            [CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()
+        }else{
+            $at=At 'divider-11'
+            $scale=[CapyStackCoordinates]::GetDpiForWindow($review.MainWindowHandle)/96.
+            Drag 'divider-11' @{x=[int]($at.x-160*$scale);y=$at.y}
+        }
+        Wait-Until {$null -eq (Column 12)} "$operation did not expand the column"
+        WindowCommand 'undo_workspace';Wait-Until {$null -ne (Column 12)} "$operation was not one Undo step"
+        WindowCommand 'redo_workspace';Wait-Until {$null -eq (Column 12)} "$operation did not redo"
+        WindowCommand 'undo_workspace';Wait-Until {$null -ne (Column 12)} "$operation did not restore the collapsed column"
+    }
+    if(!(Column 12).open){Tap 'column-icon-layers'}
+    Check-Open 12
 }
 function Check-Open([int]$Id){
     Wait-Until {
@@ -134,13 +166,14 @@ function Start-Review([string]$Phase){
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Native stack review did not start' 45
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    (Control 'Drawing canvas' -Name).SetFocus()
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 }
 try {
     foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     Start-Review 'initial'
-    Check-Open 12;Capture 'default-paint'
+    Check-Open 12;Capture 'default-paint';Check-ColumnInteractions
     Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Clicking the selected member did not close it'
     foreach($group in (Column 12).groups){foreach($icon in $group.icons){if((Control ('column-icon-'+$icon.panel)).Current.ItemStatus -eq 'Selected'){throw 'Closed strip retained a selected tile'}}}
     Tap 'column-icon-layers';Check-Open 12
@@ -200,7 +233,7 @@ try {
     Wait-Until {!(Column 12).open} 'Outside canvas contact did not auto-hide the column'
     if((Model).state.document_file.revision -ne $revision){throw 'Auto-hide painted with the consumed contact'}
     Tap 'column-icon-layers';Check-Open 12
-    Invoke 'Preferences' -Name
+    Invoke 'settings-button'
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control 'Light' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -228,7 +261,7 @@ try {
     Tap 'column-icon-layers';Check-Open 12;Capture 'restarted-stack'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Restart stderr requires inspection'}
-    [pscustomobject]@{device=$Device;restart_persistence='passed';default_full_column='passed';native_geometry_and_connectors='passed';selected_tiles='passed';immediate_handles='passed';stack_cancel_undo_redo='passed';member_switch='passed';panel_group_toolbar_and_held_icon_drops='passed';retained_member_resize='passed';themes_and_zen='passed';fixed_closed_width='passed';individual_panels='passed';auto_hide_consumes_contact='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, performance and complete visual acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{device=$Device;restart_persistence='passed';default_full_column='passed';column_background_menu='passed';column_double_click='passed';closed_column_drag_resize='passed';native_geometry_and_connectors='passed';selected_tiles='passed';immediate_handles='passed';stack_cancel_undo_redo='passed';member_switch='passed';panel_group_toolbar_and_held_icon_drops='passed';retained_member_resize='passed';themes_and_zen='passed';fixed_closed_width='passed';individual_panels='passed';auto_hide_consumes_contact='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, performance and complete visual acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
