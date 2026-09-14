@@ -15112,6 +15112,87 @@ mod tests {
         );
     }
     #[test]
+    fn stationary_lasso_contacts_preserve_selection_history_and_save_readiness() {
+        for platform in [
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Web,
+            Platform::Android,
+        ] {
+            for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
+                let mut s = session();
+                s.set_platform(platform);
+                invoke(&mut s, CommandId::SelectAll);
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::New {
+                        group: false,
+                        clipped: false,
+                    },
+                })
+                .unwrap();
+                invoke(&mut s, CommandId::Undo);
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::Tool { tool },
+                })
+                .unwrap();
+                let selection = s.engine.document().selection.clone();
+                let checkpoint = s.engine.checkpoint();
+                let mut sequence = 0;
+                for moves in [0, 1, 20] {
+                    let phases = std::iter::once(PenPhase::Down)
+                        .chain(std::iter::repeat_n(PenPhase::Move, moves))
+                        .chain([PenPhase::Up, PenPhase::Up]);
+                    for phase in phases {
+                        sequence += 1;
+                        let mut sample = event(&s, sequence, phase, 1.);
+                        sample.surface_position = Point { x: 300., y: 300. };
+                        s.pen(sample).unwrap();
+                    }
+                    assert!(
+                        s.state.host_error.is_none(),
+                        "A stationary lasso must not report a canvas error: {:?}",
+                        s.state.host_error
+                    );
+                    s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
+                        .unwrap();
+                    assert_eq!(s.engine.document().selection, selection);
+                    assert_eq!(s.engine.checkpoint(), checkpoint);
+                    assert!(
+                        s.engine.can_redo(),
+                        "An empty contact preserves the preceding Redo"
+                    );
+                    s.require_document_snapshot_idle().unwrap();
+                }
+                // An actual enclosed path must still commit normally.
+                for (phase, x, y) in [
+                    (PenPhase::Down, 300., 300.),
+                    (PenPhase::Move, 400., 300.),
+                    (PenPhase::Move, 400., 400.),
+                    (PenPhase::Move, 300., 400.),
+                    (PenPhase::Up, 300., 300.),
+                ] {
+                    sequence += 1;
+                    let mut sample = event(&s, sequence, phase, 1.);
+                    sample.surface_position = Point { x, y };
+                    s.pen(sample).unwrap();
+                }
+                assert!(s.state.host_error.is_none());
+                s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
+                    .unwrap();
+                if tool == LayerCanvasTool::Select {
+                    assert_ne!(s.engine.document().selection, selection);
+                } else {
+                    assert_ne!(s.engine.checkpoint(), checkpoint);
+                }
+                invoke(&mut s, CommandId::Undo);
+                assert_eq!(s.engine.checkpoint(), checkpoint);
+                assert_eq!(s.engine.document().selection, selection);
+                s.require_document_snapshot_idle().unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn predicted_samples_never_enter_nonpainting_gestures() {
         for tool in [
             LayerCanvasTool::Move,

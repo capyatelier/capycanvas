@@ -1,5 +1,150 @@
 use super::*;
 
+#[test]
+fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_platforms() {
+    for platform in [0, 1] {
+        for tool in ["select", "lasso_fill"] {
+            let app = App::new(platform);
+            unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
+                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware Metal required"),
+            );
+            app.action(json!({"type":"set_color","rgba":[0.2,0.45,0.8,1]}));
+            app.layer_action(json!({"op":"new","group":false,"clipped":false}));
+            app.invoke("undo");
+            app.layer_action(json!({"op":"tool","tool":tool}));
+            app.draw_until_idle();
+            let baseline = app.pixels();
+            let session = &unsafe { &*app.0 }.host.session;
+            let selection = session.engine().document().selection.clone();
+            let width = session.engine().document().width as usize;
+            let transform = session.state().camera.input_transform();
+            let a = transform.map(layer_core::Point { x: 500., y: 400. });
+            let b = transform.map(layer_core::Point { x: 650., y: 550. });
+            let send = |id: u64, points: &[[f64; 3]]| {
+                let records: Vec<_> = points
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, &[x, y, phase])| {
+                        [
+                            x,
+                            y,
+                            1.,
+                            0.,
+                            0.,
+                            0.,
+                            0.,
+                            (1_000_000_000 + id * 100_000_000 + i as u64 * 10_000_000) as f64,
+                            phase,
+                        ]
+                    })
+                    .collect();
+                assert_eq!(
+                    unsafe {
+                        capy_apple_pointer(
+                            app.0,
+                            id,
+                            0,
+                            0,
+                            records.as_ptr(),
+                            records.len(),
+                            0,
+                            capy_apple_camera_revision(app.0),
+                        )
+                    },
+                    0
+                );
+                app.draw_until_idle();
+                assert!(app.state()["host_error"].is_null());
+            };
+            assert!(unsafe { &*app.0 }.host.session.engine().can_redo());
+            for (id, points) in [
+                (1, vec![[540., 440., 1.], [540., 440., 3.]]),
+                (
+                    2,
+                    vec![
+                        [540., 440., 1.],
+                        [540., 440., 2.],
+                        [540., 440., 2.],
+                        [540., 440., 3.],
+                    ],
+                ),
+                (
+                    3,
+                    vec![
+                        [500., 400., 1.],
+                        [650., 400., 2.],
+                        [650., 550., 2.],
+                        [500., 550., 4.],
+                    ],
+                ),
+            ] {
+                send(id, &points);
+                let session = &unsafe { &*app.0 }.host.session;
+                assert_eq!(session.engine().document().selection, selection);
+                assert!(
+                    session.engine().can_redo(),
+                    "Empty/cancelled contacts preserve Redo"
+                );
+                session.require_document_snapshot_idle().unwrap();
+                assert_eq!(app.pixels(), baseline);
+            }
+            send(
+                4,
+                &[
+                    [500., 400., 1.],
+                    [650., 400., 2.],
+                    [650., 550., 2.],
+                    [500., 550., 2.],
+                    [500., 400., 3.],
+                ],
+            );
+            let before_fill = if tool == "select" {
+                assert_ne!(
+                    unsafe { &*app.0 }
+                        .host
+                        .session
+                        .engine()
+                        .document()
+                        .selection,
+                    selection
+                );
+                let pixels = app.pixels();
+                app.invoke("fill_selection");
+                app.draw_until_idle();
+                pixels
+            } else {
+                baseline.clone()
+            };
+            let painted = app.pixels();
+            // Readback contains document pixels, not the 1200-by-900 viewport.
+            let center = (((a.y + b.y) * 0.5) as usize * width + ((a.x + b.x) * 0.5) as usize) * 4;
+            assert!(
+                i16::from(painted[center + 2]) > i16::from(painted[center]) + 50,
+                "The enclosed area must be blue"
+            );
+            let xs = a.x.min(b.x) - 2. ..=a.x.max(b.x) + 2.;
+            let ys = a.y.min(b.y) - 2. ..=a.y.max(b.y) + 2.;
+            assert!(
+                painted
+                    .chunks_exact(4)
+                    .zip(before_fill.chunks_exact(4))
+                    .enumerate()
+                    .all(|(i, (a, b))| {
+                        let (x, y) = ((i % width) as f32, (i / width) as f32);
+                        xs.contains(&x) && ys.contains(&y) || a == b
+                    }),
+                "Pixels outside the lasso must remain unchanged"
+            );
+            app.invoke("undo");
+            app.draw_until_idle();
+            assert_eq!(app.pixels(), before_fill);
+            app.invoke("redo");
+            app.draw_until_idle();
+            assert_eq!(app.pixels(), painted);
+        }
+    }
+}
+
 fn assert_sensor_pixels(actual: &[u8], expected: &[u8], context: &str) {
     assert_eq!(actual.len(), expected.len(), "{context}");
     // Corrected contacts can use different GPU batch boundaries. Their sRGB8

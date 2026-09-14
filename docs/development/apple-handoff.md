@@ -55,6 +55,13 @@ shared regression for every contact preset painting on masks. Both the new mask
 case and the refactored ordinary-contact history case pass on Metal. Apple and
 shared production sources are unchanged by that pull; all five follow-up paths
 are preserved.
+The `f170041` fast-forward adds only Windows Preferences focus/theme choices,
+test tooling and Narrator acceptance. Apple and shared sources are unchanged,
+and the local gradient-control work is preserved.
+The `5aeab5e` fast-forward adds Windows curve gesture/history and its package
+acceptance, plus Windows coverage in the existing shared effect-gesture test.
+Apple and shared production sources are unchanged. The local lasso regression
+merges without conflicts, and all eleven stashes remain intact.
 The duplicate local host fix is
 removed; all eleven stashes remain. Light header controls
 now use Web's half-opacity gray surface; Menu Labels share one rounded surface.
@@ -282,9 +289,9 @@ earlier Redo, Escape, blur, invalid input and the document-snapshot idle gate.
 Read-only ownership loss cancels a continuing contact, and late terminal events
 after renderer suspension remain harmless. The initial guard failure is retained.
 
-The native integration currently adopts this shared path for curve points.
-Gradient-stop dragging still uses individual edits and remains a follow-up;
-its native movement/history acceptance is not inferred from the shared cases.
+At that milestone, the native integration adopts this shared path for curve
+points. Gradient-stop dragging still uses individual edits; its native
+movement/history acceptance is not inferred from the shared cases.
 Final shared/Apple/engine/host checks pass 524 tests, with one host benchmark
 ignored, and both current Release builds pass. The first sandboxed integration
 could not acquire a Metal adapter; its failures are retained separately from
@@ -295,6 +302,62 @@ remains open. These filter tests, visual corrections, curve history and obsolete
 probe removal form one milestone. Physical Pencil acceptance remains separate.
 All jobs are terminal. Evidence and retained failures are ignored under
 `artifacts/apple-curve-drag-v1/`.
+The accumulated filter milestone is published as `15ee5fd`; GitHub main was
+verified at that exact commit before the subsequent Windows-only integration.
+
+The subsequent gradient workflow reproduces the same first-Undo failure on
+Mac version 1. Native gradient stops now use the existing shared gesture path,
+retain their initial grab position, and cancel when the contact/view disappears.
+The common effect helper also retains numeric controls' validation callbacks;
+the separate gradient action/receipt construction is removed. No Rust protocol,
+history, renderer or native recognizer changes are needed.
+
+Mac version 3 and simulator version 4 pass insertion, ordinary selection without
+nudging the stop, actual mouse/touch movement, one-step Undo/Redo, removal,
+Reset and deletion/restoration. Their activity records include the new steps
+and both full gradient-drag captures are reviewed. Earlier curve and brightness
+workflows also pass in those runs. Both final Debug builds pass.
+
+Simulator version 3 reports a passing test but executes only the older workflow;
+its missing gradient-drag steps mean it establishes no new gradient acceptance.
+Built and installed test-bundle hashes match and both contain the new code, so
+the cause is unproven. Explicit installation of the current disposable app and
+runner precedes version 4, which executes the full new workflow. No product
+workaround is added; the private runner now requires its new capture in the
+activity record before reporting acceptance.
+
+The native ramp now has Web's rounded corners, colored circular stops and
+selection ring, drawn in its existing Canvas. Fresh Web captures expose generic
+button minimum height stretching its stops into ovals over the Position row.
+One CSS declaration restores their intended size. Both corrected Web themes
+pass circular/nonoverlapping geometry checks. Two native dark captures and both
+final Web captures are reviewed alongside the light native workflows; the ramp
+and handles agree at normal size. Different camera framing and surrounding
+property controls remain visible; these are focused control comparisons.
+
+All jobs are terminal and disposable capture apps are closed. No physical iPad
+is accessed, and native interruption/Pencil acceptance remains open. These
+changes are grouped with the input-control milestone below. Evidence and
+retained failures are ignored under `artifacts/apple-gradient-drag-v1/`.
+
+A follow-up curve pickup check reproduces another native defect on simulator
+version 1: tapping near an existing handle changes the artwork.
+Web already leaves that point unchanged on a click. Apple now retains the
+original point and applies only drag translation, using the same established
+SwiftUI contact and shared history path as gradient stops. No new recognizer
+or effect protocol is added. Mac and simulator version 2 each pass ordinary
+selection, preserved Redo, offset dragging, one-step Undo/Redo, removal and Reset,
+alongside the full brightness and gradient workflows. Both results verify the
+new steps in their activity records, with no failures or skips. All four final
+selection/drag captures are reviewed, with matching live Navigator results.
+Both Debug and Release builds pass; all 49 Apple bridge tests pass on real
+Metal, including the stationary-lasso regression. All 399 shared UI tests pass
+after the final main integration.
+The curve pickup, gradient appearance/history and empty-lasso fixes form one
+input-control milestone. Physical Pencil, full freehand OS delivery, remaining
+feature/lifecycle coverage and sustained cadence are still open. All jobs are
+terminal. Evidence and the original failure are ignored under
+`artifacts/apple-curve-pickup-v1/`.
 
 ## Ongoing native selection and fill workflows
 
@@ -364,6 +427,31 @@ permission workaround is adopted. Physical testing was not retried. Current
 jobs from that navigation checkpoint are all terminal. Its fetch confirmed `0a760c0`;
 all eleven stashes remain. Evidence and the checkpoint are ignored under
 `artifacts/apple-canvas-navigation-v1/`.
+
+The subsequent stationary-lasso check finds a shared pen-input error: a contact
+with too few points reports that a selection needs a closed area. Lasso selection
+and direct fill now share one release branch, remove consecutive duplicate
+positions, and ignore unfinished paths. This preserves the existing selection
+and Redo without an error or history entry; valid enclosed paths still use the
+existing selection/fill operations. No native input workaround is introduced.
+
+All 399 shared UI tests pass. The Apple pointer ABI regression passes both host
+configurations on real Metal: stationary and cancelled contacts preserve exact
+document pixels, selection, Redo and save readiness; enclosed paths produce blue
+interiors with unchanged pixels beyond a two-pixel boundary margin and exact
+whole-image Undo/Redo. The same regression fails with an error state on the
+original implementation, which is retained as a negative control. The first
+pixel fixture used viewport coordinates for document-sized readback; correcting
+that fixture requires no renderer or tolerance change.
+
+Both candidate Debug builds pass. Mac version 3 passes the native lasso controls,
+ordinary clicks, subsequent layer editing and Redo. The original implementation
+also passes that mouse check, so it is preservation evidence, not reproduction
+of the pen defect. Freehand AppKit/UIKit event delivery, physical Pencil and the
+full interruption matrix remain open. All jobs are terminal, no physical iPad is
+accessed. These changes are grouped with the gradient and curve pickup fixes
+in the input-control milestone above. Evidence is ignored under
+`artifacts/apple-lasso-contact-v1/`.
 
 ## Ongoing native transform input
 
@@ -659,9 +747,10 @@ Complete feature/menu coverage, windowed iPad input, physical Pencil/keyboard,
 provider/interruption and sustained Mac 90 Hz / iPad 120 Hz acceptance remain
 open. The completed editor changes, integration fixes and retained acceptance
 evidence form one major milestone. Physical workload processes are closed and
-device cleanup is complete. The overall goal is **incomplete**. Next feature
-work should close native filter-control and lasso gaps with the existing shared
-paths; keep physical keyboard/Pencil acceptance distinct from simulator results.
+device cleanup is complete. The overall goal is **incomplete**. The subsequent
+input-control milestone closes effect pickup/history and stationary lasso gaps.
+Continue the remaining native feature/menu inventory and full freehand lasso
+workflows; keep physical keyboard/Pencil acceptance distinct from simulator results.
 
 ## Retained renderer and committed recovery
 

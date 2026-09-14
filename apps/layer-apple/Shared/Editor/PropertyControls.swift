@@ -117,7 +117,7 @@ private struct CurveProperty: View {
     @GestureState private var contact = false
     @State private var selected: Int?
     @State private var dragging = false
-    @State private var dragIndex: Int?
+    @State private var dragPoint: (index: Int, point: CGPoint)?
     private var key: String { control["key"].string }
     private var points: [JSON] { control["value"]["value"].array }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
@@ -126,8 +126,8 @@ private struct CurveProperty: View {
         store.effect(layer, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove], phase: phase)
     }
     private func cancelDrag() {
-        if dragging, let index = dragIndex { change([0, 0], index: index, phase: "cancel") }
-        dragging = false; dragIndex = nil
+        if let point = dragPoint { change([0, 0], index: point.index, phase: "cancel") }
+        dragging = false; dragPoint = nil
     }
     var body: some View {
         VStack(spacing: 6) {
@@ -155,25 +155,33 @@ private struct CurveProperty: View {
                     .gesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
                         let size = geometry.size
                         guard size.width > 0, size.height > 0 else { return }
-                        let starting = !dragging
                         if !dragging {
                             dragging = true
-                            dragIndex = points.indices.min { a, b in distance(points[a], event.startLocation, size) < distance(points[b], event.startLocation, size) }
-                            if let index = dragIndex, distance(points[index], event.startLocation, size) > 12 { dragIndex = nil }
-                            selected = dragIndex
+                            selected = nil
+                            let nearest = points.indices.min { a, b in distance(points[a], event.startLocation, size) < distance(points[b], event.startLocation, size) }
+                            if let index = nearest, distance(points[index], event.startLocation, size) <= 12 {
+                                selected = index
+                                let point = CGPoint(x: points[index][0].number, y: points[index][1].number)
+                                dragPoint = (index, point)
+                                change([point.x, point.y], index: index, phase: "down")
+                            }
                         }
-                        if let index = dragIndex { change([event.location.x / size.width, 1 - event.location.y / size.height], index: index, phase: starting ? "down" : "move") }
+                        if let point = dragPoint, event.translation != .zero {
+                            change([point.point.x + event.translation.width / size.width,
+                                point.point.y - event.translation.height / size.height], index: point.index, phase: "move")
+                        }
                     }.onEnded { event in
                         guard dragging else { return }
                         guard geometry.size.width > 0, geometry.size.height > 0 else { cancelDrag(); return }
-                        if let index = dragIndex {
-                            change([event.location.x / geometry.size.width, 1 - event.location.y / geometry.size.height], index: index, phase: "up")
+                        if let point = dragPoint {
+                            change([point.point.x + event.translation.width / geometry.size.width,
+                                point.point.y - event.translation.height / geometry.size.height], index: point.index, phase: "up")
                         } else {
                             // Commit insertion once. Subsequent drags address the
                             // actual returned model, never a guessed insertion index.
                             change([event.location.x / geometry.size.width, 1 - event.location.y / geometry.size.height], index: nil)
                         }
-                        dragging = false; dragIndex = nil
+                        dragging = false; dragPoint = nil
                     })
                     .allowsHitTesting(enabled)
                     .onChange(of: contact) { _, active in if !active { cancelDrag() } }
@@ -203,17 +211,20 @@ private struct GradientProperty: View {
     @GestureState private var contact = false
     @State private var selected = 0
     @State private var dragging = false
-    @State private var dragIndex: Int?
+    @State private var dragStop: (index: Int, position: Double)?
     private var key: String { control["key"].string }
     private var stops: [JSON] { control["value"]["value"].array }
     private var index: Int { max(0, min(selected, stops.count - 1)) }
     private var removable: Bool { index > 0 && index < stops.count - 1 }
-    private func change(_ position: Double, index: Int?, color: Any = NSNull(), remove: Bool = false,
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private func change(_ position: Double, index: Int?, color: Any = NSNull(), remove: Bool = false, phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {
-        store.edit(["type": "effect", "action": ["op": "gradient_stop", "layer": layer, "key": key,
-            "index": index as Any? ?? NSNull(), "position": position, "color": color, "remove": remove]]) { error in
-                if let completion { completion(error) } else if let error { store.failure = error }
-            }
+        store.effect(layer, key: key, action: ["op": "gradient_stop", "index": index as Any? ?? NSNull(),
+            "position": position, "color": color, "remove": remove], phase: phase, completion: completion)
+    }
+    private func cancelDrag() {
+        if let stop = dragStop { change(0, index: stop.index, phase: "cancel") }
+        dragging = false; dragStop = nil
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -221,30 +232,49 @@ private struct GradientProperty: View {
                 Canvas { context, size in
                     let width = max(1, size.width - 12)
                     let gradient = Gradient(stops: stops.map { Gradient.Stop(color: $0["color"].effectColor, location: $0["position"].number) })
-                    context.fill(Path(CGRect(x: 6, y: 0, width: width, height: 32)), with: .linearGradient(gradient,
+                    context.fill(Path(roundedRect: CGRect(x: 6, y: 0, width: width, height: 32), cornerRadius: 4), with: .linearGradient(gradient,
                         startPoint: CGPoint(x: 6, y: 0), endPoint: CGPoint(x: size.width - 6, y: 0)))
                     for (i, stop) in stops.enumerated() {
-                        let radius: CGFloat = i == index ? 4 : 2.5
-                        context.fill(Path(ellipseIn: CGRect(x: 6 + stop["position"].number * width - radius, y: 39 - radius,
-                            width: radius * 2, height: radius * 2)), with: .foreground)
+                        let x = 6 + stop["position"].number * width
+                        let marker = Path(ellipseIn: CGRect(x: x - 4.5, y: 38.5, width: 9, height: 9))
+                        context.fill(marker, with: .color(stop["color"].effectColor))
+                        context.stroke(marker, with: .color(palette["text"]), lineWidth: 1)
+                        if i == index {
+                            context.stroke(Path(ellipseIn: CGRect(x: x - 7, y: 36, width: 14, height: 14)),
+                                with: .color(palette["text"]), lineWidth: 2)
+                        }
                     }
                 }.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
-                    let width = max(1, geometry.size.width - 12)
+                    let width = geometry.size.width - 12
+                    guard width > 0 else { return }
                     if !dragging {
                         dragging = true
-                        dragIndex = stops.indices.min { abs(6 + stops[$0]["position"].number * width - event.startLocation.x) < abs(6 + stops[$1]["position"].number * width - event.startLocation.x) }
-                        if let found = dragIndex, abs(6 + stops[found]["position"].number * width - event.startLocation.x) > 12 { dragIndex = nil }
-                        if let found = dragIndex { selected = found }
+                        let nearest = stops.indices.min { abs(6 + stops[$0]["position"].number * width - event.startLocation.x) < abs(6 + stops[$1]["position"].number * width - event.startLocation.x) }
+                        if let found = nearest, abs(6 + stops[found]["position"].number * width - event.startLocation.x) <= 12 {
+                            selected = found
+                            dragStop = (found, stops[found]["position"].number)
+                            change(stops[found]["position"].number, index: found, phase: "down")
+                        }
                     }
-                    if let found = dragIndex, event.translation.width != 0 { change((event.location.x - 6) / width, index: found) }
+                    if let stop = dragStop, event.translation.width != 0 {
+                        change(stop.position + event.translation.width / width, index: stop.index, phase: "move")
+                    }
                 }.onEnded { event in
-                    if dragIndex == nil { change((event.location.x - 6) / max(1, geometry.size.width - 12), index: nil) }
-                    dragging = false; dragIndex = nil
+                    guard dragging else { return }
+                    let width = geometry.size.width - 12
+                    guard width > 0 else { cancelDrag(); return }
+                    if let stop = dragStop {
+                        change(stop.position + event.translation.width / width, index: stop.index, phase: "up")
+                    } else {
+                        change((event.location.x - 6) / width, index: nil)
+                    }
+                    dragging = false; dragStop = nil
                 }).allowsHitTesting(enabled)
-                    .onChange(of: contact) { _, active in if !active { dragging = false; dragIndex = nil } }
+                    .onChange(of: contact) { _, active in if !active { cancelDrag() } }
+                    .onDisappear(perform: cancelDrag)
                     .accessibilityIdentifier("effect-gradient")
                     .accessibilityLabel("\(control["label"].string), \(stops.count) stops")
-            }.frame(height: 44)
+            }.frame(height: 52)
             if !stops.isEmpty {
                 NumberControl(store: store, label: "Position", value: stops[index]["position"].number,
                     control: store.catalog["opacity"], identifier: "gradient-position") { change($0, index: index, completion: $1) }
@@ -275,9 +305,11 @@ private extension JSON {
     var effectColor: Color { Color(.sRGB, red: self[0].number, green: self[1].number, blue: self[2].number, opacity: self[3].number) }
 }
 private extension EditorStore {
-    func effect(_ layer: UInt64, key: String, action: [String: Any], phase: String? = nil) {
+    func effect(_ layer: UInt64, key: String, action: [String: Any], phase: String? = nil,
+        completion: (@MainActor (String?) -> Void)? = nil) {
         var action = action; action["layer"] = layer; action["key"] = key
         if let phase { action = ["op": "gesture", "phase": phase, "action": action] }
-        dispatch(["type": "effect", "action": action])
+        let message: [String: Any] = ["type": "effect", "action": action]
+        if let completion { edit(message, completion: completion) } else { dispatch(message) }
     }
 }

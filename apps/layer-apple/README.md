@@ -535,6 +535,12 @@ The Apple tests dispatch through the real C ABI for both platform configurations
 They check brush/zoom/settings actions, session isolation, committed ink after
 pen-up, and exact GPU document pixels through undo/redo. The GPU tests require
 hardware Metal access; they do not establish physical input or presentation timing.
+`cargo test -p layer-apple lasso_pointer_contacts -- --test-threads=1` checks pen
+contacts through that ABI: empty/cancelled paths preserve selection and Redo;
+enclosed selection/fill paths change actual document pixels and restore exactly
+through Undo/Redo. The native `testLassoControls` check covers control routes and,
+on Mac, ordinary clicks followed by Redo and layer editing. Freehand OS input
+and physical Pencil acceptance remain separate.
 The staged-startup check also verifies pending ink survives the initial paper
 frame and stays undoable while document/brush shaders become ready.
 Layer checks cover checked selection versus the drawing target, mask targeting,
@@ -679,9 +685,12 @@ keyboard is open. The Chrome `filter-properties` scenario in
 fixture.
 
 Use `testFilterArtworkAndHistory` for brightness expressions, Red-channel curve
-insertion/dragging/removal/reset, Gradient Map reversal/color editing, filter
-deletion and one-step Undo/Redo. Both hosts create the drawing through native
-Select/Fill commands, compare exact 8-by-8 displayed canvas samples and retain
+insertion/selection/dragging/removal/reset, Gradient Map reversal/color editing
+and stop insertion/selection/dragging/removal/reset, filter deletion and one-step
+Undo/Redo. Curve-point selection also preserves pending Redo; dragging retains
+the original grab offset.
+Both hosts create the drawing through native Select/Fill commands, compare exact
+8-by-8 displayed canvas samples and retain
 full editor screenshots.
 These checks exercise mouse/touch controls; they do not establish Pencil input
 or all-pixel filter parity. Both workflows use the native test runner above;

@@ -5,13 +5,40 @@ extension XCTestCase {
     @MainActor func checkLassoControls(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
+        #if os(macOS)
+        func clickWithoutArea() {
+            let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+            let count = layers.count
+            workspaceActivate(app.buttons["layer-New layer"])
+            expectation(for: NSPredicate(format: "count == %d", count + 1), evaluatedWith: layers)
+            waitForExpectations(timeout: 10)
+            editorHistory("Undo", in: app)
+            expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: layers)
+            waitForExpectations(timeout: 10)
+            workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)).click()
+            app.staticTexts["document-title"].hover()
+            editorHistory("Redo", in: app)
+            expectation(for: NSPredicate(format: "count == %d", count + 1), evaluatedWith: layers)
+            waitForExpectations(timeout: 10)
+            XCTAssertFalse(app.staticTexts["Canvas error"].exists, "A lasso click must not report a canvas error")
+            editorHistory("Undo", in: app)
+            expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: layers)
+            waitForExpectations(timeout: 10)
+        }
+        #endif
         editorTool("Lasso selection", in: app)
         editorChoice("Lasso", group: true, in: app)
+        #if os(macOS)
+        clickWithoutArea()
+        #endif
         workspaceActivate(app.buttons["layer-Layer actions"])
         workspaceActivate(app.buttons["menu-action-Selection"])
         attachEditor(in: app, name: "layer-selection-menu")
         workspaceActivate(app.buttons["menu-action-Lasso Fill"])
         editorChoice("Lasso fill", group: true, in: app)
+        #if os(macOS)
+        clickWithoutArea()
+        #endif
         XCTAssertFalse(app.buttons["number-value-tool-opacity"].exists)
         attachEditor(in: app, name: "lasso-fill-controls")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

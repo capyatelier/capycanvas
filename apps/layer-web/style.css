@@ -555,7 +555,7 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .gradient-editor { display:flex; flex-direction:column; gap:6px; }
 .gradient-ramp { height:32px; margin:0 6px; border-radius:4px; cursor:crosshair; }
 .gradient-stops { position:relative; height:14px; margin:0 6px; }
-.gradient-stops button { position:absolute; padding:0; width:10px; min-width:0; height:10px; border-radius:50%; transform:translateX(-50%); border:1px solid var(--text); }
+.gradient-stops button { position:absolute; padding:0; width:10px; min-width:0; height:10px; min-height:0; border-radius:50%; transform:translateX(-50%); border:1px solid var(--text); }
 .gradient-stops button.selected { outline:2px solid var(--text); outline-offset:1px; }
 .renderer-stats { display:flex; flex-direction:column; gap:6px; }
 .renderer-stats .numeric { font-variant-numeric:tabular-nums; white-space:nowrap; }
