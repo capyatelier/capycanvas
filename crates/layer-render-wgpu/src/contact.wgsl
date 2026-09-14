@@ -5,7 +5,7 @@
 
 fn contact_hash(p: vec2<f32>) -> f32 {
     let cell = vec2<i32>(p);
-    var h = bitcast<u32>(cell.x) * 1597334677u ^ bitcast<u32>(cell.y) * 3812015801u;
+    var h = (bitcast<u32>(cell.x) * 1597334677u) ^ (bitcast<u32>(cell.y) * 3812015801u);
     h = (h ^ (h >> 16u)) * 2246822519u;
     h = (h ^ (h >> 13u)) * 3266489917u;
     return f32(h ^ (h >> 16u)) / 4294967295.0;

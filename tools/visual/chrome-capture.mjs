@@ -190,6 +190,7 @@ try {
   }
   }
 } catch (error) {
+  try { console.error(JSON.stringify(await evaluate("({gpu:document.body.dataset.gpu,notice:document.querySelector('#gpu-notice')?.textContent})"))); } catch {}
   if (errors.length) console.error(JSON.stringify({browserExceptions: errors}));
   throw error;
 } finally {

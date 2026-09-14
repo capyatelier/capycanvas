@@ -131,6 +131,12 @@ struct WorkspaceData {
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){
     auto tint=color(str(object(data->state,L"palette"),L"button"));tint.A=13;return fill(tint);
 }
+// Light headers use the shared half-opacity surround surface over the canvas.
+inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){
+    auto tint=color(str(object(data->state,L"palette"),L"bg"));
+    if(data->theme()==L"light")tint.A=128;
+    return fill(tint);
+}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
