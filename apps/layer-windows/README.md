@@ -1251,6 +1251,14 @@ space expands the column. Resizable column edges show directional cursors and
 can drag out a closed single column. Footer grips match the Web/Android
 orientation and keep immediate pickup; icon tiles still require a hold.
 
+Windows uses the shared Web/Android docking targets: the upper part of a panel
+body offers tab insertion, its center highlights the body for tab docking,
+and the title-bar area above a column offers stacking before that column.
+Native previews distinguish the blue body highlight from thin insertion lines.
+The target checks drag Properties within the right column and verify cancel,
+commit and one-step Undo/Redo. They do not resolve the previously recorded
+synthetic pen/touch capture loss on direct cross-canvas tear-off.
+
 Run the isolated production-editor journey for each device, serially:
 
 ~~~powershell

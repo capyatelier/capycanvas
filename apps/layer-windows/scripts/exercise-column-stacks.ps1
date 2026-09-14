@@ -70,7 +70,7 @@ function Screen($Bounds){
 }
 function Tap([string]$Id){$at=At $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()}
 function Context([string]$Id){$at=At $Id;[CapyRowPointer]::RightClick($at.x,$at.y);Wait-Until {(Gesture).menu_open} 'Column context menu did not open'}
-function WindowCommand([string]$Id){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke $Id}
+function WindowCommand([string]$Id){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke $Id;Wait-Until {$null -eq (Find $Id)} 'Workspace menu did not close'}
 function Toggle([string]$Name){
     $item=Control $Name -Name;$pattern=$null
     if($item.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)){$pattern.Toggle()}else{$item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
@@ -111,6 +111,33 @@ function Check-ColumnInteractions {
     if(!(Column 12).open){Tap 'column-icon-layers'}
     Check-Open 12
 }
+function Check-DockTargets {
+    # Keep this target/history check within the right column. Direct injected
+    # cross-canvas tear-off has a separately documented capture limitation.
+    foreach($surface in @('tab-slot','body','header')){
+        $before=Layout
+        if($surface -eq 'header'){
+            $bounds=(Column 12).bounds
+            $to=Screen @{x=$bounds.x+$bounds.width*.5;y=$bounds.y*.5;width=0;height=0}
+            $expected=@{surface=$surface;kind='stack_column';column=12}
+        }else{
+            $group=(Model).layout.groups|Where-Object active -eq 'layers'|Select-Object -First 1
+            $bounds=$group.bounds
+            $y=if($surface -eq 'body'){$bounds.y+$bounds.height*.5}else{$bounds.y+39}
+            $x=if($surface -eq 'body'){$bounds.x+$bounds.width*.5}else{$bounds.x+8}
+            $to=Screen @{x=$x;y=$y;width=0;height=0}
+            $expected=@{surface=$surface;kind='tab';group=$group.id;body=($surface -eq 'body')}
+        }
+        Drag 'panel-tab-properties' $to -Cancel -Expected $expected
+        if((Layout) -ne $before){throw 'Canceled new docking target changed the layout'}
+        Drag 'panel-tab-properties' $to -Expected $expected
+        Wait-Until {(Layout) -ne $before} 'New docking target did not publish its move'
+        $after=Layout;Check-History $before $after
+        WindowCommand 'undo_workspace';Wait-Until {(Layout) -eq $before} 'New docking target did not restore its source'
+        if(!(Column 12).open){Tap 'column-icon-layers'}
+        Check-Open 12
+    }
+}
 function Check-Open([int]$Id){
     Wait-Until {
         $column=Column $Id;if(!$column.open){return $false}
@@ -135,7 +162,7 @@ function Check-Open([int]$Id){
     $bottom=($members|ForEach-Object {$_.bounds.y+$_.bounds.height}|Measure-Object -Maximum).Maximum
     if([Math]::Abs($column.open.bounds.y-$top) -gt .6 -or [Math]::Abs($column.open.bounds.height-($bottom-$top)) -gt .6){throw 'Open column did not span the complete stack height'}
 }
-function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack){
+function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,$Expected){
     $from=At $Id;$generation=(Gesture).generation
     [CapyRowPointer]::Down($Device,$from.x,$from.y)
     Wait-Until {(Gesture).generation -gt $generation} 'Native handle did not receive pointer down'
@@ -149,6 +176,17 @@ function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack){
     Wait-Until {(Gesture).phase -eq 'dragging'} 'Source did not drag after movement slop'
     if((Gesture).menu_open){throw 'Dragging retained the held context menu'}
     if($Stack){Wait-Until {(Presentation).workspace_update.drag.drop_hint.target.kind -eq 'stack_column'} 'Footer did not preview a new stack member'}
+    if($Expected){
+        Wait-Until {
+            $drop=(Presentation).workspace_update.drag.drop_hint
+            if($drop.target.kind -ne $Expected.kind){return $false}
+            if($Expected.kind -eq 'tab'){
+                return $drop.target.group -eq $Expected.group -and $drop.target.index -eq 0 -and (($drop.bounds.width -gt 3 -and $drop.bounds.height -gt 3) -eq $Expected.body)
+            }
+            $drop.target.column -eq $Expected.column -and $drop.target.before
+        } ('Wrong native drop target: '+$Expected.surface)
+        if(!$Cancel){Capture ('drop-'+$Expected.surface)}
+    }
     if($Cancel){if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}}
     else{[CapyRowPointer]::Up()}
     Wait-Until {(Gesture).phase -eq 'idle'} 'Handle retained native capture after completion'
@@ -173,7 +211,7 @@ try {
     foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     Start-Review 'initial'
-    Check-Open 12;Capture 'default-paint';Check-ColumnInteractions
+    Check-Open 12;Capture 'default-paint';Check-ColumnInteractions;Check-DockTargets
     Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Clicking the selected member did not close it'
     foreach($group in (Column 12).groups){foreach($icon in $group.icons){if((Control ('column-icon-'+$icon.panel)).Current.ItemStatus -eq 'Selected'){throw 'Closed strip retained a selected tile'}}}
     Tap 'column-icon-layers';Check-Open 12
@@ -252,16 +290,16 @@ try {
     if(((Control 'Drawing canvas' -Name).GetRuntimeId() -join ':') -ne $canvas -or (Model).windows_gpu_generation -ne $generation){throw 'Stack Zen replaced the native canvas or GPU'}
     $persisted=Layout
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Stack settings did not finish saving'
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [CapyRowPointer]::Dispose()
     Start-Review 'restart'
     if((Layout) -ne $persisted -or (Model).state.theme -ne 'light'){throw 'Restart did not restore stack membership, width, preferences and theme'}
     if(@((Model).layout.collapsed|Where-Object open).Count -or @((Model).state.customization.column_drawers).Count){throw 'Restart restored transient open columns or drawers'}
     Tap 'column-icon-layers';Check-Open 12;Capture 'restarted-stack'
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Restart stderr requires inspection'}
-    [pscustomobject]@{device=$Device;restart_persistence='passed';default_full_column='passed';column_background_menu='passed';column_double_click='passed';closed_column_drag_resize='passed';native_geometry_and_connectors='passed';selected_tiles='passed';immediate_handles='passed';stack_cancel_undo_redo='passed';member_switch='passed';panel_group_toolbar_and_held_icon_drops='passed';retained_member_resize='passed';themes_and_zen='passed';fixed_closed_width='passed';individual_panels='passed';auto_hide_consumes_contact='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, performance and complete visual acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{device=$Device;restart_persistence='passed';default_full_column='passed';column_background_menu='passed';native_body_tab_and_header_drops='passed';column_double_click='passed';closed_column_drag_resize='passed';native_geometry_and_connectors='passed';selected_tiles='passed';immediate_handles='passed';stack_cancel_undo_redo='passed';member_switch='passed';panel_group_toolbar_and_held_icon_drops='passed';retained_member_resize='passed';themes_and_zen='passed';fixed_closed_width='passed';individual_panels='passed';auto_hide_consumes_contact='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, performance and complete visual acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

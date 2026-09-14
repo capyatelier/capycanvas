@@ -1607,7 +1607,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android);
+        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
         let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
         let mut hint = if let Some(hint) = menubar {
@@ -9499,7 +9499,7 @@ mod tests {
                     .bounds;
                 let destination = [
                     neighbor.x + neighbor.width * 0.5,
-                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
+                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
                 ];
                 drag(&mut app, ContactPhase::Move, destination);
                 drag(&mut app, ContactPhase::Up, destination);
@@ -15886,6 +15886,11 @@ mod tests {
     mod layout_drop_web_tests {
         use super::*;
         const PLATFORM: Platform = Platform::Web;
+        include!("layout_drop_tests.rs");
+    }
+    mod layout_drop_windows_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Windows;
         include!("layout_drop_tests.rs");
     }
 }

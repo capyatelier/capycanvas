@@ -203,10 +203,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                     if(next.Size())self->data->dispatch(next);
                     self->clear();return;
                 }
-                auto bounds=object(result,L"bounds");
-                if(bounds.Size()){
-                    place(self->hint,bounds);self->hint.Visibility(Visibility::Visible);self->refresh();
-                }else self->hint.Visibility(Visibility::Collapsed);
+                self->showHint(result);self->refresh();
                 self->evidence();
             }
         }))busy=false;else dirty=false;
@@ -380,17 +377,24 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             });
         e.Handled(true);
     }
+    void showHint(J const& value){
+        auto bounds=object(value,L"bounds");
+        if(!bounds.Size()){hint.Visibility(Visibility::Collapsed);return;}
+        bool body=str(object(value,L"target"),L"kind")==L"tab"&&num(bounds,L"width")>3&&num(bounds,L"height")>3;
+        auto accent=selected();auto tint=accent.Color();tint.A=255;accent.Color(tint);tint.A=64;
+        hint.Background(body?fill(tint):accent);hint.BorderBrush(accent);
+        hint.BorderThickness(body?Thickness{2,2,2,2}:Thickness{});
+        hint.CornerRadius(body?CornerRadius{}:CornerRadius{2,2,2,2});
+        place(hint,bounds);hint.Visibility(Visibility::Visible);
+    }
     void present(J const& drag){
         if(!dragging||str(action,L"type")!=L"drag_workspace")return;
         tabSlide->Update(object(drag,L"tab"));tabSlide->Refresh(tabs);
-        auto bounds=object(object(drag,L"drop_hint"),L"bounds");
-        if(bounds.Size()){place(hint,bounds);hint.Visibility(Visibility::Visible);}
-        else hint.Visibility(Visibility::Collapsed);
+        showHint(object(drag,L"drop_hint"));
         evidence();
     }
     void refresh(){
         uint32_t index;if(!root.Children().IndexOf(hint,index))root.Children().Append(hint);
-        hint.Background(selected());hint.BorderBrush(data->brush(L"text"));hint.BorderThickness({1,1,1,1});
         tabSlide->Refresh(tabs);
     }
     void init(){
