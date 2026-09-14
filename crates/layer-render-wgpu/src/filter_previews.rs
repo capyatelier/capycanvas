@@ -879,11 +879,14 @@ mod tests {
                 sampling: layer_core::EffectSampling::Document,
             }]
             .into();
-        let mut layers = vec![upper, blur, pattern];
+        let mut paper = Layer::paint(LayerId(4), "partial paper");
+        paper.kind = LayerKind::Background;
+        paper.opacity = 0.5;
+        let mut layers = vec![upper, blur, pattern, paper];
         let view = layer_render::ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            background_rgba_linear: [0.; 4],
+            background_rgba_linear: [0.1, 0.2, 0.3, 1.],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
         let frame = |r: &mut WgpuRasterizer, layers: &[Layer]| {
@@ -914,6 +917,9 @@ mod tests {
         let p = r.filter_previews.as_ref().unwrap();
         assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
         assert!(p.request.is_some());
+        // A view-only frame must compare the caller's paper color, before the
+        // compositor applies paper opacity. It must not cancel this scan.
+        frame(&mut r, &layers);
         let mut callbacks = 0;
         loop {
             r.device

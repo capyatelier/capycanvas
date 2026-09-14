@@ -160,13 +160,38 @@ need qualification. Live composition also still uses full-document image stages
 and a full composite. Sparse storage and cropped previews therefore do not yet
 bound the total cost of large filters or densely painted documents.
 
+The native [snapshot renderer](../../crates/layer-render-wgpu/src/snapshot.rs)
+prepares document metadata independently of the live full composite. A file or
+inspection worker owns an immutable project snapshot and a native Float32
+renderer. Region requests restore only the translated paint, material and mask
+pages needed by composition and its halos. Compressed backing remains shared;
+restoration uses the same integer decoder as live editing. Initial masks use the
+existing GPU crossing/coverage and affine-resampling shaders, with bounded
+output rectangles and row slices of immutable packed selection coverage.
+
+Snapshot PNG/TIFF output streams sixteen-row strips through the working-color
+encoder and profiled row writers. A matching, unmodified source with default
+conversion and no matte bypasses composition to preserve exact integer samples,
+including hidden straight RGB. An explicit matte composites in linear document
+RGB before encoding. Region captures return linear-premultiplied document values;
+they contain no viewing or mask-area overlay. Cancellation and writer failures
+return errors; the caller must publish its temporary file only after success.
+
+Capture dependency plans have an explicit byte ceiling checked before restoring
+pixels. This planning limit is separate from measured peak process/device memory,
+codec buffers and retained compressed sources. Global samplers can exceed it and
+still need their scheduled, qualified route. Snapshot capture/output is currently
+a headless worker API; GTK export UI, progress/cancellation ownership and recipes
+still need integration. This does not yet replace live composite residency.
+
 ## GPU resources and unified memory
 
 Committed edits queue exact readback of changed 256² tiles for raster history
 and persistence. Mapping and lossless compression run on a bounded worker; GTK
 input never waits on the GPU. Move frames and presentation do not perform full
-canvas readback. Export explicitly requests a full image; thumbnails and color
-sampling use separate bounded requests. Source bytes and immutable compressed
+canvas readback. The exposed host export still requests a full image; the native
+snapshot API streams bounded strips. Thumbnails and color sampling use separate
+bounded requests. Source bytes and immutable compressed
 tile backing are shared with save snapshots. See the [raster project contract](../reference/project-format.md).
 
 On unified-memory hardware, CPU and GPU share physical RAM. Keeping separate

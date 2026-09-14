@@ -1221,6 +1221,31 @@ impl Scene {
         Ok(())
     }
 
+    pub(super) fn capture_window(layers: &[Layer], region: PixelRect, extent: [u32; 2]) -> PixelRect {
+        images::capture_window(layers, region, extent)
+    }
+    pub(super) fn release_capture_window(&mut self, window: PixelRect) {
+        // The snapshot owner has completed its previous readback. Release job
+        // references and old image windows before restoring the next inputs.
+        self.jobs.clear();
+        if self.images.bounds != window {
+            self.images = images::ImageStages::default();
+        }
+    }
+    pub(super) fn capture_image_bound(layers: &[Layer], window: PixelRect) -> u64 {
+        let mut images = 0u64;
+        let mut scratch = 0;
+        for layer in layers {
+            if !images::visible(layers, layer) { continue; }
+            if let Some(effect) = &layer.effect && effect.program.image_boundary() {
+                images += 2 + u64::from(layer.mask.as_ref().is_some_and(|m| m.enabled))
+                    + if layer.properties.clipped { 2 } else { 0 };
+                scratch = scratch.max(effect.program.passes.len().saturating_sub(1).min(2) as u64);
+            }
+        }
+        window.area().saturating_mul(16).saturating_mul(images + scratch)
+    }
+
     /// Explicit source capture, with independent caches for the caller's
     /// layer projection. Reuse ordinary groups, masks, effects and tile jobs.
     pub fn capture(

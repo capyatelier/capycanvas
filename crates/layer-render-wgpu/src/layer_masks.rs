@@ -195,16 +195,41 @@ impl MaskRenderer {
         reset: bool,
         selections: &mut selection_clip::SelectionClip,
     ) -> Result<(), GpuRasterError> {
+        self.prepare_regions(device, encoder, inputs, extent, reset, selections, None)
+    }
+    /// Prepare only the mask-local pages needed by an isolated region capture.
+    /// Existing GPU polygon/pixel coverage rules are shared with live editing.
+    pub fn prepare_regions(
+        &mut self,
+        device: &PipelineDevice,
+        encoder: &mut crate::submission::CommandEncoder,
+        inputs: (&[Layer], &[DabBatch]),
+        extent: [u32; 2],
+        reset: bool,
+        selections: &mut selection_clip::SelectionClip,
+        regions: Option<&std::collections::HashMap<LayerId, PixelRect>>,
+    ) -> Result<(), GpuRasterError> {
         let (layers, batches) = inputs;
         if reset {
             self.pages.clear();
         }
-        self.pages.retain(|(id, _), _| Self::is_mask(layers, *id));
+        self.pages.retain(|(id, coordinate), _| {
+            Self::is_mask(layers, *id)
+                && regions.is_none_or(|regions| {
+                    regions
+                        .get(id)
+                        .is_some_and(|region| !page_rect(*coordinate).intersect(*region).is_empty())
+                })
+        });
         self.definitions = Self::masks(layers).map(|m| (m.id, m.clone())).collect();
         for mask in Self::masks(layers) {
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
-                needed.extend(page_coordinates(pixel_rect(selection.bounds(), extent)));
+                let bounds = pixel_rect(selection.bounds(), extent);
+                let bounds = regions.map_or(bounds, |regions| {
+                    bounds.intersect(regions.get(&mask.id).copied().unwrap_or(PixelRect::EMPTY))
+                });
+                needed.extend(page_coordinates(bounds));
             }
             for batch in batches.iter().filter(|b| b.layer_id == mask.id) {
                 needed.extend(page_coordinates(batch_pixel_rect(batch, extent)));
@@ -219,11 +244,18 @@ impl MaskRenderer {
                 continue;
             }
             if let Some(selection) = &mask.initial {
-                selections.prepare(
+                let region = regions.map(|_| {
+                    missing
+                        .iter()
+                        .fold(PixelRect::EMPTY, |region, c| region.union(page_rect(*c)))
+                        .intersect(PixelRect::full(extent))
+                });
+                selections.prepare_region(
                     device,
                     encoder,
                     extent,
                     &std::sync::Arc::new(selection.clone()),
+                    region,
                 )?;
             }
             let coverage = if mask.initial.is_some() {

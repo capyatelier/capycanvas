@@ -12,6 +12,9 @@ qualified in the headless paint/history fixtures below. Native photo-adjustment
 and material references pass, and document-to-view color conversion is explicit.
 Document-coordinate region capture and chunked filter-preview sources now have
 connected correctness coverage, including spatial support and cancellation.
+Standalone native snapshots now restore window dependencies and stream profiled
+PNG/TIFF rows, with exact untouched-source delivery; GTK file jobs are not yet
+connected to that API.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
 mips, managed GTK viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
@@ -2698,3 +2701,119 @@ logs/session records use `bounded-previews-filters`, `bounded-previews-files`, a
 ABSOLUTE_TEST_BINARY TEST_FILTER REPORT_PREFIX`. The final runs were serial;
 release compilation overlapped the focused preview run. Hashes, parent revision,
 source hashes and build/result mappings are in `bounded-previews-provenance.json`.
+
+
+## Standalone native snapshot capture and profiled row output (2026-09-14)
+
+Document metadata preparation is now separate from allocating the live full
+composite. The new `snapshot::SnapshotRenderer` owns an immutable project on a
+worker, resolves its backing and creates native Float32 processing in the declared
+document space/depth. Each request restores only the translated native paint,
+mask and material pages required by the image window, including watercolor's
+neighbor pages. Restoration shares the existing native color/scalar decoder and
+updates its private resident index per successfully restored target, so a later
+failure/cancellation cannot leave that index describing discarded pages. Packed
+legacy RGBA8 project images become retained tiled sources for this consumer;
+there is no second full immutable GPU upload. Native edit/history roots remain
+unchanged.
+
+Initial selection masks no longer require full selection output for this route.
+The shared GPU crossing/fill shaders rasterize the requested rectangle. Packed
+source selections copy only required source words/rows; coverage is neither
+rasterized nor interpolated on the CPU. Fractional translation preserves the
+existing zero-resampling coverage rule, and affine placements use the existing
+GPU resampler with a conservative source footprint. Cropped buffers include the
+source origin, and polygon edges outside the crop still establish its interior
+parity. Old selection staging is released before the next completed snapshot
+capture. Native mask textures remain R32Float.
+
+Completed captures evict obsolete private paint/material/mask pages and image
+windows before restoring replacements. This avoids retaining both completed
+windows during the next allocation. The final focused suite includes repeated
+and disjoint captures after this change; it does not establish measured peak
+memory for a complete GTK export job.
+
+PNG and TIFF output now have a connected headless document route: sixteen-row
+Float32 composite strips feed `WorkingEncoder` and the profiled row writers.
+Output transforms a copy; the surface/presentation format never participates.
+The requested profile, channel model, precision and intent/BPC remain independent.
+An explicit matte flattens in linear document RGB before output conversion.
+A matching untouched source, with default conversion and no matte, bypasses
+compositing and preserves every integer sample, including hidden RGB at zero
+alpha. Gray builtin interpretations write a real gray ICC profile. Writer or
+cancellation errors leave publication to the caller's existing temporary-file
+protocol; this API does not publish files itself.
+
+Each capture checks an explicit conservative pixel-dependency plan before
+restoring pages. The default planning ceiling is 512 MiB, configurable by the
+worker owner. It is **not** a measured peak-RSS/VRAM budget: retained compressed
+sources, codec/output buffers, pipeline/driver resources and concurrent jobs need
+separate host accounting. A global dependency can exceed the plan and fail before
+restoration. Global scheduling, tighter dependency planning, named large-photo
+limits and live composite/mutable residency remain outstanding. No resource-size
+assertion here closes the final memory or latency gates.
+
+Connected fixtures cover:
+
+- Integer8/integer16 × all four builtin RGB spaces × PNG/TIFF identity delivery.
+  The 257×256 source includes every integer16 code, repeat codes, zero alpha,
+  one-code alpha and hidden RGB. Decoded output samples match exactly. Neither
+  full composites nor materialized paint pages are allocated by identity output.
+- GrayAlpha16 identity through both codecs with gray-profile validation, and an
+  explicit same-profile matte that makes all output alpha opaque and matches
+  the encoded matte at originally transparent pixels.
+- Fifty-four cropped/full comparisons over sRGB8, Display P3 integer16 and
+  ProPhoto integer16: nested groups, a spatial pass, non-unit opacity, translated
+  source/paint/mask origins, committed mask edits, watercolor pigment/wetness and
+  polygon/fractionally translated/affine-inverted packed selections. All channels
+  meet absolute 2e-6. The affine cases also pass native project save/reopen before
+  snapshot rendering. The final focused version enables mask-area viewing only
+  in the snapshot input and still compares against untinted artwork.
+- Eight edited composite deliveries: sRGB/P3 × integer8/integer16 × PNG/TIFF,
+  compared with encoded full native-render pixels at at most one code per channel.
+  Source raster publication identities remain unchanged; budget rejection occurs
+  without a full composite, and a cancelled write emits no bytes.
+- Legacy packed sRGB8 source conversion into a ProPhoto integer16 snapshot agrees
+  with `WorkingDecoder` within 2e-6, with no full composite, legacy image GPU
+  source or materialized paint pages.
+
+The concurrent preview audit found that a view-only frame could cancel a scan
+when paper opacity was below one: it compared the caller's paper alpha with the
+already multiplied compositor alpha. Cancellation now compares the original
+requested view. The chunked preview test includes partially transparent paper
+and a view-only frame before continuing all 27 tiles; real source edits still
+cancel after the in-flight chunk.
+
+This is a **headless worker API**, not completed GTK export integration. GTK file
+jobs/recipes/progress/cancellation still need wiring, together with JPEG output,
+the remaining RGB/gray/CMYK metadata/interchange matrix and external-editor
+handoff. Live native GTK activation, source/color/photo UI, histogram/numeric
+color journeys, managed display/picker/monitor behavior, brush dynamics and
+remaining nonlinear precision also remain open. Benchmarking and optimization
+remain last, as requested; no new frame-performance measurements were run.
+
+Validation: the release GPU library suite passes **185 tests, with 26 benchmarks
+ignored**, in 184.32 s (`snapshot-full-gpu.log`, `snapshot-verified-tests`). That
+build precedes only private snapshot cache eviction and the mask-area exclusion
+assertion; the final `snapshot-residency-tests` passes all **five snapshot tests**
+in 26.89 s (`snapshot-residency-focused.log`). Their build records are
+`snapshot-verified-build.{json,log}` and `snapshot-residency-build.{json,log}`.
+Reproduce with `cargo test --offline --release -p layer-render-wgpu --lib --no-run
+--message-format=json`, retain the executable from its successful compiler
+artifact, and run it serially with `--test-threads=1` or
+`snapshot::tests --test-threads=1`. These test durations are correctness-run
+elapsed times, not frame-performance measurements.
+
+The release GTK executable `snapshot-gtk-tests` passes actual
+`native_runtime_filter_packages` (6.79 s), `native_document_files` (9.94 s), and
+`native_diagnostics_and_gpu_failure_recovery` (1.93 s). Runs use fatal GTK
+criticals and the isolated 1600×1000@120 Hz Mutter harness, serially, with the
+existing drawing path. Its build includes all shared changes but predates the
+private snapshot cache eviction; GTK does not yet invoke that API. Build records
+are `snapshot-gtk-build.{json,log}`; logs and session records use
+`snapshot-filters`, `snapshot-files`, and `snapshot-recovery`. Reproduce with
+`bash tools/performance/gtk-raster.sh ABSOLUTE_TEST_BINARY TEST_FILTER
+REPORT_PREFIX`. The final `cargo check --offline -p layer-linux` and
+`git diff --check` pass. `snapshot-provenance.json` records the parent revision,
+source/binary/result hashes and successful Cargo build mappings under
+`artifacts/color-m2/`.

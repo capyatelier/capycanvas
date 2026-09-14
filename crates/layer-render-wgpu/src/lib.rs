@@ -7,6 +7,8 @@
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
 pub mod native_tiles;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod snapshot;
 mod pixel_rect;
 mod submission;
 use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
@@ -1414,6 +1416,26 @@ impl WgpuRasterizer {
         extent: [u32; 2],
         layers: &[Layer],
     ) -> Result<bool, GpuRasterError> {
+        let resized = self.ensure_document_metadata(extent, layers)?;
+        if resized || self.composite_texture.is_none() {
+            let (texture, view) = create_color_target(&self.device, extent, "layer composite");
+            self.composite_bind_group = Some(create_texture_bind_group(
+                &self.device, &self.texture_layout, &view, &self.sampler,
+                "layer composite export binding",
+            ));
+            self.composite_texture = Some(texture);
+            self.composite_view = Some(view);
+        }
+        Ok(resized)
+    }
+
+    /// Set the document topology independently of full-composite allocation.
+    /// Snapshot/window consumers prepare only their own pixel dependencies.
+    fn ensure_document_metadata(
+        &mut self,
+        extent: [u32; 2],
+        layers: &[Layer],
+    ) -> Result<bool, GpuRasterError> {
         if let Some(regions) = &mut self.regions { regions.raw.clear_bindings(); }
         if extent[0] == 0 || extent[1] == 0 {
             return Err(GpuRasterError::InvalidExtent);
@@ -1431,16 +1453,9 @@ impl WgpuRasterizer {
             self.preview_coverage_pages.clear();
             self.preview_watercolor_wetness_pages.clear();
             self.update_target_records(extent)?;
-            let (texture, view) = create_color_target(&self.device, extent, "layer composite");
-            self.composite_bind_group = Some(create_texture_bind_group(
-                &self.device,
-                &self.texture_layout,
-                &view,
-                &self.sampler,
-                "layer composite export binding",
-            ));
-            self.composite_texture = Some(texture);
-            self.composite_view = Some(view);
+            self.composite_texture = None;
+            self.composite_view = None;
+            self.composite_bind_group = None;
             self.preview_damage = PixelRect::EMPTY;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
@@ -1970,7 +1985,7 @@ impl WgpuRasterizer {
             .saturating_add(self.selection_clip.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
-            self.document_extent[0] as u64 * self.document_extent[1] as u64 * pixel_bytes;
+            self.composite_texture.as_ref().map_or(0, texture_bytes);
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -4070,6 +4085,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(scene) = &mut self.scene {
             scene.effect_passes = 0;
         }
+        let requested_view = packet.view;
         let mut view = packet.view;
         self.thumbnails.paper = packet
             .layers
@@ -4832,7 +4848,7 @@ impl CanvasRenderer for WgpuRasterizer {
             self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
         }
         if let Some(previews) = &mut self.filter_previews {
-            previews.note_frame(packet, self.filter_source_epoch);
+            previews.note_frame(FramePacket { view: requested_view, ..packet }, self.filter_source_epoch);
         }
         if packet.composite_all || reset {
             dirty = PixelRect::full(packet.document_extent);

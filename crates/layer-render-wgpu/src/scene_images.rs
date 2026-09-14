@@ -230,7 +230,7 @@ impl ImageStages {
     }
 }
 
-fn visible(layers: &[Layer], layer: &Layer) -> bool {
+pub(super) fn visible(layers: &[Layer], layer: &Layer) -> bool {
     if !layer.visible {
         return false;
     }

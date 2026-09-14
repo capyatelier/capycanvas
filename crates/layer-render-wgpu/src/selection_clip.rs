@@ -15,6 +15,7 @@ pub(super) struct SelectionClip {
     pub buffer: Option<wgpu::Buffer>,
     pub binding: Option<wgpu::BindGroup>,
     geometry: Option<Arc<layer_core::Selection>>,
+    region: Option<PixelRect>,
     pub generations: u64,
     pub bytes: u64,
     pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer)>,
@@ -88,6 +89,7 @@ impl SelectionClip {
             buffer: None,
             binding: None,
             geometry: None,
+            region: None,
             generations: 0,
             bytes: 0,
             pixels: BTreeMap::new(),
@@ -104,6 +106,7 @@ impl SelectionClip {
         self.buffer = None;
         self.binding = None;
         self.geometry = None;
+        self.region = None;
         self.bytes = 0;
         self.prune_pixels();
     }
@@ -160,7 +163,20 @@ impl SelectionClip {
         extent: [u32; 2],
         geometry: &Arc<layer_core::Selection>,
     ) -> Result<(), GpuRasterError> {
-        if self.geometry.as_ref().is_some_and(|old| old == geometry) {
+        self.prepare_region(device, encoder, extent, geometry, None)
+    }
+    /// Preserve the ordinary GPU coverage rules while limiting preparation to
+    /// a document-coordinate window. Packed source coverage is copied by rows;
+    /// polygon rasterization and affine resampling remain on the GPU.
+    pub fn prepare_region(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut crate::submission::CommandEncoder,
+        extent: [u32; 2],
+        geometry: &Arc<layer_core::Selection>,
+        region: Option<PixelRect>,
+    ) -> Result<(), GpuRasterError> {
+        if self.region == region && self.geometry.as_ref().is_some_and(|old| old == geometry) {
             return Ok(());
         }
         let inverse = geometry
@@ -185,18 +201,60 @@ impl SelectionClip {
                 edges.extend([a.x, a.y, b.x, b.y]);
             }
         }
-        let bounds = match &geometry.shape {
-            layer_core::SelectionShape::Pixels(pixels) if translation => {
-                PixelRect::full(pixels.extent())
+        let requested = region
+            .unwrap_or(PixelRect::full(extent))
+            .intersect(PixelRect::full(extent));
+        let source_region = match &geometry.shape {
+            layer_core::SelectionShape::Pixels(pixels) if region.is_some() => {
+                let rect = layer_core::Rect {
+                    min: layer_core::Point {
+                        x: requested.min_x() as f32,
+                        y: requested.min_y() as f32,
+                    },
+                    max: layer_core::Point {
+                        x: requested.max_x() as f32,
+                        y: requested.max_y() as f32,
+                    },
+                };
+                let mut source = layer_core::Affine(inverse).bounds(rect);
+                source.min.x -= 2.;
+                source.min.y -= 2.;
+                source.max.x += 2.;
+                source.max.y += 2.;
+                let bounds = if requested.is_empty() {
+                    PixelRect::EMPTY
+                } else {
+                    pixel_rect(source, pixels.extent())
+                };
+                // Retain complete source words. No coverage is rasterized or
+                // interpolated on the CPU, including partial right-edge words.
+                PixelRect::new(
+                    bounds.min_x() / 8 * 8,
+                    bounds.min_y(),
+                    bounds
+                        .max_x()
+                        .div_ceil(8)
+                        .saturating_mul(8)
+                        .min(pixels.extent()[0]),
+                    bounds.max_y(),
+                )
             }
-            _ => pixel_rect(geometry.bounds(), extent),
+            layer_core::SelectionShape::Pixels(pixels) => PixelRect::full(pixels.extent()),
+            _ => PixelRect::EMPTY,
+        };
+        let bounds = match &geometry.shape {
+            layer_core::SelectionShape::Pixels(_) if translation => source_region,
+            _ => pixel_rect(geometry.bounds(), extent).intersect(requested),
         };
         let words = (u64::from(bounds.width().div_ceil(8)) * u64::from(bounds.height())).max(1);
         let bytes = (32 + words * 4).next_multiple_of(16);
         let source_bytes = match &geometry.shape {
-            layer_core::SelectionShape::Pixels(pixels) => {
-                (32 + pixels.words().len() as u64 * 4).next_multiple_of(16)
-            }
+            layer_core::SelectionShape::Pixels(_) => (32
+                + u64::from(source_region.width().div_ceil(8))
+                    * u64::from(source_region.height())
+                    * 4)
+            .max(36)
+            .next_multiple_of(16),
             _ => edges.len() as u64 * 4,
         };
         if bytes.max(source_bytes) > device.limits().max_storage_buffer_binding_size
@@ -206,7 +264,8 @@ impl SelectionClip {
         {
             return Err(GpuRasterError::SizeOverflow);
         }
-        if bytes > self.bytes || self.buffer.is_none() {
+        if bytes > self.bytes || self.buffer.is_none() || (region.is_some() && bytes != self.bytes)
+        {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("packed brush selection"),
                 size: bytes,
@@ -251,7 +310,11 @@ impl SelectionClip {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
         });
         if let layer_core::SelectionShape::Pixels(pixels) = &geometry.shape {
-            let source = self.pixel_buffer(device, pixels);
+            let source = if region.is_some() {
+                pixel_region_buffer(device, pixels, source_region)
+            } else {
+                self.pixel_buffer(device, pixels)
+            };
             let buffer = self.buffer.as_ref().unwrap();
             encoder.copy_buffer_to_buffer(&params, 0, buffer, 0, 32);
             if translation {
@@ -284,6 +347,7 @@ impl SelectionClip {
                 pass.dispatch_workgroups(bounds.width().div_ceil(512), bounds.height(), 1);
             }
             self.geometry = Some(geometry.clone());
+            self.region = region;
             self.generations += 1;
             return Ok(());
         }
@@ -330,10 +394,45 @@ impl SelectionClip {
         pass.set_pipeline(&self.fill);
         pass.dispatch_workgroups(bounds.height(), 1, 1);
         self.geometry = Some(geometry.clone());
+        self.region = region;
         self.generations += 1;
         Ok(())
     }
 }
+fn pixel_region_buffer(
+    device: &wgpu::Device,
+    pixels: &layer_core::SelectionPixels,
+    bounds: PixelRect,
+) -> wgpu::Buffer {
+    let stride = pixels.extent()[0].div_ceil(8) as usize;
+    let width = bounds.width().div_ceil(8) as usize;
+    let mut bytes = Vec::with_capacity(32 + width * bounds.height() as usize * 4);
+    for value in [
+        bounds.min_x(),
+        bounds.min_y(),
+        bounds.width(),
+        bounds.height(),
+        0,
+        1,
+        0,
+        0,
+    ] {
+        bytes.extend(value.to_ne_bytes());
+    }
+    for y in bounds.min_y() as usize..bounds.max_y() as usize {
+        let start = y * stride + bounds.min_x() as usize / 8;
+        for word in &pixels.words()[start..start + width] {
+            bytes.extend(word.to_ne_bytes());
+        }
+    }
+    bytes.resize(bytes.len().max(36).next_multiple_of(16), 0);
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("windowed selection pixels"),
+        contents: &bytes,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    })
+}
+
 fn buffer_entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
