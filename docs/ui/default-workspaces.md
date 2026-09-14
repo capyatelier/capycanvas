@@ -34,19 +34,18 @@ using CapyCanvas theme colors, type, and compact spacing.
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
 | Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color (plus Full Screen on Web) |
-| Paint | Tools toolbar | Commands toolbar | Expanded Color/Diagnostics, Properties/Filters, Layers; inner collapsed strip for Tool Set, Tool/Brush size, Navigator |
-| Photo | Operation, Lasso selection, Auto select, Scale/rotate; Brush, Eraser, Blend, Liquify, Fill, Gradient; Eyedropper, Color, Hand | None | Expanded Navigator above Layers; inner collapsed column for Properties, Filters, Color, Tool |
+| Paint | Tools toolbar and expanded Tool Set/Tool/Brush size/Color column | Commands toolbar | Open collapsed stack for Navigator/Diagnostics, Properties/Filters and Layers |
+| Photo | Tools toolbar | Commands toolbar | Expanded Color/Diagnostics, Properties/Filters, Layers; inner collapsed strip for Tool Set, Tool/Brush size, Navigator |
 
 GTK/Web Sketch uses Medium window-bar icons, a transparent canvas overlay, no menu
 labels and no zoom/rotation bubble. Other hosts retain the earlier two-toolbar
 Painter arrangement until their window-bar projection is implemented.
-Photographer uses Small toolbar tiles. Painter starts with Brush
-selected and no docked content panels. Photographer starts with Operation selected,
-devotes 30% of the expanded right column to Navigator and 70% to Layers, and omits
-the illustration Tool Set/Brush size columns and Diagnostics. Paint uses a
+Photo uses Small toolbar tiles and starts with Operation selected. Sketch starts
+with Brush selected and no docked content panels. Photo uses a
 permanently expanded far-right column and an adjacent collapsed strip toward
 the canvas on all six hosts. The strip starts closed, with Auto-hide and Open
-individual panels off.
+individual panels off. Paint retains its original expanded left panels and
+initially open right stack.
 
 ## Workspace behavior
 
@@ -102,7 +101,8 @@ individual panels off.
   created by older versions. Custom workspaces and copies restore their saved
   starting arrangement. The dialog previews exactly what Restore will apply;
   Cancel keeps the current layout. Restore preserves working tool settings and
-  document edits, and adds one undoable workspace layout change.
+  document edits, and adds one undoable workspace layout change. Restore remains
+  available when a built-in workspace still matches an older default.
   Reset All Brushes resets all brush-setting overrides in the current workspace,
   including inactive presets. It preserves color, selected tool, arrangement,
   document edits, and other workspaces. Resetting brushes creates no layout event.
@@ -112,8 +112,9 @@ individual panels off.
 - The first Photographer arrangement used Medium tiles. On switching to an
   untouched copy of that arrangement, update it and its starting layout to Small.
   Keep renamed workspaces and brush edits; leave customized layout histories alone.
-- Untouched older Paint workspaces upgrade to the current two-column right
-  arrangement. Customized defaults retain their arrangement until the user
+- Untouched older Photo workspaces upgrade to the two-column right arrangement.
+  Untouched Paint workspaces using that temporary arrangement return to Paint's
+  original default. Customized defaults retain their arrangement until the user
   chooses Restore Starting Layout. Ordinary strip open/close remains transient
   and adds no layout history entry.
 - Untouched GTK/Web Sketch workspaces upgrade from the shipped two-toolbar layout

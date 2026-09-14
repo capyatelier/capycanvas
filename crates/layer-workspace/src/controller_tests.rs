@@ -373,20 +373,23 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             let mut old = match preset {
                 layer_ui::WorkspacePreset::Painter => layer_ui::WorkspacePreset::legacy_painter_layout(Platform::Web),
                 layer_ui::WorkspacePreset::Illustrator => layer_ui::WorkspacePreset::legacy_illustrator_layout(Platform::Web),
-                layer_ui::WorkspacePreset::Photographer => preset.layout(Platform::Web),
+                layer_ui::WorkspacePreset::Photographer => layer_ui::WorkspacePreset::legacy_photographer_layout(Platform::Web),
             };
             old.header.size = layer_ui::HeaderSize::Large;
             let mut edited = old.clone();
             edited.header.size = layer_ui::HeaderSize::Small;
             let mut history = layer_ui::LayoutHistory::new(&old);
             history.append(&edited, "Customize old default");
+            assert!(history.undo());
             let mut database: serde_json::Value = serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
             database["items"][id]["entity"]["content"] = serde_json::to_value(ItemContent::Workspace {
-                history, baseline: Box::new(old), origin: None,
+                history, baseline: Box::new(old.clone()), origin: None,
             }).unwrap();
             *f.backend.database.borrow_mut() = BrowserDatabase::decode(&database.to_string()).unwrap();
             f.input(serde_json::json!({"type":"switch", "id":id}));
-            assert_eq!(f.host.session.capture_workspace().unwrap().history.layout(), &edited);
+            assert_eq!(f.host.session.capture_workspace().unwrap().history.layout(), &old);
+            assert!(f.host.session.command(layer_ui::CommandId::ResetLayout).enabled,
+                "An unchanged old baseline must still offer the latest default");
             preset.layout(Platform::Web)
         } else {
             f.controller.manager.current().unwrap().starting_layout(Platform::Web).unwrap()
@@ -400,7 +403,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
         for confirm in [false, true] {
             let saved = f.controller.manager.current().unwrap();
             f.input(serde_json::json!({"type":"form","kind":"reset"}));
-            assert_eq!(f.host.session.state().workspace.layout, baseline);
+            assert_eq!(layer_ui::durable_layout(&f.host.session.state().workspace.layout), baseline);
             assert_eq!(f.host.session.capture_workspace().unwrap(), before);
             f.save();
             assert_eq!(
@@ -430,6 +433,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             }
         }
         let restored = f.host.session.capture_workspace().unwrap();
+        assert!(!f.host.session.command(layer_ui::CommandId::ResetLayout).enabled);
         assert_eq!(restored.history.layout(), &baseline);
         assert_eq!(restored.working, before.working);
         assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
@@ -439,7 +443,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             before.history.layout()
         );
         f.action(serde_json::json!({"type":"invoke","command":"redo_workspace"}));
-        assert_eq!(f.host.session.state().workspace.layout, baseline);
+        assert_eq!(layer_ui::durable_layout(&f.host.session.state().workspace.layout), baseline);
     }
 }
 

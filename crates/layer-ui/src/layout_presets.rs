@@ -34,6 +34,9 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        if self == Self::Photographer && platform != crate::Platform::Generic {
+            return Self::legacy_illustrator_primary_layout(platform);
+        }
         self.layout_with_header_tools(
             platform,
             crate::CommandId::CustomizeWorkspaceUi.available_on(platform),
@@ -43,6 +46,11 @@ impl WorkspacePreset {
     /// Exact pre-title-bar arrangement, retained for conservative default upgrades.
     pub fn legacy_painter_layout(platform: crate::Platform) -> DockLayout {
         Self::Painter.layout_with_header_tools(platform, false)
+    }
+
+    /// Exact prior Photo columns, before adopting the shared primary panels.
+    pub fn legacy_photographer_layout(platform: crate::Platform) -> DockLayout {
+        Self::Photographer.layout_with_header_tools(platform, false)
     }
 
     /// Exact prior Paint arrangement, retained for conservative default upgrades.
@@ -75,30 +83,36 @@ impl WorkspacePreset {
         layout
     }
 
+    /// Temporary Paint arrangement now used by Photo. Retained so untouched
+    /// Paint workspaces from that version can return to their original default.
+    pub fn legacy_illustrator_primary_layout(platform: crate::Platform) -> DockLayout {
+        let mut layout = Self::legacy_illustrator_layout(platform);
+        if !matches!(platform, crate::Platform::Generic) {
+            // Keep the primary column permanently expanded at the outer
+            // right edge. Secondary panels occupy the icon strip inward
+            // from it, in Tool Set / Tool + Brush size / Navigator order.
+            if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(14) {
+                *panels = vec![Panel::Color, Panel::Stats];
+                *active = Panel::Color;
+            }
+            if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(10) {
+                *panels = vec![Panel::Navigator];
+                *active = Panel::Navigator;
+            }
+            let mut secondary = layout.bands.remove(1);
+            secondary.edge = Edge::Right;
+            let expanded_width = secondary.extent - WORKSPACE_SPACING;
+            secondary.extent = TILE_SIZE + WORKSPACE_SPACING;
+            layout.bands[1].extent = Panel::Layers.default_width() + WORKSPACE_SPACING;
+            layout.bands.insert(2, secondary);
+            layout.collapsed = vec![CollapsedColumn { root: 4, expanded_width }];
+        }
+        layout
+    }
+
     fn layout_with_header_tools(self, platform: crate::Platform, header_tools: bool) -> DockLayout {
         if self == Self::Illustrator {
-            let mut layout = Self::legacy_illustrator_layout(platform);
-            if !matches!(platform, crate::Platform::Generic) {
-                // Keep the primary column permanently expanded at the outer
-                // right edge. Secondary panels occupy the icon strip inward
-                // from it, in Tool Set / Tool + Brush size / Navigator order.
-                if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(14) {
-                    *panels = vec![Panel::Color, Panel::Stats];
-                    *active = Panel::Color;
-                }
-                if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(10) {
-                    *panels = vec![Panel::Navigator];
-                    *active = Panel::Navigator;
-                }
-                let mut secondary = layout.bands.remove(1);
-                secondary.edge = Edge::Right;
-                let expanded_width = secondary.extent - WORKSPACE_SPACING;
-                secondary.extent = TILE_SIZE + WORKSPACE_SPACING;
-                layout.bands[1].extent = Panel::Layers.default_width() + WORKSPACE_SPACING;
-                layout.bands.insert(2, secondary);
-                layout.collapsed = vec![CollapsedColumn { root: 4, expanded_width }];
-            }
-            return layout;
+            return Self::legacy_illustrator_layout(platform);
         }
         use crate::CommandId::*;
         use ToolbarControl::{Color, Divider, Opacity};
@@ -262,8 +276,8 @@ impl WorkspacePreset {
 }
 
 impl DockLayout {
-    /// Retain initial opening for saved copies of the prior Paint arrangement.
-    /// The current default has a permanently expanded outer right column.
+    /// Paint opens its original right stack on adoption, preview and reset.
+    /// Ordinary open/close remains transient; Photo uses a fixed outer column.
     pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
         if matches!(
             platform,
@@ -357,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn presets_are_portable_and_paint_keeps_primary_panels_at_the_right() {
+    fn presets_are_portable_and_photo_keeps_primary_panels_at_the_right() {
         for platform in [
             crate::Platform::Gtk,
             crate::Platform::Web,
@@ -379,7 +393,7 @@ mod tests {
                     serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
                 assert_eq!(round_trip, layout);
             }
-            let mut layout = WorkspacePreset::Illustrator.layout(platform);
+            let mut layout = WorkspacePreset::Photographer.layout(platform);
             assert!(
                 layout
                     .column_stacks
@@ -492,34 +506,11 @@ mod tests {
     }
 
     #[test]
-    fn photographer_has_left_tools_and_two_right_columns() {
-        let layout = WorkspacePreset::Photographer.layout(crate::Platform::Gtk);
-        assert_eq!(
-            layout.panel(Panel::Toolbar).unwrap().tile_style,
-            TileStyle::Small
-        );
-        let resolved = layout.workspace(1600., 1000., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
-        assert_eq!(
-            layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
-            [Edge::Left, Edge::Right, Edge::Right]
-        );
-        assert_eq!(layout.collapsed.len(), 1);
-        assert!(layout.is_collapsed(8));
-        assert!(layout.panel_group(Panel::Layers).is_some());
-        assert!(layout.panel_group(Panel::Navigator).is_some());
-        for panel in [Panel::Brushes, Panel::Sizes, Panel::Stats, Panel::Commands] {
-            assert!(layout.panel_group(panel).is_none());
+    fn photo_adopts_the_reviewed_layout_and_paint_restores_its_original_default() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+            assert_eq!(WorkspacePreset::Photographer.layout(platform), WorkspacePreset::legacy_illustrator_primary_layout(platform));
+            assert_eq!(WorkspacePreset::Illustrator.layout(platform), WorkspacePreset::legacy_illustrator_layout(platform));
+            assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);
         }
-        assert!(resolved.groups.iter().any(|g| g.active == Panel::Layers));
-        let layers = resolved
-            .groups
-            .iter()
-            .find(|g| g.active == Panel::Layers)
-            .unwrap();
-        let strip = &resolved.collapsed[0];
-        assert_eq!(strip.bounds.width, TILE_SIZE);
-        assert!(
-            (layers.bounds.x - strip.bounds.x - strip.bounds.width - WORKSPACE_SPACING).abs() < 1.
-        );
     }
 }

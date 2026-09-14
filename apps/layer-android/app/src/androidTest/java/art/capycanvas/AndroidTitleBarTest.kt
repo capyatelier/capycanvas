@@ -398,37 +398,20 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Restart uses committed header", committed, model().toString())
         shot("restart")
     }
-    @Test fun paintDefaultColumnsAndResetSurviveRestart() {
-        // Model a customized built-in saved by an older app. Its starting
-        // layout differs from today's default and must not control Restore.
-        assertEquals("builtin:workspace:illustrator", view().getString("id"))
-        scenario.close()
-        android.database.sqlite.SQLiteDatabase.openDatabase(
-            File(checkNotNull(CanvasHost.workspaceDirectoryForTest), "workspaces.sqlite3").absolutePath,
-            null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use { database ->
-            val id = "builtin:workspace:illustrator"
-            val content = database.rawQuery("SELECT content FROM items WHERE id = ?", arrayOf(id)).use { cursor ->
-                assertTrue(cursor.moveToFirst()); JSONObject(cursor.getString(0))
-            }
-            // The current fixture has no panel bands. Using this retained
-            // revision also keeps the on-disk baseline free of measurements.
-            val history = content.getJSONObject("history")
-            val previous = history.getJSONObject("revisions").getJSONObject(history.getString("current")).getJSONObject("layout")
-            content.put("baseline", previous)
-            database.execSQL("UPDATE items SET content = ? WHERE id = ?", arrayOf(content.toString(), id))
-        }
-        launch()
+    @Test fun photoDefaultColumnsAndPaintRestorationSurviveRestart() {
+        send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
+        assertEquals("builtin:workspace:photographer", view().getString("id"))
         val before = capture()
         send(obj("type" to "form", "kind" to "reset"))
         waitFor("latest default preview") { node("panel-body-color") != null && node("panel-body-layers") != null }
         assertEquals("Preview is not saved", before, capture())
         send(obj("type" to "cancel"))
-        assertEquals("Cancel retains the old customized layout", before, capture())
+        assertEquals("Cancel retains the current layout", before, capture())
         send(obj("type" to "form", "kind" to "reset"))
         waitFor("starting layout confirmation") { node("workspace-submit") != null }
         tap("workspace-submit")
         fun checkColumns() {
-            waitFor("primary Paint panels") { node("panel-body-color") != null && node("panel-body-properties") != null && node("panel-body-layers") != null }
+            waitFor("primary Photo panels") { node("panel-body-color") != null && node("panel-body-properties") != null && node("panel-body-layers") != null }
             val color = bounds("group-14")
             val properties = bounds("group-15")
             val layers = bounds("group-16")
@@ -448,7 +431,7 @@ class AndroidTitleBarTest {
             tap("tab-color")
             tap("tab-adjustments"); waitFor("Filters tab") { node("panel-body-adjustments") != null }
             tap("tab-properties")
-            checkColumns(); shot("paint-default-$theme")
+            checkColumns(); shot("photo-default-$theme")
         }
         for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = device
@@ -465,7 +448,15 @@ class AndroidTitleBarTest {
         scenario.close(); launch()
         checkColumns()
         assertEquals("Default arrangement survives restart", committed, layout())
-        shot("paint-default-restart")
+        shot("photo-default-restart")
+        send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+        send(obj("type" to "form", "kind" to "reset"))
+        tap("workspace-submit")
+        waitFor("original Paint panels") { node("panel-body-brushes") != null && node("panel-body-color") != null && node("panel-body-navigator") != null }
+        assertEquals("Paint restores its left panel column", bounds("group-6").left, bounds("group-10").left, 1f)
+        assertTrue(bounds("group-10").right < bounds("group-14").left)
+        assertTrue(bounds("group-14").right < bounds("collapsed-column-12").left)
+        shot("paint-original-restored")
     }
 
     @Test fun sketchDefaultsDrawersFeedbackStatusAndWorkspaceSwitch() {
