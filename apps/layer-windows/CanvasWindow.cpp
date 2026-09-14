@@ -956,6 +956,7 @@ void CanvasWindow::UpdatePopup() {
     if(closing||closed)return;
     auto storage=CapyUi::object(lastModel,L"windows_workspace");
     bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"close_requested"));
+    unavailable|=CapyUi::flag(CapyUi::object(lastModel,L"windows_settings_close"),L"requested");
     bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
     canvasFocus.IsEnabled(!blocked);
     if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
@@ -1026,7 +1027,9 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
             workspaceOwnerProperty=std::move(property);
         }
     }
-    if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))){Stop();return;}
+    auto preferencesClose=object(model,L"windows_settings_close");
+    if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))
+        &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))){Stop();return;}
     if(!statusFailed){
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");

@@ -221,10 +221,31 @@ impl Worker {
                             None => return,
                         }
                     };
-                    let error = write(&job.bytes).err(); // Never hold the mailbox during disk work.
-                    state.mailbox.lock().unwrap().completed =
-                        Some(Completion { id: job.id, error });
+                    // A failed worker must complete the newest accepted save
+                    // so close recovery cannot wait forever for a dead thread.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        write(&job.bytes) // Never hold the mailbox during disk work.
+                    }));
+                    let stopped = result.is_err();
+                    {
+                        let mut mailbox = state.mailbox.lock().unwrap();
+                        let id = if stopped {
+                            mailbox.stopping = true;
+                            mailbox.pending.take().map_or(job.id, |pending| pending.id)
+                        } else {
+                            job.id
+                        };
+                        let error = result
+                            .unwrap_or_else(|_| {
+                                Err("Preferences storage stopped unexpectedly.".into())
+                            })
+                            .err();
+                        mailbox.completed = Some(Completion { id, error });
+                    }
                     wake();
+                    if stopped {
+                        return;
+                    }
                 }
             })
             .map_err(|error| io_error("start storage for", error))?;
@@ -269,11 +290,22 @@ impl Drop for Worker {
 
 mod shared;
 
+#[derive(Clone, Default, PartialEq, serde::Serialize)]
+pub(crate) struct CloseStatus {
+    pub requested: bool,
+    pub ready: bool,
+    pub busy: bool,
+    pub error: Option<String>,
+    pub attempt: u64,
+}
+
 pub(crate) struct SettingsService {
     subscription: Option<shared::Subscription>,
     worker: Result<Worker, String>,
     submitted: Option<u32>,
     load_error: Option<String>,
+    save_error: Option<String>,
+    close: CloseStatus,
 }
 impl SettingsService {
     /// Called on the render owner before GPU startup or queued user actions.
@@ -309,6 +341,8 @@ impl SettingsService {
             subscription,
             submitted: None,
             load_error,
+            save_error: None,
+            close: CloseStatus::default(),
         }
     }
     fn sync(&mut self, native: &mut NativeHost) -> Result<(), String> {
@@ -329,6 +363,7 @@ impl SettingsService {
             .iter()
             .any(|request| request.id == completion.id)
         {
+            self.save_error = completion.error.clone();
             if completion.error.is_none() && native.error == self.load_error {
                 native.error = None;
                 self.load_error = None;
@@ -340,7 +375,7 @@ impl SettingsService {
         }
         Ok(())
     }
-    pub(crate) fn poll(&mut self, native: &mut NativeHost) -> Result<(), String> {
+    fn poll_saves(&mut self, native: &mut NativeHost) -> Result<(), String> {
         let completed = self.worker.as_ref().ok().and_then(Worker::completion);
         if let Some(completed) = completed {
             self.complete(native, completed)?;
@@ -397,6 +432,80 @@ impl SettingsService {
             native.dispatch(UiAction::CompleteRequest { id, error })?;
         }
         Ok(())
+    }
+    pub(crate) fn close_status(&self) -> &CloseStatus {
+        &self.close
+    }
+    fn pending(native: &NativeHost) -> bool {
+        native
+            .session
+            .state()
+            .requests
+            .iter()
+            .any(|request| matches!(request.kind, HostRequestKind::SaveSettings { .. }))
+    }
+    fn retry_save(&mut self, native: &mut NativeHost) -> Result<(), String> {
+        if let Err(error) = native.session.retry_settings_save() {
+            self.save_error = Some(error);
+            return Ok(());
+        }
+        self.poll_saves(native)
+    }
+    pub(crate) fn poll(&mut self, native: &mut NativeHost) -> Result<(), String> {
+        let previous = self.close.clone();
+        self.poll_saves(native)?;
+        if !native.session.state().document_file.close_ready {
+            self.close = CloseStatus {
+                attempt: self.close.attempt,
+                ..Default::default()
+            };
+        } else if !self.close.requested {
+            self.close.requested = true;
+            self.close.attempt = self.close.attempt.saturating_add(1);
+            // Flush accepted edits before the workspace releases its claim.
+            // Shared dirty state also covers a write started by another window.
+            if Self::pending(native)
+                || self.save_error.is_some()
+                || self.subscription.as_ref().is_some_and(|s| s.hub.dirty())
+            {
+                self.retry_save(native)?;
+            }
+        }
+        if self.close.requested && !self.close.ready {
+            self.close.busy = Self::pending(native);
+            self.close.error = if self.close.busy {
+                None
+            } else {
+                self.save_error.clone()
+            };
+            self.close.ready = !self.close.busy && self.close.error.is_none();
+        }
+        if self.close != previous {
+            native.invalidate_snapshot();
+        }
+        Ok(())
+    }
+    pub(crate) fn retry_close(&mut self, native: &mut NativeHost) -> Result<(), String> {
+        if self.close.requested && !self.close.busy && !self.close.ready {
+            self.close.attempt = self.close.attempt.saturating_add(1);
+            native.invalidate_snapshot();
+            self.retry_save(native)?;
+            self.poll(native)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn keep_open(&mut self, native: &mut NativeHost) {
+        if self.close.requested && !self.close.busy && !self.close.ready {
+            native.session.reset_document_close();
+            native.invalidate_snapshot();
+        }
+    }
+    pub(crate) fn discard_close(&mut self, native: &mut NativeHost) {
+        if self.close.requested && !self.close.busy && !self.close.ready {
+            self.close.ready = true;
+            self.close.error = None;
+            native.invalidate_snapshot();
+        }
     }
     /// Joins only on the render owner, before the callback context is destroyed.
     pub(crate) fn finish(&mut self, native: &mut NativeHost) -> Result<(), String> {

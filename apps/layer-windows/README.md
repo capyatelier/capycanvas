@@ -216,7 +216,14 @@ Windows uses the shared settings schema and migration rules. Writes run on a
 dedicated worker and replace the previous file atomically after flushing. An
 unreadable file is preserved as `settings.recovery.*.json` when a later change
 is saved. Save failures appear in the window and Preferences; drawing continues.
-A final save failure does not yet offer a Retry/Keep Open shutdown dialog.
+Closing waits for accepted preference writes before releasing the workspace.
+If a write fails, the native recovery dialog offers Retry, Keep open, or Close
+without saving. Keep open retains the live preferences and workspace; Retry
+saves the retained values without requiring another edit. Explicit discard
+leaves the last saved preferences file unchanged. The settings-storage fixture
+covers failed writes, repeated retry, native recovery decisions and restart.
+Rust tests also cover delayed writes, storage worker failure and shared unsaved
+preferences across windows.
 
 `CAPY_SETTINGS_DIRECTORY` overrides the storage directory and must be absolute.
 Use an owned, disposable directory under ignored artifacts for native UI tests.

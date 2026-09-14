@@ -3671,6 +3671,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    /// Retry the current preferences through the ordinary host request path.
+    /// Native close recovery can call this without changing a preference value.
+    pub fn retry_settings_save(&mut self) -> Result<(), String> {
+        self.request(HostRequestKind::SaveSettings {
+            settings: Box::new(self.state.settings.clone()),
+        })?;
+        self.changed(crate::regions::HOST, false);
+        Ok(())
+    }
+
     fn request(&mut self, kind: HostRequestKind) -> Result<(), String> {
         let id = self.next_request;
         self.next_request = id.checked_add(1).ok_or("Host request IDs exhausted")?;
