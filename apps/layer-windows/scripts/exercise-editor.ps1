@@ -205,8 +205,8 @@ try{
     [CapyEditorKeys]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace startup did not complete' 45
-    # Paint starts with its secondary column closed. Open its retained tools for this journey.
-    Invoke 'column-icon-brushes'
+    # Open secondary tools when the workspace keeps them in a collapsed column.
+    if(Find 'column-icon-brushes'){Invoke 'column-icon-brushes'}
     Wait-Until {@((Model).layout.groups|Where-Object active -eq 'brushes').Count -eq 1} 'Secondary tools did not open'
     Set-Viewport
     Wait-Until {@((Model).panel_measurements|Where-Object {$_.panel -eq 'brushes' -and $_.content_height -gt 0 -and $_.content_height -ne 320}).Count -eq 1} 'Native content measurements did not reach Core'
