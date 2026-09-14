@@ -812,6 +812,21 @@ independent documents, drawing while another window is modal, cancelled close,
 closing the original first, and zero process exit within five seconds. Drawing
 uses controlled replay; this is not physical input or performance acceptance.
 
+Run the preference-save failure case with:
+
+~~~powershell
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailPreferences
+~~~
+
+This also passed on the native Release build. It locks the fixture's saved
+preferences against replacement, then verifies that closing recovery stays in
+its owning window and retains that workspace claim. The other window can still
+Undo/Redo. A failed Retry preserves the saved bytes; after removing the lock,
+Retry saves both windows' edits and closes only the requesting window. A new
+window inherits those preferences, and the final process exits normally within
+the existing five-second limit. Preferences and history use the Edit menu so the
+checks work with workspace layouts that omit their titlebar buttons.
+
 With CAPY_TRACE_UI enabled, windows-<process>.json records live window IDs/HWNDs
 and ui-state-<process>-<window>.json identifies each window's model. These local
 files can contain private state and stay ignored. The initial window also keeps

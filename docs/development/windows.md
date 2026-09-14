@@ -202,6 +202,7 @@ cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-window
 ./apps/layer-windows/scripts/exercise-startup-close.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailPreferences
 ./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
