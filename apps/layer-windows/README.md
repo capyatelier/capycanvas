@@ -12,6 +12,13 @@ Web/Android arrangement, tool picker and workspace history. See the current
 [title-bar acceptance record](../../docs/development/title-bar-windows-acceptance.md)
 for scope and reproduction commands; older header/clock notes below are historical.
 
+The sections below are chronological validation checkpoints. Earlier statements
+about missing docking, document windows, runtime filters or workspace management
+are superseded by the later implementation sections. Current acceptance still
+requires whole-editor visual review, the strict GPU filter reference, physical
+pen/touch, mixed-display/lifecycle, clean-machine and installed-package checks,
+and sustained 120 Hz painting.
+
 ## Milestone integration
 
 Windows implementation work lives on `ports/windows`. At each major milestone, merge
@@ -1100,6 +1107,30 @@ behavior; exact raster parity and physical input/performance acceptance remain
 separate.
 
 ## Matched editor captures
+
+The current Paint review covers twelve native/Web pairs: 744, 960 and 1200 by
+660 logical pixels at scale 1.5, both themes, with fitted and zoomed paper beneath
+the title bar. Tool Set geometry differs by at most 0.50 physical pixels and
+Layers by 1.01; camera viewport, translation, zoom and work area agree exactly.
+Brush-preview rows now include the shared tool icon through the existing label
+component. Native checks cover all 17 tool projections, numeric drafts, retained
+controls and tool/layer context replacement; normal close exits successfully.
+
+The overall comparison still fails. Title-bar geometry differs by up to 21
+physical pixels, and the compact workspace presentation differs at 744 and 960.
+Windows follows Android's natural text widths and icon-sized compact selector;
+Web currently uses fixed title widths and a wider text selector. Full-image
+visual acceptance, including header/footer surfaces and native control styling,
+remains open. The image pairs are evidence, not a raster-parity pass.
+
+The fixture uses the same saved title-bar arrangement and supplies native caption
+reservations to the shared header geometry without shrinking the Web header.
+Each host measures its own controls and panels. Restoring the reference header
+reopens its previous transient columns through ordinary column icons. Native
+control IDs, UTF-8-independent zoom text and asynchronous viewport publication
+are handled explicitly. All pairs and mismatch reports are saved before the
+command returns failure; geometry tolerances and required control sets remain
+strict.
 
 The native capture fixture requires an isolated settings directory and
 CAPY_TRACE_UI=1. It uses actual Preferences, View and Navigator controls, then

@@ -55,22 +55,23 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=45) {
     }while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
 }
-function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root) {
+function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
+    $property=if($Id){[System.Windows.Automation.AutomationElement]::AutomationIdProperty}else{[System.Windows.Automation.AutomationElement]::NameProperty}
     $Scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.AndCondition]::new(
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
+            [System.Windows.Automation.PropertyCondition]::new($property,$Name),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type)))
 }
-function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root) {
-    Wait-Until {Find $Name $Type $Scope} "Missing native control: $Name"
-    (Find $Name $Type $Scope).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
+    Wait-Until {Find $Name $Type $Scope -Id:$Id} "Missing native control: $Name"
+    (Find $Name $Type $Scope -Id:$Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function Fit-Canvas {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
     Invoke 'Fit canvas' ([System.Windows.Automation.ControlType]::MenuItem)
 }
 function Set-Theme([string]$Theme) {
-    Invoke 'Preferences'
+    Invoke 'settings-button' -Id
     Wait-Until {Find 'Preferences' ([System.Windows.Automation.ControlType]::Window)} 'Preferences did not open'
     $dialog=Find 'Preferences' ([System.Windows.Automation.ControlType]::Window)
     $picker=Find 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox) $dialog
@@ -100,7 +101,7 @@ function Settle {
         if($status -and !$status.Current.IsOffscreen){return $false}
         $readout=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'canvas-camera'))
-        $expected=([Math]::Round($m.state.camera.zoom*100,[MidpointRounding]::AwayFromZero)).ToString()+'% · 0°'
+        $expected=([Math]::Round($m.state.camera.zoom*100,[MidpointRounding]::AwayFromZero)).ToString()+'% '+[char]0xB7+' 0'+[char]0xB0
         if(!$readout -or $readout.Current.Name -ne $expected){return $false}
         # A stable model does not imply that asynchronous GPU readbacks reached
         # the visible Image controls. Require each visible raster row's previews.
@@ -147,8 +148,9 @@ if(![CapyEditorCapture]::MoveWindow($handle,$outer.left,$outer.top,
     [int]($outer.bottom-$outer.top+$pixelHeight-$surfaceRect.Height),$true)){throw 'Cannot size native drawing surface'}
 Wait-Until {
     [CapyEditorCapture]::GetClientRect($handle,[ref]$client)|Out-Null
-    $surface.Current.BoundingRectangle.Width -eq $pixelWidth -and $surface.Current.BoundingRectangle.Height -eq $pixelHeight -and
-        (Model).state.camera.viewport[0] -eq $pixelWidth -and (Model).state.camera.viewport[1] -eq $pixelHeight
+    $m=Model
+    $m -and $surface.Current.BoundingRectangle.Width -eq $pixelWidth -and $surface.Current.BoundingRectangle.Height -eq $pixelHeight -and
+        $m.state.camera.viewport[0] -eq $pixelWidth -and $m.state.camera.viewport[1] -eq $pixelHeight
 } 'Native drawing surface and GPU viewport did not reach the exact capture dimensions'
 $fixtures=@()
 foreach($theme in @('dark','light')){
@@ -215,11 +217,11 @@ foreach($theme in @('dark','light')){
         $elements|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $OutputDirectory "elements-$name.json")
         $fixtures+=@{name=$name;viewport=@($Width,$Height);scale=$scale;theme=$theme;scenario=$scenario;
             native="native-$name.png";full_client="client-$name.png";surface_offset_pixels=$offset;client_pixels=@($client.right,$client.bottom);
-            workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;
+            workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;header_model=$model.header.model;workspace_switcher=$model.windows_workspace.switcher_display;
             document=$model.state.tabs[0];camera=$model.state.camera;layout=$model.layout;
             tool_set=@($elements|Where-Object{$_.id -match '^tool-(group|subtool)-'});
             layers=$layerElements;layer_geometry_source='UIElement RenderSize transformed into Drawing workspace; ActualWidth/Height and UIA bounds retained';
-            header=@($elements|Where-Object{$_.id -match '^(application-menu[s-]|workspace-switch|document-title$|zen-button$|fullscreen$|settings-button$)'})}
+            header=@($elements|Where-Object{$_.id -match '^(application-menu[s-]|workspace-switch|header-workspace-menu$|header-overflow-[0-2]$|document-title$|zen-button$|fullscreen$|settings-button$)'})}
         Write-Output "Captured $name at $Width x $Height logical, scale $scale"
     }
 }
