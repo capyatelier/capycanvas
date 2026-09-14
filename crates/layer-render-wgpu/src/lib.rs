@@ -421,8 +421,11 @@ struct BrushPassPlan {
 impl BrushPassPlan {
     fn for_style(style: &layer_render::DabStyle) -> Self {
         let state = BrushStateTargets {
+            // Watercolor's physical shader always reads/writes stroke coverage,
+            // independently of the ordinary brush accumulation preference.
             coverage: style.rendering.accumulation == BrushAccumulation::Uniform
-                || style.rendering.edge_after_stroke,
+                || style.rendering.edge_after_stroke
+                || style.execution == BrushExecution::Watercolor,
             canvas_wetness: style.wet_mix.wetness > 0.0,
             watercolor_wetness: style.execution == BrushExecution::Watercolor,
         };
@@ -1549,89 +1552,60 @@ impl WgpuRasterizer {
     }
 
     fn material_bind_group(
-        &self,
+        &mut self,
         layer_id: LayerId,
         coordinate: [u32; 2],
         stroke_id: StrokeId,
         watercolor: bool,
+        preview: bool,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
+        let offsets = std::array::from_fn::<_, 9, _>(|i| [i as i32 % 3 - 1, i as i32 / 3 - 1]);
+        self.prepare_raw_neighborhood(layer_id, coordinate, offsets, preview, encoder)?;
         let layer = self
             .paint_layers
             .iter()
             .find(|layer| layer.id == layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
-        Ok(self.material_bind_group_for_pages(
-            &layer.pages,
-            Some(layer),
-            None,
-            watercolor.then(|| {
-                &layer
-                    .watercolor_wetness_pages
-                    .iter()
-                    .find(|page| page.coordinate == coordinate)
-                    .expect("watercolor wetness page is prepared before binding")
-                    .active()
-                    .view
-            }),
-            coordinate,
-            stroke_id,
-        ))
-    }
-
-    fn material_bind_group_for_pages(
-        &self,
-        pages: &[LayerPage],
-        state_layer: Option<&PaintLayer>,
-        coverage_override: Option<&wgpu::TextureView>,
-        auxiliary_override: Option<&wgpu::TextureView>,
-        coordinate: [u32; 2],
-        stroke_id: StrokeId,
-    ) -> wgpu::BindGroup {
-        let mut views = Vec::with_capacity(9);
-        for offset_y in -1_i32..=1 {
-            for offset_x in -1_i32..=1 {
-                let neighbor_x = coordinate[0] as i32 + offset_x;
-                let neighbor_y = coordinate[1] as i32 + offset_y;
-                let view = if neighbor_x < 0 || neighbor_y < 0 {
-                    &self.empty_view
-                } else {
-                    let coordinate = [neighbor_x as u32, neighbor_y as u32];
-                    pages
-                        .iter()
-                        .find(|page| page.coordinate == coordinate)
-                        .or_else(|| {
-                            state_layer.and_then(|layer| {
-                                layer
-                                    .pages
-                                    .iter()
-                                    .find(|page| page.coordinate == coordinate)
-                            })
-                        })
-                        .map(|page| &page.active().view)
-                        .unwrap_or(&self.empty_view)
-                };
-                views.push(view);
-            }
+        let views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        let coverage = if preview {
+            self.preview_coverage_pages
+                .iter()
+                .find(|p| p.coordinate == coordinate)
+        } else {
+            None
         }
-        let coverage = coverage_override.unwrap_or_else(|| {
-            state_layer
-                .and_then(|layer| {
-                    layer
-                        .coverage_pages
-                        .iter()
-                        .find(|page| page.coordinate == coordinate && page.owner == Some(stroke_id))
-                })
-                .map(|page| &page.active().view)
-                .unwrap_or(&self.empty_scalar_view)
-        });
-        create_material_bind_group(
+        .or_else(|| {
+            layer
+                .coverage_pages
+                .iter()
+                .find(|p| p.coordinate == coordinate && p.owner == Some(stroke_id))
+        })
+        .map(|p| &p.active().view)
+        .unwrap_or(&self.empty_scalar_view);
+        let auxiliary = if watercolor {
+            let pages = if preview {
+                &self.preview_watercolor_wetness_pages
+            } else {
+                &layer.watercolor_wetness_pages
+            };
+            &pages
+                .iter()
+                .find(|p| p.coordinate == coordinate)
+                .expect("watercolor wetness page is prepared before binding")
+                .active()
+                .view
+        } else {
+            &self.reservoir.active().view
+        };
+        Ok(create_material_bind_group(
             &self.device,
             &self.material_layout,
             &views,
             &self.dab_buffer,
             coverage,
-            auxiliary_override.unwrap_or(&self.reservoir.active().view),
-        )
+            auxiliary,
+        ))
     }
 
     fn ensure_preview_destination_companions(&mut self, batches: &[DabBatch]) {
@@ -2077,8 +2051,8 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         preview: bool,
     ) -> Option<wgpu::BindGroup> {
+        debug_assert!(!self.tiled_sources.contains_key(&layer.id));
         let mut color_views = Vec::with_capacity(5);
-        let mut wetness_views = Vec::with_capacity(9);
         let mut any_source = false;
         for [offset_x, offset_y] in [[0_i32, 0_i32], [-1, 0], [1, 0], [0, -1], [0, 1]] {
             let x = coordinate[0] as i32 + offset_x;
@@ -2108,6 +2082,30 @@ impl WgpuRasterizer {
             };
             color_views.push(view);
         }
+        any_source |= layer
+            .watercolor_wetness_pages
+            .iter()
+            .chain(
+                self.preview_watercolor_wetness_pages
+                    .iter()
+                    .filter(|_| preview),
+            )
+            .any(|p| {
+                p.coordinate[0].abs_diff(coordinate[0]) <= 1
+                    && p.coordinate[1].abs_diff(coordinate[1]) <= 1
+            });
+        any_source
+            .then(|| self.watercolor_binding_with_colors(layer, coordinate, preview, &color_views))
+    }
+
+    fn watercolor_binding_with_colors(
+        &self,
+        layer: &PaintLayer,
+        coordinate: [u32; 2],
+        preview: bool,
+        color_views: &[&wgpu::TextureView],
+    ) -> wgpu::BindGroup {
+        let mut wetness_views = Vec::with_capacity(9);
         for offset_y in -1_i32..=1 {
             for offset_x in -1_i32..=1 {
                 let x = coordinate[0] as i32 + offset_x;
@@ -2133,23 +2131,18 @@ impl WgpuRasterizer {
                             .iter()
                             .find(|page| page.coordinate == neighbor)
                     });
-                    if page.is_some() {
-                        any_source = true;
-                    }
                     page.map(|page| &page.active().view)
                         .unwrap_or(&self.empty_scalar_view)
                 };
                 wetness_views.push(view);
             }
         }
-        any_source.then(|| {
-            create_watercolor_neighborhood_bind_group(
-                &self.device,
-                &self.watercolor_layout,
-                &color_views,
-                &wetness_views,
-            )
-        })
+        create_watercolor_neighborhood_bind_group(
+            &self.device,
+            &self.watercolor_layout,
+            color_views,
+            &wetness_views,
+        )
     }
 
     fn encode_clear(
@@ -2490,7 +2483,6 @@ impl WgpuRasterizer {
             coverage_source_secondary: Option<bool>,
             coverage_destination_secondary: Option<bool>,
             has_scalar_state: bool,
-            source_bind_group: wgpu::BindGroup,
         }
 
         let plan = BrushPassPlan::for_style(&batch.style);
@@ -2585,36 +2577,18 @@ impl WgpuRasterizer {
                         .iter()
                         .any(|page| page.coordinate == coordinate)
                 },
-                source_bind_group: self.material_bind_group(
-                    batch.layer_id,
-                    coordinate,
-                    batch.stroke_id,
-                    plan.state.watercolor_wetness,
-                )?,
             });
         }
-        // Reservoir exchange samples the immutable pre-batch canvas. Keep a
-        // bind group to that generation before the page ping-pong state flips.
-        let reservoir_exchange = if plan.reservoir {
-            batch_dabs
-                .last()
-                .map(|last| {
-                    let coordinate = [
-                        (last.center.x.max(0.0) as u32 / PAGE_SIZE)
-                            .min(self.document_extent[0].saturating_sub(1) / PAGE_SIZE),
-                        (last.center.y.max(0.0) as u32 / PAGE_SIZE)
-                            .min(self.document_extent[1].saturating_sub(1) / PAGE_SIZE),
-                    ];
-                    self.material_bind_group(batch.layer_id, coordinate, batch.stroke_id, false)
-                        .map(|bind_group| (coordinate, bind_group))
-                })
-                .transpose()?
-        } else {
-            None
-        };
-
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
+            let source_bind_group = self.material_bind_group(
+                batch.layer_id,
+                job.coordinate,
+                batch.stroke_id,
+                plan.state.watercolor_wetness,
+                false,
+                encoder,
+            )?;
             let page = self.paint_layers[layer_index]
                 .pages
                 .iter()
@@ -2779,10 +2753,37 @@ impl WgpuRasterizer {
                 self.paint_target_binding(&batch.style),
                 &[self.target_offset(job.coordinate)],
             );
-            pass.set_bind_group(2, &job.source_bind_group, &[]);
+            pass.set_bind_group(2, &source_bind_group, &[]);
             pass.set_bind_group(3, &texture_set.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+
+        // Reservoir exchange samples the immutable pre-batch canvas. Keep a
+        // bind group to that generation before the page ping-pong state flips.
+        let reservoir_exchange = if plan.reservoir {
+            batch_dabs
+                .last()
+                .map(|last| {
+                    let coordinate = [
+                        (last.center.x.max(0.0) as u32 / PAGE_SIZE)
+                            .min(self.document_extent[0].saturating_sub(1) / PAGE_SIZE),
+                        (last.center.y.max(0.0) as u32 / PAGE_SIZE)
+                            .min(self.document_extent[1].saturating_sub(1) / PAGE_SIZE),
+                    ];
+                    self.material_bind_group(
+                        batch.layer_id,
+                        coordinate,
+                        batch.stroke_id,
+                        false,
+                        false,
+                        encoder,
+                    )
+                    .map(|bind_group| (coordinate, bind_group))
+                })
+                .transpose()?
+        } else {
+            None
+        };
 
         for job in jobs {
             let page = self.paint_layers[layer_index]
@@ -2812,40 +2813,43 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    fn transport_bind_group_for_pages(
-        &self,
-        pages: &[LayerPage],
-        wetness_pages: &[WatercolorWetnessPage],
+    fn transport_bind_group(
+        &mut self,
+        layer_id: LayerId,
         coordinate: [u32; 2],
-    ) -> wgpu::BindGroup {
-        let mut colors = Vec::with_capacity(5);
-        let mut wetness = Vec::with_capacity(5);
-        for [offset_x, offset_y] in [[0_i32, 0_i32], [-1, 0], [1, 0], [0, -1], [0, 1]] {
-            let x = coordinate[0] as i32 + offset_x;
-            let y = coordinate[1] as i32 + offset_y;
+        preview: bool,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<wgpu::BindGroup, GpuRasterError> {
+        let offsets = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]];
+        self.prepare_raw_neighborhood(layer_id, coordinate, offsets, preview, encoder)?;
+        let layer = self
+            .paint_layers
+            .iter()
+            .find(|l| l.id == layer_id)
+            .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
+        let colors = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        let wetness_pages = if preview {
+            &self.preview_watercolor_wetness_pages
+        } else {
+            &layer.watercolor_wetness_pages
+        };
+        let wetness = offsets.map(|[dx, dy]| {
+            let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
             if x < 0 || y < 0 {
-                colors.push(&self.empty_view);
-                wetness.push(&self.empty_scalar_view);
-                continue;
+                return &self.empty_scalar_view;
             }
-            let neighbor = [x as u32, y as u32];
-            colors.push(
-                pages
-                    .iter()
-                    .find(|page| page.coordinate == neighbor)
-                    .map(|page| &page.active().view)
-                    .unwrap_or(&self.empty_view),
-            );
-            if let Some(page) = wetness_pages
+            wetness_pages
                 .iter()
-                .find(|page| page.coordinate == neighbor)
-            {
-                wetness.push(&page.active().view);
-            } else {
-                wetness.push(&self.empty_scalar_view);
-            }
-        }
-        create_transport_bind_group(&self.device, &self.transport_layout, &colors, &wetness)
+                .find(|p| p.coordinate == [x as u32, y as u32])
+                .map(|p| &p.active().view)
+                .unwrap_or(&self.empty_scalar_view)
+        });
+        Ok(create_transport_bind_group(
+            &self.device,
+            &self.transport_layout,
+            &colors,
+            &wetness,
+        ))
     }
 
     fn encode_watercolor_transport(
@@ -2869,7 +2873,6 @@ impl WgpuRasterizer {
             color_destination_secondary: bool,
             wetness_source_secondary: bool,
             wetness_destination_secondary: bool,
-            bind_group: wgpu::BindGroup,
         }
 
         let updated = unique_page_coordinates(damages);
@@ -2903,11 +2906,6 @@ impl WgpuRasterizer {
                             color_destination_secondary: !color.active_secondary,
                             wetness_source_secondary: wetness.active_secondary,
                             wetness_destination_secondary: !wetness.active_secondary,
-                            bind_group: self.transport_bind_group_for_pages(
-                                &self.preview_pages,
-                                &self.preview_watercolor_wetness_pages,
-                                *coordinate,
-                            ),
                         }
                     })
                     .collect::<Vec<_>>()
@@ -2936,17 +2934,14 @@ impl WgpuRasterizer {
                             color_destination_secondary: !color.active_secondary,
                             wetness_source_secondary: wetness.active_secondary,
                             wetness_destination_secondary: !wetness.active_secondary,
-                            bind_group: self.transport_bind_group_for_pages(
-                                &layer.pages,
-                                &layer.watercolor_wetness_pages,
-                                *coordinate,
-                            ),
                         }
                     })
                     .collect::<Vec<_>>()
             };
 
             for job in &jobs {
+                let bind_group =
+                    self.transport_bind_group(batch.layer_id, job.coordinate, preview, encoder)?;
                 let (color_source, color_destination, wetness_source, wetness_destination) =
                     if preview {
                         let color = self
@@ -3065,7 +3060,7 @@ impl WgpuRasterizer {
                     self.paint_target_binding(&batch.style),
                     &[self.target_offset(job.coordinate)],
                 );
-                pass.set_bind_group(2, &job.bind_group, &[]);
+                pass.set_bind_group(2, &bind_group, &[]);
                 pass.set_bind_group(3, &transport_texture_bind_group, &[]);
                 pass.draw(0..3, 0..1);
             }
@@ -3288,7 +3283,6 @@ impl WgpuRasterizer {
             coverage_source_secondary: Option<bool>,
             coverage_destination_secondary: Option<bool>,
             has_watercolor_wetness: bool,
-            source_bind_group: wgpu::BindGroup,
         }
 
         let plan = BrushPassPlan::for_style(&batch.style);
@@ -3312,29 +3306,19 @@ impl WgpuRasterizer {
                 coverage_source_secondary: coverage.map(|page| page.active_secondary),
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
                 has_watercolor_wetness: plan.state.watercolor_wetness,
-                source_bind_group: self.material_bind_group_for_pages(
-                    &self.preview_pages,
-                    self.paint_layers
-                        .iter()
-                        .find(|layer| layer.id == batch.layer_id),
-                    coverage.map(|page| &page.active().view),
-                    plan.state.watercolor_wetness.then(|| {
-                        &self
-                            .preview_watercolor_wetness_pages
-                            .iter()
-                            .find(|page| page.coordinate == coordinate)
-                            .expect("preview watercolor wetness page is prepared before binding")
-                            .active()
-                            .view
-                    }),
-                    coordinate,
-                    batch.stroke_id,
-                ),
             });
         }
 
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
+            let source_bind_group = self.material_bind_group(
+                batch.layer_id,
+                job.coordinate,
+                batch.stroke_id,
+                plan.state.watercolor_wetness,
+                true,
+                encoder,
+            )?;
             let page = self
                 .preview_pages
                 .iter()
@@ -3489,7 +3473,7 @@ impl WgpuRasterizer {
                 self.paint_target_binding(&batch.style),
                 &[self.target_offset(job.coordinate)],
             );
-            pass.set_bind_group(2, &job.source_bind_group, &[]);
+            pass.set_bind_group(2, &source_bind_group, &[]);
             pass.set_bind_group(3, &texture_set.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -3521,35 +3505,25 @@ impl WgpuRasterizer {
         batch: &DabBatch,
         damage: PixelRect,
     ) -> Result<(), GpuRasterError> {
-        struct Job {
-            coordinate: [u32; 2],
-            source_bind_group: wgpu::BindGroup,
-        }
-
         let plan = BrushPassPlan::for_style(&batch.style);
-        let jobs = page_coordinates(damage)
-            .map(|coordinate| {
-                Ok(Job {
-                    coordinate,
-                    source_bind_group: self.material_bind_group(
-                        batch.layer_id,
-                        coordinate,
-                        batch.stroke_id,
-                        plan.state.watercolor_wetness,
-                    )?,
-                })
-            })
-            .collect::<Result<Vec<_>, GpuRasterError>>()?;
         let texture_key = Self::texture_set_key(&batch.style);
-        for job in jobs {
+        for coordinate in page_coordinates(damage) {
+            let source_bind_group = self.material_bind_group(
+                batch.layer_id,
+                coordinate,
+                batch.stroke_id,
+                plan.state.watercolor_wetness,
+                false,
+                encoder,
+            )?;
             let page = self
                 .preview_pages
                 .iter()
-                .find(|page| page.coordinate == job.coordinate)
+                .find(|page| page.coordinate == coordinate)
                 .expect("preview page is prepared before encoding");
             let local = damage
-                .intersect(page_rect(job.coordinate))
-                .page_local(job.coordinate);
+                .intersect(page_rect(coordinate))
+                .page_local(coordinate);
             if local.is_empty() {
                 continue;
             }
@@ -3589,9 +3563,9 @@ impl WgpuRasterizer {
             pass.set_bind_group(
                 1,
                 self.paint_target_binding(&batch.style),
-                &[self.target_offset(job.coordinate)],
+                &[self.target_offset(coordinate)],
             );
-            pass.set_bind_group(2, &job.source_bind_group, &[]);
+            pass.set_bind_group(2, &source_bind_group, &[]);
             pass.set_bind_group(3, &texture_set.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -4524,6 +4498,7 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
+        self.preview_damage = new_preview_damage;
         if let Some(layer_id) = new_preview_layer
             && !new_preview_direct_to_composite
         {
@@ -4549,7 +4524,12 @@ impl CanvasRenderer for WgpuRasterizer {
                         .iter()
                         .find(|page| page.coordinate == coordinate)
                         .expect("preview pages are prepared before encoding");
-                    let local = if preview_is_watercolor || scene_required {
+                    // Material sampling can reach outside the dab's scissor.
+                    // Seed complete neighbor pages for a private prediction fork.
+                    let local = if preview_is_watercolor
+                        || scene_required
+                        || destination_preview_batches > 0
+                    {
                         page_rect(coordinate).page_local(coordinate)
                     } else {
                         copied
@@ -4598,6 +4578,15 @@ impl CanvasRenderer for WgpuRasterizer {
                     }
                 }
             }
+            if new_preview_requires_base
+                && let Some(layer) = packet.layers.iter().find(|l| l.id == layer_id && l.source.is_some())
+            {
+                let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+                scene.initialize_source_preview(self, layer, copied, &mut encoder)?;
+                self.scene = Some(scene);
+            }
+            let source = self.paint_layers.iter().find(|l| l.id == layer_id)
+                .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
             // Prediction is a disposable fork of committed stroke coverage.
             // Initialize only pages touched by this preview, then let its
             // microbatches ping-pong the private copy exactly like persistent
@@ -4732,7 +4721,6 @@ impl CanvasRenderer for WgpuRasterizer {
                 )?;
             }
         }
-        self.preview_damage = new_preview_damage;
         self.preview_layer_id = new_preview_layer;
         self.preview_requires_base = new_preview_requires_base;
         self.preview_direct_to_composite = new_preview_direct_to_composite;
@@ -6818,6 +6806,8 @@ mod tests {
     mod material;
     #[cfg(not(target_arch = "wasm32"))]
     mod source_tiles;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod source_brushes;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

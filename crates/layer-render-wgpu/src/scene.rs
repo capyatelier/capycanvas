@@ -248,6 +248,42 @@ impl Scene {
         }
         self.encode_jobs(r, encoder)
     }
+    pub fn initialize_source_preview(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        layer: &Layer,
+        damage: PixelRect,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        self.jobs.clear();
+        let stored = r.paint_layers.iter().find(|p| p.id == layer.id);
+        let pages: Vec<_> = r
+            .preview_pages
+            .iter()
+            .filter(|p| {
+                !page_rect(p.coordinate).intersect(damage).is_empty()
+                    && !stored.is_some_and(|l| l.pages.iter().any(|s| s.coordinate == p.coordinate))
+            })
+            .map(|p| (p.coordinate, p.primary.view.clone()))
+            .collect();
+        for (coordinate, target) in pages {
+            let Some(view) = self.source_tile(r, layer, coordinate)? else {
+                continue;
+            };
+            let mut data = [0.; 24];
+            data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
+            data[8] = 1.;
+            data[9] = 1.;
+            self.jobs.push(Job::Draw {
+                target,
+                sources: [view, r.empty_view.clone()],
+                data,
+                over: false,
+                clip: None,
+            });
+        }
+        self.encode_jobs(r, encoder)
+    }
     pub fn begin_frame(&mut self) {
         self.record_count = 0;
         self.effect_passes = 0;
@@ -330,8 +366,8 @@ impl Scene {
         #[cfg(target_arch = "wasm32")]
         Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
     }
-    /// The caller must encode its read/copy before requesting another tile:
-    /// these textures belong to the fixed, queue-ordered source cache.
+    /// Consume a bounded group before gathering the next one: these textures
+    /// belong to the fixed, queue-ordered source cache.
     pub fn source_tile_for_query(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -354,6 +390,55 @@ impl Scene {
         }
         #[cfg(target_arch = "wasm32")]
         Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepared_source_view(
+        &self,
+        source: &std::sync::Arc<layer_core::color::source::SourceImage>,
+        coordinate: [u32; 2],
+    ) -> Option<&wgpu::TextureView> {
+        self.source_tiles.prepared_view(source, coordinate)
+    }
+
+    fn watercolor_binding(
+        &mut self,
+        r: &WgpuRasterizer,
+        layer: &Layer,
+        stored: &PaintLayer,
+        coordinate: [u32; 2],
+        preview: bool,
+    ) -> Result<wgpu::BindGroup, GpuRasterError> {
+        let mut colors = Vec::with_capacity(5);
+        for [dx, dy] in [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]] {
+            let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
+            let mut view = None;
+            if x >= 0 && y >= 0 {
+                let neighbor = [x as u32, y as u32];
+                let predicted = preview
+                    .then(|| {
+                        r.preview_pages.iter().find(|p| {
+                            p.coordinate == neighbor
+                                && !r.preview_damage.intersect(page_rect(neighbor)).is_empty()
+                        })
+                    })
+                    .flatten();
+                view = predicted
+                    .or_else(|| stored.pages.iter().find(|p| p.coordinate == neighbor))
+                    .map(|p| p.active().view.clone());
+                if view.is_none() {
+                    view = self.source_tile(r, layer, neighbor)?;
+                }
+            }
+            colors.push(view.unwrap_or_else(|| r.empty_view.clone()));
+        }
+        // Source uploads precede the immediately appended watercolor job. No
+        // later neighborhood may be planned before that job has its bindings.
+        Ok(r.watercolor_binding_with_colors(
+            stored,
+            coordinate,
+            preview,
+            &colors.iter().collect::<Vec<_>>(),
+        ))
     }
     fn effect(
         &mut self,
@@ -622,7 +707,10 @@ impl Scene {
                     }
                     let preview = r.preview_layer_id == Some(layer.id)
                         && !r.preview_damage.intersect(page_rect(c)).is_empty();
-                    let wet_nearby = stored.is_some_and(|stored| stored.watercolor.is_some()
+                    let watercolor_preview = preview && packet.dab_batches.iter().any(|b|
+                        b.layer_id == layer.id && b.kind == DabBatchKind::Preview
+                            && b.style.execution == BrushExecution::Watercolor);
+                    let wet_nearby = stored.is_some_and(|stored| (stored.watercolor.is_some() || watercolor_preview)
                         && stored
                             .watercolor_wetness_pages
                             .iter()
@@ -636,27 +724,24 @@ impl Scene {
                                     && p.coordinate[1].abs_diff(c[1]) <= 1
                             }));
                     if wet_nearby {
-                        if let Some(binding) =
-                            r.watercolor_neighborhood_bind_group(stored.unwrap(), c, preview)
-                        {
-                            let page = self.alloc(r, wgpu::Color::TRANSPARENT);
-                            self.jobs.push(Job::Watercolor {
-                                target: self.pool[page].view.clone(),
-                                binding,
-                                record: (self.style_base + index) as u32,
-                                coordinate: c,
-                            });
-                            self.draw(
-                                r,
-                                out,
-                                self.pool[page].view.clone(),
-                                None,
-                                rect,
-                                [1., 1., 0., 0.],
-                                true,
-                            );
-                            self.free(page);
-                        }
+                        let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
+                        let page = self.alloc(r, wgpu::Color::TRANSPARENT);
+                        self.jobs.push(Job::Watercolor {
+                            target: self.pool[page].view.clone(),
+                            binding,
+                            record: (self.style_base + index) as u32,
+                            coordinate: c,
+                        });
+                        self.draw(
+                            r,
+                            out,
+                            self.pool[page].view.clone(),
+                            None,
+                            rect,
+                            [1., 1., 0., 0.],
+                            true,
+                        );
+                        self.free(page);
                     } else {
                         let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
                         let predicted = if preview {
@@ -980,10 +1065,8 @@ impl Scene {
                 }
                 LayerOperationKind::ApplyMask => {
                     let mut resolved = None;
-                    if watercolor
-                        && let Some(binding) =
-                            r.watercolor_neighborhood_bind_group(stored, c, false)
-                    {
+                    if watercolor {
+                        let binding = self.watercolor_binding(r, layer, stored, c, false)?;
                         let p = self.alloc(r, wgpu::Color::TRANSPARENT);
                         self.jobs.push(Job::Watercolor {
                             target: self.pool[p].view.clone(),

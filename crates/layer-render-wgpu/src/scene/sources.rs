@@ -62,6 +62,17 @@ pub(super) struct SourceTiles {
     pub misses: u64,
 }
 impl SourceTiles {
+    pub fn prepared_view(
+        &self,
+        source: &Arc<SourceImage>,
+        coordinate: [u32; 2],
+    ) -> Option<&wgpu::TextureView> {
+        let weak = Arc::downgrade(source);
+        self.slots
+            .iter()
+            .find(|s| s.coordinate == coordinate && s.source.ptr_eq(&weak))
+            .map(|s| &s.view)
+    }
     pub fn uploads_full(&self) -> bool {
         self.in_flight.count.load(Ordering::Acquire) >= SOURCE_SLOTS
     }

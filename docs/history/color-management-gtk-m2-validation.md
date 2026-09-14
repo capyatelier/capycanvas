@@ -879,3 +879,91 @@ The final level-1 build also passes all 26 color tests, four GPU project tests,
 and the isolated native GTK file and diagnostics/GPU-recovery workflows. Logs:
 `output-final-{build,color-tests}.log`, `output-project-tests.log`, and
 `output-gtk-{files,recovery}.log`. No other host integration was changed.
+
+## Source-aware material brushes and prediction (2026-09-14)
+
+Material brush neighborhoods, watercolor transport/composition and disposable
+prediction pages now include immutable photo tiles beneath paint overrides.
+Preparation warms at most nine of the 16 source-cache slots; each binding is
+consumed before another neighborhood can evict its inputs. Bindings borrow
+prepared views. Persistent page generations flip after all jobs have sampled
+the pre-batch state; reservoir exchange retains that same generation. Superseded
+paint-only binding helpers and eagerly retained job bindings were removed.
+
+Regression tests exposed two additional prerequisites: untouched photo prediction
+pages were initialized as transparent, and default-accumulation watercolor could
+omit the coverage attachment required by its physical shader. Prediction now
+seeds complete disposable pages, limits retained preview inputs to the current
+tail footprint, and initializes source originals without creating permanent paint
+pages. Watercolor explicitly requests its required coverage state.
+
+The new physical-GPU comparison covers Smudge, Wet, Liquify and Watercolor on a
+2305×769 source with 40 original tiles. It crosses cache capacity and tile edges,
+then compares initial rendering, one prediction batch, a shortened two-batch
+prediction tail, persistent painting and zero-dab PenUp against materialized
+reference pixels. All 20 complete-image comparisons agree within one integer8
+code. Each brush changes pixels; untouched neighbors remain unmaterialized,
+source digests remain exact and source upload staging stays within 16 MiB.
+The source uses integer16 endpoints representable in integer8: this qualifies
+source access and existing paint behavior, **not integer16 editing precision**.
+
+Final correctness: **136 GPU tests passed / 18 benchmark tests ignored**, four
+GPU project tests passed, and isolated native GTK file and diagnostics/GPU
+recovery workflows passed. Logs: `source-brush-final-{build,gpu-tests,project-tests}.log`,
+`source-brush-final-gtk-{files,recovery}{,-run}.log`.
+
+A fresh parent executable from `196e456` and the first implementation each pass
+all 10,920 measured frames in the 25-scenario suite; every final PNG is byte
+identical. The first implementation cloned owned texture/view handles for each
+neighbor and triggered relative CPU gates in several material brushes. Replacing
+that with borrowed prepared views removes the repeatable Move regressions.
+Five affected scenarios were then measured in current/parent/parent/current order,
+10 repetitions per case (`source-brush-abba-*`). Final PNGs remain identical.
+
+Oil PenUp still triggered the relative gate in those short runs (40 measured
+PenUp samples, whose reported p99 is the maximum). Paired phase probes measured
+frame encoding, primary submission, capture metadata/allocation/copy encoding,
+command finishing and capture submission. Excluding each repetition's three
+setup captures and one warm-up capture, parent/current capture p99 was
+552/506 microseconds; frame encode 536/642, primary submit 1044/955. Capture
+allocation p99 was 4/6 microseconds. No capture-growth mechanism was established.
+The cold setup allocation/submit spikes are outside the drawing sample window.
+
+Uninstrumented 20-repetition Oil runs in parent/current/current/parent order
+(80 measured PenUp samples per run) clear the trigger:
+
+| Run | CPU Move p95 / p99 ms | CPU PenUp p99 ms |
+| --- | ---: | ---: |
+| parent 0 | 1.960 / 2.441 | 2.112 |
+| current 1 | 1.882 / 2.286 | 2.111 |
+| current 2 | 1.917 / 2.357 | 2.165 |
+| parent 3 | 1.902 / 2.366 | 2.294 |
+
+All 11,680 measured frames in these four runs pass 8.33 ms. Artifacts are
+`source-brush-oil20-*`; diagnostic probes are `source-brush-trace-*`.
+`tools/performance/trace-raster-commit.py --parent 196e456 --current REV
+--output-dir OUTPUT` reproduces isolated instrumented builds from committed
+revisions; run the printed executables with `CAPY_TRACE_COMMIT_PHASES=1` and
+`LAYER_GPU_INDEX=0`. Instrumented timings are diagnostic, not qualification.
+
+Prediction comparison uses an 8 ms simulated input tail with +4/+8 ms predictions.
+Initial Smudge/Liquify CPU and completion timings did not regress. Initial Oil
+and Watercolor CPU p95 triggers cleared in current/parent/parent/current repeats:
+Oil parent 3.527–4.015 ms versus current 3.353–3.425; Watercolor parent
+3.296–3.380 versus current 3.382–3.511. Current prediction-enabled frames all
+remain within 8.33 ms; one parent Oil frame exceeds it. Tip gap, correction,
+preview dab counts and resident memory agree across revisions. Watercolor's
+completed p95 remains higher at 5.834–5.854 versus 5.502–5.596 ms (0.238–0.352 ms),
+while p99 is 6.275–6.378 versus 6.062–6.138 ms. Complete prediction-page seeding
+is required for neighborhood correctness and adds copy area. This remaining
+completion-time signal must be rechecked in final sustained native qualification;
+it is not waived by the CPU result or attributed solely to noise. Logs/reports:
+`source-brush-feedback-*`, `source-brush-feedback-repeat-*`. These offscreen
+fixtures do not establish GTK input-to-present latency.
+
+Reproduce ordinary runs using saved binaries `source-brush-parent-gpu-bench`
+and `source-brush-borrow-gpu-bench`, `--scenario NAME --repeats 10 --report FILE`
+(or 20 for Oil), with GPU index 0. Use `--feedback-comparison` for prediction
+(the mode runs its own single fixture and does not use `--repeats`). Final
+integer16 paint, source-aware transforms/thumbnails and bounded whole-document
+working/composite residency remain prerequisites to enabling GTK photo editing.

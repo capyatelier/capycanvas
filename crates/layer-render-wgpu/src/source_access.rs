@@ -8,7 +8,84 @@ pub(super) struct RawTile {
 }
 
 impl WgpuRasterizer {
-    /// Consume this texture in queue order before requesting more source tiles.
+    /// Prepare at most one job's neighborhood before borrowing its views.
+    /// Ordinary paint has no source preparation or resource-handle cloning.
+    pub(super) fn prepare_raw_neighborhood<const N: usize>(
+        &mut self,
+        layer: LayerId,
+        coordinate: [u32; 2],
+        offsets: [[i32; 2]; N],
+        preview: bool,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        assert!(N <= SOURCE_SLOTS);
+        if !self.tiled_sources.contains_key(&layer) {
+            return Ok(());
+        }
+        for [dx, dy] in offsets {
+            let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
+            if x < 0 || y < 0 {
+                continue;
+            }
+            let neighbor = [x as u32, y as u32];
+            if preview
+                && !self
+                    .preview_damage
+                    .intersect(page_rect(neighbor))
+                    .is_empty()
+                && self.preview_pages.iter().any(|p| p.coordinate == neighbor)
+            {
+                continue;
+            }
+            self.raw_layer_tile(layer, neighbor, encoder)?;
+        }
+        Ok(())
+    }
+
+    /// Consume the resulting binding before preparing another neighborhood;
+    /// no cache eviction may intervene. All returned resources are borrowed.
+    pub(super) fn raw_layer_neighborhood<'a, const N: usize>(
+        &'a self,
+        layer: &'a PaintLayer,
+        coordinate: [u32; 2],
+        offsets: [[i32; 2]; N],
+        preview: bool,
+    ) -> [&'a wgpu::TextureView; N] {
+        offsets.map(|[dx, dy]| {
+            let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
+            if x < 0 || y < 0 {
+                return &self.empty_view;
+            }
+            let neighbor = [x as u32, y as u32];
+            let predicted = if preview
+                && !self
+                    .preview_damage
+                    .intersect(page_rect(neighbor))
+                    .is_empty()
+            {
+                self.preview_pages.iter().find(|p| p.coordinate == neighbor)
+            } else {
+                None
+            };
+            if let Some(page) =
+                predicted.or_else(|| layer.pages.iter().find(|p| p.coordinate == neighbor))
+            {
+                return &page.active().view;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(source) = self.tiled_sources.get(&layer.id)
+                && let Some(view) = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.prepared_source_view(source, neighbor))
+            {
+                return view;
+            }
+            &self.empty_view
+        })
+    }
+
+    /// Consume this texture in queue order before the source cache can evict it.
     /// It can be encoded sRGB8 paint or linear Float32 original-source data.
     pub(super) fn raw_layer_tile(
         &mut self,
