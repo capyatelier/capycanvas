@@ -10,6 +10,81 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current editor parity milestone
+
+Prioritize visible Web/Android parity gaps and simple shared solutions. Use the
+iPad simulator for routine UI iteration; reserve physical iPad runs for major
+milestones and hardware-specific Pencil, provider, lifecycle and performance
+acceptance. Avoid repeating passing checks without a relevant change. Commit
+only major milestones.
+
+Main is integrated through `59732aa`; the final incoming changes are Windows-only.
+Paint again has Tool Set, Tool/Brush size
+and Color on the left and its right collapsed stack initially open. Photo uses
+the reviewed outer-right Color/Diagnostics, Properties/Filters and Layers column
+with its secondary strip closed. All eleven recovery stashes remain.
+
+This milestone groups three visible fixes:
+
+- Docked Color wheels fit their available height, retaining the shared 128-point
+  minimum and scrolling below it. Six real SwiftUI allocations match Web geometry
+  exactly. Paint and Photo checks require the wheel and every corner control to
+  fit without scrolling at their default sizes.
+- Collapsed-column bottom grips now have the correct rotation. Headers, vertical
+  toolbar footers and column footers share Web/Android's orientation, opacity and
+  inset through one drawing. Drag targets and recognition remain unchanged.
+- The user chose Web's gray title-bar backgrounds over Android's transparent
+  style. Buttons, menu labels, title and status use the existing theme palette
+  and button style; empty space retains the live canvas. The redundant ink-halo
+  renderer and its parameters are removed. Menu labels also follow the selected
+  title-bar tile height. Mac application menus remain in the OS menu bar.
+
+The full-editor capture helper now selects the current managed Paint workspace,
+waits for Navigator and thumbnails, and uses the visible View → Fit canvas action.
+It removes the old Mac panel-configuration workaround. Light/dark fit and zoomed
+captures record dimensions and the existing iPad window-control clearance, which
+Chrome reproduces through the shared layout action. Exact PNG equality remains
+a diagnostic; review perceptual parity at normal viewing size.
+
+The integrated Apple, host, UI and native workspace suite passes 528 tests, with
+one existing host benchmark ignored. Both signed version-5 builds pass. Mac
+version 5 passes four workflows: light/dark complete Paint, Navigator/blend Undo,
+and Paint/Photo column opening and relaunch. The unchanged title-bar code also
+passes Mac version 4 customization and tool-drawer checks. Physical version 5
+passes all seven workflows with no failures or skips: Color contacts, light/dark
+complete Paint, Navigator/blend Undo, Paint/Photo columns and relaunch, title-bar
+customization and tool drawers.
+
+Simulator version 4 passes both complete-editor workflows. Its customization
+drag instead moved the OS window, and the following drawer containment check
+failed in that smaller window. Retain these failures; do not infer a new product
+workaround from them. The corresponding physical iPad checks pass; windowed
+simulator input remains a separate unresolved case. Earlier simulator Color,
+Paint/column and numeric checks passed. Earlier native capture setup failures
+and the fractional-coordinate hue failure remain recorded; hue tests now allow
+one degree and report accepted state on failure.
+
+Eight final native/Web full-image comparisons retain every pixel. Normal-size
+review shows the accepted Color fit, footer grips and readable gray header
+backgrounds in both themes, including paper behind the header. Mean channel
+errors span 0.92–1.65 on iPad and 1.56–4.61 on Mac (0–255); intentional OS menu,
+window and status differences remain in those diagnostics. These states do not
+establish every popup, workspace and input-state visual gate.
+
+The current signed review app and runner are installed. Their pre-test scoped
+query verifies the artist descriptor unchanged after installation. Post-test
+app queries and a direct review-only launch all time out in the local CoreDevice
+service. The review namespace is **not yet restored**, and the post-test artist
+descriptor is unverified. Do not scan or restart unrelated processes to clear
+this. Use the installed descriptors in `native-v5/ipad-apps-installed.json` and
+the existing saved review environment for a later scoped restoration; retain
+all failed results. Regular artist app data was never used for these tests.
+
+Evidence is ignored under `artifacts/apple-editor-parity-v1/` and
+`artifacts/apple-color-fit-v1/`. Complete feature/menu coverage, windowed iPad
+input, physical Pencil/keyboard, provider/interruption and sustained Mac 90 Hz /
+iPad 120 Hz acceptance remain open. The overall goal is **incomplete**.
+
 ## Retained renderer and committed recovery
 
 This milestone follows published column-stack commit `7d5d59b` and integrates

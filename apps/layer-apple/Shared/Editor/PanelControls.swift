@@ -6,6 +6,7 @@ struct PanelControls: View {
     var scrollable = true
     var measureForWorkspace = true
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var padding: CGFloat { panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8 }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace)
             .background {
@@ -29,25 +30,32 @@ struct PanelControls: View {
     }
     private var controls: some View {
         Group {
-            if scrollable { ScrollView { controlBody }.frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else { controlBody }
+            if scrollable {
+                GeometryReader { viewport in
+                    ScrollView {
+                        controlBody(maximumHeight: max(128, viewport.size.height - padding * 2))
+                    }
+                }
+            } else { controlBody() }
         }
     }
-    private var controlBody: some View {
+    private func controlBody(maximumHeight: CGFloat? = nil) -> some View {
         VStack(alignment: .leading, spacing: 12) {
                 ForEach(panel["controls"].array.indices, id: \.self) { index in
                     let item = panel["controls"][index]
-                    if item["visible_in_panel"].bool { control(item) }
+                    if item["visible_in_panel"].bool { control(item, maximumHeight: maximumHeight) }
                 }
-        }.padding(panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8)
+        }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .modifier(PanelBodyMeasurement(panel: panel["id"].string))
     }
-    @ViewBuilder func control(_ item: JSON) -> some View {
+    @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {
         case "brushes": ToolSetControls(store: store)
         case "tool_settings": ToolSettingsControls(store: store)
-        case "color_wheel": ColorPanel(store: store)
+        // Match the shared panel's fit-to-viewport wheel while retaining its
+        // readable minimum size and scrolling for smaller/customized panels.
+        case "color_wheel": ColorPanel(store: store).frame(maxHeight: maximumHeight)
         case "properties": LayerPropertiesPanel(store: store)
         case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")

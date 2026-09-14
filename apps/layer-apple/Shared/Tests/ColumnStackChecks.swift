@@ -1,44 +1,71 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkPaintDefaultColumns(in app: XCUIApplication) {
+    @MainActor func checkDefaultWorkspaceColumns(in app: XCUIApplication, photo: Bool = false) {
+        let workspace = photo ? "photographer" : "illustrator"
         app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
         app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = "[{\"type\":\"set_theme\",\"theme\":\"light\"},{\"type\":\"workspace_manager\",\"command\":{\"type\":\"switch\",\"id\":\"builtin:workspace:\(workspace)\"}}]"
         func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
         let scene = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-")).firstMatch
         var previousScene: String?
         for launch in 0..<2 {
             app.launch()
-            let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
-            XCTAssertTrue(paint.waitForExistence(timeout: 30))
+            let selected = app.buttons["workspace-switch-builtin:workspace:" + workspace]
+            XCTAssertTrue(selected.waitForExistence(timeout: 30))
             XCTAssertTrue(scene.exists)
             // AppKit can create a new scene after XCTest terminates the app.
             // Existing scenes must restore their binding; new scenes can open
             // the same saved workspace through the ordinary switcher.
-            if launch == 1 && scene.identifier != previousScene { workspaceActivate(paint) }
-            let strip = element("collapsed-column-4")
-            let color = element("workspace-group-14"), properties = element("workspace-group-15"), layers = element("workspace-group-16")
+            if launch == 1 && scene.identifier != previousScene { workspaceActivate(selected) }
+            let strip = element(photo ? "collapsed-column-4" : "collapsed-column-12")
+            let color = element(photo ? "workspace-group-14" : "workspace-group-10"), properties = element("workspace-group-15"), layers = element("workspace-group-16")
             XCTAssertTrue(strip.waitForExistence(timeout: 30))
             XCTAssertTrue(color.waitForExistence(timeout: 10))
             XCTAssertTrue(properties.exists && layers.exists)
-            XCTAssertLessThan(strip.frame.maxX, color.frame.minX)
-            XCTAssertEqual(color.frame.minX, properties.frame.minX, accuracy: 1)
+            if photo {
+                XCTAssertLessThan(strip.frame.maxX, color.frame.minX)
+                XCTAssertEqual(color.frame.minX, properties.frame.minX, accuracy: 1)
+                XCTAssertLessThan(color.frame.maxY, properties.frame.minY)
+            } else {
+                XCTAssertLessThan(color.frame.maxX, properties.frame.minX)
+                XCTAssertLessThan(properties.frame.maxX, strip.frame.minX)
+                XCTAssertTrue(element("workspace-group-6").exists)
+                XCTAssertTrue(app.buttons["panel-tab-navigator"].exists)
+            }
             XCTAssertEqual(properties.frame.minX, layers.frame.minX, accuracy: 1)
-            XCTAssertLessThan(color.frame.maxY, properties.frame.minY)
             XCTAssertLessThan(properties.frame.maxY, layers.frame.minY)
             for panel in ["color", "stats", "properties", "adjustments", "layers"] {
                 XCTAssertTrue(app.buttons["panel-tab-" + panel].firstMatch.exists)
             }
-            let brushes = app.buttons["column-icon-brushes"], tool = app.buttons["column-icon-tool_settings"], navigator = app.buttons["column-icon-navigator"]
-            XCTAssertLessThan(brushes.frame.minY, tool.frame.minY)
-            XCTAssertLessThan(tool.frame.minY, navigator.frame.minY)
-            XCTAssertFalse(element("workspace-group-6").exists)
-            workspaceActivate(brushes)
-            XCTAssertTrue(element("workspace-group-6").waitForExistence(timeout: 10))
-            XCTAssertTrue(color.exists && properties.exists && layers.exists)
-            workspaceActivate(brushes)
-            XCTAssertTrue(element("workspace-group-6").waitForNonExistence(timeout: 10))
+            // Photo has a short Color group; Paint puts Color below Tools.
+            // The wheel and corner controls must fit without scrolling, as on Web.
+            let wheel = element("color-wheel")
+            XCTAssertTrue(wheel.waitForExistence(timeout: 10))
+            XCTAssertEqual(wheel.frame.width, wheel.frame.height, accuracy: 1)
+            for id in ["color-wheel", "color-readout", "color-foreground", "color-background",
+                       "color-transparent", "color-swap", "color-shape-square", "color-shape-triangle"] {
+                let control = element(id)
+                XCTAssertTrue(control.exists, id)
+                XCTAssertTrue(color.frame.insetBy(dx: -1, dy: -1).contains(control.frame), "Clipped Color control: \(id)")
+            }
+            if photo {
+                let brushes = app.buttons["column-icon-brushes"], tool = app.buttons["column-icon-tool_settings"], navigator = app.buttons["column-icon-navigator"]
+                XCTAssertLessThan(brushes.frame.minY, tool.frame.minY)
+                XCTAssertLessThan(tool.frame.minY, navigator.frame.minY)
+                XCTAssertFalse(element("workspace-group-6").exists)
+                workspaceActivate(brushes)
+                XCTAssertTrue(element("workspace-group-6").waitForExistence(timeout: 10))
+                XCTAssertTrue(color.exists && properties.exists && layers.exists)
+                workspaceActivate(brushes)
+                XCTAssertTrue(element("workspace-group-6").waitForNonExistence(timeout: 10))
+            } else {
+                let icon = app.buttons["column-icon-layers"]
+                workspaceActivate(icon)
+                XCTAssertTrue(layers.waitForNonExistence(timeout: 10))
+                workspaceActivate(icon)
+                XCTAssertTrue(layers.waitForExistence(timeout: 10))
+            }
             XCTAssertFalse(app.staticTexts["Canvas error"].exists)
             #if os(macOS)
             let shot = app.windows.firstMatch.screenshot()
@@ -46,7 +73,7 @@ extension XCTestCase {
             let shot = XCUIScreen.main.screenshot()
             #endif
             let capture = XCTAttachment(screenshot: shot)
-            capture.name = "paint-default-columns-\(launch)"; capture.lifetime = .keepAlways; add(capture)
+            capture.name = "\(workspace)-default-columns-\(launch)"; capture.lifetime = .keepAlways; add(capture)
             previousScene = scene.identifier
             app.terminate()
             app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS")

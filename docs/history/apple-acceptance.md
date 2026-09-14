@@ -108,6 +108,38 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Editor fit, footer grips and gray title-bar backgrounds — 2026-09-13
+
+Apple now fits docked Color wheels to available height, retaining the shared
+128-point minimum and scroll behavior. One grip drawing matches Web/Android
+header and vertical-footer rotation, opacity and inset. The user chose Web's
+rounded gray title-bar backgrounds; the redundant text/icon halo renderer and
+parameters are removed. Mac keeps top-level menus in the OS menu bar.
+
+Integration through `59732aa` includes restored Paint defaults and Photo's
+reviewed right-column arrangement; final Windows-only updates do not alter the
+validated Apple/shared/Web source. All eleven recovery stashes remain. The
+integrated shared regression passes 528 tests, with one existing host benchmark
+ignored. Both signed version-5 builds pass. Four Mac and seven physical iPad
+workflows pass with no failures or skips: both-theme Paint captures, Navigator
+and blend Undo, Paint/Photo columns and relaunch; iPad additionally checks Color,
+title-bar customization and tool drawers. Mac's preceding version-4 title-bar
+checks also pass. Simulator Color, column, numeric and full-editor checks pass;
+its later header drag moved the OS window and a following drawer containment
+check failed. Those two windowed simulator cases remain unresolved.
+
+Eight current native/Web fit/zoomed full-editor comparisons retain all pixels.
+Normal-size review accepts the wheel fit, footer orientation and gray header
+backgrounds. Exact image equality is not claimed. The capture helper uses current
+managed Paint and visible Fit canvas, removing an obsolete Mac popup workaround.
+
+The physical review app/runner are updated, but the post-test local CoreDevice
+service timed out on status queries and direct review launch. Review-session
+restoration and post-test descriptor verification remain pending. Evidence and
+all failures are ignored under `artifacts/apple-editor-parity-v1/` and
+`artifacts/apple-color-fit-v1/`. Complete feature, visual-state, physical-input,
+provider/lifecycle and sustained Mac 90 Hz/iPad 120 Hz acceptance remain open.
+
 ## Retained renderer and committed recovery — 2026-09-13
 
 This checkpoint follows `7d5d59b` and integrates shared main through `9c89f7a`,

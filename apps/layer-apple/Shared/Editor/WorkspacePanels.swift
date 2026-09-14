@@ -118,7 +118,7 @@ private struct WorkspacePanelGroup: View {
         }.accessibilityElement(children: .contain).accessibilityIdentifier("panel-preview-" + active["id"].string)
     }
     private var grip: some View {
-        WorkspaceGroupGrip(store: store, group: group["id"])
+        WorkspaceGroupGrip(store: store, group: group["id"], vertical: true)
     }
 }
 
@@ -140,7 +140,7 @@ struct WorkspaceToolbar: View {
                     .placed(geometry["tiles"][index])
             }
             if !geometry["grip"].isNull {
-                SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
+                PanelGrip(vertical: vertical).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .accessibilityElement().accessibilityLabel("Toolbar options for " + panel["title"].string)
                 .accessibilityIdentifier("toolbar-options-" + panel["id"].string)

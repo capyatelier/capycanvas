@@ -228,8 +228,9 @@ open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_p
 Release builds ignore this variable. The focused `testNumericToolControls` test
 uses a fresh light-theme editor on both platforms. It checks expression acceptance,
 invalid input, stepping and remembered brush settings across group changes.
-`testCompleteEditorCapture` captures only the settled default workspace and its
-logical dimensions for the Chrome `initial` comparison. Standalone edit-state
+`testCompleteEditorCapture` captures the settled Paint workspace with its
+default right stack open for the Chrome `paint-expanded` comparison. Its metadata
+records logical dimensions and any native window-control clearance. Standalone edit-state
 checks need no GUI automation:
 
 ```sh
@@ -248,7 +249,11 @@ captures plus measured wheel geometry for the shared
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
 The Color panel shares the Web layout, vector icons and readout spacing on both
-Apple targets. Its
+Apple targets. Docked wheels shrink to the available viewport height, retaining
+the shared 128-point minimum and scrolling below that size. The Paint and Photo default
+checks include visibility of the wheel and every corner control. Panel headers,
+vertical toolbar footers and collapsed-column footers use one grip drawing with
+the same orientation, opacity and inset as Web/Android. The Color
 [complete-panel fixture](../../tools/visual/README.md#complete-color-panels)
 compares 216 cases per host: both presets/themes, three shapes, two readouts,
 three paint slots and three widths. The same source has AppKit and UIKit capture
@@ -261,7 +266,7 @@ closed control to the longest option while keeping room for its row label.
 The layer blend control exposes its current value to accessibility.
 `testEditorControlLayout` checks all six Navigator hit targets, changes a blend
 mode through Properties, verifies the Layers value and undoes the change. It
-also attaches matching `initial` and `canvas-under-header` captures. The latter
+also attaches matching `paint-expanded` and `paint-canvas-under-header` captures. The latter
 uses four shared zoom-in steps so the paper is visible through empty header
 space; title, Zen and Settings retain their own background plates.
 
@@ -442,8 +447,9 @@ fullscreen notifications. Neither observation requests an iPad fullscreen change
 
 Small, Medium and Large use shared tile/icon dimensions and six-point gaps.
 The selector retains its pill background and compacts to a menu when necessary.
-Transparent controls use contrasting ink over artwork, and Color shows the live
-foreground/background paints. See the
+Title-bar controls, menu labels and status text use Web's rounded theme-gray
+backgrounds over artwork; gaps retain the live canvas. Color shows the live
+foreground/background paints. The retired text/icon halo renderer is removed. See the
 [header comparison](../../tools/visual/README.md#complete-header-components)
 for native/Web captures and recorded host differences.
 

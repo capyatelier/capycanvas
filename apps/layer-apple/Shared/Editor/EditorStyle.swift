@@ -28,10 +28,19 @@ extension View {
         return frame(width: max(0, r.width), height: max(0, r.height), alignment: .topLeading).offset(x: r.minX, y: r.minY)
     }
 }
+/// Shared grip orientation and inset for panel headers and column footers.
+struct PanelGrip: View {
+    var vertical = false
+    var body: some View {
+        SharedIcon(name: "grip").opacity(0.65)
+            .rotationEffect(.degrees(vertical ? 90 : 0))
+            .offset(x: vertical ? 0 : -1.6, y: vertical ? -1.6 : 0)
+    }
+}
+
 struct SharedIcon: View {
     let name: String
     var size: CGFloat = 16
-    var halo: Color?
     var body: some View {
         let key = Self.assetKey(name)
         Group {
@@ -44,7 +53,7 @@ struct SharedIcon: View {
             } else {
                 glyph("icon-" + key, template: true)
             }
-        }.modifier(EditorInkHalo(color: halo)).accessibilityHidden(true)
+        }.accessibilityHidden(true)
     }
     static func assetKey(_ name: String) -> String {
         var key = name
@@ -72,24 +81,13 @@ struct IconTile: View {
     var size: CGFloat = 16
     var active = false
     var joinedEdge: String?
-    var halo: Color?
+    var background: Color?
     let action: () -> Void
     var body: some View {
-        Button(action: action) { SharedIcon(name: icon, size: size, halo: halo).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge))
+        Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge, background: background))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
-    }
-}
-
-/// Contrasting ink stays legible over artwork without changing control fills.
-struct EditorInkHalo: ViewModifier {
-    let color: Color?
-    func body(content: Content) -> some View {
-        if let color {
-            content.shadow(color: color, radius: 0, x: 1).shadow(color: color, radius: 0, x: -1)
-                .shadow(color: color, radius: 0, y: 1).shadow(color: color, radius: 0, y: -1)
-        } else { content }
     }
 }
 
@@ -99,6 +97,7 @@ struct EditorControlButtonStyle: ButtonStyle {
     var selected = false
     var active = false
     var joinedEdge: String?
+    var background: Color?
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
             bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
@@ -111,6 +110,8 @@ struct EditorControlButtonStyle: ButtonStyle {
                 shape.fill(EditorPalette.sharedAccent.opacity(0.22))
             } else if configuration.isPressed || active {
                 shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+            } else if let background {
+                shape.fill(background)
             }
         }
     }

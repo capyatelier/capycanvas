@@ -62,7 +62,7 @@ private struct WorkspaceCollapsedColumn: View {
                 .onScrollGeometryChange(for: CGFloat.self) { max(0, $0.contentOffset.y + $0.contentInsets.top) } action: { _, next in
                     if abs(next - offset) > 0.5 { store.dispatch(["type": "measure_column_scroll", "column": column["id"].raw, "offset": next]) }
                 }
-            SharedIcon(name: "grip").frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+            PanelGrip(vertical: true).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                 .accessibilityElement().accessibilityHidden(false).accessibilityLabel("Move column")
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "column", "column": column["id"].raw]),
                     context: JSON(["kind": "column", "column": column["id"].raw]), openOnTap: true))

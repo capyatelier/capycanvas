@@ -14,9 +14,18 @@ above the original ink/paper layers, matching the iPad layer workflow's final
 capture. The default scenario is `initial`.
 `canvas-under-header` applies four shared zoom-in steps after fitting the default
 document. Paper then extends behind the header, exposing opaque-header mistakes
-that the initial gray surround cannot reveal. The native
-`EditorLaunchTests/testEditorControlLayout` workflow attaches this scenario and
-`initial` on both Apple targets, using the actual Navigator buttons.
+that the initial gray surround cannot reveal.
+`paint-expanded` switches to the current Paint default with its right stack
+open; `paint-canvas-under-header` then applies the four zoom steps.
+The native `EditorLaunchTests/testEditorControlLayout` workflow attaches the last
+two scenarios on both Apple targets, using View → Fit canvas and the Navigator
+buttons. Pass its geometry JSON as the final argument to reproduce the native
+window-control clearance through the shared layout model:
+
+```sh
+node tools/visual/chrome-capture.mjs 1376 1032 2 artifacts/ui/paint light paint-expanded native-geometry.json
+```
+
 `filter-properties` reproduces the final state of the shared Apple
 `testFilterSearchPreviewAndProperties` workflow: Gaussian Blur radius 5, identity
 Curves and default Gradient Map, with Properties open. The test attaches the full

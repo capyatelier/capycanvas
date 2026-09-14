@@ -22,7 +22,7 @@ const width = Number(widthArg), height = Number(heightArg), scale = Number(scale
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions', 'windows-editor', 'number-controls', 'color-panel', 'icons', 'choices', 'inline-numbers'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'paint-expanded', 'paint-canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions', 'windows-editor', 'number-controls', 'color-panel', 'icons', 'choices', 'inline-numbers'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -117,10 +117,30 @@ try {
     await captureWorkspaceTabs({fixture: JSON.parse(await readFile(fixturePath, 'utf8')), output, evaluate, call});
     assert.deepEqual(errors, []);
   } else {
+  if (scenario.startsWith('paint')) {
+    // Native capture metadata records reserved space for OS window controls.
+    // Apply it through the shared layout action; the canvas stays full size.
+    if (fixturePath) {
+      const {workspace_bottom=0} = JSON.parse(await readFile(fixturePath, 'utf8'));
+      assert(Number.isFinite(workspace_bottom) && workspace_bottom >= 0 && workspace_bottom < height);
+      await evaluate(`layerApp.dispatch({type:'measure_workspace_bottom',inset:${workspace_bottom}})`);
+    }
+    await evaluate(`layerApp.dispatch({type:'workspace_manager',command:{type:'switch',id:'builtin:workspace:illustrator'}})`);
+    await evaluate(`new Promise((resolve,reject)=>{
+      const start=performance.now();
+      function check(){
+        const workspace=JSON.parse(layerApp.app.workspace_view());
+        if(workspace?.error)reject(new Error(workspace.error));
+        else if(workspace?.id==='builtin:workspace:illustrator'&&workspace.ready&&!workspace.busy)resolve(true);
+        else if(performance.now()-start>25000)reject(new Error('Paint workspace did not settle'));
+        else setTimeout(check,50);
+      }check();
+    })`);
+  }
   const captures = [];
   for (const selectedTheme of [theme]) {
     await evaluate(`layerApp.dispatch({type:'system_theme_changed',theme:'${selectedTheme}'}); layerApp.dispatch({type:'invoke',command:'fit_canvas'});`);
-    if (scenario === 'canvas-under-header') await evaluate(`for(let i=0;i<4;i++) layerApp.dispatch({type:'invoke',command:'zoom_in'});`);
+    if (scenario === 'canvas-under-header' || scenario === 'paint-canvas-under-header') await evaluate(`for(let i=0;i<4;i++) layerApp.dispatch({type:'invoke',command:'zoom_in'});`);
     if (scenario === 'layer-added') await evaluate(`layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});`);
     if (scenario === 'panel-configuration') await evaluate(`layerApp.dispatch({type:'customize',action:{type:'show_all_controls',panel:'sizes'}});`);
     if (scenario === 'partial-zen') await evaluate(`layerApp.dispatch({type:'invoke',command:'zen_mode'});`);
