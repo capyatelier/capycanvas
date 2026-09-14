@@ -514,7 +514,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
 }
 
 #[test]
-fn paint_defaults_open_right_stack_on_load_and_reset() {
+fn paint_defaults_keep_primary_panels_visible_and_secondary_stack_closed_on_load_and_reset() {
     for platform in [
         Platform::Gtk,
         Platform::Web,
@@ -535,45 +535,34 @@ fn check_paint_default_stack(platform: Platform) {
         history: crate::LayoutHistory::new(&layout),
         working: crate::WorkspacePreset::Illustrator.working_state(),
     };
-    let assert_open = |s: &UiSession<Recorder>| {
+    let assert_default = |s: &UiSession<Recorder>| {
         let resolved = s.layout(STACK_VIEW);
         assert_eq!(resolved.collapsed.len(), 1);
-        assert_eq!(resolved.collapsed[0].id, 12);
-        assert!(
-            resolved
-                .groups
-                .iter()
-                .any(|g| g.panels.contains(&Panel::Brushes))
-        );
+        assert_eq!(resolved.collapsed[0].id, 4);
+        assert!(!resolved.groups.iter().any(|g| g.panels.contains(&Panel::Brushes)));
+        for panel in [Panel::Color, Panel::Stats, Panel::Properties, Panel::Adjustments, Panel::Layers] {
+            assert!(resolved.groups.iter().any(|g| g.panels.contains(&panel)));
+        }
         for column in &resolved.collapsed {
             let stack = s.state.workspace.layout.column_stack(column.id);
             assert!(!stack.auto_hide && !stack.drawers);
             assert_eq!(stack.members, [column.id]);
-            let open = column.open.as_ref().unwrap();
-            assert_eq!(open.bounds.y, HEADER_HEIGHT);
-            assert_eq!(
-                open.bounds.height,
-                STACK_VIEW[1] - HEADER_HEIGHT - WORKSPACE_SPACING
-            );
-            assert_eq!(open.connections.len(), column.groups.len());
-            for group in &column.groups {
-                assert!(resolved.groups.iter().any(|g| g.id == group.group));
-            }
+            assert!(column.open.is_none());
         }
     };
     s.adopt_workspace(crate::PreparedWorkspace::new(capture.clone()).unwrap())
         .unwrap();
-    assert_open(&s);
+    assert_default(&s);
     assert_eq!(s.capture_workspace().unwrap().history, capture.history);
-    click_column(&mut s, Panel::Layers);
+    click_column(&mut s, Panel::Brushes);
     assert!(
         s.layout(STACK_VIEW)
             .collapsed
             .iter()
-            .find(|c| c.id == 12)
+            .find(|c| c.id == 4)
             .unwrap()
             .open
-            .is_none()
+            .is_some()
     );
     assert_eq!(s.capture_workspace().unwrap().history, capture.history);
 
@@ -582,11 +571,11 @@ fn check_paint_default_stack(platform: Platform) {
             .unwrap();
     s.adopt_workspace(crate::PreparedWorkspace::new(saved).unwrap())
         .unwrap();
-    assert_open(&s);
-    click_column(&mut s, Panel::Layers);
+    assert_default(&s);
+    click_column(&mut s, Panel::Brushes);
     s.restore_workspace_layout(layout.clone(), "Reset Paint")
         .unwrap();
-    assert_open(&s);
+    assert_default(&s);
 
     let mut customized = layout;
     customized.header.size = crate::HeaderSize::Large;

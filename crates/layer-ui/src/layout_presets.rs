@@ -45,32 +45,58 @@ impl WorkspacePreset {
         Self::Painter.layout_with_header_tools(platform, false)
     }
 
+    /// Exact prior Paint arrangement, retained for conservative default upgrades.
+    pub fn legacy_illustrator_layout(platform: crate::Platform) -> DockLayout {
+        let mut layout = DockLayout::for_platform(platform);
+        for column in layout.column_roots() {
+            let stack = layout.column_stack_mut(column);
+            stack.drawers = false;
+            stack.auto_hide = false;
+            if matches!(
+                platform,
+                crate::Platform::Gtk
+                    | crate::Platform::Web
+                    | crate::Platform::Android
+                    | crate::Platform::Windows
+                    | crate::Platform::Mac
+                    | crate::Platform::Ios
+            ) {
+                let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
+                if band.edge != Edge::Right {
+                    continue;
+                }
+                layout.collapsed.push(CollapsedColumn {
+                    root: column,
+                    expanded_width: band.extent - WORKSPACE_SPACING,
+                });
+                band.extent = TILE_SIZE + WORKSPACE_SPACING;
+            }
+        }
+        layout
+    }
+
     fn layout_with_header_tools(self, platform: crate::Platform, header_tools: bool) -> DockLayout {
         if self == Self::Illustrator {
-            let mut layout = DockLayout::for_platform(platform);
-            for column in layout.column_roots() {
-                let stack = layout.column_stack_mut(column);
-                stack.drawers = false;
-                stack.auto_hide = false;
-                if matches!(
-                    platform,
-                    crate::Platform::Gtk
-                        | crate::Platform::Web
-                        | crate::Platform::Android
-                        | crate::Platform::Windows
-                        | crate::Platform::Mac
-                        | crate::Platform::Ios
-                ) {
-                    let band = layout.bands.iter_mut().find(|b| b.root.id() == column).unwrap();
-                    if band.edge != Edge::Right {
-                        continue;
-                    }
-                    layout.collapsed.push(CollapsedColumn {
-                        root: column,
-                        expanded_width: band.extent - WORKSPACE_SPACING,
-                    });
-                    band.extent = TILE_SIZE + WORKSPACE_SPACING;
+            let mut layout = Self::legacy_illustrator_layout(platform);
+            if !matches!(platform, crate::Platform::Generic) {
+                // Keep the primary column permanently expanded at the outer
+                // right edge. Secondary panels occupy the icon strip inward
+                // from it, in Tool Set / Tool + Brush size / Navigator order.
+                if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(14) {
+                    *panels = vec![Panel::Color, Panel::Stats];
+                    *active = Panel::Color;
                 }
+                if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(10) {
+                    *panels = vec![Panel::Navigator];
+                    *active = Panel::Navigator;
+                }
+                let mut secondary = layout.bands.remove(1);
+                secondary.edge = Edge::Right;
+                let expanded_width = secondary.extent - WORKSPACE_SPACING;
+                secondary.extent = TILE_SIZE + WORKSPACE_SPACING;
+                layout.bands[1].extent = Panel::Layers.default_width() + WORKSPACE_SPACING;
+                layout.bands.insert(2, secondary);
+                layout.collapsed = vec![CollapsedColumn { root: 4, expanded_width }];
             }
             return layout;
         }
@@ -236,8 +262,8 @@ impl WorkspacePreset {
 }
 
 impl DockLayout {
-    /// The shipped Paint arrangement opens its right column on adoption or
-    /// reset. This is initial presentation; ordinary open/close stays transient.
+    /// Retain initial opening for saved copies of the prior Paint arrangement.
+    /// The current default has a permanently expanded outer right column.
     pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
         if matches!(
             platform,
@@ -249,7 +275,7 @@ impl DockLayout {
                 | crate::Platform::Ios
         )
             && self.collapsed.len() == 1
-            && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
+            && crate::durable_layout(self) == WorkspacePreset::legacy_illustrator_layout(platform)
         {
             for stack in &mut self.column_stacks {
                 if self.collapsed.iter().any(|c| c.root == stack.column) {
@@ -331,12 +357,14 @@ mod tests {
     }
 
     #[test]
-    fn presets_are_portable_and_preserve_illustrator() {
+    fn presets_are_portable_and_paint_keeps_primary_panels_at_the_right() {
         for platform in [
             crate::Platform::Gtk,
             crate::Platform::Web,
             crate::Platform::Android,
             crate::Platform::Windows,
+            crate::Platform::Mac,
+            crate::Platform::Ios,
         ] {
             for preset in WorkspacePreset::ALL {
                 let layout = preset.layout(platform);
@@ -351,34 +379,49 @@ mod tests {
                     serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
                 assert_eq!(round_trip, layout);
             }
-            let layout = WorkspacePreset::Illustrator.layout(platform);
+            let mut layout = WorkspacePreset::Illustrator.layout(platform);
             assert!(
                 layout
                     .column_stacks
                     .iter()
                     .all(|s| !s.drawers)
             );
-            if matches!(
-                platform,
-                crate::Platform::Gtk
-                    | crate::Platform::Web
-                    | crate::Platform::Android
-                    | crate::Platform::Windows
-                    | crate::Platform::Mac
-                    | crate::Platform::Ios
-            ) {
-                assert_eq!(layout.collapsed.len(), 1);
-                assert!(layout.is_collapsed(12) && !layout.is_collapsed(4));
-                assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
-                for (band, original) in layout.bands.iter().zip(DockLayout::for_platform(platform).bands) {
-                    assert_eq!(band.root, original.root);
-                    assert_eq!(band.edge, original.edge);
-                    if band.edge == Edge::Left {
-                        assert_eq!(band.extent, original.extent);
-                    }
-                }
-            } else {
-                assert_eq!(layout.bands, DockLayout::for_platform(platform).bands);
+            assert_eq!(layout.collapsed.len(), 1);
+            assert!(layout.is_collapsed(4) && !layout.is_collapsed(12));
+            assert!(layout.column_stacks.iter().all(|s| !s.auto_hide && !s.drawers));
+            layout.open_default_columns(platform);
+            assert!(layout.column_stacks.iter().all(|s| s.open_column.is_none()));
+            assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
+                [Edge::Left, Edge::Right, Edge::Right, Edge::Top]);
+            for (id, expected) in [
+                (14, vec![Panel::Color, Panel::Stats]),
+                (15, vec![Panel::Properties, Panel::Adjustments]),
+                (16, vec![Panel::Layers]),
+                (6, vec![Panel::Brushes]),
+                (7, vec![Panel::ToolSettings, Panel::Sizes]),
+                (10, vec![Panel::Navigator]),
+            ] {
+                let DockNode::Tabs { panels, active, .. } = layout.node(id).unwrap() else {
+                    panic!("default tab group");
+                };
+                assert_eq!(panels, &expected);
+                assert_eq!(*active, expected[0]);
+            }
+            for [width, height] in [[1600., 1200.], [1200., 800.], [640., 480.]] {
+                let resolved = layout.workspace(width, height, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+                let group = |panel| resolved.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds;
+                let color = group(Panel::Color);
+                let properties = group(Panel::Properties);
+                let layers = group(Panel::Layers);
+                assert_eq!(color, group(Panel::Stats));
+                assert_eq!(properties, group(Panel::Adjustments));
+                assert_eq!(color.x, properties.x);
+                assert_eq!(properties.x, layers.x);
+                assert!(color.y + color.height < properties.y);
+                assert!(properties.y + properties.height < layers.y);
+                let strip = &resolved.collapsed[0];
+                assert!((strip.bounds.x + strip.bounds.width + WORKSPACE_SPACING - color.x).abs() < 1.);
+                assert!(resolved.work_area.width > 0. && resolved.work_area.height > 0.);
             }
         }
     }

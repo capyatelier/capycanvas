@@ -398,6 +398,52 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Restart uses committed header", committed, model().toString())
         shot("restart")
     }
+    @Test fun paintDefaultColumnsAndResetSurviveRestart() {
+        // Restore the shipped baseline in this test's isolated Paint workspace.
+        send(obj("type" to "form", "kind" to "reset"))
+        waitFor("starting layout confirmation") { node("workspace-submit") != null }
+        tap("workspace-submit")
+        fun checkColumns() {
+            waitFor("primary Paint panels") { node("panel-body-color") != null && node("panel-body-properties") != null && node("panel-body-layers") != null }
+            val color = bounds("group-14")
+            val properties = bounds("group-15")
+            val layers = bounds("group-16")
+            val strip = bounds("collapsed-column-4")
+            assertEquals(color.left, properties.left, 1f)
+            assertEquals(properties.left, layers.left, 1f)
+            assertTrue(color.bottom < properties.top && properties.bottom < layers.top)
+            assertEquals("Secondary strip is immediately inward from the outer column", color.left, strip.right + 6 * density, density)
+            val icons = listOf("brushes", "tool_settings", "sizes", "navigator").map { bounds("column-icon-$it") }
+            assertTrue(icons.zipWithNext().all { (a, b) -> a.bottom < b.top })
+            instrumentation.runOnMainSync { assertNull("Secondary column starts closed", node("group-6")) }
+        }
+        checkColumns()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            tap("tab-stats"); waitFor("Diagnostics tab") { node("panel-body-stats") != null }
+            tap("tab-color")
+            tap("tab-adjustments"); waitFor("Filters tab") { node("panel-body-adjustments") != null }
+            tap("tab-properties")
+            checkColumns(); shot("paint-default-$theme")
+        }
+        for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = device
+            for (panel in listOf("brushes", "tool_settings", "sizes", "navigator")) {
+                tap("column-icon-$panel")
+                waitFor("secondary $panel opens") { node("panel-body-$panel") != null }
+                assertTrue(bounds("group-6").right < bounds("collapsed-column-4").left)
+                assertNotNull(bounds("panel-body-color"))
+                tap("column-icon-$panel")
+                checkColumns()
+            }
+        }
+        val committed = layout()
+        scenario.close(); launch()
+        checkColumns()
+        assertEquals("Default arrangement survives restart", committed, layout())
+        shot("paint-default-restart")
+    }
+
     @Test fun sketchDefaultsDrawersFeedbackStatusAndWorkspaceSwitch() {
         tool = MotionEvent.TOOL_TYPE_MOUSE
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))

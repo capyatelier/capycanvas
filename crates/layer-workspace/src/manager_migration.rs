@@ -159,11 +159,13 @@ pub(super) fn updated_illustrator_default(
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
+    let previous_collapsed = layer_ui::WorkspacePreset::legacy_illustrator_layout(platform);
     let mut previous = layer_ui::DockLayout::for_platform(platform);
     let without_preferences = previous.clone();
-    previous.column_stacks = layout.column_stacks.clone();
+    previous.column_stacks = previous_collapsed.column_stacks.clone();
     if history.revisions.len() != 1 || history.layout() != baseline.as_ref() || baseline.as_ref() == &layout
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &without_preferences)
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &without_preferences
+            && baseline.as_ref() != &previous_collapsed)
     {
         return None;
     }

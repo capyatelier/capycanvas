@@ -59,9 +59,14 @@ Old Group panel settings migrate to “Open individual panels” disabled. The
 custom all-tabs renderer, per-panel height weights and dedicated resize actions
 are retired.
 
-The shared model does not serialize an open member. The Paint default opens its right stack when loaded,
-previewed or reset, with Auto-hide and Open individual panels disabled. Other
-saved arrangements start with their stacks closed.
+The shared model does not serialize an open member. Paint has a permanently
+expanded far-right column: Color / Diagnostics at the top, Properties / Filters
+in the middle, and Layers at the bottom. Its collapsed strip immediately to the
+left contains Tool Set, Tool / Brush size, then Navigator, with Auto-hide and
+Open individual panels disabled. The strip starts closed on load, preview and
+reset. Untouched older Paint defaults migrate to this arrangement; customized
+workspaces retain their layouts. Saved copies of the previous Paint default
+retain its initial right-stack opening. Other saved stacks start closed.
 
 Apple uses the ordinary SwiftUI dock groups, dividers and existing drawer
 connector shape for full-column opening. Column grips expose the shared stack
@@ -115,6 +120,13 @@ views. They cover full-height opening, resizing, Back, auto-hide, compact drawer
 active connectors, first/middle member append targets, stack targets, drawer
 tabs, held icons, cancellation and one-step undo/redo. Physical pen accuracy and
 hover remain separate hardware checks.
+
+`AndroidTitleBarTest#paintDefaultColumnsAndResetSurviveRestart` checks the Paint
+starting layout on the Wacom tablet: primary panel geometry, secondary icon order,
+both themes, tab selection, mouse/finger/stylus opening, reset and restart. The
+2026-09-13 run passed in 25.393 seconds; captures and logs are retained under
+ignored `artifacts/android/paint-default-2026-09-13/`. Shared UI, workspace and
+host tests and Android debug builds/lint also pass.
 
 Validation on the Wacom MovinkPad 14 used a separate test application ID and
 isolated workspace stores. The production app and its data were retained.
