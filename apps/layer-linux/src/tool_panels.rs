@@ -423,6 +423,7 @@ mod wheel {
         // Background precedes foreground so their deliberate overlap also picks correctly.
         pub corners: RefCell<Vec<WheelButton>>,
         pub menu: RefCell<Option<gtk::Popover>>,
+        pub hue_guide: RefCell<Option<(u32, ColorShape, gtk::gdk::MemoryTexture)>>,
         pub disc: RefCell<Option<(u32, f32, cairo::ImageSurface)>>,
     }
     #[glib::object_subclass]
@@ -509,12 +510,30 @@ mod wheel {
                     &gtk::gsk::Stroke::new(geometry.outer - geometry.inner),
                 );
                 let state = self.color.borrow();
-                let colors = state.wheel_hue_stops();
-                let stops: Vec<_> = colors.iter().map(|stop| {
-                    let [r, g, b] = stop.color;
-                    gtk::gsk::ColorStop::new(stop.offset, gtk::gdk::RGBA::new(r, g, b, 1.))
-                }).collect();
-                snapshot.append_conic_gradient(&bounds, &center, state.wheel_hue_start_degrees() + 90., &stops);
+                // GTK renders the hundreds of Okhsv gradient stops in many
+                // offscreen batches, even when it reuses our snapshot node.
+                // Retain the immutable guide as a texture; paint changes and
+                // overlapping panel motion only need to sample it. Keep the
+                // ring's native stroke and sample its colors at display DPI.
+                let guide_side = (size * self.obj().scale_factor() as f32).ceil() as u32;
+                let shape = state.wheel_shape();
+                let mut guide = self.hue_guide.borrow_mut();
+                if guide
+                    .as_ref()
+                    .is_none_or(|(s, model, _)| *s != guide_side || *model != shape)
+                {
+                    let mut pixels = vec![0; guide_side as usize * guide_side as usize * 4];
+                    layer_ui::render_hue_guide(guide_side, shape, &mut pixels);
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        guide_side as i32,
+                        guide_side as i32,
+                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                        &glib::Bytes::from_owned(pixels),
+                        guide_side as usize * 4,
+                    );
+                    *guide = Some((guide_side, shape, texture));
+                }
+                snapshot.append_texture(&guide.as_ref().unwrap().2, &bounds);
                 snapshot.pop();
                 let hue = state.wheel_components()[0];
                 // Smooth field colors need logical-pixel sampling; Cairo scales

@@ -157,6 +157,15 @@ raster timings, run
 `cargo run --locked --release -p layer-ui --example color_wheel_bench`.
 This measures computation only, not GTK snapshotting or display latency.
 
+GTK retains the hue guide as a native-resolution `GdkTexture`, keyed by pixel
+size and wheel shape. Paint changes and overlapping panel motion reuse it;
+the stroke and markers remain native vectors. This avoids repeatedly rendering
+the Okhsv ring's hundreds of gradient stops into intermediate textures.
+`--color-panel` checks cache reuse, size/shape invalidation and ring colors
+against the original native gradient; repeat at display scale 2 for DPI coverage.
+`--workspace-motion` includes mouse/touch floating-panel motion over Color and
+checks texture reuse while recording native presentation timing.
+
 For real pointer/hold/drag delivery, use
 `bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.
 That [runner](../../tools/performance/workspace-motion.sh) provides an isolated
