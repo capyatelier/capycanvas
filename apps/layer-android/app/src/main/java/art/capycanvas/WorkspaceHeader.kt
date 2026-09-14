@@ -169,7 +169,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
                                 input.overflow = null
                                 when (entry.getJSONObject("item").getString("kind")) {
                                     "menu", "menu_labels" -> overflowMenu = view.getJSONObject("primary_menu")
-                                    "workspaces" -> overflowMenu = menus.first { it.getString("id") == "window" }.getJSONObject("model")
+                                    "workspaces" -> overflowMenu = workspaceSwitcherMenu(host.workspaceManager)
                                     else -> activateHeader(host, entry)
                                 }
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -273,7 +273,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     onClick = {
                         when (kind) {
                             "menu", "menu_labels" -> menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
-                            "workspaces" -> menu = snapshot.array("application_menus").objects().first { it.getString("id") == "window" }.getJSONObject("model")
+                            "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
                             else -> activateHeader(host, entry)
                         }
                     }) {

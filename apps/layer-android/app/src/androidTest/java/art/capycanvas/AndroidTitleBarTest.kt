@@ -357,6 +357,71 @@ class AndroidTitleBarTest {
         }
     }
 
+    @Test fun compactWorkspaceChoicesAndOverflowIconsFollowTheTitleBar() {
+        val initial = view().array("switcher_display").objects().map { it.getString("id") }
+        send(obj("type" to "edit_switcher", "edit" to obj("type" to "move", "id" to initial[2], "before" to initial[0])))
+        var next = 1
+        fun entry(kind: String) = obj("id" to next++, "item" to obj("kind" to kind))
+        val left = JSONArray(listOf(entry("capy"), entry("menu")) + List(40) { entry("space") })
+        val workspace = entry("workspaces")
+        val id = workspace.getInt("id")
+        val center = JSONArray(listOf(workspace) + List(30) { entry("space") })
+        fixture.getJSONObject("layout").put("header", obj("size" to "small", "next_id" to next,
+            "zones" to JSONArray(listOf(left, center, JSONArray()))))
+        fun texts(node: SemanticsNode): List<String> =
+            (node.config.getOrNull(SemanticsProperties.Text)?.map { it.text } ?: emptyList()) + node.children.flatMap(::texts)
+        fun label(node: SemanticsNode, title: String): SemanticsNode? =
+            if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == title } == true) node
+            else node.children.firstNotNullOfOrNull { label(it, title) }
+        fun choose() {
+            val choices = view().array("switcher_display").objects()
+            val target = choices.first { it.getString("id") != view().getString("id") }
+            waitFor("workspace choices") { node("workspace-menu") != null }
+            instrumentation.runOnMainSync {
+                val (root, popup) = checkNotNull(node("workspace-menu"))
+                assertEquals("Only the pill's choices, in configured order", listOf("Workspaces") + choices.map { it.getString("title") }, texts(popup))
+                pressed = root
+                point = checkNotNull(label(popup, target.getString("title"))).boundsInRoot.center
+            }
+            event(MotionEvent.ACTION_DOWN); event(MotionEvent.ACTION_UP)
+            idle()
+            assertEquals(target.getString("id"), view().getString("id"))
+            instrumentation.runOnMainSync { assertNull(node("workspace-menu")) }
+        }
+        for (theme in listOf("dark", "light")) for ((index, size) in listOf("small", "medium", "large").withIndex()) {
+            tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[index]
+            restore(size)
+            action(obj("type" to "set_theme", "theme" to theme))
+            waitFor("compact workspace selector") { node("header-control-$id") != null && node("workspace-switcher") == null }
+            instrumentation.runOnMainSync {
+                val overflow = checkNotNull(node("header-overflow-0")).second
+                fun image(node: SemanticsNode): SemanticsNode? =
+                    if (node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("More title bar items") == true) node
+                    else node.children.firstNotNullOfOrNull(::image)
+                val icon = checkNotNull(image(overflow)).boundsInRoot
+                val expected = listOf(20f, 28f, 36f)[index]
+                assertEquals("Hamburger width at $size", expected, icon.width / density, .5f)
+                assertEquals("Hamburger height at $size", expected, icon.height / density, .5f)
+                assertEquals(overflow.boundsInRoot.center.x, icon.center.x, 1f)
+                assertEquals(overflow.boundsInRoot.center.y, icon.center.y, 1f)
+            }
+            tap("header-control-$id")
+            shot("workspace-choices-$theme-$size")
+            choose()
+        }
+        // Moving the selector into a crowded region must retain its menu action.
+        restore("large")
+        var before = 0
+        instrumentation.runOnMainSync {
+            before = left.objects().first { node("header-item-${it.getInt("id")}") == null }.getInt("id")
+        }
+        edit(obj("type" to "move", "id" to id, "zone" to "left", "before" to before))
+        waitFor("hidden workspace selector") { node("header-item-$id") == null }
+        tap("header-overflow-0")
+        tap("header-overflow-item-$id")
+        choose()
+    }
+
     @Test fun nativeMenusToolPickerDrawersFooterZenAndRestart() {
         tool = MotionEvent.TOOL_TYPE_FINGER
         restore()

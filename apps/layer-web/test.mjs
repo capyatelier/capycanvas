@@ -14,6 +14,7 @@ import {checkTitleBarState} from "./title-bar-state.test.mjs";
 import {checkTitleBar} from "./title-bar.test.mjs";
 import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkTitleBarOverflow} from "./title-bar-overflow.test.mjs";
+import {checkCompactWorkspaces} from "./compact-workspaces.test.mjs";
 import {checkMenuLabels} from "./menu-labels.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
@@ -228,6 +229,9 @@ try {
     checkRasterErrors();
   } else if (process.argv.includes("--menu-labels")) {
     await checkMenuLabels({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--compact-workspaces")) {
+    await checkCompactWorkspaces({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-overflow")) {
     await checkTitleBarOverflow({call,evaluate,settle});

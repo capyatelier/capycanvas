@@ -27,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import org.json.JSONObject
+import org.json.JSONArray
 
 /** Compose owns focus/scroll/input; Rust owns records, selections and previews. */
 @Composable internal fun WorkspaceManager(host: CanvasHost) {
@@ -97,6 +98,16 @@ import org.json.JSONObject
                 TextButton({ host.workspaceInput(obj("type" to "form", "kind" to "recover")) }) { Text("Save as New Workspace…") }
             }
         })
+}
+
+internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
+    val enabled = view != null && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form")
+    val choices = view?.array("switcher_display")?.objects() ?: emptyList()
+    return obj("title" to "Workspaces", "sections" to JSONArray(listOf(JSONArray(choices.map { row ->
+        val id = row.getString("id")
+        obj("label" to row.getString("title"), "selected" to (view?.optString("id") == id), "enabled" to enabled,
+            "action" to obj("type" to "workspace_manager", "command" to obj("type" to "switch", "id" to id)), "sections" to JSONArray())
+    }))))
 }
 
 @Composable internal fun WorkspaceSwitcher(host: CanvasHost, modifier: Modifier = Modifier, interactive: Boolean = true) {
