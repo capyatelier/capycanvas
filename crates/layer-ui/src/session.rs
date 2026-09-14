@@ -80,6 +80,7 @@ pub struct UiSession<R: CanvasRenderer> {
     rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
+    effect_gesture: Option<effects::EffectGesture>,
     navigator_preview: crate::navigator::Preview,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
@@ -138,6 +139,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
+            effect_gesture: None,
             navigator_preview: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
@@ -1842,10 +1844,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
-        if self.rendering_suspended && !Self::action_without_renderer(&action) {
+        // An interrupted property contact still needs to restore its preview.
+        // The gesture handler cancels it when editing is no longer available.
+        let continuing_effect_gesture = matches!(&action, UiAction::Effect {
+            action: EffectAction::Gesture {
+                phase: ContactPhase::Move | ContactPhase::Up | ContactPhase::Cancel, ..
+            }
+        });
+        if self.rendering_suspended && !continuing_effect_gesture && !Self::action_without_renderer(&action) {
             return Err("Painting is unavailable. Save the drawing and reopen it.".into());
         }
         if self.workspace_read_only
+            && !continuing_effect_gesture
             && !matches!(
                 &action,
                 UiAction::WorkspaceManager { .. }
@@ -1885,6 +1895,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             );
         }
         if self.workspace_transition
+            && !continuing_effect_gesture
             && !matches!(
                 &action,
                 UiAction::CompleteRequest { .. }
@@ -2072,7 +2083,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (DOCUMENT, false)
             }
             UiAction::Effect { action } => {
-                self.require_idle()?;
+                if !continuing_effect_gesture {
+                    self.require_idle()?;
+                }
                 self.effect_action(action)?;
                 self.refresh_document();
                 (DOCUMENT | LAYOUT, true)
@@ -3828,6 +3841,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn require_idle(&self) -> Result<(), String> {
         if self.input_pending
+            || self.effect_gesture.is_some()
             || self.engine.has_active_stroke()
             || !self.layer_interaction.path.is_empty()
         {
@@ -12901,6 +12915,176 @@ mod tests {
             .is_err()
         );
         assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), valid);
+    }
+
+    #[test]
+    fn effect_gestures_preview_commit_once_and_cancel_without_losing_redo() {
+        use layer_core::{EffectValue, GradientStop};
+        for platform in [
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Web,
+            Platform::Android,
+        ] {
+            for effect in ["curves", "gradient_map"] {
+                let mut app = session();
+                app.set_platform(platform);
+                app.dispatch(UiAction::Effect {
+                    action: EffectAction::Insert {
+                        effect: effect.into(),
+                    },
+                })
+                .unwrap();
+                let controls = &app.state.layer_properties.controls;
+                let index = controls
+                    .iter()
+                    .position(|c| matches!(&c.value, EffectValue::Curve(_) | EffectValue::Gradient(_)))
+                    .unwrap();
+                let key = controls[index].key.clone();
+                let layer = app.engine.document().active_layer.0;
+                let initial = if effect == "curves" {
+                    EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
+                } else {
+                    EffectValue::Gradient(vec![
+                        GradientStop {
+                            position: 0.,
+                            color: [0., 0., 0., 1.],
+                        },
+                        GradientStop {
+                            position: 0.5,
+                            color: [0.5, 0.5, 0.5, 1.],
+                        },
+                        GradientStop {
+                            position: 1.,
+                            color: [1., 1., 1., 1.],
+                        },
+                    ])
+                };
+                app.dispatch(UiAction::Effect {
+                    action: EffectAction::Set {
+                        layer,
+                        key: key.clone(),
+                        value: initial.clone(),
+                    },
+                })
+                .unwrap();
+                let gesture = |phase, position| UiAction::Effect {
+                    action: EffectAction::Gesture {
+                        phase,
+                        action: Box::new(if effect == "curves" {
+                            EffectAction::CurvePoint {
+                                layer,
+                                key: key.clone(),
+                                index: Some(1),
+                                point: [position, 0.75],
+                                remove: false,
+                            }
+                        } else {
+                            EffectAction::GradientStop {
+                                layer,
+                                key: key.clone(),
+                                index: Some(1),
+                                position,
+                                color: None,
+                                remove: false,
+                            }
+                        }),
+                    },
+                };
+                let checkpoint = app.engine.checkpoint();
+                app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+                for i in 1..=20 {
+                    app.dispatch(gesture(ContactPhase::Move, 0.5 + i as f32 * 0.01))
+                        .unwrap();
+                }
+                assert_eq!(
+                    app.engine.checkpoint(),
+                    checkpoint,
+                    "Preview must not consume history"
+                );
+                let preview = app.state.layer_properties.controls[index].value.clone();
+                assert_ne!(preview, initial);
+                assert!(
+                    app.require_document_snapshot_idle().is_err(),
+                    "A save must wait for the gesture to finish"
+                );
+                assert!(
+                    app.dispatch(UiAction::SelectLayer { id: 1 }).is_err(),
+                    "Another document operation must not overwrite the preview"
+                );
+                app.dispatch(gesture(ContactPhase::Up, 0.7)).unwrap();
+                app.require_document_snapshot_idle().unwrap();
+                assert_ne!(app.engine.checkpoint(), checkpoint);
+                invoke(&mut app, CommandId::Undo);
+                assert_eq!(
+                    app.state.layer_properties.controls[index].value, initial,
+                    "One Undo restores the whole drag"
+                );
+                invoke(&mut app, CommandId::Redo);
+                assert_eq!(app.state.layer_properties.controls[index].value, preview);
+                invoke(&mut app, CommandId::Undo);
+                for end in [
+                    "cancel",
+                    "blur",
+                    "escape",
+                    "readonly",
+                    "invalid",
+                    "unchanged",
+                ] {
+                    app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+                    if end != "unchanged" {
+                        app.dispatch(gesture(ContactPhase::Move, 0.65)).unwrap();
+                    }
+                    match end {
+                        "cancel" => {
+                            app.dispatch(gesture(ContactPhase::Cancel, 0.65)).unwrap();
+                        }
+                        "blur" => {
+                            app.input(UiInput::Blur).unwrap();
+                        }
+                        "escape" => {
+                            app.input(UiInput::Key {
+                                key: "escape".into(),
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Default::default(),
+                                editing: false,
+                                divider: None,
+                            })
+                            .unwrap();
+                        }
+                        "readonly" => {
+                            app.set_workspace_read_only(true);
+                            app.dispatch(gesture(ContactPhase::Up, 0.65)).unwrap();
+                            assert!(app.dispatch(gesture(ContactPhase::Down, 0.5)).is_err());
+                            app.set_workspace_read_only(false);
+                        }
+                        "invalid" => {
+                            assert!(app.dispatch(gesture(ContactPhase::Move, f32::NAN)).is_err());
+                        }
+                        _ => {
+                            app.dispatch(gesture(ContactPhase::Up, 0.5)).unwrap();
+                        }
+                    }
+                    app.dispatch(gesture(ContactPhase::Up, 0.8)).unwrap();
+                    assert_eq!(app.state.layer_properties.controls[index].value, initial);
+                    assert_eq!(app.engine.checkpoint(), checkpoint);
+                    app.require_document_snapshot_idle().unwrap();
+                    assert!(
+                        app.engine.can_redo(),
+                        "Cancelled and empty drags preserve the earlier Redo"
+                    );
+                }
+                invoke(&mut app, CommandId::Redo);
+                assert_eq!(app.state.layer_properties.controls[index].value, preview);
+                app.dispatch(gesture(ContactPhase::Down, 0.7)).unwrap();
+                app.dispatch(gesture(ContactPhase::Move, 0.6)).unwrap();
+                app.suspend_renderer().unwrap();
+                app.dispatch(gesture(ContactPhase::Cancel, 0.6)).unwrap();
+                assert_eq!(app.state.layer_properties.controls[index].value, preview);
+                app.require_document_snapshot_idle().unwrap();
+            }
+        }
     }
 
     #[test]

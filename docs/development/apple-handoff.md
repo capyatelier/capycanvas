@@ -18,13 +18,20 @@ milestones and hardware-specific Pencil, provider, lifecycle and performance
 acceptance. Avoid repeating passing checks without a relevant change. Commit
 only major milestones. All eleven recovery stashes remain.
 
-Published Apple milestone `1952f31` fixed Color wheel height allocation, the
+Earlier published Apple milestone `1952f31` fixed Color wheel height allocation, the
 collapsed-column footer grip rotation, and gray header backgrounds chosen by
 the user. Paint and Photo default-column workflows, physical Color contacts,
 title-bar customization and tool drawers passed. Its eight unmasked native/Web
 comparisons are retained under `artifacts/apple-editor-parity-v1/`.
 
-The current milestone integrates main through `1fd753a`. Recent pulls add
+Published major milestone `0431c36` groups the native control, keyboard,
+document, startup and redraw fixes below with artwork/Metal qualification and
+current hardware measurements. All 523 integrated regressions, seven Metal
+contact/project checks, command/property audits and both Release builds pass.
+The ten-minute workloads complete but still fail sustained cadence. Publication
+to main is verified; private evidence and all eleven stashes remain local.
+
+The published milestone integrates main through `1fd753a`. Recent pulls add
 Windows docking and settings-save recovery, GPU color-test precision bounds,
 the equivalent host drawer fixture fix, and Windows brush icons, control contrast,
 capture and multiwindow-recovery updates. The latest integration adds only
@@ -43,6 +50,11 @@ The `1fd753a` integration includes Windows header surfaces, a Web suspended-GPU
 Navigator guard, and explicit grouping of the contact shader's existing integer
 hash expression. All seven final Metal contact/project checks and both Release
 builds pass after that integration.
+The subsequent `1b2e97e` fast-forward adds Windows layer/keyboard changes and a
+shared regression for every contact preset painting on masks. Both the new mask
+case and the refactored ordinary-contact history case pass on Metal. Apple and
+shared production sources are unchanged by that pull; all five follow-up paths
+are preserved.
 The duplicate local host fix is
 removed; all eleven stashes remain. Light header controls
 now use Web's half-opacity gray surface; Menu Labels share one rounded surface.
@@ -207,6 +219,82 @@ export full images; the shared independent capture patch accepts Metal.
 Other GPUs, complete cross-backend artwork and physical iPad/input/performance
 acceptance remain separate. Evidence is under
 `artifacts/apple-filter-qualification-v1/`.
+
+## Native filter artwork and history
+
+Earlier simulator version 5 and Mac version 6 each pass the complete native artwork
+workflow with no failures or skips. Both create blue artwork through Select/Fill,
+add filters through search and ready previews, and check brightness expressions,
+Red-channel curve insertion/reset, Gradient Map reversal and endpoint color
+editing. Exact 8-by-8 displayed canvas samples validate one-step Undo/Redo and
+filter deletion/restoration. Six final full-editor captures are reviewed: bright
+blue, Red-curve violet and gradient-stop red, each with matching live Navigator,
+readable controls and unchanged OS-window bounds. These are focused native
+workflows, not all-pixel filter or physical Pencil acceptance.
+
+Earlier fixture failures are retained. Search state must survive tab changes;
+the curve can be taller than its scroll viewport; touch scrolling must begin
+outside the curve's editing surface; and layer assertions wait for shared state.
+The iPad switch's accessible row includes blank space, so the test targets its
+visible trailing control. UIKit exposes its on/off value as text and AppKit as
+a number. No product input or rendering workaround is added. The obsolete
+direct-event Mac filter probe still expected the old curve accessibility values;
+it is removed and the README points to the maintained native tests.
+
+All jobs are terminal. The final Mac-only assertion change leaves the passing
+simulator branch unchanged. No physical iPad is accessed in this follow-up.
+Evidence and retained failures are ignored under
+`artifacts/apple-filter-artwork-v1/`; these focused tests and cleanup are grouped
+with the curve fixes below.
+
+The curve surface now uses Web's 12%-text background and square corners through
+one shared SwiftUI modifier. Both native Debug builds pass, and all four fresh
+Mac/simulator light/dark editor captures are reviewed. These are focused surface
+checks; their camera framing is not a new full-editor pixel comparison. This
+surface-only change leaves input unchanged; the subsequent gesture correction
+is validated separately below.
+
+The Web reference exposed a related hit-target bug: its square SVG plot was
+inset by 21 points inside the 242-point-wide input surface. Clicking the visible
+endpoint inserted a third point. Setting `preserveAspectRatio="none"` makes the
+plot fill its existing hit area, matching Apple's coordinate mapping. The
+endpoint regression is part of the existing Web filter checks and passes pickup
+and actual movement in both themes; the original failing check is retained.
+The probe targets the exposed handle, clear of the overlapping panel scrollbar.
+Both corrected Web captures are reviewed. No shared renderer or gesture
+workaround is added. All jobs are terminal and the disposable native apps are
+closed. Evidence is ignored under `artifacts/apple-curve-surface-v1/`.
+
+The extended curve workflow exposed a real history bug on both native hosts:
+version 1 moves the existing Red point correctly, but the first Undo fails to
+restore the pre-drag artwork. Every movement had created a separate layer edit.
+Version 2 passes on both Mac and simulator, including actual mouse/touch point
+movement, one-step Undo/Redo, point removal/restoration, Reset/history and the
+preceding brightness/Gradient Map workflows. Both full curve-drag captures are
+reviewed with matching live Navigator and unchanged OS-window bounds.
+
+Curve contacts now wrap the existing effect actions in a shared gesture. Rust
+uses the engine's established preview, restore and commit operations; release
+creates one history entry. Native controls retain their SwiftUI drag gesture
+and report cancellation when its contact or view disappears. The shared cases
+cover curve/gradient values, multiple updates, empty gestures, exact restoration,
+earlier Redo, Escape, blur, invalid input and the document-snapshot idle gate.
+Read-only ownership loss cancels a continuing contact, and late terminal events
+after renderer suspension remain harmless. The initial guard failure is retained.
+
+The native integration currently adopts this shared path for curve points.
+Gradient-stop dragging still uses individual edits and remains a follow-up;
+its native movement/history acceptance is not inferred from the shared cases.
+Final shared/Apple/engine/host checks pass 524 tests, with one host benchmark
+ignored, and both current Release builds pass. The first sandboxed integration
+could not acquire a Metal adapter; its failures are retained separately from
+the passing authorized Metal run. The native version-2 workflows precede the
+final ownership-loss guard and guards against cancelled or zero-size release;
+the shared regression covers recovery, while native interruption acceptance
+remains open. These filter tests, visual corrections, curve history and obsolete
+probe removal form one milestone. Physical Pencil acceptance remains separate.
+All jobs are terminal. Evidence and retained failures are ignored under
+`artifacts/apple-curve-drag-v1/`.
 
 ## Ongoing native selection and fill workflows
 

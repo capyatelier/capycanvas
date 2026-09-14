@@ -386,6 +386,12 @@ final class EditorLaunchTests: XCTestCase {
         checkNavigatorAndDiagnostics(in: app)
     }
 
+    @MainActor func testFilterArtworkAndHistory() throws {
+        let app = editorCaptureApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkFilterArtworkAndHistory(in: app)
+    }
+
     @MainActor func testFilterSearchPreviewAndProperties() throws {
         let app = editorTestApplication()
         XCUIDevice.shared.orientation = .landscapeLeft

@@ -674,21 +674,18 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 The shared `testFilterSearchPreviewAndProperties` workflow checks filter search,
 GPU preview loading, radius expressions, curve insertion/reset and gradient
 insertion/position/reset. On iPad it also checks canvas geometry while the search
-keyboard is open. A faster Mac-only alternative avoids XCTest startup and never
-addresses the system menu bar:
+keyboard is open. The Chrome `filter-properties` scenario in
+[`tools/visual`](../../tools/visual/README.md) provides the corresponding property
+fixture.
 
-```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcrun swift apps/layer-apple/tests/effect-controls-mac.swift \
-  apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app
-```
-
-This utility requires existing Accessibility permission for its launching
-terminal/agent. It opens a separate editor with persistence disabled, uses
-control identifiers and graph-relative pointer events, and leaves its final
-fixture open for direct capture. Missing permission returns failure without
-launching or modifying an editor. The Chrome `filter-properties` scenario in
-[`tools/visual`](../../tools/visual/README.md) reproduces its final document.
+Use `testFilterArtworkAndHistory` for brightness expressions, Red-channel curve
+insertion/dragging/removal/reset, Gradient Map reversal/color editing, filter
+deletion and one-step Undo/Redo. Both hosts create the drawing through native
+Select/Fill commands, compare exact 8-by-8 displayed canvas samples and retain
+full editor screenshots.
+These checks exercise mouse/touch controls; they do not establish Pencil input
+or all-pixel filter parity. Both workflows use the native test runner above;
+the obsolete direct-event Mac probe is removed.
 
 Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state

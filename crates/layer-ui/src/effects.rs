@@ -137,6 +137,12 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
+    /// Live property editing uses the same validation as individual actions,
+    /// with one history entry on release and restoration on cancellation.
+    Gesture {
+        phase: ContactPhase,
+        action: Box<EffectAction>,
+    },
     Insert {
         effect: Arc<str>,
     },
@@ -365,9 +371,81 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
         controls,
     }
 }
+pub(super) struct EffectGesture {
+    original: Layer,
+    key: String,
+}
+
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn cancel_effect_gesture(&mut self) -> Result<bool, String> {
+        let Some(gesture) = self.effect_gesture.take() else {
+            return Ok(false);
+        };
+        self.engine
+            .preview_edit(Edit::ReplaceLayer(Box::new(gesture.original)))
+            .map_err(error)?;
+        self.refresh_document();
+        Ok(true)
+    }
+
+    fn effect_gesture_action(
+        &mut self,
+        phase: ContactPhase,
+        action: EffectAction,
+    ) -> Result<(), String> {
+        let (layer, key) = match &action {
+            EffectAction::CurvePoint { layer, key, .. }
+            | EffectAction::GradientStop { layer, key, .. } => (*layer, key.clone()),
+            _ => return Err("Not a draggable effect property".into()),
+        };
+        if phase == ContactPhase::Down {
+            self.require_idle()?;
+            self.effect_gesture = Some(EffectGesture {
+                original: self.editable_layer(layer)?,
+                key: key.clone(),
+            });
+        } else if !self
+            .effect_gesture
+            .as_ref()
+            .is_some_and(|g| g.original.id.0 == layer && g.key == key)
+        {
+            // A cancelled native contact may still deliver its terminal event.
+            return Ok(());
+        }
+        if phase == ContactPhase::Cancel
+            || self.workspace_read_only
+            || self.workspace_transition
+            || self.rendering_suspended
+        {
+            self.cancel_effect_gesture()?;
+            return Ok(());
+        }
+        if let Err(error) = self.effect_action(action) {
+            self.cancel_effect_gesture()?;
+            return Err(error);
+        }
+        if phase == ContactPhase::Up {
+            let gesture = self.effect_gesture.take().unwrap();
+            let edited = self
+                .engine
+                .document()
+                .layer(gesture.original.id)
+                .unwrap()
+                .clone();
+            let changed = edited.effect != gesture.original.effect;
+            self.engine
+                .preview_edit(Edit::ReplaceLayer(Box::new(gesture.original)))
+                .map_err(error)?;
+            if changed {
+                self.layer_edit(Edit::ReplaceLayer(Box::new(edited)))?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         match action {
+            EffectAction::Gesture { phase, action } => return self.effect_gesture_action(phase, *action),
             EffectAction::GradientStop {
                 layer,
                 key,
@@ -579,7 +657,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Arc::make_mut(layer.effect.as_mut().ok_or("Not an effect layer")?)
                     .set(&key, value)
                     .map_err(str::to_string)?;
-                self.layer_edit(Edit::ReplaceLayer(Box::new(layer)))?;
+                let edit = Edit::ReplaceLayer(Box::new(layer));
+                if self.effect_gesture.is_some() {
+                    self.engine.preview_edit(edit).map_err(error)?;
+                } else {
+                    self.layer_edit(edit)?;
+                }
             }
         }
         Ok(())

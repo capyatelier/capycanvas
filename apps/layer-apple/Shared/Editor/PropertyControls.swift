@@ -122,8 +122,12 @@ private struct CurveProperty: View {
     private var points: [JSON] { control["value"]["value"].array }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var removable: Bool { selected.map { $0 > 0 && $0 < points.count - 1 } ?? false }
-    private func change(_ point: [Double], index: Int?, remove: Bool = false) {
-        store.effect(layer, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove])
+    private func change(_ point: [Double], index: Int?, remove: Bool = false, phase: String? = nil) {
+        store.effect(layer, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove], phase: phase)
+    }
+    private func cancelDrag() {
+        if dragging, let index = dragIndex { change([0, 0], index: index, phase: "cancel") }
+        dragging = false; dragIndex = nil
     }
     var body: some View {
         VStack(spacing: 6) {
@@ -147,19 +151,24 @@ private struct CurveProperty: View {
                         context.fill(Path(ellipseIn: CGRect(x: p[0].number * size.width - radius,
                             y: (1 - p[1].number) * size.height - radius, width: radius * 2, height: radius * 2)), with: .color(palette["text"]))
                     }
-                }.background(palette["input"], in: RoundedRectangle(cornerRadius: 6)).contentShape(Rectangle())
+                }.background(palette["text"].opacity(0.12)).contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
                         let size = geometry.size
                         guard size.width > 0, size.height > 0 else { return }
+                        let starting = !dragging
                         if !dragging {
                             dragging = true
                             dragIndex = points.indices.min { a, b in distance(points[a], event.startLocation, size) < distance(points[b], event.startLocation, size) }
                             if let index = dragIndex, distance(points[index], event.startLocation, size) > 12 { dragIndex = nil }
                             selected = dragIndex
                         }
-                        if let index = dragIndex { change([event.location.x / size.width, 1 - event.location.y / size.height], index: index) }
+                        if let index = dragIndex { change([event.location.x / size.width, 1 - event.location.y / size.height], index: index, phase: starting ? "down" : "move") }
                     }.onEnded { event in
-                        if dragIndex == nil, geometry.size.width > 0, geometry.size.height > 0 {
+                        guard dragging else { return }
+                        guard geometry.size.width > 0, geometry.size.height > 0 else { cancelDrag(); return }
+                        if let index = dragIndex {
+                            change([event.location.x / geometry.size.width, 1 - event.location.y / geometry.size.height], index: index, phase: "up")
+                        } else {
                             // Commit insertion once. Subsequent drags address the
                             // actual returned model, never a guessed insertion index.
                             change([event.location.x / geometry.size.width, 1 - event.location.y / geometry.size.height], index: nil)
@@ -167,7 +176,8 @@ private struct CurveProperty: View {
                         dragging = false; dragIndex = nil
                     })
                     .allowsHitTesting(enabled)
-                    .onChange(of: contact) { _, active in if !active { dragging = false; dragIndex = nil } }
+                    .onChange(of: contact) { _, active in if !active { cancelDrag() } }
+                    .onDisappear(perform: cancelDrag)
                     .accessibilityLabel("\(control["label"].string), \(points.count) points")
                     .accessibilityIdentifier("effect-curve")
             }.frame(height: 200)
@@ -265,8 +275,9 @@ private extension JSON {
     var effectColor: Color { Color(.sRGB, red: self[0].number, green: self[1].number, blue: self[2].number, opacity: self[3].number) }
 }
 private extension EditorStore {
-    func effect(_ layer: UInt64, key: String, action: [String: Any]) {
+    func effect(_ layer: UInt64, key: String, action: [String: Any], phase: String? = nil) {
         var action = action; action["layer"] = layer; action["key"] = key
+        if let phase { action = ["op": "gesture", "phase": phase, "action": action] }
         dispatch(["type": "effect", "action": action])
     }
 }

@@ -179,6 +179,12 @@ final class EditorLaunchTests: XCTestCase {
         checkNavigatorAndDiagnostics(in: app)
     }
 
+    @MainActor func testFilterArtworkAndHistory() throws {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        checkFilterArtworkAndHistory(in: app)
+    }
+
     @MainActor func testFilterSearchPreviewAndProperties() throws {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
