@@ -4,7 +4,7 @@ use lcms2::{
     ThreadContext, ToneCurve, Transform,
 };
 
-pub const MAX_ICC_BYTES: usize = 16 * 1024 * 1024;
+pub use layer_core::color::source::MAX_PROFILE_BYTES as MAX_ICC_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProfileChannels {

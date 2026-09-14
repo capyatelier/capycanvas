@@ -83,6 +83,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// readbacks are cancelled; pending filter validation resumes from retained
     /// source bytes before it can publish a catalog or edit.
     pub fn replace_renderer(&mut self, mut renderer: R) -> Result<(R, UiChange), String> {
+        if self.engine.document().layers.iter().any(|l| l.source.is_some())
+            && !renderer.supports_tiled_sources()
+        {
+            return Err("The replacement renderer does not support tiled photo documents".into());
+        }
         for (id, asset) in &self.files.assets {
             renderer.prepare_owned_asset(id, asset).map_err(error)?;
         }

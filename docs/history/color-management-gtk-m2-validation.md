@@ -311,5 +311,90 @@ limit; further HDR/ambiguous-profile recognition; cancellation/progress integrat
 Current default codec allocation limit is 128 MiB, retained compressed source
 limit 512 MiB and dimension limit 32768. These are implementation ceilings, not
 qualified whole-document memory budgets. Source-backed renderer composition,
-copy-on-write painting, native source persistence and all exposed color journeys
-remain outstanding.
+copy-on-write painting and all exposed color journeys remain outstanding. Native
+source persistence is implemented in the next stage below.
+
+## Fourth stage: physical precision and native source ownership
+
+The `sdr_precision` example compares identical Float32 arithmetic through physical
+`Rgba16Unorm`, `Rgba16Float` and `Rgba32Float` intermediates. It uploads every
+16-bit gray code, decodes to linear premultiplied working values, executes zero,
+one or 64 physical passes, and encodes to integer16. The independent Float64
+reference covers identity, 64 exposure multiplications, 64 low-alpha source-over
+steps and two-tap linear resampling in all four standard spaces. The Float32
+acceptance tolerance was declared as at most two RGB codes and one alpha code
+before the successful run; measured results are stricter:
+
+| Physical working format | Worst identity RGB error | Worst edit RGB error | Worst alpha error |
+| --- | --- | --- | --- |
+| Linear UNORM16 | 325 | 23156 | 0 |
+| FP16 | 33 | 671 | 16 |
+| Float32 | 0 | 1 | 0 |
+
+Values are integer16 code differences, not percentages. Float32 identity changes
+zero codes across all 65,536 opaque gray values in each space. Its edited RMS
+error is 0.113–0.224 code. This supports bounded Float32 working tiles with
+integer backing. It does not qualify every brush, effect or ICC transform, and
+does not establish hidden-RGB identity through a premultiplied edit surface.
+Untouched source samples retain their exact straight representation.
+
+Reproduce with `cargo build --release -p layer-render-wgpu --example sdr_precision
+--offline`, then `LAYER_GPU_INDEX=0 target/release/examples/sdr_precision`. The
+recorded adapter is PCI `0000:f1:00.0`, Vulkan 610.57.04. Normalized16 render targets
+require both `TEXTURE_FORMAT_16BIT_NORM` and adapter-specific format capabilities;
+the initial missing-feature validation error was corrected before measuring.
+Float32 uses unfilterable texture bindings and explicit loads, without requiring
+Float32 filtering. Ten warmups and 100 measured submissions per case include CPU
+view/bind-group construction and queue completion. Typical Float32 64-pass p95
+is 0.87–0.96 ms per 256² tile, with noisy p99 outliers. These are cold submission
+costs, not production hot-frame or pure GPU timings. The earlier 4096² equal-format
+experiment still demonstrates why full-resolution Float32 copies are unsuitable
+as an automatic replacement. Raw results: `sdr-precision.log`.
+
+Layers now own immutable tiled source handles. Duplication, composition snapshots,
+undo and file snapshots share them; cleared history releases sources absent from
+the document. History accounting includes distinct source indices, compressed
+tile allocations and embedded profiles while excluding allocations already owned
+by the current document. Equal samples in separate allocations are still charged.
+
+Archive version 2 has explicit image/layer indices, a shared content-addressed
+tile pool and binary ICC payloads with independent SHA-256 checks. Reader
+preflight validates dimensions, roles, coordinate coverage, offsets, references,
+tile counts and retained-source budgets before reading payloads. Tiles are
+decoded one at a time for integrity checking. Duplicated layers share the same
+source after reopening. Saving reuses compressed tiles and exact ICC bytes;
+there is no old-version reader. Existing packed8 host resources remain a separate
+valid input contract until their respective host integrations are replaced.
+
+Source-only native archive measurements, using the random ProPhoto16 fixtures
+from the preceding stage and no concurrent compilation or test work:
+
+| Size | Retained source MiB | Archive write ms | Reopen + exact comparison ms | Process high-water KiB |
+| --- | --- | --- | --- | --- |
+| 24 MP | 137.58 | 49.27 | 255.56 | 289208 |
+| 45 MP | 258.36 | 82.09 | 450.87 | 538452 |
+| 60 MP | 343.78 | 113.87 | 605.68 | 712428 |
+
+High-water includes both original and reopened sources, without GPU composition.
+Writes include buffered output flush but exclude file synchronization and atomic
+publication; GTK retains its existing durable publication path. Reproduce by
+building `photo_sources`, then running `photo_sources roundtrip INPUT.tiff
+OUTPUT.capy`. Artifacts: `native-source{24,45,60}.log` and corresponding archives.
+This helper stores a photo source in a document; it does not claim the document's
+working precision or renderer has been upgraded.
+
+Session creation and GPU replacement reject tiled-source documents until the
+renderer advertises actual support. No new photo/color mode is exposed in GTK
+yet; other platform integration and qualification remain pending user approval.
+
+Validation: 52 core tests, 13 color-service tests, 49 engine tests and the existing
+369 UI tests pass, plus the new unsupported-source adoption test. All 129 GPU
+library tests and three GPU project tests pass. The rebuilt GTK host passes
+`native_document_files` and `native_diagnostics_and_gpu_failure_recovery` on the
+private 120 Hz Mutter display with fatal GTK criticals. The recovery test's
+deliberately invalid scissor produces the expected worker failure and restores
+the retained checkpoint. Artifacts: `source-persistence-tests.log`,
+`native-source-core-tests.log`, `source-capability-test.log`, `persistence-gpu.log`,
+`persistence-project.log`, `persistence-gtk-{files,recovery}.log`. No hot-rendering
+format changed in this stage; final frame and whole-document memory qualification
+remains required after source composition and editing are integrated.

@@ -352,6 +352,11 @@ impl TransformPreview {
 /// into GPU resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Expose source-backed documents only when the renderer can interpret and
+    /// compose their retained samples. Unsupported hosts must reject adoption.
+    fn supports_tiled_sources(&self) -> bool {
+        false
+    }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true

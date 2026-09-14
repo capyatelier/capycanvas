@@ -71,8 +71,9 @@ pub struct Project {
     pub assets: BTreeMap<AssetId, ProjectAsset>,
 }
 
-/// Bounds apply to decoded data, not just compressed file size. Hosts may use
-/// stricter limits for their memory budget. GPU device limits are checked later.
+/// Raster bounds cover decoded instances. Source bounds cover retained tiled
+/// source/profile ownership and packed assets; source decoding is tile/band
+/// bounded. Hosts may set stricter limits; GPU limits are checked separately.
 #[derive(Clone, Copy, Debug)]
 pub struct ProjectLimits {
     pub metadata_bytes: u64,
@@ -168,6 +169,32 @@ impl Project {
             }
         }
         let mut total = 0u64;
+        let mut source_memory = color::source::SourceAccounting::default();
+        let mut source_tiles = 0usize;
+        let mut seen_sources = BTreeSet::new();
+        for layer in &self.document.layers {
+            if matches!(layer.kind, LayerKind::ImportedImage | LayerKind::AiSuggestion)
+                && layer.asset.is_none() && layer.source.is_none()
+            {
+                return Err("A layer source image is missing".into());
+            }
+            if let Some(source) = &layer.source {
+                source.validate()?;
+                if source.extent.iter().any(|v| *v > limits.dimension) {
+                    return Err("Source image exceeds the dimension limit".into());
+                }
+                if seen_sources.insert(Arc::as_ptr(source) as usize) {
+                    source_tiles = source_tiles.saturating_add(source.tiles.len());
+                }
+                if source_tiles > limits.tiles {
+                    return Err("Project has too many source tiles".into());
+                }
+                total = total.saturating_add(source_memory.charge(source) as u64);
+            }
+        }
+        if total > limits.asset_bytes {
+            return Err("Project images exceed the memory limit".into());
+        }
         for (id, asset) in &self.assets {
             if !needed.contains_key(id) {
                 return Err("Project contains an unused asset".into());
@@ -373,15 +400,6 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
         doc.validate_layer(l).map_err(|e| e.to_string())?;
         if l.kind == LayerKind::Background && i + 1 != doc.layers.len() {
             return Err("Paper must be the bottom layer".into());
-        }
-        if (matches!(l.kind, LayerKind::ImportedImage | LayerKind::AiSuggestion)
-            && l.asset.is_none())
-            || (!matches!(
-                l.kind,
-                LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion
-            ) && l.asset.is_some())
-        {
-            return Err("Invalid layer source image".into());
         }
     }
     Ok(())

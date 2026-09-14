@@ -118,6 +118,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2]) -> Result<Self, String> {
+        if document.layers.iter().any(|l| l.source.is_some()) && !renderer.supports_tiled_sources() {
+            return Err("This renderer does not support tiled photo documents".into());
+        }
         let camera = Camera::new([document.width, document.height], viewport);
         let (pen, input) = input_queue(8192);
         let mut engine = CanvasEngine::new(
@@ -4292,6 +4295,23 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn source_document_adoption_requires_renderer_support() {
+        use layer_core::color::{IntegerDepth, source::*};
+        let mut document = Document::new("photo", 1, 1);
+        let mut source = SourceBuilder::new([1, 1], SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            profile: Default::default(),
+            profile_assumed: false,
+        }, 1024 * 1024).unwrap();
+        source.push_row(&[0; 8]).unwrap();
+        document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+        let project = layer_core::Project { document, assets: Default::default() };
+        let result = UiSession::from_project(Recorder::default(), project, None, [256, 256]);
+        assert!(matches!(result, Err(message) if message.contains("does not support tiled photo")));
     }
 
     #[test]

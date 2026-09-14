@@ -5,6 +5,37 @@ use crate::raster::{TILE_SIZE, TileBlob};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
+pub const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Count actual shared ownership, including sources held only by undo. Equal
+/// digests in independently allocated sources still occupy separate memory.
+#[derive(Default)]
+pub(crate) struct SourceAccounting {
+    sources: std::collections::HashSet<usize>,
+    tiles: std::collections::HashSet<usize>,
+    profiles: std::collections::HashSet<usize>,
+}
+impl SourceAccounting {
+    pub(crate) fn charge(&mut self, source: &Arc<SourceImage>) -> usize {
+        if !self.sources.insert(Arc::as_ptr(source) as usize) {
+            return 0;
+        }
+        let mut bytes = std::mem::size_of::<SourceImage>()
+            .saturating_add(source.tiles.len().saturating_mul(96));
+        for tile in source.tiles.values() {
+            if self.tiles.insert(Arc::as_ptr(tile) as usize) {
+                bytes = bytes.saturating_add(tile.resident_bytes());
+            }
+        }
+        if let ColorProfile::Icc(profile) = &source.interpretation.profile
+            && self.profiles.insert(profile.as_ptr() as usize)
+        {
+            bytes = bytes.saturating_add(profile.len());
+        }
+        bytes
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceChannels {
     Gray,
@@ -58,6 +89,17 @@ pub struct SourceImage {
     pub interpretation: SourceInterpretation,
     pub tiles: BTreeMap<[u32; 2], Arc<TileBlob>>,
 }
+impl PartialEq for SourceImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.extent == other.extent
+            && self.interpretation == other.interpretation
+            && self.tiles.len() == other.tiles.len()
+            && self.tiles.iter().zip(&other.tiles).all(|((a, x), (b, y))| {
+                a == b && x.descriptor == y.descriptor && x.digest == y.digest
+            })
+    }
+}
+impl Eq for SourceImage {}
 impl SourceImage {
     pub fn resident_bytes(&self) -> usize {
         self.tiles.values().map(|t| t.resident_bytes()).sum()
@@ -76,6 +118,11 @@ impl SourceImage {
         let [w, h] = self.extent;
         if w == 0 || h == 0 || w > 32768 || h > 32768 {
             return Err("Unsupported source dimensions".into());
+        }
+        if let ColorProfile::Icc(bytes) = &self.interpretation.profile
+            && (bytes.is_empty() || bytes.len() > MAX_PROFILE_BYTES)
+        {
+            return Err("Invalid source profile size".into());
         }
         let columns = w.div_ceil(TILE_SIZE);
         let rows = h.div_ceil(TILE_SIZE);
@@ -214,6 +261,39 @@ impl SourceBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_accounting_tracks_allocations_instead_of_equal_samples() {
+        let interpretation = SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            profile: ColorProfile::Icc(vec![17; 512].into()),
+            profile_assumed: false,
+        };
+        let mut builder = SourceBuilder::new([1, 1], interpretation, 1024 * 1024).unwrap();
+        builder.push_row(&[0; 8]).unwrap();
+        let source = Arc::new(builder.finish().unwrap());
+        let mut accounting = SourceAccounting::default();
+        let total = accounting.charge(&source);
+        assert!(total > source.resident_bytes() + 512);
+        assert_eq!(accounting.charge(&source.clone()), 0);
+        let shared_tiles = Arc::new((*source).clone());
+        let index_bytes = accounting.charge(&shared_tiles);
+        assert!(index_bytes > 0 && index_bytes < total);
+        let mut separate = (*source).clone();
+        for tile in separate.tiles.values_mut() {
+            *tile = Arc::new(
+                TileBlob::encode_source(tile.descriptor, &tile.decode().unwrap()).unwrap(),
+            );
+        }
+        assert_eq!(
+            separate, *source,
+            "equal samples need not share their allocation"
+        );
+        assert_eq!(
+            accounting.charge(&Arc::new(separate)),
+            index_bytes + source.resident_bytes()
+        );
+    }
     #[test]
     fn source_bands_preserve_integer16_hidden_rgb_and_partial_tiles() {
         let interpretation = SourceInterpretation {

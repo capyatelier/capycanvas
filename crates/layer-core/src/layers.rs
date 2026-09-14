@@ -1075,6 +1075,15 @@ impl Document {
         target.is_some()
     }
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
+        if layer.asset.is_some() && layer.source.is_some()
+            || (!matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion)
+                && (layer.asset.is_some() || layer.source.is_some()))
+        {
+            return Err(DocumentError::InvalidLayerOperation("Invalid layer source"));
+        }
+        if layer.source.as_ref().is_some_and(|s| s.validate().is_err()) {
+            return Err(DocumentError::InvalidLayerOperation("Invalid tiled source"));
+        }
         for op in &layer.pending_operations {
             op.validate()?;
         }

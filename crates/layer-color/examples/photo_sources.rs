@@ -3,8 +3,9 @@ use layer_color::photo::{DecodeLimits, read_photo, write_png, write_tiff};
 use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
 use std::{
     fs::File,
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Write},
     path::Path,
+    sync::Arc,
     time::Instant,
 };
 
@@ -93,23 +94,45 @@ fn main() -> Result<(), String> {
     if args[1] == "inspect" {
         return Ok(());
     }
+    let source = Arc::new(source);
     let output = args.last().unwrap();
     let start = Instant::now();
-    let file = BufWriter::new(File::create(output).map_err(err)?);
-    match Path::new(output).extension().and_then(|s| s.to_str()) {
+    let mut file = BufWriter::new(File::create(output).map_err(err)?);
+    let extension = Path::new(output).extension().and_then(|s| s.to_str());
+    match extension {
         Some("png") => write_png(file, &source)?,
         Some("tif" | "tiff") => write_tiff(file, &source)?,
-        _ => return Err("Choose a PNG or TIFF output".into()),
+        Some("capy") => {
+            let mut document = layer_core::Document::new(
+                "source archive measurement",
+                source.extent[0],
+                source.extent[1],
+            );
+            document.layers[0].source = Some(source.clone());
+            layer_core::Project {
+                document,
+                assets: Default::default(),
+            }
+            .write(&mut file)?;
+            file.flush().map_err(err)?;
+        }
+        _ => return Err("Choose a PNG, TIFF or Capy output".into()),
     }
     println!(
         "streamed output {:.2} ms",
         start.elapsed().as_secs_f64() * 1000.
     );
     let start = Instant::now();
-    let reopened = read_photo(
-        BufReader::new(File::open(output).map_err(err)?),
-        DecodeLimits::default(),
-    )?;
+    let input = BufReader::new(File::open(output).map_err(err)?);
+    let reopened = if extension == Some("capy") {
+        let project = layer_core::Project::read(input, Default::default())?;
+        project.document.layers[0]
+            .source
+            .clone()
+            .ok_or("Missing archived source")?
+    } else {
+        Arc::new(read_photo(input, DecodeLimits::default())?)
+    };
     if source.extent != reopened.extent
         || source.interpretation.depth != reopened.interpretation.depth
         || source.tiles.len() != reopened.tiles.len()

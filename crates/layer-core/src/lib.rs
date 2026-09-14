@@ -162,6 +162,11 @@ pub struct Layer {
     /// The indexed project container serializes backing separately from metadata.
     #[serde(skip)]
     pub raster: raster::RasterRevision,
+    /// Immutable original samples and interpretation, shared by duplication,
+    /// history and save snapshots. Raster tiles override edited source regions.
+    /// The indexed project container stores source/profile payload separately.
+    #[serde(skip)]
+    pub source: Option<Arc<color::source::SourceImage>>,
     pub asset: Option<AssetId>,
     /// Document revision used to generate an AI suggestion.
     pub source_revision: Option<Revision>,
@@ -182,6 +187,7 @@ impl Layer {
             visible: self.visible,
             opacity: self.opacity,
             raster: self.raster.clone(),
+            source: self.source.clone(),
             asset: self.asset.clone(),
             source_revision: None,
             properties: self.properties.clone(),
@@ -198,6 +204,7 @@ impl Layer {
             visible: true,
             opacity: 1.0,
             raster: Default::default(),
+            source: None,
             asset: None,
             source_revision: None,
             properties: LayerProperties::default(),
@@ -219,6 +226,7 @@ impl Layer {
             visible: true,
             opacity: 1.0,
             raster: Default::default(),
+            source: None,
             asset: Some(asset),
             source_revision: None,
             properties: LayerProperties::default(),
@@ -1254,6 +1262,7 @@ impl Document {
                     visible: true,
                     opacity: 1.0,
                     raster: Default::default(),
+                    source: None,
                     asset: None,
                     source_revision: None,
                     properties: LayerProperties::default(),
@@ -1563,6 +1572,14 @@ pub enum Edit {
 }
 
 impl Edit {
+    fn source_roots<'a>(&'a self, out: &mut Vec<&'a Arc<color::source::SourceImage>>) {
+        match self {
+            Self::Batch(edits) => edits.iter().for_each(|edit| edit.source_roots(out)),
+            Self::ReplaceLayer(layer) => out.extend(layer.source.as_ref()),
+            Self::InsertLayer { layer, .. } => out.extend(layer.source.as_ref()),
+            _ => (),
+        }
+    }
     fn raster_roots<'a>(&'a self, out: &mut Vec<&'a raster::RasterRevision>) {
         match self {
             Self::SetRaster { revision, .. } => out.push(revision),
@@ -1731,9 +1748,13 @@ impl Editor {
         }
         let mut seen_roots = std::collections::HashSet::new();
         let mut seen_tiles = std::collections::HashSet::new();
+        let mut sources = color::source::SourceAccounting::default();
         let mut current = Vec::new();
         for layer in &self.document.layers {
             layer_roots(layer, &mut current);
+            if let Some(source) = &layer.source {
+                sources.charge(source);
+            }
         }
         for revision in current {
             seen_roots.insert(revision.identity());
@@ -1746,6 +1767,11 @@ impl Editor {
             let mut keep = 0;
             for entry in history.iter().rev().take(ENTRY_BUDGET) {
                 bytes = bytes.saturating_add(entry.metadata_bytes);
+                let mut referenced_sources = Vec::new();
+                entry.edit.source_roots(&mut referenced_sources);
+                for source in referenced_sources {
+                    bytes = bytes.saturating_add(sources.charge(source));
+                }
                 let mut referenced = Vec::new();
                 entry.edit.raster_roots(&mut referenced);
                 for revision in referenced {

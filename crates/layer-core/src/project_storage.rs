@@ -5,8 +5,10 @@ use crate::{raster::*, *};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
+mod sources;
+use sources::SourceIndex;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x01\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x02\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,6 +54,7 @@ struct Manifest<D = Document> {
     rasters: Vec<RasterRecord>,
     blobs: Vec<BlobRecord>,
     sources: Vec<SourceRecord>,
+    tiled_sources: SourceIndex,
 }
 
 pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), String> {
@@ -96,6 +99,11 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
             });
         }
     }
+    let (mut tiled_sources, profiles) =
+        SourceIndex::collect(&project.document, &mut blobs, &mut ids, &mut tile_count);
+    if tile_count > limits.tiles {
+        return Err("Project has too many raster/source tiles".into());
+    }
     let mut offset = 0u64;
     let records = blobs
         .iter()
@@ -111,6 +119,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
             record
         })
         .collect();
+    tiled_sources.index_profiles(&profiles, &mut offset);
     let sources = project
         .assets
         .iter()
@@ -137,6 +146,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         rasters,
         blobs: records,
         sources,
+        tiled_sources,
     };
     let json = metadata(&manifest, limits.metadata_bytes)?;
     output.write_all(MAGIC).map_err(io_error)?;
@@ -147,6 +157,9 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     output.write_all(&json).map_err(io_error)?;
     for blob in blobs {
         output.write_all(blob.compressed()).map_err(io_error)?;
+    }
+    for profile in profiles {
+        output.write_all(&profile).map_err(io_error)?;
     }
     for source in project.assets.values() {
         output.write_all(&source.bytes).map_err(io_error)?;
@@ -185,16 +198,10 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     }
     // Validate all offsets, roles and allocation budgets before reading payload.
     let mut offset = 0u64;
-    let mut decoded = 0u64;
     for blob in &manifest.blobs {
-        let raw = blob
-            .descriptor
+        blob.descriptor
             .byte_len([TILE_SIZE; 2])
-            .ok_or("Unsupported raster pixel descriptor")? as u64;
-        decoded = decoded
-            .checked_add(raw)
-            .filter(|v| *v <= limits.raster_bytes)
-            .ok_or("Raster data exceeds the memory budget")?;
+            .ok_or("Unsupported raster pixel descriptor")?;
         if blob.offset != offset || blob.size == 0 || blob.size > MAX_TILE_BYTES as u64 + 1024 {
             return Err("Invalid raster chunk index".into());
         }
@@ -202,7 +209,16 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
             .checked_add(blob.size)
             .ok_or("Raster index overflow")?;
     }
-    let mut source_bytes = 0u64;
+    let mut referenced = BTreeSet::new();
+    let mut tile_count = 0;
+    let mut source_bytes = manifest.tiled_sources.validate(
+        &manifest.document,
+        &manifest.blobs,
+        limits,
+        &mut offset,
+        &mut referenced,
+        &mut tile_count,
+    )?;
     let mut asset_ids = BTreeSet::new();
     for source in &manifest.sources {
         if source.offset != offset
@@ -219,18 +235,30 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
             .checked_add(source.size)
             .ok_or("Source index overflow")?;
     }
-    let mut referenced = BTreeSet::new();
     let mut target_ids = BTreeSet::new();
-    let mut tile_count = 0;
+    let expected_targets: BTreeMap<_, _> = manifest
+        .document
+        .layers
+        .iter()
+        .flat_map(|l| std::iter::once((l.id, false)).chain(l.mask.iter().map(|m| (m.id, true))))
+        .collect();
     let mut instance_bytes = 0u64;
     for raster in &manifest.rasters {
+        let mask = *expected_targets
+            .get(&raster.target)
+            .ok_or("Missing raster target")?;
         if !target_ids.insert(raster.target) {
             return Err("Duplicate raster target".into());
         }
         let mut keys = BTreeSet::new();
         for tile in &raster.tiles {
             let blob = manifest.blobs.get(tile.blob).ok_or("Missing raster blob")?;
-            if !keys.insert(tile.key) || blob.descriptor != tile.key.plane.descriptor() {
+            if !keys.insert(tile.key)
+                || blob.descriptor != tile.key.plane.descriptor()
+                || mask != (tile.key.plane == RasterPlane::Mask)
+                || tile.key.coordinate[0] >= manifest.document.width.div_ceil(TILE_SIZE)
+                || tile.key.coordinate[1] >= manifest.document.height.div_ceil(TILE_SIZE)
+            {
                 return Err("Invalid raster tile reference".into());
             }
             referenced.insert(tile.blob);
@@ -240,6 +268,9 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
                 .filter(|v| *v <= limits.raster_bytes)
                 .ok_or("Raster instances exceed the memory budget")?;
         }
+    }
+    if target_ids.len() != expected_targets.len() {
+        return Err("Project is missing a raster target".into());
     }
     if tile_count > limits.tiles || referenced.len() != manifest.blobs.len() {
         return Err("Oversized raster index or unused blobs".into());
@@ -253,6 +284,9 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
             bytes.into(),
         )?));
     }
+    manifest
+        .tiled_sources
+        .read(&mut input, &tiles, &mut manifest.document)?;
     for raster in manifest.rasters {
         let mask = manifest
             .document
@@ -287,11 +321,6 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         };
         *revision = RasterRevision::backed(data);
     }
-    if manifest.document.layers.iter().any(|l| {
-        !target_ids.contains(&l.id) || l.mask.as_ref().is_some_and(|m| !target_ids.contains(&m.id))
-    }) {
-        return Err("Project is missing a raster target".into());
-    }
     let mut assets = BTreeMap::new();
     for source in manifest.sources {
         let bytes = read_block(&mut input, source.size, limits.asset_bytes)?;
@@ -322,12 +351,175 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::{ColorProfile, IntegerDepth, source::*};
+
+    fn source_fixture() -> Project {
+        let mut project = fixture();
+        let interpretation = SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            // Transport treats ICC as exact opaque bytes; color services validate
+            // its tags and supported CMM role before any renderer adopts it.
+            profile: ColorProfile::Icc((0..256).map(|n| n as u8).collect::<Vec<_>>().into()),
+            profile_assumed: false,
+        };
+        let mut builder = SourceBuilder::new([257, 259], interpretation, 8 * 1024 * 1024).unwrap();
+        for y in 0..259u32 {
+            let mut row = Vec::new();
+            for x in 0..257u32 {
+                for value in [
+                    x.wrapping_mul(255) as u16,
+                    y.wrapping_mul(253) as u16,
+                    (x ^ y) as u16,
+                    if x % 7 == 0 { 0 } else { 65535 },
+                ] {
+                    row.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            builder.push_row(&row).unwrap();
+        }
+        let source = Arc::new(builder.finish().unwrap());
+        project.document.layers[0].source = Some(source);
+        let mut duplicate = project.document.layers[0].clone();
+        duplicate.id = project.document.allocate_layer_id();
+        project.document.layers.insert(0, duplicate);
+        project
+    }
+
+    #[test]
+    fn native_sources_preserve_u16_profiles_hidden_rgb_and_shared_ownership() {
+        let project = source_fixture();
+        let snapshot = Project::snapshot(&project.document, &project.assets).unwrap();
+        assert!(Arc::ptr_eq(
+            snapshot.document.layers[0].source.as_ref().unwrap(),
+            project.document.layers[0].source.as_ref().unwrap()
+        ));
+        let mut bytes = Vec::new();
+        snapshot.write(&mut bytes).unwrap();
+        let loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        let a = loaded.document.layers[0].source.as_ref().unwrap();
+        let b = loaded.document.layers[1].source.as_ref().unwrap();
+        assert!(
+            Arc::ptr_eq(a, b),
+            "duplicated layers share a source after reopening"
+        );
+        let original = project.document.layers[0].source.as_ref().unwrap();
+        assert_eq!(a, original);
+        for (key, tile) in &a.tiles {
+            assert_eq!(
+                tile.decode().unwrap(),
+                original.tiles[key].decode().unwrap()
+            );
+        }
+        let mut second = Vec::new();
+        loaded.write(&mut second).unwrap();
+        assert_eq!(
+            bytes, second,
+            "repeat saves reuse exact source/profile payloads"
+        );
+
+        let weak = Arc::downgrade(a);
+        let mut editor = Editor::new(loaded.document);
+        for id in [LayerId(1), LayerId(3)] {
+            let mut layer = editor.document().layer(id).unwrap().clone();
+            layer.source = None;
+            editor.perform(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        }
+        assert!(editor.undo().unwrap());
+        assert!(Arc::ptr_eq(
+            editor
+                .document()
+                .layer(LayerId(3))
+                .unwrap()
+                .source
+                .as_ref()
+                .unwrap(),
+            &weak.upgrade().unwrap()
+        ));
+        assert!(editor.redo().unwrap());
+        assert!(weak.upgrade().is_some(), "history retains original source");
+        editor.clear_history();
+        assert!(
+            weak.upgrade().is_none(),
+            "cleared history releases an unused source"
+        );
+    }
+
+    fn rewrite_manifest(bytes: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+        let length = u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
+        let mut value = serde_json::from_slice(&bytes[52..52 + length]).unwrap();
+        edit(&mut value);
+        let json = serde_json::to_vec(&value).unwrap();
+        let mut changed = MAGIC.to_vec();
+        changed.extend_from_slice(&(json.len() as u64).to_le_bytes());
+        changed.extend_from_slice(&Sha256::digest(&json));
+        changed.extend_from_slice(&json);
+        changed.extend_from_slice(&bytes[52 + length..]);
+        changed
+    }
+
+    #[test]
+    fn source_indices_reject_aliases_corruption_and_budget_bypasses() {
+        let mut bytes = Vec::new();
+        source_fixture().write(&mut bytes).unwrap();
+        for mutate in [
+            |v: &mut serde_json::Value| {
+                v["tiled_sources"]["layers"][1]["target"] =
+                    v["tiled_sources"]["layers"][0]["target"].clone()
+            },
+            |v: &mut serde_json::Value| v["tiled_sources"]["layers"][0]["image"] = 999.into(),
+            |v: &mut serde_json::Value| {
+                v["tiled_sources"]["images"][0]["tiles"][1]["coordinate"] =
+                    serde_json::json!([0, 0])
+            },
+            |v: &mut serde_json::Value| {
+                v["tiled_sources"]["images"][0]["profile"] = serde_json::json!({"Embedded": 1})
+            },
+            |v: &mut serde_json::Value| v["tiled_sources"]["profiles"][0]["offset"] = 0.into(),
+        ] {
+            let changed = rewrite_manifest(&bytes, mutate);
+            // Supply only metadata. A bad index must fail before requesting any
+            // payload, rather than relying on a later decompression failure.
+            let length = u64::from_le_bytes(changed[12..20].try_into().unwrap()) as usize;
+            let error = Project::read(&changed[..52 + length], Default::default()).unwrap_err();
+            assert!(
+                !error.contains("incomplete") && !error.contains("I/O"),
+                "{error}"
+            );
+        }
+        let end = bytes.len();
+        bytes[end - 1] ^= 1;
+        assert!(
+            Project::read(bytes.as_slice(), Default::default())
+                .unwrap_err()
+                .contains("profile integrity")
+        );
+        bytes[end - 1] ^= 1;
+        for limits in [
+            ProjectLimits {
+                asset_bytes: 128,
+                ..Default::default()
+            },
+            ProjectLimits {
+                tiles: 5,
+                ..Default::default()
+            },
+            ProjectLimits {
+                dimension: 256,
+                ..Default::default()
+            },
+        ] {
+            assert!(Project::read(bytes.as_slice(), limits).is_err());
+        }
+    }
     fn fixture() -> Project {
         let mut document = Document::new("raster fixture", 512, 256);
         let tile = RasterTile::backed(
             TileBlob::encode(
                 color::PixelDescriptor::SRGB8_PAINT,
-                &(0..crate::color::PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap())
+                &(0..crate::color::PixelDescriptor::SRGB8_PAINT
+                    .byte_len([TILE_SIZE; 2])
+                    .unwrap())
                     .map(|i| (i % 251) as u8)
                     .collect::<Vec<_>>(),
             )
@@ -393,7 +585,9 @@ mod tests {
             Project::read(
                 bytes.as_slice(),
                 ProjectLimits {
-                    raster_bytes: crate::color::PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap() as u64,
+                    raster_bytes: crate::color::PixelDescriptor::SRGB8_PAINT
+                        .byte_len([TILE_SIZE; 2])
+                        .unwrap() as u64,
                     ..Default::default()
                 }
             )
