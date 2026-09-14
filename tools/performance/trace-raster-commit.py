@@ -48,7 +48,7 @@ def instrument(root):
         if let Some(started) = started {''')
     p.write_text(s)
     p=root/'crates/layer-render-wgpu/src/raster.rs';s=p.read_text()
-    if '    pub(crate) fn capture_tiles(' in s:
+    if ' fn capture_tiles(' in s:
         p.write_text(instrument_native_capture(s))
         return
     a=s.index('    pub fn capture_raster(');b=s.index('    /// Restore changed pages',a)
@@ -80,7 +80,7 @@ def instrument(root):
 
 
 def instrument_native_capture(source):
-    begin = source.index('    pub(crate) fn capture_tiles(')
+    begin = source.rfind('\n', 0, source.index(' fn capture_tiles(')) + 1
     end = source.index('    /// Restore changed pages', begin)
     body = source[begin:end]
     old = '    ) -> Result<RasterCapture, GpuRasterError> {'

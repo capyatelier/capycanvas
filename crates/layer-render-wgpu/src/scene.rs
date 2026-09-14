@@ -419,6 +419,23 @@ impl Scene {
         Ok(())
     }
     #[cfg(not(target_arch = "wasm32"))]
+    pub fn restore_native_scalars(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        requests: &[crate::native_tiles::scalar::NativeScalarRestore<'_>],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        for request in requests {
+            if self.source_tiles.uploads_full() {
+                Self::submit_source_uploads(r, encoder)?;
+            }
+            let bytes = crate::native_tiles::scalar::restore_upload(r, request, encoder)?;
+            let in_flight = self.source_tiles.charge_upload(encoder, bytes);
+            r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepared_source_view(
         &self,
         source: &std::sync::Arc<layer_core::color::source::SourceImage>,

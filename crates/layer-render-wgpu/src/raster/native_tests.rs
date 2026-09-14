@@ -77,7 +77,7 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
     let mut copies: Vec<_> = (0..35)
         .map(|_| TileCapture {
             descriptor: descriptor(IntegerDepth::U16),
-            texture: &native16,
+            source: crate::raster::CaptureSource::Texture(&native16),
             tile: RasterTile::default(),
         })
         .collect();
@@ -85,13 +85,13 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
         31,
         TileCapture {
             descriptor: descriptor(IntegerDepth::U8),
-            texture: &native8,
+            source: crate::raster::CaptureSource::Texture(&native8),
             tile: RasterTile::default(),
         },
     );
     copies.push(TileCapture {
         descriptor: PixelDescriptor::COVERAGE8,
-        texture: &coverage,
+        source: crate::raster::CaptureSource::Texture(&coverage),
         tile: RasterTile::default(),
     });
     let capture = r.capture_tiles(&copies, Some(&status)).unwrap();
@@ -108,9 +108,9 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
     for copy in &copies {
         let blob = copy.tile.wait_backing().unwrap();
         assert_eq!(blob.descriptor, copy.descriptor);
-        let expected = if copy.texture == &native16 {
+        let expected = if matches!(copy.source, CaptureSource::Texture(t) if t == &native16) {
             &stored16
-        } else if copy.texture == &native8 {
+        } else if matches!(copy.source, CaptureSource::Texture(t) if t == &native8) {
             &stored8
         } else {
             &mask
@@ -177,7 +177,7 @@ fn native_gpu_failure_rejects_every_capture_before_backing_and_retry_succeeds() 
         let copies: Vec<_> = (0..33)
             .map(|_| TileCapture {
                 descriptor: descriptor(IntegerDepth::U16),
-                texture: &encoded,
+                source: crate::raster::CaptureSource::Texture(&encoded),
                 tile: RasterTile::default(),
             })
             .collect();
@@ -211,7 +211,7 @@ fn native_gpu_failure_rejects_every_capture_before_backing_and_retry_succeeds() 
     }
     let cancelled = [TileCapture {
         descriptor: descriptor(IntegerDepth::U16),
-        texture: &encoded,
+        source: crate::raster::CaptureSource::Texture(&encoded),
         tile: RasterTile::default(),
     }];
     drop(r.capture_tiles(&cancelled, Some(&status)).unwrap());
@@ -225,7 +225,7 @@ fn native_capture_preflights_descriptors_tickets_and_actual_staging_budget() {
     let native16 = texture(&r, wgpu::TextureFormat::Rgba16Uint);
     let make = |texture, depth| TileCapture {
         descriptor: descriptor(depth),
-        texture,
+        source: crate::raster::CaptureSource::Texture(texture),
         tile: RasterTile::default(),
     };
     assert!(r.capture_tiles(&[], None).is_err());
@@ -305,7 +305,7 @@ fn native_capture_workloads() {
                     let copies: Vec<_> = (0..count)
                         .map(|_| TileCapture {
                             descriptor: descriptor(depth),
-                            texture: &encoded,
+                            source: crate::raster::CaptureSource::Texture(&encoded),
                             tile: RasterTile::default(),
                         })
                         .collect();

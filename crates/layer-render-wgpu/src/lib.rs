@@ -32,7 +32,7 @@ mod source_access;
 mod export_readback;
 mod raster;
 pub use export_readback::ExportReadback;
-pub use raster::RasterCapture;
+pub use raster::{CaptureSource, RasterCapture, TileCapture};
 mod deferred;
 mod paint_transform;
 mod pixel_transform;

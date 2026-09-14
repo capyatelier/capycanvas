@@ -1886,3 +1886,101 @@ corrects scalar precision/accounting. It does not enable Float32 document editin
 in exposed constructors. Native scalar backing, document/native publication,
 bounded photo residency, extended effects, GTK viewing and user journeys remain
 required before enabling the new mode. No other platform host is integrated.
+
+
+## Native scalar writeback, capture and restore (parent `d2195b8`)
+
+Mutable mask/wet-state working tiles need the same native precision boundary as
+color tiles. `native_tiles::scalar` now quantizes R32Float into packed integer8 or
+integer16 buffers and writes the corresponding canonical R32Float candidate.
+The exact integer-significand coverage quantizer is shared with RGBA writeback;
+there is no second approximate scalar rounding algorithm. One invocation owns
+each packed u32 word, preserving components outside the requested region even
+at odd pixel boundaries. The path does not require single-channel integer
+storage-texture extensions. Nonfinite or out-of-range coverage rejects the
+publication through the existing shared status; it is not clipped into validity.
+
+`capture_tiles` now accepts encoded textures and packed scalar buffers through
+one descriptor preflight, staging budget and worker. Each packed tile is exactly
+64 KiB or 128 KiB. The captured status is checked before any backing ticket is
+published, including mixed-depth captures; resetting the GPU status afterward
+cannot erase an earlier capture failure. Cancellation retains the existing failed
+ticket behavior. These validated capture types are exposed alongside the native
+encoder primitives for a GPU owner to integrate, without changing host adoption.
+
+Scalar restore decodes one backing tile at a time into a mapped 256 KiB R32Float
+upload. It shares the source/raster sixteen-upload ceiling and drains that queue
+when full. It creates no second decoded cache. Source texture shape, descriptor
+and duplicate destinations are preflighted; late corruption discards the current
+encoder. All outputs are private candidates, and a caller must discard the whole
+set on failure, including candidates written by an earlier drained chunk.
+
+Four physical tests pass. Every native code and neighboring Float32 values at
+half-code boundaries match a separate f64 rounding reference at both depths;
+five regions cover full, partial, last-row/column and empty writes, with exact
+preservation outside the region. Canonical scalar error is below 6e-8. Six invalid
+coverage cases reject every backing ticket in mixed-depth publication; negative
+zero succeeds. Sixteen mixed-depth tiles survive four encode/capture/compress/
+restore cycles byte-exactly (64 tile publications). Twenty sixteen-tile restore
+batches total 320 tile restores and exercise the shared upload ceiling, with
+peak charged staging **4 MiB**. Shape/depth/alias rejection and late corruption
+followed by retry also pass. The existing RGBA reference corpus remains
+**10,485,760 pixels with zero native-code error** after quantizer extraction.
+
+The full production GPU suite passes **159 tests, 25 ignored**, in 98.31 seconds
+(`native-scalar-full-gpu-tests.log`). That executable precedes only the visibility
+change exposing the shared capture API; `native-scalar-public-{tests,frame}` are
+successfully rebuilt from the same implementation with that API exposed. Build
+JSON/logs and `native-scalar-restore-run.log` retain provenance and focused output.
+No document/native edit mode or additional platform host is enabled here.
+
+`native_tiles::scalar::tests::bench::scalar_native_workloads` measures separate
+restore and writeback phases with 20 warm-up/100 measured batches per case, twice.
+There are four restore cases (two depths × one/sixteen tiles) and sixteen encode
+cases (add full/63×65 region and rebuilt/reused bindings): **4,000 measured
+batches**. Fixtures and pipeline preparation are outside warm timing. CPU timing
+includes validation and queue submission; completed timing explicitly polls all
+submitted work. Encoding excludes preservation copies, capture, history and
+presentation. Restore includes backing decode/digest validation, scalar conversion,
+upload and submission. Cold creation and first restore are reported separately.
+
+| Workload | CPU p95 ms | Completed p95 ms |
+| --- | ---: | ---: |
+| Restore one integer8 tile | 0.0825–0.0847 | 0.1129–0.1153 |
+| Restore sixteen integer8 tiles | 1.1226–1.1272 | 1.2117–1.2190 |
+| Restore one integer16 tile | 0.1808–0.1813 | 0.2137–0.2160 |
+| Restore sixteen integer16 tiles | 2.7300–2.7330 | 2.8554–2.8593 |
+| Write sixteen full tiles, rebuilt bindings, both depths | 0.0902–0.0931 | 0.2121–0.2207 |
+| Write sixteen full tiles, reused bindings, both depths | 0.0297–0.0345 | 0.0918–0.0967 |
+
+Cold pipeline preparation is **19.7915/0.5560 ms**, demonstrating why preparation
+must precede interaction even for this small shader. First integer8 single-tile
+restore completes in 2.8657/0.6848 ms. The measured sixteen-tile working/canonical
+payload is 8 MiB plus 1/2 MiB of packed outputs, at most 4 KiB batch parameters
+and 8 status bytes. Restore adds up to 4 MiB of charged uploads, one decoded
+native tile (up to 128 KiB), its bounded unshuffle temporary and a 1 KiB row.
+The existing 64 MiB capture pool and driver allocations are separate. Process
+high-water marks are **194,372/141,752 KiB** for these small fixtures; they do not
+qualify dense-photo residency. Raw timings and process statistics are
+`native-scalar-workloads-{0,1}.log`.
+
+
+Fresh ten-repetition parent/current/fixed runs measure **109,200 drawing frames**,
+with all twenty-five scenario PNGs byte-identical and no Move/Pen-up sample over
+8.33 ms. Maximum CPU Move p95/p99 is **2.169/2.863 ms parent**, **2.190/2.815 ms
+current**, and **2.035/2.895 ms fixed**. Exact executable hashes and raw reports
+are `native-scalar-frame-runs.json`, `native-scalar-frame-measurements.json` and
+`native-scalar-frame-{0-parent,1-current,2-fixed}.md`. No compilation ran during
+these measurements or the scalar workload runs.
+
+Relative tail triggers remain under investigation. Against both fresh baselines,
+wet-round Oklab Pen-up CPU p99 is 2.301 ms versus 1.692/1.573; dry scumble is
+0.961 versus 0.696/0.663; natural blender is 2.432 versus 2.220/1.841; loaded-oil
+Move CPU p99 is 2.635 versus 2.279/2.376. Liquify-twirl Move and wet-watercolor
+Pen-up trigger against parent; pastel-block Pen-up and watercolor-wash Move
+trigger against fixed. The full data retains all those comparisons. The capture
+phase diagnostic now recognizes the public `capture_tiles` entry point; subsequent
+focused runs will distinguish copy/capture costs from the prior variable tails.
+The absolute pass and matching images do not clear these relative investigations,
+or the earlier transform/prediction and full-photo failures. Native document
+publication and the complete GTK color/photo journeys remain unimplemented.

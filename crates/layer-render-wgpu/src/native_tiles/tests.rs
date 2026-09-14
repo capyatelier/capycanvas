@@ -798,7 +798,7 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
                         .capture_tiles(
                             &[TileCapture {
                                 descriptor,
-                                texture: encoded,
+                                source: crate::raster::CaptureSource::Texture(encoded),
                                 tile: ticket.clone(),
                             }],
                             Some(&status),

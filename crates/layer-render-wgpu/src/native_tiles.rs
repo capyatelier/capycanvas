@@ -3,6 +3,7 @@
 //! any captured tiles and retains the previous revision if the batch failed.
 use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, IntegerDepth, PixelDescriptor, TransferEncoding};
+pub mod scalar;
 pub(crate) mod transfer;
 pub use transfer::NativeTransfer;
 
@@ -239,8 +240,9 @@ impl NativeTileEncoder {
         });
         let pipelines = std::array::from_fn(|index| {
             let source = format!(
-                "{}\n{}",
+                "{}\n{}\n{}",
                 include_str!("sdr_color.wgsl"),
+                include_str!("native_tiles/coverage.wgsl"),
                 include_str!("native_tiles/encode.wgsl").replace(
                     "OUTPUT_FORMAT",
                     if index == 0 {

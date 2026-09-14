@@ -272,15 +272,41 @@ impl Chunk {
     }
 }
 
-pub(crate) struct TileCapture<'a> {
+#[derive(Clone, Copy)]
+pub enum CaptureSource<'a> {
+    /// Exact encoded color or coverage samples in a validated native format.
+    Texture(&'a wgpu::Texture),
+    /// Exactly one tile of little-endian linear integer8/integer16 coverage.
+    Packed(&'a wgpu::Buffer),
+}
+
+/// One unpublished backing ticket and its queue-ordered native samples. The
+/// descriptor is validated against the source before any copies are recorded.
+pub struct TileCapture<'a> {
     pub descriptor: PixelDescriptor,
-    pub texture: &'a wgpu::Texture,
+    pub source: CaptureSource<'a>,
     pub tile: RasterTile,
 }
 impl TileCapture<'_> {
     fn byte_len(&self) -> Result<u64, GpuRasterError> {
-        let t = self.texture;
         let d = self.descriptor;
+        let t = match self.source {
+            CaptureSource::Texture(t) => t,
+            CaptureSource::Packed(buffer) => {
+                let size = d.byte_len([PAGE_SIZE; 2]);
+                if d.channels != 1
+                    || d.encoding != TransferEncoding::Linear
+                    || d.alpha != AlphaAssociation::None
+                    || size.is_none_or(|n| n as u64 != buffer.size())
+                    || !buffer.usage().contains(wgpu::BufferUsages::COPY_SRC)
+                {
+                    return Err(GpuRasterError::Color(
+                        "Invalid packed scalar capture representation".into(),
+                    ));
+                }
+                return Ok(size.unwrap() as u64);
+            }
+        };
         let rgba = d.channels == 4
             && matches!(
                 d.alpha,
@@ -903,7 +929,7 @@ impl WgpuRasterizer {
                 data.tiles.insert(key, tile.clone());
                 copies.push(TileCapture {
                     descriptor: key.plane.descriptor(),
-                    texture,
+                    source: crate::raster::CaptureSource::Texture(texture),
                     tile,
                 });
             }
@@ -921,7 +947,7 @@ impl WgpuRasterizer {
     /// worker as ordinary paint. Validate every input and the actual rounded
     /// staging allocation before recording copies. A publication-wide status,
     /// when present, is checked before any tile backing is published.
-    pub(crate) fn capture_tiles(
+    pub fn capture_tiles(
         &self,
         copies: &[TileCapture<'_>],
         status: Option<&NativeEncodeStatus>,
@@ -976,18 +1002,23 @@ impl WgpuRasterizer {
             for index in range {
                 let copy = &copies[index];
                 let size = sizes[index];
-                encoder.copy_texture_to_buffer(
-                    copy.texture.as_image_copy(),
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset,
-                            bytes_per_row: Some((size / u64::from(PAGE_SIZE)) as u32),
-                            rows_per_image: Some(PAGE_SIZE),
+                match copy.source {
+                    CaptureSource::Texture(texture) => encoder.copy_texture_to_buffer(
+                        texture.as_image_copy(),
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: &buffer,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset,
+                                bytes_per_row: Some((size / u64::from(PAGE_SIZE)) as u32),
+                                rows_per_image: Some(PAGE_SIZE),
+                            },
                         },
-                    },
-                    copy.texture.size(),
-                );
+                        texture.size(),
+                    ),
+                    CaptureSource::Packed(source) => {
+                        encoder.copy_buffer_to_buffer(source, 0, &buffer, offset, size)
+                    }
+                }
                 entries.push(Entry {
                     #[cfg(not(target_arch = "wasm32"))]
                     offset,
