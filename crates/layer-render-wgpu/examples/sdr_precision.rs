@@ -6,6 +6,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "sdr_precision/tiles.rs"]
+mod tiles;
+
 const SIZE: u32 = 256;
 const COUNT: usize = 65536;
 const SHARED: &str = include_str!("../src/sdr_color.wgsl");
@@ -31,16 +34,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .nth(index)
         .ok_or("No adapter")?;
-    println!("Adapter: {:?}", adapter.get_info());
-    let features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-        | wgpu::Features::FLOAT32_BLENDABLE;
+    let native_tiles = std::env::args().nth(1).as_deref() == Some("tiles");
+    let features = if native_tiles {
+        wgpu::Features::empty()
+    } else {
+        wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgpu::Features::FLOAT32_BLENDABLE
+    };
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: features,
             ..Default::default()
         })
         .await?;
+    println!(
+        "Adapter: {:?}; requested features: {features:?}",
+        adapter.get_info()
+    );
+    if native_tiles {
+        return tiles::run(&device, &queue);
+    }
     let encoded = texture(&device, wgpu::TextureFormat::Rgba16Unorm);
     let output = texture(&device, wgpu::TextureFormat::Rgba16Unorm);
     let staging = device.create_buffer(&wgpu::BufferDescriptor {

@@ -1226,3 +1226,81 @@ expected; recovery completes. Logs: `tiled-transform-native-build.log`,
 `tiled-transform-gtk-{files,recovery}{,-run}.log`. Formatting checks for the
 changed Rust modules and `git diff --check` pass. Other platform hosts were not
 integrated or qualified in this checkpoint.
+
+## Native integer paint boundary qualification
+
+The `sdr_precision tiles` experiment checks native straight `Rgba8Uint` and
+`Rgba16Uint` samples through physical `Rgba32Float` premultiplied working tiles.
+It requests **no optional GPU features**: neither normalized16 storage,
+Float32 filtering nor Float32 fixed-function blending is needed for these two
+conversion passes. The existing blend/pass experiments still establish their
+separate feature and precision requirements. This experiment does not change
+current document paint storage or enable integer16 editing.
+
+Three methods are compared: analytic transfer functions; Float64-generated
+Float32 decode values with binary-search quantization; and the same tables with
+an analytic estimate verified against exact decision boundaries. The last
+method adjusts at most twice, then falls back to a bounded 16-step binary search
+if the estimate still lacks a valid bracket. Correctness does not rely on a
+particular driver's `pow` approximation. Decision boundaries are the smallest
+Float32 values at or above the Float64 decoded encoded-half-code boundary.
+
+The 65,536-entry table contains one decode value and one quantization boundary
+per entry (524,288 bytes plus a 16-byte experimental header). Its body serves
+both depths: integer8 decode indices are `257 × code`, and integer8 boundary
+indices are `257 × code + 128`. It can therefore be shared independently of
+native depth in the production codec. sRGB and P3 also have identical transfer
+tables; their primaries remain separate. All pipeline compilation, table creation
+and fixture construction precede timed work.
+
+Across all four working spaces, every integer code, low-alpha values
+0/1/2/17/128/255 for integer8 and 0/1/2/17/257/32768/65535 for integer16, all
+three methods return **zero RGB and alpha code error** after both one and 64
+physical decode/encode cycles (312 cases). Transparent working pixels become
+canonical black. This is the edit-boundary convention; untouched source samples,
+including hidden RGB, must continue to use the exact source-preserving route.
+
+A separate adversarial corpus feeds the Float32 values immediately below, at
+and above every rounding boundary, plus deterministic extended-range samples,
+into the encoder. Across 6,291,456 RGB comparisons per method, both table methods
+match the Float64 transfer/quantization reference exactly. The analytic method
+has maximum error one code, affecting 1,307,506 comparisons in this deliberately
+boundary-heavy corpus. That fraction does not describe ordinary photographs.
+These cases distinguish deterministic final quantization from integer identity
+round trips, which alone did not reveal the difference.
+
+The final no-optional-feature run uses 20 warm-up and 100 measured single-cycle
+iterations per case. CPU timing covers command construction/submission; completed
+timing includes GPU completion and the already queued one-tile input upload.
+Input upload CPU work and final numerical readback are outside those timers.
+The 64-cycle cases verify accuracy once and have no percentile timing; their
+output records `timed_samples=0`. The following are medians of the per-case p95
+values for nonzero alpha, not pooled latency percentiles:
+
+| Native depth / method | CPU p95 ms | Completed p95 ms |
+| --- | ---: | ---: |
+| Integer8 analytic | 0.0151 | 0.0519 |
+| Integer8 binary table | 0.0149 | 0.0565 |
+| Integer8 verified estimate | 0.0154 | 0.0544 |
+| Integer16 analytic | 0.0156 | 0.0539 |
+| Integer16 binary table | 0.0159 | 0.0706 |
+| Integer16 verified estimate | 0.0157 | 0.0587 |
+
+Maximum individual completed p99 is 0.2292 ms across these runs; process
+high-water is 218,000 KiB including the GPU device/compiler and fixtures.
+The verified-estimate method provides exact reference quantization with a
+smaller measured cost than full binary search. This supports using it at the
+native paint boundary. It does not justify per-dab conversion passes: active
+stroke work must remain Float32 and native publication must be batched.
+Partial-tile preservation, invalid nonfinite results, asynchronous native capture,
+bounded edited/composite residency and complete-tool precision still need
+integration and qualification before the document mode is enabled.
+
+Reproduce with `cargo build --offline --release -p layer-render-wgpu --example
+sdr_precision`, then `LAYER_GPU_INDEX=0 /usr/bin/time -v
+target/release/examples/sdr_precision tiles`. Reports:
+`native-tile-boundary-{first,final,portable}.log`; `portable` is the final run
+without optional features. `final` contains the same full-table/adversarial
+corpus with the example's older feature request. Both pass. The initial `first`
+run has depth-sized tables and no adversarial boundary corpus. Only example and
+reporting code changed in this qualification; the GTK renderer is unchanged.
