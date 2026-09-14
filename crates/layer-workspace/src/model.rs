@@ -457,10 +457,10 @@ impl Entity {
         let ItemContent::Workspace { baseline, .. } = &self.content else {
             return Err(StoreError::invalid("Choose a workspace."));
         };
-        if self.metadata.builtin {
-            if let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(id, _)| *id == self.id) {
-                return Ok(preset.layout(platform));
-            }
+        if self.metadata.builtin
+            && let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(id, _)| *id == self.id)
+        {
+            return Ok(preset.layout(platform));
         }
         Ok(baseline.as_ref().clone())
     }
