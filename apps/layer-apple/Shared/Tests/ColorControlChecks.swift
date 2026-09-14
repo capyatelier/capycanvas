@@ -60,12 +60,15 @@ extension XCTestCase {
             return decoded
         }
         func expect(_ index: Int, _ value: Double) {
+            // XCTest rounds touch positions and accessibility bounds to pixels.
+            // At the wheel's minimum size that can move hue by about one degree.
+            let tolerance = index == 0 ? 1.0 : 0.2
             let predicate = NSPredicate { _, _ in
                 guard let values = state()["components"] as? [Double], values.indices.contains(index) else { return false }
-                return abs(values[index] - value) < 0.2
+                return abs(values[index] - value) < tolerance
             }
-            expectation(for: predicate, evaluatedWith: panel)
-            waitForExpectations(timeout: 5)
+            let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: panel)], timeout: 5)
+            XCTAssertEqual(result, .completed, "Expected Color component \(index) = \(value); accepted state: \(state())")
         }
         func captureColor(_ shape: String) {
             let accepted = state()

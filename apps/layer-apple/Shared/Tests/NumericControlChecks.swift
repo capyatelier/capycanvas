@@ -2,7 +2,7 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkInlineLayerOpacity(in app: XCUIApplication) {
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         let value = app.buttons["number-value-layer-opacity"]
         let entry = app.textFields["number-entry-layer-opacity"]
         let property = app.buttons["number-value-property-opacity"]
@@ -61,7 +61,7 @@ extension XCTestCase {
     }
 
     @MainActor func checkBlendChoices(in app: XCUIApplication) {
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         let property = app.buttons["property-blend"], compact = app.buttons["layer-blend"]
         func expect(_ value: String) {
             for control in [property, compact] {
@@ -86,7 +86,12 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func captureDefaultEditor(in app: XCUIApplication, scenario: String = "initial") {
+    @MainActor func capturePaintEditor(in app: XCUIApplication, scenario: String = "paint-expanded", theme: String = "light") {
+        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        XCTAssertTrue(paint.waitForExistence(timeout: 30))
+        if !paint.isSelected { workspaceActivate(paint) }
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: paint)
+        waitForExpectations(timeout: 10)
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
@@ -98,7 +103,7 @@ extension XCTestCase {
                 XCTAssertEqual(workspace.isSelected, name == "illustrator")
             }
         }
-        for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "navigator", "properties", "layers"] {
+        for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "stats", "navigator", "properties", "adjustments", "layers"] {
             let control = panel == "toolbar" || panel == "commands"
                 ? app.descendants(matching: .any)["toolbar-options-" + panel].firstMatch
                 : app.buttons["panel-tab-" + panel]
@@ -118,17 +123,18 @@ extension XCTestCase {
             }
             waitForExpectations(timeout: 30)
         }
+        if scenario == "paint-expanded" {
+            #if os(macOS)
+            app.menuBars.menuBarItems["View"].click()
+            app.menuItems["Fit canvas"].firstMatch.click()
+            #else
+            workspaceActivate(app.buttons["menu-View"])
+            workspaceActivate(app.buttons["command-fit_canvas"])
+            #endif
+        }
         #if os(macOS)
         let window = app.windows.firstMatch
-        // Open and close panel configuration to dismiss native help without
-        // touching ink. Empty header space can forward contacts to the canvas.
-        app.buttons["panel-tab-brushes"].click()
-        let closeConfiguration = app.buttons["close-panel-configuration"]
-        XCTAssertTrue(closeConfiguration.waitForExistence(timeout: 5))
-        closeConfiguration.click()
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: closeConfiguration)
-        waitForExpectations(timeout: 5)
-        app.buttons["panel-tab-brushes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        app.staticTexts["document-title"].hover()
         let viewport = window.frame
         #else
         let viewport = app.frame
@@ -145,8 +151,15 @@ extension XCTestCase {
         #endif
         let initial = XCTAttachment(screenshot: screenshot)
         initial.name = "complete-editor-" + scenario; initial.lifetime = .keepAlways; add(initial)
+        let bottomInset: Double = {
+            #if os(iOS)
+            if #available(iOS 26.0, *) { return 36 }
+            #endif
+            return 0
+        }()
         let metadata = XCTAttachment(data: try! JSONSerialization.data(withJSONObject:
-            ["scenario": scenario, "theme": "light", "viewport": [viewport.width, viewport.height]]), uniformTypeIdentifier: "public.json")
+            ["scenario": scenario, "theme": theme, "viewport": [viewport.width, viewport.height],
+             "workspace_bottom": bottomInset]), uniformTypeIdentifier: "public.json")
         metadata.name = "complete-editor-geometry-" + scenario; metadata.lifetime = .keepAlways; add(metadata)
     }
 
@@ -160,14 +173,14 @@ extension XCTestCase {
             element.tap()
             #endif
         }
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         for command in ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"] {
             XCTAssertTrue(app.buttons["navigator-" + command].isHittable)
         }
         // The shared zoom step is sqrt(2); four steps put the paper behind the
         // header on both viewport sizes, without changing document history.
         for _ in 0..<4 { activate(app.buttons["navigator-zoom_in"]) }
-        captureDefaultEditor(in: app, scenario: "canvas-under-header")
+        capturePaintEditor(in: app, scenario: "paint-canvas-under-header")
 
         let choice = app.buttons["property-blend"]
         activate(choice)
@@ -193,7 +206,7 @@ extension XCTestCase {
             element.tap()
             #endif
         }
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         let value = app.buttons["number-value-tool-size"]
         let entry = app.textFields["number-entry-tool-size"]
         activate(value)

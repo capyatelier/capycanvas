@@ -33,7 +33,9 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testColumnStacksDark() { checkColumnStacks(in: editorTestApplication(), theme: "dark") }
 
-    @MainActor func testPaintDefaultColumns() { checkPaintDefaultColumns(in: editorTestApplication()) }
+    @MainActor func testPaintDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication()) }
+
+    @MainActor func testPhotoDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication(), photo: true) }
 
     @MainActor func testRendererRecovery() { checkRendererRecovery(in: editorTestApplication()) }
 
@@ -174,7 +176,17 @@ final class EditorLaunchTests: XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
+    }
+
+    @MainActor func testCompleteEditorDarkCapture() {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
+        app.launch()
+        capturePaintEditor(in: app, theme: "dark")
+        for _ in 0..<4 { workspaceActivate(app.buttons["navigator-zoom_in"]) }
+        capturePaintEditor(in: app, scenario: "paint-canvas-under-header", theme: "dark")
     }
 
     @MainActor func testBlendChoices() {
