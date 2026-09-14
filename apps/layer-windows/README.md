@@ -1,23 +1,22 @@
 # Capy Canvas for Windows
 
-Development prototype using WinUI 3/C++/WinRT and the shared Rust/wgpu D3D12
-renderer. The prototype builds and runs with a GPU canvas, an independent input
-dispatcher, correct DPI composition, and asynchronous resize/shutdown. Controlled
-pointer replay verifies drawing, undo/redo, and a painted document continuing
-behind titlebar controls. Full OS input, workspace parity, recovery and
-presentation acceptance remain open; this is not a release package.
+Native Windows client using WinUI 3/C++/WinRT and the shared Rust/wgpu D3D12
+renderer. One GPU canvas covers the extended client area behind the title bar.
+The host supplies native controls, independent input collection and asynchronous
+window/surface lifecycle handling around shared document and workspace behavior.
 
-The workspace-owned native title bar and inline customization now use the shared
-Web/Android arrangement, tool picker and workspace history. See the current
-[title-bar acceptance record](../../docs/development/title-bar-windows-acceptance.md)
-for scope and reproduction commands; older header/clock notes below are historical.
+The [current acceptance status](../../docs/development/windows-acceptance.md)
+records what has passed, the validated application/package source, known visual
+qualifications and remaining hardware/deployment gates. It includes the collapsed
+column fixes, document/recovery journeys, native touch/transform checks and actual
+Japanese IME composition. The full Windows goal is not yet accepted.
 
-The sections below are chronological validation checkpoints. Earlier statements
-about missing docking, document windows, runtime filters or workspace management
-are superseded by the later implementation sections. Current acceptance still
-requires whole-editor visual review, the strict GPU filter reference, physical
-pen/touch, mixed-display/lifecycle, clean-machine and installed-package checks,
-and sustained 120 Hz painting.
+The sections below are chronological checkpoints and reproduction notes. Earlier
+statements about missing docking, document windows, runtime filters or workspace
+management are superseded by their later implementation sections. Use the current
+acceptance status for the remaining work, and the
+[title-bar record](../../docs/development/title-bar-windows-acceptance.md) for its
+specific customization/input scope.
 
 ## Milestone integration
 

@@ -2,6 +2,9 @@
 
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
+See the [current acceptance status](windows-acceptance.md) for validated workflows,
+package scope, known differences and remaining release gates.
+
 The Windows client uses C++/WinRT and WinUI 3 controls. Its Rust bridge uses
 `NativeHost` and the shared wgpu D3D12 renderer, presenting through a
 `SwapChainPanel`.
@@ -97,8 +100,7 @@ Deployment follows Microsoft's
 [self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
 and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
 Clean-machine installation, distribution signing, full visual and physical-input
-acceptance, device recovery and sustained painting performance remain separate
-acceptance work.
+acceptance and sustained painting performance remain separate acceptance work.
 
 ## MSIX package
 
@@ -184,8 +186,9 @@ GPU Navigator previews use compositor clips when overlapping native panels.
 The full editor preset and titlebar-aware Zen layout are available. Incremental
 workspace messages retain panel models while native translation transforms move
 floating panels, resize grips and GPU overview allocations. Full content refresh,
-motion and camera updates retain their separate ordering rules. Complete
-workspace gesture acceptance remains in progress. Runtime filter JSON/WGSL loads
+motion and camera updates retain their separate ordering rules. The
+[acceptance status](windows-acceptance.md) records completed gesture journeys and
+remaining physical-device checks. Runtime filter JSON/WGSL loads
 from editable packaged assets through background file transport and the shared
 GPU validator; compatible live replacement preserves current parameter values.
 New Window creates independent native windows with shared preferences and storage. Native task workspace management uses the
