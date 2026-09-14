@@ -335,6 +335,7 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn supports_raster_damage(&self) -> bool { true }
     fn can_submit(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) < 2
     }
@@ -913,7 +914,7 @@ impl Worker {
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
         let features =
-            adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE);
+            adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE | wgpu::Features::FLOAT32_FILTERABLE);
         #[cfg(test)]
         let features = features
             | (adapter.features()

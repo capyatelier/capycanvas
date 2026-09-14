@@ -225,6 +225,10 @@ impl WgpuRasterizer {
             required
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
+            #[cfg(not(target_arch = "wasm32"))]
+            if document.layers.iter().any(|l| l.source.is_some()) {
+                required.render.push(self.scene_pipelines.source.pipeline.clone());
+            }
             if document
                 .layers
                 .iter()

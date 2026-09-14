@@ -221,7 +221,14 @@ impl ImageStages {
 // Stroke history does not participate in composition; batches invalidate paint.
 // Mask stroke IDs are already shared. Do not clone stroke/operation vectors.
 fn metadata(l: &Layer) -> Layer {
-    l.composite_snapshot()
+    static EMPTY: std::sync::OnceLock<layer_core::raster::RasterRevision> = std::sync::OnceLock::new();
+    let empty = EMPTY.get_or_init(Default::default);
+    let mut result = l.composite_snapshot();
+    // Batches and restoration damage identify changed pixels. A new immutable
+    // root alone must not turn every commit/undo into a full-image filter pass.
+    result.raster = empty.clone();
+    if let Some(mask) = &mut result.mask { mask.raster = empty.clone(); }
+    result
 }
 fn visible(layers: &[Layer], layer: &Layer) -> bool {
     if !layer.visible {
@@ -622,6 +629,7 @@ impl Scene {
         }
         let painting = !packet.dab_batches.is_empty()
             || !packet.dabs.is_empty()
+            || !r.transform_damage.is_empty()
             || (!packet.composite_all && !dirty.is_empty());
         let unidentified_paint = painting
             && packet.dab_batches.is_empty()

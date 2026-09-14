@@ -357,6 +357,12 @@ pub trait CanvasRenderer {
     fn supports_tiled_sources(&self) -> bool {
         false
     }
+    /// Restored immutable raster roots identify their own damaged tiles. A
+    /// renderer with this capability does not need a full composition request
+    /// for a history entry containing only raster replacements.
+    fn supports_raster_damage(&self) -> bool {
+        false
+    }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true

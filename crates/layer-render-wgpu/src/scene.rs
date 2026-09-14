@@ -7,9 +7,13 @@ mod images;
 #[path = "filter_previews.rs"]
 mod previews;
 pub(super) use previews::FilterPreviews;
+#[cfg(not(target_arch = "wasm32"))]
+mod sources;
 
 #[derive(Clone)]
 enum Job {
+    #[cfg(not(target_arch = "wasm32"))]
+    TiledSource(std::sync::Arc<sources::PendingSource>),
     SourceUpload {
         buffer: wgpu::Buffer,
         texture: wgpu::Texture,
@@ -45,6 +49,8 @@ enum Job {
     },
 }
 pub(super) struct Scene {
+    #[cfg(not(target_arch = "wasm32"))]
+    source_tiles: sources::SourceTiles,
     pub style_base: usize,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -73,6 +79,8 @@ pub(super) struct Pipelines {
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
+    #[cfg(not(target_arch = "wasm32"))]
+    pub source: sources::Pipelines,
 }
 
 impl Scene {
@@ -112,11 +120,20 @@ impl Scene {
             self.images.composition_builds,
         ]
     }
+    pub fn source_cache_work(&self) -> [u64; 2] {
+        #[cfg(not(target_arch = "wasm32"))]
+        { [self.source_tiles.hits, self.source_tiles.misses] }
+        #[cfg(target_arch = "wasm32")]
+        { [0; 2] }
+    }
     pub fn scratch_bytes(&self) -> u64 {
-        self.pool.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4
+        let mut bytes = self.pool.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
-            + self.images.storage_bytes()
+            + self.images.storage_bytes();
+        #[cfg(not(target_arch = "wasm32"))]
+        { bytes += self.source_tiles.gpu_bytes(); }
+        bytes
     }
     pub fn initialize_images(
         &mut self,
@@ -209,6 +226,23 @@ impl Scene {
         let _ = submission; // Browser queue draining needs separate host qualification.
         Ok(())
     }
+    pub fn initialize_source_paint(&mut self, r: &mut WgpuRasterizer, layers: &[Layer], encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        self.jobs.clear();
+        for layer in layers.iter().filter(|l| l.source.is_some()) {
+            let pages: Vec<_> = r.paint_layers.iter().filter(|p| p.id == layer.id)
+                .flat_map(|p| p.pages.iter().filter(|p| p.primary_needs_clear)
+                    .map(|p| (p.coordinate, p.primary.view.clone()))).collect();
+            for (coordinate, target) in pages {
+                let Some(view) = self.source_tile(r, layer, coordinate)? else { continue; };
+                let mut data = [0.; 24];
+                data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
+                data[8] = 1.;
+                data[9] = 1.;
+                self.jobs.push(Job::Draw { target, sources: [view, r.empty_view.clone()], data, over: false, clip: None });
+            }
+        }
+        self.encode_jobs(r, encoder)
+    }
     pub fn begin_frame(&mut self) {
         self.record_count = 0;
         self.effect_passes = 0;
@@ -219,6 +253,7 @@ impl Scene {
             uniforms,
             layout,
             pipeline,
+            ..
         } = r.scene_pipelines.clone();
         let pipeline = pipeline.map(|p| p.compile().clone());
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(96) as usize;
@@ -231,6 +266,8 @@ impl Scene {
         let binding = uniform_binding(device, &uniforms, &buffer);
         let effects = effects::Effects::new(r, &uniforms, &layout);
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            source_tiles: sources::SourceTiles::default(),
             style_base: 0,
             pool: Vec::new(),
             used: Vec::new(),
@@ -273,6 +310,20 @@ impl Scene {
     }
     fn free(&mut self, id: usize) {
         self.used[id] = false;
+    }
+    fn source_tile(&mut self, r: &WgpuRasterizer, layer: &Layer, coordinate: [u32; 2]) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
+        let Some(source) = &layer.source else { return Ok(None); };
+        if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
+            return Ok(None);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (view, pending) = self.source_tiles.plan(r, source, coordinate)?;
+            if let Some(pending) = pending { self.jobs.push(Job::TiledSource(std::sync::Arc::new(pending))); }
+            Ok(Some(view))
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
     }
     fn effect(
         &mut self,
@@ -515,7 +566,8 @@ impl Scene {
         } else {
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             let offset = world_offset(packet.layers, layer.id, false);
-            if let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) {
+            let stored = r.paint_layers.iter().find(|l| l.id == layer.id);
+            if stored.is_some() || layer.source.is_some() {
                 // A translated output tile intersects at most four native
                 // source tiles. Watercolor samples its halo from their bindings;
                 // never scan/expand every page in the layer for every output tile.
@@ -540,7 +592,7 @@ impl Scene {
                     }
                     let preview = r.preview_layer_id == Some(layer.id)
                         && !r.preview_damage.intersect(page_rect(c)).is_empty();
-                    let wet_nearby = stored.watercolor.is_some()
+                    let wet_nearby = stored.is_some_and(|stored| stored.watercolor.is_some()
                         && stored
                             .watercolor_wetness_pages
                             .iter()
@@ -552,10 +604,10 @@ impl Scene {
                             .any(|p| {
                                 p.coordinate[0].abs_diff(c[0]) <= 1
                                     && p.coordinate[1].abs_diff(c[1]) <= 1
-                            });
+                            }));
                     if wet_nearby {
                         if let Some(binding) =
-                            r.watercolor_neighborhood_bind_group(stored, c, preview)
+                            r.watercolor_neighborhood_bind_group(stored.unwrap(), c, preview)
                         {
                             let page = self.alloc(r, wgpu::Color::TRANSPARENT);
                             self.jobs.push(Job::Watercolor {
@@ -576,7 +628,7 @@ impl Scene {
                             self.free(page);
                         }
                     } else {
-                        let persistent = stored.pages.iter().find(|p| p.coordinate == c);
+                        let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
                         let predicted = if preview {
                             r.preview_pages.iter().find(|p| p.coordinate == c)
                         } else {
@@ -594,6 +646,8 @@ impl Scene {
                                 [1., 1., 0., 0.],
                                 true,
                             );
+                        } else if let Some(view) = self.source_tile(r, layer, c)? {
+                            self.draw(r, out, view, None, rect, [1., 1., 0., 0.], true);
                         }
                         if let Some(p) = predicted.filter(|_| !r.preview_requires_base) {
                             self.draw(
@@ -758,12 +812,13 @@ impl Scene {
                     .is_some_and(|l| l.properties.clipped);
                 if layer.visible
                     && !clips_above
-                    && self.draw_normal_layer(r, packet, i, tile, output)
+                    && self.draw_normal_layer(r, packet, i, tile, output)?
                 {
                     continue;
                 }
                 if layer.visible
                     && (matches!(layer.kind, LayerKind::Group | LayerKind::Effect)
+                        || layer.source.is_some()
                         || r.paint_layers
                             .iter()
                             .any(|l| l.id == layer.id && !l.pages.is_empty())
@@ -804,29 +859,33 @@ impl Scene {
         index: usize,
         tile: [u32; 2],
         target: usize,
-    ) -> bool {
+    ) -> Result<bool, GpuRasterError> {
         let layer = &packet.layers[index];
         if layer.kind != LayerKind::Paint
             || layer.properties.blend != layer_core::LayerBlend::Normal
             || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
             || r.preview_layer_id == Some(layer.id)
         {
-            return false;
+            return Ok(false);
         }
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
         if mask.is_some()
             && world_offset(packet.layers, layer.id, true) != layer_core::Point::default()
         {
-            return false;
+            return Ok(false);
         }
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
-            return true;
+            return Ok(true);
         };
         if stored.watercolor.is_some() {
-            return false;
+            return Ok(false);
         }
-        let Some(page) = stored.pages.iter().find(|p| p.coordinate == tile) else {
-            return true;
+        let view = if let Some(page) = stored.pages.iter().find(|p| p.coordinate == tile) {
+            page.active().view.clone()
+        } else if let Some(view) = self.source_tile(r, layer, tile)? {
+            view
+        } else {
+            return Ok(true);
         };
         let default = mask.map_or(1., |m| {
             if m.inverted {
@@ -839,7 +898,7 @@ impl Scene {
         self.draw(
             r,
             target,
-            page.active().view.clone(),
+            view,
             source.map(|p| p.view.clone()),
             [0., 0., 256., 256.],
             [
@@ -850,7 +909,7 @@ impl Scene {
             ],
             true,
         );
-        true
+        Ok(true)
     }
     pub fn apply_operation(
         &mut self,
@@ -1167,7 +1226,13 @@ impl Scene {
         }
         self.upload.resize(self.jobs.len() * self.stride, 0);
         for (i, job) in self.jobs.iter().enumerate() {
-            if let Job::Draw { data, .. } | Job::Effect { data, .. } = job {
+            let data = match job {
+                Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data),
+                #[cfg(not(target_arch = "wasm32"))]
+                Job::TiledSource(pending) => pending.data.as_ref(),
+                _ => None,
+            };
+            if let Some(data) = data {
                 for (j, v) in data.iter().enumerate() {
                     self.upload[i * self.stride + j * 4..i * self.stride + j * 4 + 4]
                         .copy_from_slice(&v.to_ne_bytes());
@@ -1191,6 +1256,15 @@ impl Scene {
                 continue;
             }
             match job {
+                #[cfg(not(target_arch = "wasm32"))]
+                Job::TiledSource(pending) => {
+                    if self.source_tiles.uploads_full() {
+                        Self::submit_source_uploads(r, encoder)?;
+                    }
+                    let bytes = self.source_tiles.encode(r, encoder, pending, &self.binding, ((base + i) * self.stride) as u32)?;
+                    let in_flight = self.source_tiles.charge_upload(encoder, bytes);
+                    r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
+                }
                 Job::SourceUpload { buffer, texture } => encoder.copy_buffer_to_texture(
                     wgpu::TexelCopyBufferInfo {
                         buffer,
@@ -1336,6 +1410,7 @@ impl Scene {
                 }
             }
         }
+        self.jobs.clear();
         Ok(())
     }
 }
@@ -1401,6 +1476,8 @@ impl Pipelines {
             })
         });
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            source: sources::Pipelines::new(device, &uniforms),
             uniforms,
             layout,
             pipeline,

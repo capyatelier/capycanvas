@@ -94,6 +94,7 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
             .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
     }) || packet.layers.iter().any(|l| {
         l.mask.is_some()
+            || l.source.is_some()
             || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
             || l.properties.clipped
             || l.properties.parent.is_some()
@@ -189,10 +190,13 @@ pub struct GpuRasterMetrics {
     pub paint_state_storage_bytes: u64,
     pub composite_storage_bytes: u64,
     pub raster_backing_reserved_bytes: u64,
-    /// Native import upload buffers plus the source tile and CPU packing tile.
-    /// Excludes retained source bytes, uniforms, paint pages and driver overhead.
+    /// Peak native source upload charge. Packed imports include CPU/GPU packing
+    /// tiles; tiled sources charge in-flight staging here and their fixed GPU
+    /// cache in scene storage. Excludes retained source bytes and driver overhead.
     pub source_upload_peak_bytes: u64,
     pub source_upload_submissions: u64,
+    pub source_tile_hits: u64,
+    pub source_tile_misses: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -206,6 +210,7 @@ pub struct GpuAdapterInfo {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GpuRasterError {
+    Color(String),
     AdapterUnavailable,
     HardwareAdapterRequired,
     DeviceRequest(String),
@@ -227,6 +232,7 @@ pub enum GpuRasterError {
 impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Color(message) => write!(formatter, "color: {message}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
             Self::AdapterUnavailable => {
                 formatter.write_str("no compatible wgpu adapter is available")
@@ -805,7 +811,7 @@ impl WgpuRasterizer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("layer canvas device"),
-                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE),
                 required_limits: limits,
                 ..Default::default()
             })
@@ -1115,6 +1121,9 @@ impl WgpuRasterizer {
     pub fn metrics(&self) -> GpuRasterMetrics {
         let mut metrics = self.metrics.clone();
         metrics.raster_backing_reserved_bytes = self.raster_staging_bytes();
+        if let Some(scene) = &self.scene {
+            [metrics.source_tile_hits, metrics.source_tile_misses] = scene.source_cache_work();
+        }
         metrics
     }
 
@@ -3759,6 +3768,7 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn supports_raster_damage(&self) -> bool { true }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.raster_restore_ready(packet)
     }
@@ -3977,6 +3987,12 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if packet.layers.iter().any(|l| l.source.is_some()) {
+            // Source-backed photos own no paint initially. Prepare their bounded
+            // capture spare pool during loading, before the first stroke needs it.
+            self.prepare_source_backing()?;
+        }
         self.transform_damage.clear();
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
@@ -4104,13 +4120,14 @@ impl CanvasRenderer for WgpuRasterizer {
             self.transform_damage.extend(result?);
             self.transform_preview = None;
         }
-        self.reconcile_rasters(
+        let raster_damage = self.reconcile_rasters(
             FramePacket {
                 dab_batches: original_batches,
                 ..packet
             },
             reset,
         )?;
+        self.transform_damage.extend(raster_damage);
         self.ensure_persistent_pages(packet.dab_batches)?;
         self.ensure_destination_companions(packet.dab_batches);
         self.ensure_paint_state_pages(packet.dab_batches)?;
@@ -4372,6 +4389,11 @@ impl CanvasRenderer for WgpuRasterizer {
         if reset && packet.layers.iter().any(|l| l.asset.is_some()) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             scene.initialize_images(self, packet.layers, &mut encoder)?;
+            self.scene = Some(scene);
+        }
+        if packet.layers.iter().any(|l| l.source.is_some()) {
+            let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+            scene.initialize_source_paint(self, packet.layers, &mut encoder)?;
             self.scene = Some(scene);
         }
         for layer in &mut self.paint_layers {
@@ -6755,6 +6777,8 @@ mod tests {
     mod adjustments;
     mod filter_library;
     mod material;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod source_tiles;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

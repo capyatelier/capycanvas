@@ -14,6 +14,8 @@ pub enum ProfileChannels {
 }
 
 type FloatTransform<const N: usize> = Transform<[f32; N], [f32; 4], ThreadContext, DisallowCache>;
+mod working;
+pub use working::WorkingDecoder;
 
 /// Straight encoded RGB in/out; linear coverage is copied verbatim. Construct
 /// once per operation and reuse for rows/tiles. Float32 formats avoid LCMS's

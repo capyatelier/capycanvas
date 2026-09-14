@@ -398,3 +398,189 @@ the retained checkpoint. Artifacts: `source-persistence-tests.log`,
 `persistence-project.log`, `persistence-gtk-{files,recovery}.log`. No hot-rendering
 format changed in this stage; final frame and whole-document memory qualification
 remains required after source composition and editing are integrated.
+
+## Fifth implementation stage: source composition and copy-on-write paint
+
+The native renderer can now compose retained tiled originals without first
+allocating paint pages for the whole image. A first edit initializes only the
+affected paint pages from the original. Restoring an empty raster root reveals
+the original again. This is an internal integration stage: the renderer's public
+`supports_tiled_sources` capability remains false. GTK Open/Place and integer16
+editing must not adopt it until the remaining operation and precision paths are
+complete. Existing documents still use sRGB8 paint/composite storage.
+
+Source working tiles are linear premultiplied RGBA Float32. Built-in sRGB, P3,
+Adobe RGB and ProPhoto sources upload their original integer samples to a
+reusable unsigned-integer texture and decode directly on the GPU. This avoids
+both a bounded sRGB intermediate and CPU expansion of every integer pixel into
+four floats. Embedded ICC profiles use a worker-owned Little CMS transform
+directly into linear destination RGB; alpha is restored independently. Profile
+labels never select the analytic path. Current document primaries are sRGB;
+the decoder also has native-primary precision fixtures for the future document
+contract. Original hidden RGB remains in the immutable integer source, whereas
+alpha-zero working pixels are transparent black.
+
+Declared per-scene source limits, enforced before enabling the public path:
+
+- 16 reusable 256² Float32 GPU slots: at most 16 MiB. Eviction reuses the same
+  texture in queue order; jobs retain source/coordinate metadata, not another
+  converted GPU tile. Cache keys use weak source references so deleting a photo
+  does not retain its full original through the cache.
+- One RGBA8Uint and one RGBA16Uint input texture, allocated on demand: at most
+  0.75 MiB combined. Built-in conversion packs at most one integer row beyond
+  the decoded tile; ICC conversion uses one 1 MiB output scratch tile.
+- At most 16 source upload buffers in flight across frames, charged until queue
+  completion or cancellation of the unsubmitted encoder. Thus staging is at
+  most 4 MiB for RGBA8, 8 MiB for RGBA16 or 16 MiB for ICC Float32 output. A full
+  queue forces an exact submission/wait on the native render owner. An ordinary
+  cold tile can join its frame's submission without an unconditional wait.
+- Four worker decoders, using fixed 256-pixel conversion scratch. Built-in CPU
+  fallback tone tables contain every possible code (at most 256 KiB each), not
+  interpolated curves. Little CMS internal transform allocations still need
+  separate accounting in the complete profile/workload budget.
+
+These are component limits, not whole-document qualification. Full composites,
+image-boundary filters, export copies and edited paint residency still require
+the planned bounding work. Multiple concurrent scenes/documents each have their
+own cache and must be included in the total.
+
+Precision validation reads the actual Float32 GPU cache. Both integer depths,
+all possible channel codes, four built-in spaces, RGB/RGBA/gray/gray-alpha,
+native-primary decoding and conversion into extended sRGB are exercised.
+Before acceptance the limits are 2 RGB codes in destination coordinates,
+1 alpha code, and 3e-6 absolute premultiplied linear component error. Native
+primary cases have zero code errors; conversion to sRGB has at most one integer16
+code error and 5.97e-7 linear error. Opaque coverage is explicitly exactly one:
+the first shader test exposed approximate GPU reciprocal division at the
+integer maximum. The shader preserves that endpoint explicitly.
+
+An initial test additionally converted Adobe RGB through linear sRGB and back;
+dark-sample cancellation produced three codes of error. That extra inverse
+conversion is not the decoder's one-way destination contract. The retained test
+now measures destination coordinates and separately checks native-primary
+identity. This observation supports keeping document-native primaries and
+retained original samples; it does not qualify arbitrary repeated profile
+conversion as lossless. Identity source import/export continues to compare the
+original integer bytes and profile, independently of this working-cache test.
+
+The first copy-on-write experiment exposed a separate undo regression: restoring
+a raster root requested full-image composition and the changed root also
+invalidated every cached filter pixel. Pure-raster undo/redo now schedules a
+frame without requesting full composition on a backend that supports raster
+damage. The renderer compares tile capture identities and includes uncommitted
+GPU changes and watercolor neighbor footprints. Filter metadata excludes raster
+root identity; batches/restoration damage identify the pixels to refresh. Other
+backends retain their existing full-refresh capability default.
+
+New correctness fixtures compare the displayed composite directly, including a
+Gaussian blur after paint/undo with `composite_all=false`; a full export cannot
+hide a stale display in these assertions. A 2049×513 source crosses the 16-slot
+cache capacity and partial tile boundaries, starts with zero paint pages, edits
+one page and restores the exact original. A GPU native-save/reopen fixture
+retains integer16 original samples while preserving its sRGB8 edited tiles and
+undo/redo. This last fixture is not an integer16 editing qualification.
+
+Reproduce source measurements by building `raster_workloads` in release, then
+running `LAYER_GPU_INDEX=0 /usr/bin/time -v target/release/examples/raster_workloads
+all --tiled-sources`. It uses the same deterministic opaque sRGB8 samples,
+document dimensions, strokes and 31 empty layers as the original dense baseline.
+Source generation, compression, device startup and first submission are timed
+together; those numbers must not be described as isolated rendering time.
+Drawing is also classified by whether the frame caused a source-cache miss.
+The native save comparison checks source identity, exact original tile/profile
+content and edited raster digests, while the undo/redo comparison checks the
+three established export hashes.
+
+The pre-optimization 24/45/60 MP source prototype reached 204/393/584 ms undo and
+194/368/554 ms redo. Damage-based restoration reduced the 24 MP case to 36/14 ms.
+GPU decoding then reached 25/14, 45/35 and 56/48 ms, respectively, before removing
+the unconditional final source-upload wait. Those exploratory measurements are
+retained in `source-cow-{24mp,45mp,60mp}.log`, `source-cow-damage-24mp.log` and
+`source-gpu-decode-dense.log`; they are not the final qualification result.
+
+Separate warm/cold reporting exposed two-document stalls that aggregate p99
+hid. Six isolated repeats reproduced 8–14 ms frames around the first stroke,
+with only 0.3–2.7 ms of render-thread CPU and no source-capacity wait. Unlike the
+old eagerly materialized photo, the new source had no initial raster capture;
+its worker therefore allocated four 16 MiB pinned spare buffers during the
+first stroke. Preparation now starts during source loading, and backing readiness
+includes preparation completion. No staging budget was raised. Six repeats after
+the fix pass all 3,072 frames: per-document cold completed p99 is 4.296–5.898 ms,
+with no CPU/completed sample above 8.33 ms. Logs: `source-outlier-multiple-*`
+before and `source-prepared-multiple-*` after. The example records current-thread
+CPU separately from submission wall time and prints each over-budget frame.
+
+The final stage run (`source-prepared-dense.log`) measures:
+
+| Workload | 24 MP | 45 MP | 60 MP |
+| --- | ---: | ---: | ---: |
+| Warm/cold drawing frames | 163 / 93 | 126 / 130 | 126 / 130 |
+| Warm CPU p95 / p99 ms | 0.318 / 1.926 | 0.337 / 0.474 | 0.329 / 0.537 |
+| Cold CPU p95 / p99 ms | 2.178 / 3.346 | 1.824 / 2.318 | 2.201 / 3.555 |
+| Cold completed p95 / p99 ms | 2.378 / 4.668 | 2.039 / 2.514 | 2.483 / 3.560 |
+| Concurrent save ms / archive MiB | 27.14 / 32.56 | 43.80 / 56.00 | 55.68 / 70.57 |
+| Exact archive reopen ms | 185.71 | 330.71 | 435.90 |
+| Undo / redo ms | 25.10 / 14.71 | 45.97 / 35.21 | 56.45 / 48.58 |
+| Export and checksum ms | 58.79 | 124.84 | 169.30 |
+| Actual GPU live / reserved MiB | 221.88 / 640 | 329.07 / 640 | 387.04 / 640 |
+| Cumulative process high-water KiB | 629,304 | 861,432 | 1,006,336 |
+
+All 768 measured single-document drawing frames and 512 additional alternating
+two-document frames pass the 8.33 ms CPU/completed gate. The established hashes
+remain `8356e7bd`, `86475ef0`, `50c21c68`. Two-document final RSS is 782,492 KiB;
+the original instrumented baseline was 1,305,656 KiB. The comparable first-24 MP
+high-water decreases from 937,100 to 629,304 KiB (or 908,120 KiB for the bounded
+upload parent). Do not compare an individual document's peak with the old
+whole-run 60 MP peak. GPU counters include application allocations and staging,
+but exclude driver-private memory.
+
+This source path adds cold decode work that the fully materialized baseline had
+already paid during loading. It is not an unchanged hot-path comparison. Bulk
+undo at 45/60 MP still exceeds the earlier 21/20 ms observations: the current
+damage representation merges changed pages into a rectangle and reloads
+unaffected source tiles inside that rectangle. Disjoint composition damage and
+the remaining source-aware operations must be completed before enabling it.
+Startup/source generation also includes compression and is slower than the
+packed fixture. None of these measurements qualifies the unfinished integer16
+document path or replaces native input-to-present qualification.
+
+The unchanged 25-scenario suite passes 10,920 frames (`source-cow-frames.md`),
+with maximum CPU p95/p99 2.357/2.924 ms. Investigation compared both fixed
+baseline runs and a freshly rebuilt parent `8a4dc00`. Ten initially triggered
+scenarios ran current/parent/parent/current with five repetitions per invocation
+(`source-cow-abba-*`). No consistent Move increase above the declared trigger
+was reproduced. Two pen-up tails received longer, twenty-
+repeat alternating runs (`source-prepared-penup-*`):
+
+| Scenario | Parent CPU p95 / p99 / pen-up p99 range ms | Current range ms |
+| --- | --- | --- |
+| Large Paintbrush | 0.245–0.253 / 0.627–0.632 / 0.600–0.774 | 0.234–0.241 / 0.618–0.649 / 0.559–0.715 |
+| Loaded Oil Mixer | 2.009–2.026 / 2.629–2.670 / 2.298–2.309 | 2.024–2.082 / 2.617–2.625 / 2.383–2.588 |
+
+Loaded Oil's larger current pen-up tail exceeds the 0.2 ms trigger in one of
+these two runs, but not both; Move distributions do not show the same increase.
+This is retained as a tail to monitor during final sustained GTK qualification,
+not an allowance to accumulate regressions. Reproduce with `gpu-bench --scenario
+NAME --repeats 20 --report PATH --output-dir PATH`, running serially without
+compilation or other GPU tests. The parent was built from a `git archive 8a4dc00`
+checkout in `/tmp/capy-m2-stage5-parent`; saved parent/current binaries and all
+reports remain in the local artifact directory.
+
+Stage validation passes 16 color-service, 52 core, 49 engine and 370 UI tests;
+132 GPU library tests (18 hardware-specific benchmarks intentionally ignored in
+that invocation) and four GPU project tests. The rebuilt GTK host passes native
+file operations and the injected-failure/diagnostics/recovery workflow on the
+isolated 120 Hz Mutter display. Source tests additionally verify completion and
+cancellation release upload reservations and compare embedded RGB ICC Float32
+uploads against the native transform. Logs: `raster-damage-shared-tests.log`,
+`source-prepared-{gpu-tests,project-tests}.log`,
+`source-prepared-gtk-{files,recovery}.log`. Build tests with `cargo test --offline
+--release -p layer-linux -p layer-render-wgpu --no-run`, then run the resulting
+executables serially with `LAYER_GPU_INDEX=0`; use the documented
+`tools/performance/gtk-raster.sh` wrapper for native GTK tests.
+
+Outstanding integration includes transform capture, raw-layer sampling and
+regions, material/smudge neighbor inputs, previews/thumbnails, document working
+space/depth, integer16 raster capture/restoration/export, bounded composition and
+filters, all GTK color journeys and managed display. No other platform host
+integration is authorized or performed in this stage.

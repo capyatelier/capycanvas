@@ -18,6 +18,12 @@ crc32fast = "1.5"
 [dev-dependencies]
 layer-engine = { path = "../layer-engine" }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+layer-color = { path = "../layer-color" }
+
 [target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"
 

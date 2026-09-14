@@ -120,6 +120,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     transform_preview: Option<layer_render::TransformPreview>,
     rebuild_all: bool,
     composite_all: bool,
+    raster_dirty: bool,
     animation_origin_ns: Option<u64>,
     metrics: EngineMetrics,
 }
@@ -186,6 +187,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             transform_preview: None,
             rebuild_all: true,
             composite_all: true,
+            raster_dirty: false,
             animation_origin_ns: None,
             document_view_revision: 0,
             metrics: EngineMetrics::default(),
@@ -524,6 +526,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.pending_frame.is_some()
             || self.rebuild_all
             || self.composite_all
+            || self.raster_dirty
             || self
                 .batches
                 .iter()
@@ -620,9 +623,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.completed_before = None;
         self.estimates.clear();
         let image = self.editor.undo_changes_image();
+        let raster_only = self.backend.supports_raster_damage() && self.editor.undo_only_updates_rasters();
         let changed = self.editor.undo()?;
         self.transform_preview = None;
-        self.composite_all |= changed && image;
+        self.composite_all |= changed && image && !raster_only;
+        self.raster_dirty |= changed && raster_only;
         Ok(changed)
     }
 
@@ -632,9 +637,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.completed_before = None;
         self.estimates.clear();
         let image = self.editor.redo_changes_image();
+        let raster_only = self.backend.supports_raster_damage() && self.editor.redo_only_updates_rasters();
         let changed = self.editor.redo()?;
         self.transform_preview = None;
-        self.composite_all |= changed && image;
+        self.composite_all |= changed && image && !raster_only;
+        self.raster_dirty |= changed && raster_only;
         Ok(changed)
     }
 
@@ -714,13 +721,14 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         prepare(&mut edit, self.document(), &mut operation_batches);
         fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
             match edit {
-                Edit::InsertLayer { layer, .. } => layer.asset.is_some(),
+                Edit::InsertLayer { layer, .. } => layer.asset.is_some() || layer.source.is_some(),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
                 // A batch may replace a layer inserted earlier in that batch;
                 // it is absent from this pre-edit snapshot, so be conservative.
                 Edit::ReplaceLayer(layer) => {
                     document.layer(layer.id).is_none_or(|old| {
                         old.asset != layer.asset
+                            || old.source != layer.source
                             || old.mask.as_ref().map(|m| {
                                 (&m.initial, m.id, m.default_coverage, &m.pending_operations)
                             }) != layer.mask.as_ref().map(|m| {
@@ -911,6 +919,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.rebuild_all = true;
         } else {
             self.composite_all = false;
+            self.raster_dirty = false;
             self.editor.finish_raster_submission();
         }
         self.metrics.frames = self.metrics.frames.saturating_add(1);

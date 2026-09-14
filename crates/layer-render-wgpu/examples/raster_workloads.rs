@@ -22,16 +22,36 @@ struct Canvas {
     input: InputProducer<PenEvent>,
     assets: BTreeMap<AssetId, ProjectAsset>,
     sequence: u64,
+    source_frames: [Vec<(f64, f64, f64)>; 2],
 }
 fn ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.
+}
+fn thread_cpu_ms() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // A valid writable timespec and the current thread's CPU clock.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
+            0
+        );
+        time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1_000_000.
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        f64::NAN
+    }
 }
 fn quantiles(values: &mut [f64]) -> [f64; 3] {
     values.sort_by(f64::total_cmp);
     [0.5, 0.95, 0.99].map(|q| values[((values.len() - 1) as f64 * q).ceil() as usize])
 }
 impl Canvas {
-    fn new(extent: [u32; 2], name: &str) -> Result<Self> {
+    fn new(extent: [u32; 2], name: &str, tiled: bool) -> Result<Self> {
         let start = Instant::now();
         let mut document = Document::new(name, extent[0], extent[1]);
         let id = AssetId::from("qualification:synthetic-source");
@@ -52,20 +72,44 @@ impl Canvas {
                 ]
             })
             .collect::<Vec<_>>();
-        let image = ProjectAsset {
-            extent,
-            format: ProjectAssetFormat::Rgba8Srgb,
-            bytes: bytes.into(),
+        let assets = if tiled {
+            use layer_core::color::{IntegerDepth, source::*};
+            let mut builder = SourceBuilder::new(
+                extent,
+                SourceInterpretation {
+                    channels: SourceChannels::Rgba,
+                    depth: IntegerDepth::U8,
+                    profile: Default::default(),
+                    profile_assumed: false,
+                },
+                512 * 1024 * 1024,
+            )?;
+            for row in bytes.chunks_exact(extent[0] as usize * 4) {
+                builder.push_row(row)?;
+            }
+            document.layers[0].source = Some(std::sync::Arc::new(builder.finish()?));
+            drop(bytes);
+            BTreeMap::new()
+        } else {
+            document.layers[0].asset = Some(id.clone());
+            BTreeMap::from([(
+                id,
+                ProjectAsset {
+                    extent,
+                    format: ProjectAssetFormat::Rgba8Srgb,
+                    bytes: bytes.into(),
+                },
+            )])
         };
-        document.layers[0].asset = Some(id.clone());
         for _ in 0..31 {
             let id = document.allocate_layer_id();
             document.layers.insert(1, Layer::paint(id, "empty"));
         }
-        let assets = BTreeMap::from([(id.clone(), image.clone())]);
         let mut gpu = WgpuRasterizer::new_headless()?;
         gpu.set_telemetry_enabled(true);
-        gpu.prepare_owned_asset(&id, &image)?;
+        for (id, image) in &assets {
+            gpu.prepare_owned_asset(id, image)?;
+        }
         let (input, consumer) = input_queue(64);
         let scale = (1024. / extent[0] as f32).min(768. / extent[1] as f32);
         let mut engine = CanvasEngine::new(
@@ -91,6 +135,7 @@ impl Canvas {
             input,
             assets,
             sequence: 0,
+            source_frames: Default::default(),
         };
         canvas.settle()?;
         println!(
@@ -126,6 +171,7 @@ impl Canvas {
         let mut cpu = Vec::new();
         let mut complete = Vec::new();
         for frame in 0..64 {
+            let before = self.engine.backend().metrics();
             let start = Instant::now();
             for j in 0..8 {
                 let sample = frame * 8 + j;
@@ -157,11 +203,14 @@ impl Canvas {
                     .map_err(|_| "Input queue overflow")?;
             }
             let mut frame_cpu = 0.;
+            let mut frame_thread_cpu = 0.;
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
+                let thread = thread_cpu_ms();
                 let submitted = Instant::now();
                 self.engine.render_frame()?;
                 frame_cpu += ms(submitted);
+                frame_thread_cpu += thread_cpu_ms() - thread;
                 self.engine.backend_mut().wait_idle()?;
                 if !self.engine.has_pending_input() {
                     break;
@@ -171,8 +220,24 @@ impl Canvas {
                 }
                 std::thread::yield_now();
             }
+            let completed = ms(start);
+            let after = self.engine.backend().metrics();
+            let misses = after.source_tile_misses - before.source_tile_misses;
+            self.source_frames[usize::from(misses != 0)].push((
+                frame_cpu,
+                completed,
+                frame_thread_cpu,
+            ));
+            if frame_cpu > 8.33 || completed > 8.33 {
+                println!(
+                    "outlier {:?} stroke={ordinal} frame={frame} CPU-wall={frame_cpu:.3} thread-CPU={frame_thread_cpu:.3} completed={completed:.3} ms misses={misses} capacity-waits={} capture-reserved={} bytes",
+                    self.engine.document().id,
+                    after.source_upload_submissions - before.source_upload_submissions,
+                    after.raster_backing_reserved_bytes
+                );
+            }
             cpu.push(frame_cpu);
-            complete.push(ms(start));
+            complete.push(completed);
         }
         Ok((cpu, complete))
     }
@@ -215,6 +280,29 @@ impl Canvas {
         Ok(())
     }
     fn memory(&self) -> Result<()> {
+        for (kind, samples) in ["warm source", "cold source"]
+            .into_iter()
+            .zip(&self.source_frames)
+        {
+            if samples.is_empty() {
+                continue;
+            }
+            let mut cpu: Vec<_> = samples.iter().map(|s| s.0).collect();
+            let mut completed: Vec<_> = samples.iter().map(|s| s.1).collect();
+            let mut thread: Vec<_> = samples.iter().map(|s| s.2).collect();
+            println!(
+                "{kind}: {} frames; CPU p50/p95/p99 {:?} ms; completed {:?} ms; CPU/completed over 8.33 ms {}/{}",
+                samples.len(),
+                quantiles(&mut cpu),
+                quantiles(&mut completed),
+                cpu.iter().filter(|v| **v > 8.33).count(),
+                completed.iter().filter(|v| **v > 8.33).count()
+            );
+            println!(
+                "{kind} thread CPU p50/p95/p99 {:?} ms",
+                quantiles(&mut thread)
+            );
+        }
         let metrics = self.engine.backend().metrics();
         println!(
             "source upload staging/scratch peak {:.2} MiB; bounded upload submissions {}",
@@ -240,7 +328,16 @@ impl Canvas {
             "renderer allocated/reserved {:.2} MiB; current compressed tiles {:.2} MiB; source {:.2} MiB",
             self.engine.backend().telemetry().resident_bytes as f64 / 1048576.,
             backed as f64 / 1048576.,
-            self.assets.values().map(|a| a.bytes.len()).sum::<usize>() as f64 / 1048576.
+            (self.assets.values().map(|a| a.bytes.len()).sum::<usize>()
+                + self
+                    .engine
+                    .document()
+                    .layers
+                    .iter()
+                    .filter_map(|l| l.source.as_ref())
+                    .map(|s| s.resident_bytes())
+                    .sum::<usize>()) as f64
+                / 1048576.
         );
         for line in std::fs::read_to_string("/proc/self/status")?
             .lines()
@@ -281,6 +378,10 @@ fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
         .iter()
         .zip(&reopened.document.layers)
     {
+        assert!(
+            before.source == after.source,
+            "Original source samples/profile changed"
+        );
         let before = before.raster.wait_data()?;
         let after = after.raster.wait_data()?;
         assert_eq!(before.tiles.len(), after.tiles.len());
@@ -298,8 +399,25 @@ fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
     Ok(())
 }
 fn main() -> Result<()> {
-    let selected = std::env::args().nth(1).unwrap_or_else(|| "all".into());
-    let output = PathBuf::from("artifacts/color-m1/dense");
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let tiled = args.iter().any(|a| a == "--tiled-sources");
+    let selected = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .map_or("all", String::as_str);
+    println!(
+        "Source ownership: {}; sRGB8 working document",
+        if tiled {
+            "tiled copy-on-write"
+        } else {
+            "packed source with materialized paint"
+        }
+    );
+    let output = PathBuf::from(if tiled {
+        "artifacts/color-m2/tiled-dense"
+    } else {
+        "artifacts/color-m1/dense"
+    });
     std::fs::create_dir_all(&output)?;
     for (name, extent) in [
         ("24mp", [6000, 4000]),
@@ -309,8 +427,9 @@ fn main() -> Result<()> {
         if selected != "all" && selected != name {
             continue;
         }
-        let mut canvas = Canvas::new(extent, name)?;
+        let mut canvas = Canvas::new(extent, name, tiled)?;
         canvas.stroke(0)?;
+        canvas.source_frames = Default::default();
         canvas.settle()?;
         let snapshot = canvas.snapshot()?;
         let path = output.join(format!("{name}.capy"));
@@ -338,8 +457,8 @@ fn main() -> Result<()> {
         std::fs::remove_file(path)?;
     }
     if selected == "all" || selected == "multiple" {
-        let mut first = Canvas::new([6000, 4000], "multiple-a")?;
-        let mut second = Canvas::new([6000, 4000], "multiple-b")?;
+        let mut first = Canvas::new([6000, 4000], "multiple-a", tiled)?;
+        let mut second = Canvas::new([6000, 4000], "multiple-b", tiled)?;
         let path = output.join("multiple.capy");
         let worker = save(first.snapshot()?, path.clone());
         let (mut cpu, mut completed) = (Vec::new(), Vec::new());

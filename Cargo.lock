@@ -1162,6 +1162,7 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "futures-channel",
+ "layer-color",
  "layer-core",
  "layer-engine",
  "layer-render",

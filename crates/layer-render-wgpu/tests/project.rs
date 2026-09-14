@@ -90,6 +90,45 @@ fn source_uploads_share_owned_pixels_and_pack_borrowed_rows() {
         gpu.release_asset(&id);
     }
 }
+
+#[test]
+fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
+    use layer_core::color::{IntegerDepth, source::*};
+    let mut builder = SourceBuilder::new(SIZE, SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+        profile: Default::default(), profile_assumed: false,
+    }, 16 * 1024 * 1024).unwrap();
+    for y in 0..SIZE[1] {
+        let row: Vec<_> = (0..SIZE[0]).flat_map(|x| {
+            [x.wrapping_mul(617) as u16, y.wrapping_mul(251) as u16, (x ^ y) as u16, 65535]
+                .into_iter().flat_map(u16::to_le_bytes)
+        }).collect();
+        builder.push_row(&row).unwrap();
+    }
+    let source = Arc::new(builder.finish().unwrap());
+    let mut document = Document::new("retained16 source in sRGB8 working document", SIZE[0], SIZE[1]);
+    document.layers[0].source = Some(source.clone());
+    let project = Project { document, assets: BTreeMap::new() };
+    let (mut live, mut input) = engine(&project);
+    let original = image(&mut live, 0);
+    draw(&mut live, &mut input, DefaultBrushPreset::GPen, [1., 0., 0., 0.5], 100., 1_000_000);
+    let painted = image(&mut live, 100_000_000);
+    assert!(painted != original);
+    let mut archive = Vec::new();
+    let snapshot = Project::snapshot(live.document(), &BTreeMap::new()).unwrap();
+    snapshot.write(&mut archive).unwrap();
+    let loaded = Project::read(archive.as_slice(), Default::default()).unwrap();
+    assert_eq!(loaded.document.layers[0].source.as_ref().unwrap(), &source);
+    let (mut reopened, _) = engine(&loaded);
+    let actual = image(&mut reopened, 0);
+    assert_eq!(actual.iter().zip(&painted).enumerate().find(|(_, (a,b))| a != b), None);
+    live.undo().unwrap();
+    let restored = image(&mut live, 200_000_000);
+    assert_eq!(restored.iter().zip(&original).enumerate().find(|(_, (a,b))| a != b), None);
+    live.redo().unwrap();
+    let restored = image(&mut live, 300_000_000);
+    assert_eq!(restored.iter().zip(&painted).enumerate().find(|(_, (a,b))| a != b), None);
+}
 fn image(engine: &mut Engine, time: u64) -> Vec<u8> {
     engine.render_frame_at(time).unwrap();
     let mut bytes = vec![0; (SIZE[0] * SIZE[1] * 4) as usize];

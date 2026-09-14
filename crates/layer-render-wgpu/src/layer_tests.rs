@@ -621,10 +621,10 @@ fn region_request_latency() {
 // This is test-only readback, never a drawing or selection raster path.
 pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
     let row = texture.width() * texture.format().block_copy_size(None).unwrap();
-    assert_eq!(row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
+    let stride = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test persistent page"),
-        size: u64::from(row) * u64::from(texture.height()),
+        size: u64::from(stride) * u64::from(texture.height()),
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -635,7 +635,7 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(row),
+                bytes_per_row: Some(stride),
                 rows_per_image: None,
             },
         },
@@ -655,7 +655,8 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
         })
         .unwrap();
     receive.recv().unwrap().unwrap();
-    let bytes = buffer.slice(..).get_mapped_range().unwrap().to_vec();
+    let bytes = buffer.slice(..).get_mapped_range().unwrap()
+        .chunks_exact(stride as usize).flat_map(|line| line[..row as usize].iter().copied()).collect();
     buffer.unmap();
     bytes
 }

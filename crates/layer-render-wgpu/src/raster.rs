@@ -79,6 +79,26 @@ struct Target {
     data: Arc<RasterData>,
     changed: BTreeSet<[u32; 2]>,
 }
+
+fn restored_damage(before: &RasterData, after: &RasterData, changed: &BTreeSet<[u32; 2]>, extent: [u32; 2]) -> PixelRect {
+    let mut damage = PixelRect::EMPTY;
+    let style_changed = before.watercolor != after.watercolor;
+    for key in before.tiles.keys().chain(after.tiles.keys()) {
+        let same = before.tiles.get(key).zip(after.tiles.get(key))
+            .is_some_and(|(a, b)| a.same_capture(b));
+        if !same || style_changed {
+            damage = damage.union(page_rect(key.coordinate));
+        }
+    }
+    for &coordinate in changed { damage = damage.union(page_rect(coordinate)); }
+    damage = damage.intersect(PixelRect::full(extent));
+    // Neighboring watercolor tiles can contribute visible wet edges. This is
+    // deliberately conservative and bounded by the existing 3x3 neighborhood.
+    if before.watercolor.is_some() || after.watercolor.is_some() {
+        damage = damage.expand(PAGE_SIZE, extent);
+    }
+    damage
+}
 #[derive(Default)]
 pub(super) struct RasterRuntime {
     targets: BTreeMap<LayerId, Target>,
@@ -93,6 +113,7 @@ struct CaptureWorker {
     thread: Option<std::thread::JoinHandle<()>>,
     staging: Arc<AtomicU64>,
     error: Arc<std::sync::Mutex<Option<String>>>,
+    prepared: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl CaptureWorker {
@@ -104,6 +125,8 @@ impl CaptureWorker {
         let bytes = staging.clone();
         let error = Arc::new(std::sync::Mutex::new(None));
         let failure = error.clone();
+        let prepared = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let preparation = prepared.clone();
         let thread = std::thread::Builder::new()
             .name("capy-raster-backing".into())
             .spawn(move || {
@@ -125,6 +148,7 @@ impl CaptureWorker {
                     *failure.lock().unwrap() =
                         Some("Could not prepare raster staging buffers".into());
                 }
+                preparation.store(true, Ordering::Release);
                 while let Ok(captures) = receiver.recv() {
                     let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
                     // Dropped tickets publish failures even if a driver callback or
@@ -154,13 +178,15 @@ impl CaptureWorker {
             pending,
             staging,
             error,
+            prepared,
             thread: Some(thread),
         })
     }
     fn ready(&self) -> bool {
         // Reserve room for the largest legal next capture. The total staging
         // ceiling remains 512 MiB, while small edits can share that allowance.
-        self.pending.load(Ordering::Acquire) < 16
+        self.prepared.load(Ordering::Acquire)
+            && self.pending.load(Ordering::Acquire) < 16
             && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES
     }
     fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
@@ -399,13 +425,23 @@ impl WgpuRasterizer {
             .is_none_or(CaptureWorker::ready)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn prepare_source_backing(&mut self) -> Result<(), GpuRasterError> {
+        let runtime = self.raster.get_or_insert_with(Default::default);
+        if runtime.worker.is_none() {
+            runtime.worker = Some(CaptureWorker::new((*self.device).clone(), self.raster_buffers.clone())?);
+        }
+        Ok(())
+    }
+
     pub(super) fn reconcile_rasters(
         &mut self,
         packet: FramePacket<'_>,
         reset: bool,
-    ) -> Result<(), GpuRasterError> {
+    ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         let mut runtime = self.raster.take().unwrap_or_default();
         let result = (|| {
+            let mut damage = Vec::new();
             if let Some(error) = runtime
                 .worker
                 .as_ref()
@@ -422,6 +458,7 @@ impl WgpuRasterizer {
             for (id, revision) in packet.restore_rasters {
                 if let Some(current) = runtime.targets.get_mut(id) {
                     let data = revision.wait_data().map_err(GpuRasterError::Effect)?;
+                    damage.push((*id, restored_damage(&current.data, &data, &current.changed, packet.document_extent)));
                     let mut before = if reset {
                         RasterData::default()
                     } else {
@@ -460,6 +497,7 @@ impl WgpuRasterizer {
                     if let Some(current) = runtime.targets.get_mut(&id) {
                         if reset || (wanted.is_some() && current.revision != *revision) {
                             let data = wanted.unwrap_or_else(|| current.data.clone());
+                            damage.push((id, restored_damage(&current.data, &data, &current.changed, packet.document_extent)));
                             let mut before = if reset {
                                 RasterData::default()
                             } else {
@@ -478,6 +516,7 @@ impl WgpuRasterizer {
                     } else {
                         let data = wanted.unwrap_or_default();
                         if !data.tiles.is_empty() {
+                            damage.push((id, restored_damage(&RasterData::default(), &data, &BTreeSet::new(), packet.document_extent)));
                             self.restore_raster(id, &RasterData::default(), &data)?;
                         }
                         runtime.targets.insert(
@@ -520,7 +559,7 @@ impl WgpuRasterizer {
                     }
                 }
             }
-            Ok(())
+            Ok(damage)
         })();
         self.raster = Some(runtime);
         result

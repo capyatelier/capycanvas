@@ -1572,6 +1572,13 @@ pub enum Edit {
 }
 
 impl Edit {
+    fn only_raster_updates(&self) -> bool {
+        match self {
+            Self::SetRaster { .. } => true,
+            Self::Batch(edits) => !edits.is_empty() && edits.iter().all(Self::only_raster_updates),
+            _ => false,
+        }
+    }
     fn source_roots<'a>(&'a self, out: &mut Vec<&'a Arc<color::source::SourceImage>>) {
         match self {
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.source_roots(out)),
@@ -1712,6 +1719,12 @@ impl Editor {
         self.redo
             .last()
             .is_some_and(|entry| entry.edit.changes_image())
+    }
+    pub fn undo_only_updates_rasters(&self) -> bool {
+        self.undo.last().is_some_and(|entry| entry.edit.only_raster_updates())
+    }
+    pub fn redo_only_updates_rasters(&self) -> bool {
+        self.redo.last().is_some_and(|entry| entry.edit.only_raster_updates())
     }
 
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
