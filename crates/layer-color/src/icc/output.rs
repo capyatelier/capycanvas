@@ -1,6 +1,9 @@
 //! Worker-owned encoding of bounded linear working rows for SDR delivery.
 use super::*;
 use layer_core::color::source::{SourceChannels, SourceInterpretation};
+use layer_core::color::{OutputDither, OutputEncoding};
+
+mod quantize;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutputStatistics {
@@ -11,6 +14,7 @@ pub struct OutputStatistics {
 pub struct WorkingEncoder {
     destination: SourceInterpretation,
     kind: OutputKind,
+    dither: OutputDither,
     // Transform handles must be dropped before their context.
     _context: ThreadContext,
 }
@@ -28,8 +32,10 @@ impl WorkingEncoder {
     pub fn new(
         source: RgbSpace,
         destination: &SourceInterpretation,
-        options: ConversionOptions,
+        encoding: OutputEncoding,
     ) -> Result<Self, String> {
+        encoding.validate(destination.depth)?;
+        let options = encoding.conversion;
         let context = ThreadContext::new();
         let mut destination = destination.clone();
         destination.profile_assumed = false;
@@ -104,6 +110,7 @@ impl WorkingEncoder {
         Ok(Self {
             destination,
             kind,
+            dither: encoding.dither,
             _context: context,
         })
     }
@@ -116,13 +123,16 @@ impl WorkingEncoder {
 
     /// Preserve straight hidden RGB if supplied. Opaque output with any coverage
     /// below one requires an explicit matte in the linear working RGB space.
+    /// `origin` names the first pixel of this output row, keeping dithering
+    /// stable when the row is split across independently encoded chunks.
     pub fn encode_straight(
         &self,
         input: &[[f32; 4]],
         output: &mut [u8],
         matte: Option<[f32; 3]>,
+        origin: [u32; 2],
     ) -> Result<OutputStatistics, String> {
-        self.encode(input, output, matte, false)
+        self.encode(input, output, matte, false, origin)
     }
     /// Linear premultiplied artwork; zero coverage becomes transparent black.
     /// Matte compositing precedes nonlinear/profile conversion and quantization.
@@ -131,8 +141,9 @@ impl WorkingEncoder {
         input: &[[f32; 4]],
         output: &mut [u8],
         matte: Option<[f32; 3]>,
+        origin: [u32; 2],
     ) -> Result<OutputStatistics, String> {
-        self.encode(input, output, matte, true)
+        self.encode(input, output, matte, true, origin)
     }
     fn encode(
         &self,
@@ -140,6 +151,7 @@ impl WorkingEncoder {
         output: &mut [u8],
         matte: Option<[f32; 3]>,
         premultiplied: bool,
+        origin: [u32; 2],
     ) -> Result<OutputStatistics, String> {
         let destination = &self.destination;
         let bpp = destination.pixel_bytes();
@@ -159,7 +171,11 @@ impl WorkingEncoder {
         let maximum = f64::from(destination.depth.maximum());
         let step = destination.depth.bytes();
         let mut statistics = OutputStatistics::default();
-        for (input, output) in input.chunks(256).zip(output.chunks_mut(256 * bpp)) {
+        for (chunk, (input, output)) in input
+            .chunks(256)
+            .zip(output.chunks_mut(256 * bpp))
+            .enumerate()
+        {
             let mut values = [[0f32; 4]; 256];
             for (i, &p) in input.iter().enumerate() {
                 let rgb = if premultiplied {
@@ -217,13 +233,25 @@ impl WorkingEncoder {
                 if destination.channels.has_alpha() {
                     encoded[destination.channels.count() - 1] = f64::from(values[i][3]);
                 }
-                for (code, &value) in pixel.chunks_exact_mut(step).zip(&encoded) {
+                let threshold = if self.dither == OutputDither::Stochastic8 {
+                    Some(quantize::threshold([
+                        origin[0].wrapping_add((chunk * 256 + i) as u32),
+                        origin[1],
+                    ]))
+                } else {
+                    None
+                };
+                for (channel, (code, &value)) in
+                    pixel.chunks_exact_mut(step).zip(&encoded).enumerate()
+                {
                     if !value.is_finite() {
                         return Err("Destination profile produced non-finite output".into());
                     }
                     let unbounded = (value * maximum).round();
                     statistics.clipped_channels += u64::from(unbounded < 0. || unbounded > maximum);
-                    let value = unbounded.clamp(0., maximum) as u16;
+                    let alpha = destination.channels.has_alpha()
+                        && channel + 1 == destination.channels.count();
+                    let value = quantize::code(value, maximum, threshold.filter(|_| !alpha));
                     code.copy_from_slice(&value.to_le_bytes()[..step]);
                 }
             }

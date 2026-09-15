@@ -1,6 +1,6 @@
 //! Delivery choices describe a copy of the master. Hosts own dialogs and jobs.
 use layer_core::color::source::{SourceChannels, SourceInterpretation};
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, OutputEncoding, RgbSpace};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +49,7 @@ pub struct ExportRecipe {
     pub color: DocumentColor,
     pub background: ExportBackground,
     pub jpeg_quality: u8,
+    pub encoding: OutputEncoding,
 }
 impl ExportRecipe {
     pub fn web_share() -> Self {
@@ -57,6 +58,7 @@ impl ExportRecipe {
             color: DocumentColor::default(),
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
+            encoding: Default::default(),
         }
     }
     pub fn wide_color() -> Self {
@@ -77,6 +79,7 @@ impl ExportRecipe {
             },
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
+            encoding: Default::default(),
         }
     }
     pub fn interpretation(self) -> SourceInterpretation {
@@ -92,6 +95,7 @@ impl ExportRecipe {
         }
     }
     pub fn validate(self) -> Result<(), String> {
+        self.encoding.validate(self.color.depth)?;
         if !(1..=100).contains(&self.jpeg_quality) {
             return Err("JPEG quality must be between 1 and 100".into());
         }

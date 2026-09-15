@@ -43,7 +43,7 @@ fn every_native_integer_code_and_straight_hidden_color_round_trips() {
             let mut output = vec![0; input.len()];
             assert_eq!(
                 encoder
-                    .encode_straight(&working, &mut output, None)
+                    .encode_straight(&working, &mut output, None, [0, 0])
                     .unwrap()
                     .clipped_channels,
                 0
@@ -77,7 +77,7 @@ fn premultiplied_output_preserves_integer16_at_low_alpha() {
                 .collect();
             let mut output = vec![0; input.len() * 8];
             encoder
-                .encode_premultiplied(&input, &mut output, None)
+                .encode_premultiplied(&input, &mut output, None, [0, 0])
                 .unwrap();
             for (i, pixel) in codes(&output, IntegerDepth::U16)
                 .chunks_exact(4)
@@ -112,12 +112,17 @@ fn matte_is_explicit_linear_and_precedes_profile_conversion() {
     let mut output = [13; 3];
     assert!(
         encoder
-            .encode_premultiplied(&[[0.5, 0., 0., 0.5]], &mut output, None)
+            .encode_premultiplied(&[[0.5, 0., 0., 0.5]], &mut output, None, [0, 0])
             .is_err()
     );
     assert_eq!(output, [13; 3]);
     encoder
-        .encode_premultiplied(&[[0.5, 0., 0., 0.5]], &mut output, Some([0., 0., 1.]))
+        .encode_premultiplied(
+            &[[0.5, 0., 0., 0.5]],
+            &mut output,
+            Some([0., 0., 1.]),
+            [0, 0],
+        )
         .unwrap();
     assert_eq!(output, [188, 0, 188]);
     let encoder = WorkingEncoder::new(
@@ -128,7 +133,7 @@ fn matte_is_explicit_linear_and_precedes_profile_conversion() {
     .unwrap();
     let mut output = [0; 8];
     let statistics = encoder
-        .encode_straight(&[[1., 0., 0., 1.]], &mut output, None)
+        .encode_straight(&[[1., 0., 0., 1.]], &mut output, None, [0, 0])
         .unwrap();
     assert_eq!(codes(&output, IntegerDepth::U16), [65535, 0, 0, 65535]);
     assert_eq!(statistics.clipped_channels, 3);
@@ -153,7 +158,9 @@ fn gray_outputs_have_stable_matching_profiles_and_independent_alpha() {
             [1., 1., 1., 1.],
         ];
         let mut output = [0; 12];
-        encoder.encode_straight(&input, &mut output, None).unwrap();
+        encoder
+            .encode_straight(&input, &mut output, None, [0, 0])
+            .unwrap();
         let values = codes(&output, IntegerDepth::U16);
         assert_eq!([values[1], values[3], values[5]], [0, 1, 65535]);
         assert_eq!(values[0], 0);
@@ -192,7 +199,7 @@ fn unsupported_profiles_channels_and_nonfinite_working_data_fail() {
     ] {
         assert!(
             encoder
-                .encode_premultiplied(&[input], &mut [0; 8], None)
+                .encode_premultiplied(&[input], &mut [0; 8], None, [0, 0])
                 .is_err()
         );
     }
@@ -215,7 +222,15 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
                     intent,
                     black_point_compensation: true,
                 };
-                let encoder = WorkingEncoder::new(source, &destination, options).unwrap();
+                let encoder = WorkingEncoder::new(
+                    source,
+                    &destination,
+                    layer_core::color::OutputEncoding {
+                        conversion: options,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
                 let reference = RgbTransform::new(
                     &ColorProfile::Builtin(source),
                     &destination.profile,
@@ -246,7 +261,9 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
                 let mut expected = original;
                 reference.apply(&mut expected);
                 let mut output = vec![0; linear.len() * 8];
-                encoder.encode_straight(&linear, &mut output, None).unwrap();
+                encoder
+                    .encode_straight(&linear, &mut output, None, [0, 0])
+                    .unwrap();
                 for (i, (actual, expected)) in codes(&output, IntegerDepth::U16)
                     .chunks_exact(4)
                     .zip(expected)
@@ -288,7 +305,15 @@ fn cmyk_output_matches_independent_cmm_percent_samples() {
                 intent,
                 black_point_compensation: bpc,
             };
-            let encoder = WorkingEncoder::new(RgbSpace::Srgb, &destination, options).unwrap();
+            let encoder = WorkingEncoder::new(
+                RgbSpace::Srgb,
+                &destination,
+                layer_core::color::OutputEncoding {
+                    conversion: options,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             // Separate direct encoded-RGB -> CMYK transform, with independently
             // selected LCMS formatters. CMYK float samples are percentages.
             let input_profile = Profile::new_srgb();
@@ -325,7 +350,9 @@ fn cmyk_output_matches_independent_cmm_percent_samples() {
             let mut expected = vec![[0.; 4]; encoded.len()];
             reference.transform_pixels(&encoded, &mut expected);
             let mut output = vec![0; encoded.len() * 8];
-            encoder.encode_straight(&linear, &mut output, None).unwrap();
+            encoder
+                .encode_straight(&linear, &mut output, None, [0, 0])
+                .unwrap();
             for (actual, expected) in codes(&output, IntegerDepth::U16)
                 .chunks_exact(4)
                 .zip(expected)
@@ -341,5 +368,79 @@ fn cmyk_output_matches_independent_cmm_percent_samples() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn output_dither_is_stable_across_chunks_preserves_neutrals_and_does_not_touch_alpha() {
+    for space in RgbSpace::ALL {
+        let target = destination(space, IntegerDepth::U8, SourceChannels::Rgba);
+        let dithered = WorkingEncoder::new(
+            space,
+            &target,
+            OutputEncoding {
+                dither: OutputDither::Stochastic8,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let normal = WorkingEncoder::new(space, &target, Default::default()).unwrap();
+        let input: Vec<_> = (0..4097)
+            .map(|i| {
+                let code = 90. + i as f64 / 4096.;
+                let linear = space.decode(code / 255.) as f32;
+                [linear, linear, linear, (i % 257) as f32 / 256.]
+            })
+            .collect();
+        let mut whole = vec![0; input.len() * 4];
+        let mut rounded = whole.clone();
+        let mut split = whole.clone();
+        let mut next_row = whole.clone();
+        let stats = dithered
+            .encode_straight(&input, &mut whole, None, [17, 31])
+            .unwrap();
+        assert_eq!(
+            stats,
+            normal
+                .encode_straight(&input, &mut rounded, None, [17, 31])
+                .unwrap()
+        );
+        dithered
+            .encode_straight(&input, &mut next_row, None, [17, 32])
+            .unwrap();
+        assert_ne!(whole, next_row);
+        assert_ne!(whole, rounded);
+        for (chunk, (input, output)) in input.chunks(173).zip(split.chunks_mut(173 * 4)).enumerate()
+        {
+            dithered
+                .encode_straight(input, output, None, [17 + (chunk * 173) as u32, 31])
+                .unwrap();
+        }
+        assert_eq!(whole, split, "{space:?}");
+        for (i, (pixel, normal)) in whole
+            .chunks_exact(4)
+            .zip(rounded.chunks_exact(4))
+            .enumerate()
+        {
+            assert_eq!(pixel[0], pixel[1]);
+            assert_eq!(pixel[0], pixel[2]);
+            assert_eq!(pixel[3], normal[3]);
+            assert!((f64::from(pixel[0]) - (90. + i as f64 / 4096.)).abs() <= 1.0001);
+        }
+        let mut high_depth = target;
+        high_depth.depth = IntegerDepth::U16;
+        assert!(
+            WorkingEncoder::new(
+                space,
+                &high_depth,
+                OutputEncoding {
+                    dither: OutputDither::Stochastic8,
+                    ..Default::default()
+                }
+            )
+            .err()
+            .unwrap()
+            .contains("8-bit")
+        );
     }
 }

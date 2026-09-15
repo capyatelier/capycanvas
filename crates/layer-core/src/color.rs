@@ -4,6 +4,8 @@ pub mod rgb;
 pub use rgb::RgbSpace;
 mod profile;
 pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, RenderingIntent};
+mod output;
+pub use output::{OutputDither, OutputEncoding};
 pub mod source;
 
 /// Native SDR coordinates and committed integer precision. Working math and

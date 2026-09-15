@@ -413,7 +413,7 @@ impl SnapshotRenderer {
         &mut self,
         output: impl std::io::Write,
         target: &SourceInterpretation,
-        options: layer_core::color::ConversionOptions,
+        options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
         self.write_rows(target, options, matte, |extent, target, row| {
@@ -424,7 +424,7 @@ impl SnapshotRenderer {
         &mut self,
         output: impl std::io::Write + std::io::Seek,
         target: &SourceInterpretation,
-        options: layer_core::color::ConversionOptions,
+        options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
         self.write_rows(target, options, matte, |extent, target, row| {
@@ -435,7 +435,7 @@ impl SnapshotRenderer {
         &mut self,
         output: impl std::io::Write,
         target: &SourceInterpretation,
-        options: layer_core::color::ConversionOptions,
+        options: layer_core::color::OutputEncoding,
         matte: [f32; 3],
         quality: u8,
     ) -> Result<layer_color::OutputStatistics, String> {
@@ -478,7 +478,7 @@ impl SnapshotRenderer {
     fn write_rows(
         &mut self,
         target: &SourceInterpretation,
-        options: layer_core::color::ConversionOptions,
+        options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
         write: impl FnOnce(
             [u32; 2],
@@ -490,7 +490,7 @@ impl SnapshotRenderer {
         self.control.output_rows.store(0, Ordering::Relaxed);
         let encoder = layer_color::WorkingEncoder::new(self.color().space, target, options)?;
         let extent = self.extent;
-        if options == Default::default()
+        if options.conversion == Default::default()
             && matte.is_none()
             && let Some(source) = self.identity_source(target)
         {
@@ -523,7 +523,7 @@ impl SnapshotRenderer {
             }
             let start = (y - first) as usize * extent[0] as usize;
             stats.clipped_channels += encoder
-                .encode_premultiplied(&band[start..start + extent[0] as usize], row, matte)?
+                .encode_premultiplied(&band[start..start + extent[0] as usize], row, matte, [0, y])?
                 .clipped_channels;
             self.control.output_rows.store(y + 1, Ordering::Relaxed);
             Ok(())

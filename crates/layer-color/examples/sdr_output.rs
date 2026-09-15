@@ -13,7 +13,8 @@ fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 6 {
         return Err(
-            "sdr_output WIDTH HEIGHT srgb|p3|adobe|prophoto|gray|cmyk OUTPUT.png|tif ramp|noise".into(),
+            "sdr_output WIDTH HEIGHT srgb|p3|adobe|prophoto|gray|cmyk OUTPUT.png|tif ramp|noise"
+                .into(),
         );
     }
     let extent = [
@@ -113,6 +114,7 @@ fn main() -> Result<(), String> {
                 &working,
                 output,
                 (channels == SourceChannels::Cmyk).then_some([1.; 3]),
+                [0, y],
             )?
             .clipped_channels;
         Ok(())

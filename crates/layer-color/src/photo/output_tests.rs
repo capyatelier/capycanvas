@@ -21,7 +21,7 @@ fn working_rows_stream_into_profiled_files_without_an_intermediate_image() {
                     calls += 1;
                     rows.read(y, &mut original)?;
                     decoder.decode_pixels(&original, &mut working)?;
-                    encoder.encode_straight(&working, output, None)?;
+                    encoder.encode_straight(&working, output, None, [0, 0])?;
                     Ok(())
                 };
                 let mut file = Cursor::new(Vec::new());

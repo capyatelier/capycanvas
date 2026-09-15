@@ -15,7 +15,9 @@ connected correctness coverage, including spatial support and cancellation.
 Standalone native snapshots now restore window dependencies and stream profiled
 PNG/TIFF rows, with exact untouched-source delivery. GTK export now uses that
 worker with explicit profile, depth and transparency choices and cancellation;
-profiled JPEG output adds quality and an explicit opaque background.
+profiled JPEG output adds quality and an explicit opaque background. Advanced
+export choices expose intent, black point compensation and optional 8-bit
+dithering without changing the master.
 CPU brush dynamics now retain document RGB through previews, corrections and
 recovery; exact native GPU publication/save/reopen checks include color jitter.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
@@ -3228,3 +3230,73 @@ Source, binary, dependency, fixture and capture hashes are retained in
 `jpeg-provenance.json`; JPEG/PNG/TIFF sheet captures are in `jpeg-ui/`.
 The final GTK file workflow also passes in 17.34 s
 (`jpeg-reviewed-files-session.log`). Final `git diff --check` passes.
+
+
+## Export conversion controls and 8-bit dithering (2026-09-14)
+
+Shared output encoding now keeps ICC conversion policy and precision reduction
+separate. The snapshot PNG/TIFF/JPEG paths consume the same encoding choices;
+GTK no longer supplies hardcoded conversion defaults to its export worker.
+**Advanced color** exposes the four ICC intents, black point compensation and
+optional **Reduce banding**. Relative colorimetric plus BPC remains the default.
+BPC is unavailable under absolute colorimetric intent; dithering is available for
+8-bit delivery only. Preset selection resets these choices, while manual changes
+select Custom. The scrollable sheet keeps advanced options and action buttons
+reachable without increasing the initial set of color decisions.
+
+Dithering performs deterministic stochastic rounding **after destination color
+conversion**, in encoded integer8 code units. Each channel chooses one of its
+two neighboring codes according to its fractional part. RGB channels share a
+pixel threshold so neutral inputs remain neutral; alpha uses ordinary rounding.
+The threshold derives from output coordinates, with no frame, chunk, RNG-thread
+or export-call state. Black/white endpoints remain exact, clipping statistics
+are computed before dithering, and 16-bit dither requests are rejected before
+output. The existing direct source route still preserves exact unchanged codes,
+including hidden RGB, even when 8-bit dithering is selected. Quantization is an
+output-copy choice; the editable master and its depth are unchanged.
+
+The coordinate mixer adapts the [public-domain SplitMix64 reference](https://prng.di.unimi.it/splitmix64.c)
+with attribution in source and the repository notices. Correctness checks define
+fractional-code mean error below **0.004 code** over 65,536 samples, less than one
+code error in the mathematical quantizer, and at most **1.0001 code** through the
+Float32 working/transfer round trip. These are quantization-specific tolerances,
+not new exact-parity requirements for edited filters.
+
+Validation:
+
+- **35 color, 59 core and 371 shared UI tests** pass in
+  `output-encoding-core-ui.log`, including supplied JPEG/CMYK fixtures. Existing
+  exact integer16 identity/hidden-color and low-alpha tests remain intact. New
+  checks cover fractional means, endpoints, all four RGB spaces, neutral RGB,
+  unchanged alpha, repeated rows, chunk boundaries and invalid 16-bit requests.
+- **8 snapshot GPU tests** pass in 27.41 s (`output-encoding-snapshot.log`). The
+  new ProPhoto16-to-8 case spans source tiles and output strips, compares PNG
+  and TIFF, repeats PNG byte-for-byte, checks alpha against undithered output,
+  and retains exact same-depth source delivery. Other snapshot tests still cover
+  mattes, profiles, legacy images, masked materials, cancellation and limits.
+- GTK `native_document_files` passes in 20.63 s
+  (`output-encoding-files-session.log`). It changes intent/BPC/dither in the
+  real export sheet, verifies applicability, exports JPEG/PNG/TIFF, saves/reopens
+  the native project and replaces the renderer. Initial visual inspection found
+  unnecessary clipping of choices in the constrained scroll area; the reviewed
+  sheet allows more natural height and uses a shorter dither explanation.
+
+The primary release mapping is `output-encoding-build.{json,log}` and the final
+layout/test cleanup mapping is `output-encoding-reviewed-build.{json,log}`.
+Source, binary, log and capture hashes are in `output-encoding-provenance.json`.
+Use the same libjpeg pkg-config setup and GTK harness recorded in the JPEG stage.
+No performance measurements or optimizations were performed; correctness jobs
+may overlap and their durations are not latency evidence.
+
+Export still needs resized output, output previews/comparison, custom ICC/profile
+channel choices, remembered named recipes and photo metadata/DPI retention.
+Complete native GTK photo editing, managed viewing, live residency/mips and the
+final measured budgets remain required before milestone 2 is qualified.
+
+The reviewed GPU dither test passes in 3.10 s
+(`output-encoding-reviewed-dither.log`), and the revised GTK workflow passes in
+20.70 s. Final screenshot timing waits for the native expander animation to
+settle; `output-encoding-layout-build.{json,log}` maps that test-only build.
+Its GTK workflow passes in **18.23 s** (`output-encoding-layout-files-session.log`).
+The final expanded and collapsed sheets were visually reviewed and retained in
+`output-encoding-ui/`. Final `git diff --check` passes.

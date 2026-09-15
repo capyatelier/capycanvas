@@ -60,6 +60,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Output dithering hash — public domain
+
+`crates/layer-color/src/icc/output/quantize.rs` adapts the SplitMix64 mixing
+function from [Sebastiano Vigna's 2015 reference](https://prng.di.unimi.it/splitmix64.c).
+The author dedicates the code to the public domain and permits use, copying,
+modification and distribution. The source is supplied without warranty. We use
+pixel coordinates instead of mutable generator state for repeatable output.
+
 ## fasteval — MIT
 
 Numeric expressions use `fasteval` 0.2.4, downloaded as a Cargo dependency.

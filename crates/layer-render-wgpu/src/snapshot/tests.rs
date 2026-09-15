@@ -460,7 +460,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
                 .unwrap();
                 let mut expected = vec![0; full.len() * target.pixel_bytes()];
                 encoder
-                    .encode_premultiplied(&full, &mut expected, None)
+                    .encode_premultiplied(&full, &mut expected, None, [0, 0])
                     .unwrap();
                 let mut output = Cursor::new(Vec::new());
                 if tiff {
@@ -581,4 +581,71 @@ fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
             "{space:?} JPEG quality 100 differs by {max} codes"
         );
     }
+}
+
+#[test]
+fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_samples() {
+    use layer_core::color::{OutputDither, OutputEncoding};
+    let color = DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: IntegerDepth::U16,
+    };
+    let project = source_project(color, [513, 35]);
+    let original = project.clone();
+    let mut reader = SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+    let target = SourceInterpretation {
+        channels: SourceChannels::Rgba,
+        depth: IntegerDepth::U8,
+        profile: ColorProfile::Builtin(color.space),
+        profile_assumed: false,
+    };
+    let options = OutputEncoding {
+        dither: OutputDither::Stochastic8,
+        ..Default::default()
+    };
+    let mut png = Vec::new();
+    let mut repeated = Vec::new();
+    let mut tiff = Cursor::new(Vec::new());
+    let mut normal = Vec::new();
+    let stats = reader.write_png(&mut png, &target, options, None).unwrap();
+    assert_eq!(
+        stats,
+        reader
+            .write_tiff(&mut tiff, &target, options, None)
+            .unwrap()
+    );
+    assert_eq!(
+        stats,
+        reader
+            .write_png(&mut repeated, &target, options, None)
+            .unwrap()
+    );
+    assert_eq!(png, repeated);
+    reader
+        .write_png(&mut normal, &target, Default::default(), None)
+        .unwrap();
+    let dithered = raw_rows(&decode(png));
+    let rounded = raw_rows(&decode(normal));
+    assert_eq!(dithered, raw_rows(&decode(tiff.into_inner())));
+    assert_ne!(dithered, rounded);
+    for (a, b) in dithered.chunks_exact(4).zip(rounded.chunks_exact(4)) {
+        assert_eq!(a[3], b[3]);
+        assert!(a[..3].iter().zip(&b[..3]).all(|(a, b)| a.abs_diff(*b) <= 1));
+    }
+    assert_eq!(project, original);
+    // Dithering never bypasses exact same-depth/source delivery to make noise.
+    let project = source_project(
+        DocumentColor {
+            depth: IntegerDepth::U8,
+            ..color
+        },
+        [513, 35],
+    );
+    let source = project.document.layers[0].source.as_ref().unwrap().clone();
+    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut bytes = Vec::new();
+    reader
+        .write_png(&mut bytes, &source.interpretation, options, None)
+        .unwrap();
+    assert_eq!(raw_rows(&decode(bytes)), raw_rows(&source));
 }

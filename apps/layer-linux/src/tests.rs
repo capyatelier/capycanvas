@@ -650,6 +650,8 @@ fn native_document_files() {
                     .downcast::<adw::ComboRow>().unwrap().selected(), 1);
                 assert_eq!(find_named(options.upcast_ref(), "export-depth").unwrap()
                     .downcast::<adw::ComboRow>().unwrap().selected(), 1);
+                assert!(!find_named(options.upcast_ref(), "export-dither").unwrap()
+                    .downcast::<adw::SwitchRow>().unwrap().is_sensitive());
                 find_named(options.upcast_ref(), "export-space").unwrap()
                     .downcast::<adw::ComboRow>().unwrap().set_selected(3);
             }
@@ -673,6 +675,35 @@ fn native_document_files() {
                     .downcast::<adw::SpinRow>().unwrap();
                 assert!(quality.is_visible());
                 quality.set_value(95.);
+                let advanced = find_named(options.upcast_ref(), "export-advanced").unwrap()
+                    .downcast::<adw::ExpanderRow>().unwrap();
+                assert!(!advanced.is_expanded());
+                advanced.set_expanded(true);
+                let intent = find_named(options.upcast_ref(), "export-intent").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap();
+                let bpc = find_named(options.upcast_ref(), "export-bpc").unwrap()
+                    .downcast::<adw::SwitchRow>().unwrap();
+                let dither = find_named(options.upcast_ref(), "export-dither").unwrap()
+                    .downcast::<adw::SwitchRow>().unwrap();
+                assert_eq!(intent.selected(), 0);
+                assert!(bpc.is_active());
+                assert!(!dither.is_active());
+                intent.set_selected(3);
+                assert!(!bpc.is_sensitive());
+                intent.set_selected(0);
+                assert!(bpc.is_sensitive());
+                bpc.set_active(false);
+                dither.set_active(true);
+                pump(350);
+                let scroll = find_named(options.upcast_ref(), "export-scroll").unwrap()
+                    .downcast::<gtk::ScrolledWindow>().unwrap();
+                let adjustment = scroll.vadjustment();
+                adjustment.set_value(adjustment.upper() - adjustment.page_size());
+                pump(80);
+                capture_reference(&w, output.join("export-advanced-options.png").to_str().unwrap(), 1.);
+                advanced.set_expanded(false);
+                pump(350); // Capture the settled native expander, not its animation.
+                adjustment.set_value(0.);
             }
             pump(80);
             capture_reference(&w, output.join(if path == &tiff_path { "export-tiff-options.png" } else if path == &jpeg_path { "export-jpeg-options.png" } else { "export-options.png" }).to_str().unwrap(), 1.);

@@ -1,6 +1,9 @@
 //! GTK output choices and a cancellable, immutable document worker.
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{
+    ConversionOptions, DocumentColor, IntegerDepth, OutputDither, OutputEncoding, RenderingIntent,
+    RgbSpace,
+};
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
 use std::sync::{Arc, Mutex};
 
@@ -81,19 +84,19 @@ pub(crate) fn write_snapshot(
                     ExportFormat::Png => renderer.write_png(
                         file,
                         &target,
-                        Default::default(),
+                        recipe.encoding,
                         recipe.background.matte(),
                     ),
                     ExportFormat::Tiff => renderer.write_tiff(
                         file,
                         &target,
-                        Default::default(),
+                        recipe.encoding,
                         recipe.background.matte(),
                     ),
                     ExportFormat::Jpeg => renderer.write_jpeg(
                         file,
                         &target,
-                        Default::default(),
+                        recipe.encoding,
                         recipe
                             .background
                             .matte()
@@ -113,6 +116,11 @@ pub(crate) fn write_snapshot(
 }
 
 fn combo(group: &adw::PreferencesGroup, title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
+    let row = choice(title, name, values);
+    group.add(&row);
+    row
+}
+fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
     let row = adw::ComboRow::builder().title(title).build();
     row.set_expression(Some(gtk::PropertyExpression::new(
         gtk::StringObject::static_type(),
@@ -122,7 +130,6 @@ fn combo(group: &adw::PreferencesGroup, title: &str, name: &str, values: &[&str]
     row.set_use_subtitle(true);
     row.set_model(Some(&gtk::StringList::new(values)));
     row.set_widget_name(name);
-    group.add(&row);
     row
 }
 
@@ -172,6 +179,49 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
     quality.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
     quality.set_visible(false);
     group.add(&quality);
+    let advanced_group = adw::PreferencesGroup::new();
+    let advanced = adw::ExpanderRow::builder().title("Advanced color").build();
+    advanced.set_widget_name("export-advanced");
+    advanced_group.add(&advanced);
+    let intent = choice(
+        "Rendering intent",
+        "export-intent",
+        &[
+            "Relative colorimetric",
+            "Perceptual",
+            "Saturation",
+            "Absolute colorimetric",
+        ],
+    );
+    advanced.add_row(&intent);
+    let bpc = adw::SwitchRow::builder()
+        .title("Black point compensation")
+        .active(true)
+        .build();
+    bpc.set_widget_name("export-bpc");
+    advanced.add_row(&bpc);
+    intent.connect_selected_notify(glib::clone!(
+        #[weak]
+        bpc,
+        move |intent| {
+            // ICC absolute intent preserves media white/black instead of adapting
+            // to the destination's endpoints. Remember the switch for other intents.
+            bpc.set_sensitive(intent.selected() != 3);
+        }
+    ));
+    let dither = adw::SwitchRow::builder()
+        .title("Reduce banding")
+        .subtitle("Dither 8-bit gradients")
+        .build();
+    dither.set_widget_name("export-dither");
+    advanced.add_row(&dither);
+    depth.connect_selected_notify(glib::clone!(
+        #[weak]
+        dither,
+        move |depth| {
+            dither.set_sensitive(depth.selected() == 0);
+        }
+    ));
     let jpeg_hint = gtk::Label::builder()
         .label("JPEG uses 8-bit color and needs an opaque background.")
         .wrap(true)
@@ -230,6 +280,12 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
         depth,
         #[weak]
         background,
+        #[weak]
+        intent,
+        #[weak]
+        bpc,
+        #[weak]
+        dither,
         #[strong]
         updating,
         move |preset| {
@@ -249,11 +305,27 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             );
             depth.set_selected(u32::from(recipe.color.depth == IntegerDepth::U16));
             background.set_selected(0);
+            intent.set_selected(0);
+            bpc.set_active(true);
+            dither.set_active(false);
             updating.set(false);
         }
     ));
-    for row in [&format, &space, &depth, &background] {
+    for row in [&format, &space, &depth, &background, &intent] {
         row.connect_selected_notify(glib::clone!(
+            #[weak]
+            preset,
+            #[strong]
+            updating,
+            move |_| {
+                if !updating.get() {
+                    preset.set_selected(3);
+                }
+            }
+        ));
+    }
+    for row in [&bpc, &dither] {
+        row.connect_active_notify(glib::clone!(
             #[weak]
             preset,
             #[strong]
@@ -294,7 +366,16 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
     content.append(&group);
     content.append(&jpeg_hint);
     content.append(&note);
-    dialog.set_extra_child(Some(&content));
+    content.append(&advanced_group);
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(540)
+        .child(&content)
+        .build();
+    scroll.set_widget_name("export-scroll");
+    dialog.set_extra_child(Some(&scroll));
     dialog.add_responses(&[("cancel", "Cancel"), ("export", "Choose file…")]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("export"));
@@ -322,6 +403,22 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             _ => ExportBackground::Preserve,
         },
         jpeg_quality: quality.value() as u8,
+        encoding: OutputEncoding {
+            conversion: ConversionOptions {
+                intent: match intent.selected() {
+                    1 => RenderingIntent::Perceptual,
+                    2 => RenderingIntent::Saturation,
+                    3 => RenderingIntent::AbsoluteColorimetric,
+                    _ => RenderingIntent::RelativeColorimetric,
+                },
+                black_point_compensation: bpc.is_active() && intent.selected() != 3,
+            },
+            dither: if depth.selected() == 0 && dither.is_active() {
+                OutputDither::Stochastic8
+            } else {
+                OutputDither::None
+            },
+        },
     };
     Some(recipe)
 }
