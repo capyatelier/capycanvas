@@ -331,6 +331,11 @@ impl WgpuRasterizer {
         startup.transform = transform;
         if !startup.others_queued {
             startup.masks.remaining(&startup.compiler);
+            if self.device.working_format() == wgpu::TextureFormat::Rgba32Float {
+                let mip = self.canvas_preview.mip_pipelines
+                    .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+                startup.compiler.pipeline(&mip.reduce, OTHER);
+            }
             for p in self
                 .pipelines
                 .direct

@@ -1,11 +1,13 @@
-//! Navigator samples the existing document composition, never rebuilds a scene.
-//! One persistent small GPU target/map buffer; unchanged cameras cost no GPU work.
+//! Navigator samples derived display pixels, never rebuilds a scene. Native
+//! Float32 tiles reduce into a bounded coarse image before preview sampling.
 use super::*;
 use layer_render::CanvasPreview;
 use thumbnails::UiImageTarget;
 
 pub(super) struct CanvasOverview {
     target: Option<UiImageTarget>,
+    mips: Option<display_mips::Image>,
+    pub(super) mip_pipelines: Option<display_mips::Pipelines>,
     pipeline: Option<wgpu::RenderPipeline>,
     tx: mpsc::Sender<Result<CanvasPreview, GpuRasterError>>,
     rx: mpsc::Receiver<Result<CanvasPreview, GpuRasterError>>,
@@ -14,11 +16,17 @@ pub(super) struct CanvasOverview {
 impl CanvasOverview {
     pub fn storage_bytes(&self) -> u64 {
         self.target.as_ref().map_or(0, UiImageTarget::storage_bytes)
+            + self
+                .mips
+                .as_ref()
+                .map_or(0, display_mips::Image::storage_bytes)
     }
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             target: None,
+            mips: None,
+            mip_pipelines: None,
             pipeline: None,
             tx,
             rx,
@@ -48,7 +56,7 @@ impl WgpuRasterizer {
             return Ok(false);
         }
         let revision = self.composite_revision;
-        let Some(source) = &self.composite_bind_group else {
+        let Some(mut source) = self.composite_bind_group.clone() else {
             return Ok(false);
         };
         if known_revision == Some(revision) {
@@ -58,6 +66,21 @@ impl WgpuRasterizer {
             }));
         } else {
             let [width, height] = self.document_extent;
+            let native = self.device.working_format() == wgpu::TextureFormat::Rgba32Float;
+            if native {
+                let pipelines = self
+                    .canvas_preview
+                    .mip_pipelines
+                    .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+                if let Some(startup) = &self.startup {
+                    startup.compiler.check()?;
+                    startup.compiler.pipeline(&pipelines.reduce, startup::OTHER);
+                    startup.compiler.start();
+                    if !pipelines.reduce.ready() {
+                        return Ok(false);
+                    }
+                }
+            }
             let scale = 256.0 / width.max(height).max(1) as f32;
             let size = [width, height].map(|n| (n as f32 * scale).round().max(1.0) as u32);
             if self
@@ -68,49 +91,97 @@ impl WgpuRasterizer {
             {
                 self.canvas_preview.target = Some(UiImageTarget::new(&self.device, size));
             }
-            let pipeline = self.canvas_preview.pipeline.get_or_insert_with(|| {
-                let shader = self
-                    .device
-                    .create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("Navigator downsample"),
-                        source: wgpu::ShaderSource::Wgsl(
-                            format!(
-                                "{}\n{}\n{}",
-                                view_color::shader(
-                                    self.device.working_space(),
-                                    layer_core::color::RgbSpace::Srgb
-                                ),
-                                include_str!("overview_sample.wgsl"),
-                                include_str!("canvas_preview.wgsl")
-                            )
-                            .into(),
-                        ),
-                    });
-                let layout = self
-                    .device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("Navigator pipeline layout"),
-                        bind_group_layouts: &[Some(&self.texture_layout)],
-                        immediate_size: 0,
-                    });
-                fullscreen_pipeline(
-                    &self.device,
-                    &layout,
-                    &shader,
-                    "fragment_main",
-                    None,
-                    EXPORT_FORMAT,
-                    "Navigator downsample",
-                )
-            });
-            let target = self.canvas_preview.target.as_ref().unwrap();
+            let pipeline = self
+                .canvas_preview
+                .pipeline
+                .get_or_insert_with(|| {
+                    let shader = self
+                        .device
+                        .create_shader_module(wgpu::ShaderModuleDescriptor {
+                            label: Some("Navigator downsample"),
+                            source: wgpu::ShaderSource::Wgsl(
+                                format!(
+                                    "{}\n{}\n{}",
+                                    view_color::shader(
+                                        self.device.working_space(),
+                                        layer_core::color::RgbSpace::Srgb
+                                    ),
+                                    include_str!("overview_sample.wgsl"),
+                                    if native {
+                                        include_str!("canvas_preview_native.wgsl")
+                                    } else {
+                                        include_str!("canvas_preview.wgsl")
+                                    }
+                                )
+                                .into(),
+                            ),
+                        });
+                    let layout =
+                        self.device
+                            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                                label: Some("Navigator pipeline layout"),
+                                bind_group_layouts: &[Some(if native {
+                                    &self
+                                        .canvas_preview
+                                        .mip_pipelines
+                                        .as_ref()
+                                        .unwrap()
+                                        .image_layout
+                                } else {
+                                    &self.texture_layout
+                                })],
+                                immediate_size: 0,
+                            });
+                    fullscreen_pipeline(
+                        &self.device,
+                        &layout,
+                        &shader,
+                        "fragment_main",
+                        None,
+                        EXPORT_FORMAT,
+                        "Navigator downsample",
+                    )
+                })
+                .clone();
             let mut encoder = crate::submission::CommandEncoder::new(
                 &self.device,
                 &wgpu::CommandEncoderDescriptor {
                     label: Some("Navigator preview"),
                 },
             );
-            target.encode(&mut encoder, pipeline, source);
+            if native {
+                let plan = display_mips::Plan::new(self.document_extent)?;
+                let mut image = self
+                    .canvas_preview
+                    .mips
+                    .take()
+                    .filter(|image| image.plan == plan)
+                    .unwrap_or_else(|| {
+                        display_mips::Image::new(
+                            self,
+                            self.canvas_preview.mip_pipelines.as_ref().unwrap(),
+                            plan,
+                        )
+                    });
+                let result = (|| {
+                    for coordinate in page_coordinates(PixelRect::full(self.document_extent)) {
+                        image.write_tile(
+                            &self.device,
+                            self.canvas_preview.mip_pipelines.as_ref().unwrap(),
+                            &mut encoder,
+                            self.composite_texture.as_ref().unwrap(),
+                            coordinate.map(|v| v * PAGE_SIZE),
+                            coordinate,
+                        )?;
+                    }
+                    Ok::<_, GpuRasterError>(())
+                })();
+                source = image.binding.clone();
+                self.canvas_preview.mips = Some(image);
+                result?;
+            }
+            let target = self.canvas_preview.target.as_ref().unwrap();
+            target.encode(&mut encoder, &pipeline, &source);
             encoder.submit(&self.queue);
             let tx = self.canvas_preview.tx.clone();
             target.map(revision, move |image| {

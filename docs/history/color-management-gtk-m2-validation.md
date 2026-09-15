@@ -3757,3 +3757,98 @@ residency and source mips remain next, alongside active-edit bounds and complete
 GTK color/photo controls and managed viewing. No benchmarking or performance
 optimization ran in this stage; other platform hosts remain unintegrated and
 require approval after GTK qualification.
+
+
+## Bounded display mip reduction and native preview (2026-09-14)
+
+Parent: `8c07eef2`. A completed Float32 composition tile can now be reduced into
+an independent coarse display image through a reusable 256×256 mip chain. The
+coarse image has at most 512 pixels on either side. The planner retains document
+dimensions separately and selects a power-of-two footprint; coarse pixels plus
+all scratch mip levels total less than 6 MiB for the supported plans. This is an
+allocation bound for this component, not a measured total-process memory result.
+
+Each reduction pass loads four premultiplied working-color samples and weights
+them by their actual original-pixel coverage. Partial right/bottom footprints
+exclude stale padding. Float32 storage preserves negative and out-of-gamut working
+coordinates; this stage introduces no Float16 narrowing. The single-level views
+read the previous mip and write the next, consistent with the pinned wgpu 30.0.1
+subresource definitions and the [WGSL unfiltered texel-load contract](https://www.w3.org/TR/WGSL/#textureLoad).
+Queued tiles reuse immutable per-edge-size uniform records. A tile update changes
+only its derived footprint, leaving neighboring coarse pixels untouched.
+
+The native Float32 `CanvasPreview` readback API is the first consumer. It weights
+coarse-cell overlap using the original document geometry before color conversion,
+so an incomplete edge does not stretch the image. A one-bright-column-per-four
+stripe pattern retains its quarter coverage; fixed sparse sampling can alias
+that pattern away. Alpha is averaged with premultiplied color, then the existing
+straight-alpha/sRGB output boundary is applied. Reusing a known revision returns
+no new image. The mip pipeline uses the background compiler; a request arriving
+while it is unavailable remains retryable and allocates no preview pixels.
+
+The reducer is ready to consume individual completed scene tiles. **The live
+full-document composite has not yet been replaced.** This first API integration
+currently copies tiles from that composite and rebuilds the coarse image when a
+new preview is requested. GTK's in-surface Navigator/viewport still use their
+existing presenter; they have not yet been connected to this cache. Direct
+incremental scene output, detailed visible-tile residency, presentation and source
+mips remain the next work. No native color mode is enabled by this change.
+
+Four new correctness checks cover:
+
+- Allocation-only plans for 24/45/60 MP, a 32768-pixel strip, partial edges and a
+  one-pixel document; invalid/oversized plans fail before allocation.
+- Complete queued tile reductions against independent Float64 area sums on
+  257×3, 513×273, 2051×1027 and 4097×1 inputs, including alpha, negative color,
+  seams, partial footprints, stale padding and local updates. The absolute
+  Float32 error ceiling is 3e-7; unchanged source pixels and neighboring cached
+  pixels compare exactly. At most four sets of edge-size records are retained.
+- Native preview stripes, partial-alpha output, unchanged artwork and known-
+  revision reuse. A second fixture compares every output channel with an
+  original-coordinate Float64 box integral, allowing one 8-bit output code.
+  The first test draft used eight-pixel cells although its 4101-pixel width
+  selects sixteen-pixel cells. The retained failure (`display-mips-gpu.log`)
+  exposed that incorrect fixture assumption; the corrected independent fixture
+  uses sixteen-pixel cells without changing the rendering tolerance.
+- A deliberately blocked compiler, no preview allocation while blocked, and
+  successful request retry/readback after release. This is lifecycle correctness,
+  not a startup latency measurement.
+
+On the same Linux/Vulkan RTX PRO 6000 reference system and 610.57.04 driver:
+
+| Check | Result | Log under `artifacts/color-m2/` |
+| --- | --- | --- |
+| Four new mip/preview/planning checks | 4 pass, 13.22 s | `display-mips-final.log` |
+| Document/view color, export, samples and preview alpha | 4 pass, 53.00 s | `display-mips-view.log` |
+| In-surface overview, retained-source overview and presenter resources | 7 pass, 26.84 s | `display-mips-overview-checked.log` |
+| GPU startup, filters, regions and transforms | 5 pass, 9.46 s | `display-mips-startup-checked.log` |
+
+The final tests use `display-mips-final-gpu-tests`, mapped by
+`display-mips-final-build.{json,log}`. The view-color row uses
+`display-mips-corrected-gpu-tests`; the only subsequent production change starts
+the already-enqueued background compiler from the preview request, covered by
+the final blocked-compiler test. Early filters named `overview_tests` and
+`startup::tests` selected zero and one CPU test respectively; their logs are
+retained but are not counted as GPU qualification. The corrected filters and
+counts above are verified against the executable's test list.
+
+Reproduce with the existing local JPEG dependency setup:
+
+```sh
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo test -p layer-render-wgpu -p layer-linux --offline --no-run --message-format=json
+ABSOLUTE_GPU_TEST_BINARY display_mips::tests --test-threads=1 --nocapture
+ABSOLUTE_GPU_TEST_BINARY tests::view_color --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY overview --test-threads=1 --skip latency --skip workloads
+ABSOLUTE_GPU_TEST_BINARY startup::gpu_tests --test-threads=1
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo check -p layer-linux --offline
+```
+
+Production GTK builds successfully (`display-mips-gtk-check.log`). Source,
+executable and evidence hashes are recorded in `display-mips-provenance.json`.
+No performance workloads, benchmark comparisons or optimizations ran here.
+Existing frame, total residency and latency gates remain open; correctness-suite
+durations above are not performance evidence. The full GTK color/photo controls,
+managed viewing and other platform gaps recorded earlier remain outstanding.
+Other platform host integration still requires approval after GTK qualification.

@@ -60,6 +60,7 @@ mod layer_masks;
 mod layer_tests;
 mod present;
 mod artwork;
+mod display_mips;
 mod region_requests;
 mod region_sources;
 mod scene;
