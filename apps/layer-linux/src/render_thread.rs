@@ -967,6 +967,7 @@ impl Worker {
             return Err("This GPU cannot sample and blend the SDR editing format".into());
         }
         let features = working_features
+            | layer_render_wgpu::native_tiles::native_in_place_features(&adapter)
             | (adapter.features()
                 & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE));
         #[cfg(test)]

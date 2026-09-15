@@ -950,3 +950,70 @@ successfully in its own process. This is a test-runner restriction, not a
 renderer recovery failure. Logs are `native-direct-gtk-recovery*` and
 `native-direct-gtk-wide-recovery*`; capture tests/builds use
 `native-direct-capture-*` and `native-direct-final-*`.
+
+## Quantize validated working pixels in place
+
+Native publication can now encode immutable integer outputs and write their
+canonical Float32 working values in the same compute invocation. The complete
+publication is still validated first. In-place shaders check the shared failure
+flag before any write; every invocation owns one color pixel or one scalar
+packed word. The transfer/quantization code is shared with the separate-candidate
+encoder. There is no change to alpha, clipping, working precision or the native
+storage contract.
+
+The pinned wgpu 30.0.1 [storage access documentation](https://docs.rs/wgpu/latest/wgpu/enum.StorageTextureAccess.html#variant.ReadWrite)
+and local `vendor/wgpu-types/src/texture.rs` require
+`TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` for read/write storage textures.
+The optional feature is requested only when both RGBA32Float and R32Float report
+storage read/write support. GTK and the headless native reference opt in; other
+host integrations are untouched. A device without the extension retains the
+same exact separate-candidate path. On a supporting device, NativeEdit allocates
+no canonical scratch and records no promotion pass, removing 20 MiB of fixed
+pixel storage. The copy path remains necessary for capability fallback and
+private-candidate primitive users; it is not a compatibility renderer.
+
+Twenty primitive tests pass (65.33 s; four separate benchmarks ignored), including
+both paths through all 160 color cases / 10,485,760 pixels each with zero
+native-code error. Coverage tests include every native code, rounding-neighbor
+values, odd packed edges, partial/empty regions and independent dispatch slots.
+Ten runtime tests pass (71.10 s): both paths agree for mixed planes, invalid late
+color/mask inputs preserve all working pixels, delayed captures preserve earlier
+versions, and save/undo/reopen/device replacement/loss continue to pass. Exact
+test SHA-256:
+`8389626b88a59a187dd1eaf899f8d88d51bde66efe8d7a55027e6c149f79c98d`.
+
+Four serial nine-repeat offscreen palette-knife/ProPhoto U16 arms use one staged
+executable pathname. Each arm has 1,278 moves and 36 pen-ups; no build or GPU test
+overlaps measurement.
+
+| Arm | Pen-up CPU p50 / p95 / p99 ms | Completed pen-up p50 / p95 / p99 ms | Completed move p99 ms | Move / pen-up misses |
+| --- | --- | --- | ---: | --- |
+| Before | 4.448 / 6.721 / 8.036 | 7.877 / 11.755 / 13.574 | 7.113 | 1 / 13 |
+| After | 3.670 / 5.784 / 8.460 | 6.778 / 10.342 / 13.168 | 7.282 | 0 / 9 |
+| Before repeat | 4.590 / 7.297 / 7.667 | 7.968 / 12.294 / 12.871 | 7.170 | 2 / 11 |
+| After repeat | 3.886 / 5.743 / 6.089 | 6.987 / 10.188 / 10.711 | 6.961 | 3 / 10 |
+
+Every individual stroke's completed median improves in both rounds. The largest
+third stroke changes 11.346 → 9.929 ms and 12.015 → 10.084 ms. CPU pen-up p99 is
+mixed in the initial pair, so median gains are not a claim that every tail passed.
+Move p99 changes remain inside the declared relative investigation thresholds.
+The absolute pen-up gate still fails. Capture allocated/reserved peak stays
+203.5 MiB and the narrower canvas metric stays 571 MiB; the removed 20 MiB of
+native scratch is accounted separately by renderer telemetry. All four exported
+PNG files have identical bytes, SHA-256
+`84984da09047d3aabe6a38a0b5c9622043c6302172307d58c19aa1c957af2722`.
+
+`run-native-inplace.py`, `analyze-native-inplace.py`, `native-inplace-source/` and
+`native-inplace-*` retain source contents/patch, exact executables, raw frames,
+hardware/power records, tests and commands. Exact release SHA-256:
+
+- Before: `a5adc15fe72264cd100dff0f9f2ca67959448b0bc25855e1c34b64a987ce396a`.
+- After: `2ad4572050fe2793f7e41c9a18262fed9b0154219538924e351cedc49faf97bf`.
+
+
+The release GTK portable paint/managed-sampling workflow passes in all four
+working spaces (18.89 s) with in-place capability enabled. Exact GTK test SHA-256:
+`8920efa768cc574896ff998ada55864c0961686825aa116c3f95ef50f8570f3c`.
+`native-inplace-gtk-*` records the build, source manifest and private-compositor
+workflow. This is correctness evidence; GTK input-to-present qualification still
+requires further scheduling work and is not implied by the offscreen gain.

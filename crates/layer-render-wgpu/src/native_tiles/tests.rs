@@ -175,12 +175,17 @@ fn assert_pixels(
 }
 
 #[test]
-fn native_writeback_codes_boundaries_and_partial_tiles() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let encoder = NativeTileEncoder::new(&r.device);
+fn native_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(false); }
+
+#[test]
+fn native_in_place_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(true); }
+
+fn writeback_corpus(in_place: bool) {
+    let r = if in_place { WgpuRasterizer::new_native_headless(Default::default()).unwrap() } else { WgpuRasterizer::new_headless().unwrap() };
+    let encoder = if in_place { NativeTileEncoder::validated_in_place(&r.device) } else { NativeTileEncoder::new(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
-    let canonical = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let canonical = if in_place { working.clone() } else { texture(&r, wgpu::TextureFormat::Rgba32Float) };
     let outputs = [
         texture(&r, format(IntegerDepth::U8)),
         texture(&r, format(IntegerDepth::U16)),
@@ -277,10 +282,7 @@ fn native_writeback_codes_boundaries_and_partial_tiles() {
                             0x3939
                         },
                     );
-                    assert!(
-                        page_bytes(&r, &working) == bytes,
-                        "writeback modified working source"
-                    );
+                    if !in_place { assert!(page_bytes(&r, &working) == bytes, "writeback modified working source"); }
                     let canonical_bytes = page_bytes(&r, &canonical);
                     for (i, encoded) in canonical_bytes.chunks_exact(16).enumerate() {
                         let x = i as u32 % 256;
@@ -325,7 +327,7 @@ fn native_writeback_codes_boundaries_and_partial_tiles() {
         }
     }
     eprintln!(
-        "NATIVE_WRITEBACK cases={cases} pixels={} max_code_error=0",
+        "NATIVE_WRITEBACK in_place={in_place} cases={cases} pixels={} max_code_error=0",
         cases * 65536
     );
 }

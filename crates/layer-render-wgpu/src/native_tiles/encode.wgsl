@@ -40,6 +40,7 @@ fn quantize(value:f32)->u32 {
 }
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
+    PUBLICATION_GUARD
     if any(invocation.xy>=settings.region.zw) {return;}
     let pixel=invocation.xy+settings.region.xy;
     let value=load_working(invocation.z,vec2<i32>(pixel));

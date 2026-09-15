@@ -91,12 +91,15 @@ fn code(bytes: &[u8], i: usize, depth: IntegerDepth) -> u32 {
 }
 
 #[test]
-fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let encoder = NativeScalarEncoder::with_device(&r.device);
+fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(false); }
+#[test]
+fn native_in_place_scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(true); }
+fn scalar_corpus(in_place: bool) {
+    let r = if in_place { WgpuRasterizer::new_native_headless(Default::default()).unwrap() } else { WgpuRasterizer::new_headless().unwrap() };
+    let encoder = if in_place { NativeScalarEncoder::validated_in_place(&r.device) } else { NativeScalarEncoder::with_device(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r);
-    let canonical = texture(&r);
+    let canonical = if in_place { working.clone() } else { texture(&r) };
     for depth in [IntegerDepth::U8, IntegerDepth::U16] {
         let encoded = buffer(&r, depth);
         let maximum = depth.maximum();
@@ -126,7 +129,8 @@ fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words
             ] {
                 r.queue
                     .write_buffer(&encoded, 0, &vec![0xa5; encoded.size() as usize]);
-                upload(&r, &canonical, &vec![-7.; 65536]);
+                upload(&r, &working, &values);
+                if !in_place { upload(&r, &canonical, &vec![-7.; 65536]); }
                 let request = NativeScalarRequest {
                     working: &working,
                     encoded: &encoded,
@@ -162,9 +166,7 @@ fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words
                         f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
                     let expected = if inside {
                         expected as f64 / maximum as f64
-                    } else {
-                        -7.
-                    };
+                    } else if in_place { f64::from(*value) } else { -7. };
                     assert!(
                         (actual as f64 - expected).abs() < 6e-8,
                         "canonical pixel {i}: {actual} vs {expected}"
@@ -428,12 +430,15 @@ fn scalar_native_restore_capture_cycles_preserve_codes_and_bound_uploads() {
 }
 
 #[test]
-fn scalar_dispatch_slots_preserve_odd_packed_edges_and_partial_tail() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let encoder = NativeScalarEncoder::new(&r.device);
+fn scalar_dispatch_slots_preserve_odd_packed_edges_and_partial_tail() { scalar_slots(false); }
+#[test]
+fn native_in_place_scalar_dispatch_slots_preserve_odd_packed_edges_and_partial_tail() { scalar_slots(true); }
+fn scalar_slots(in_place: bool) {
+    let r = if in_place { WgpuRasterizer::new_native_headless(Default::default()).unwrap() } else { WgpuRasterizer::new_headless().unwrap() };
+    let encoder = if in_place { NativeScalarEncoder::validated_in_place(&r.device) } else { NativeScalarEncoder::new(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working: Vec<_> = (0..3).map(|_| texture(&r)).collect();
-    let canonical: Vec<_> = (0..3).map(|_| texture(&r)).collect();
+    let canonical: Vec<_> = if in_place { working.clone() } else { (0..3).map(|_| texture(&r)).collect() };
     let values: Vec<Vec<f32>> = (0..3).map(|slot| (0..65536u32).map(|i| {
         ((i.wrapping_mul(113) + slot * 17) & 65535) as f32 / 65535.
     }).collect()).collect();
@@ -443,7 +448,7 @@ fn scalar_dispatch_slots_preserve_odd_packed_edges_and_partial_tail() {
         for region in [[0, 0, 256, 256], [1, 3, 253, 251]] {
             for i in 0..3 {
                 upload(&r, &working[i], &values[i]);
-                upload(&r, &canonical[i], &vec![-7.; 65536]);
+                if !in_place { upload(&r, &canonical[i], &vec![-7.; 65536]); }
                 r.queue.write_buffer(&encoded[i], 0, &seed);
             }
             let requests: Vec<_> = (0..3).map(|i| NativeScalarRequest {
@@ -461,7 +466,7 @@ fn scalar_dispatch_slots_preserve_odd_packed_edges_and_partial_tail() {
                         else if depth == IntegerDepth::U8 { 0x39 } else { 0x3939 };
                     assert_eq!(code(&bytes, i, depth), expected, "slot {slot} pixel {i}");
                     let actual = f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
-                    let expected = if inside { f64::from(expected) / f64::from(depth.maximum()) } else { -7. };
+                    let expected = if inside { f64::from(expected) / f64::from(depth.maximum()) } else if in_place { f64::from(*value) } else { -7. };
                     assert!((f64::from(actual) - expected).abs() < 6e-8, "canonical slot {slot} pixel {i}");
                 }
             }

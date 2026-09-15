@@ -2,15 +2,34 @@ use super::*;
 
 #[test]
 fn color_dispatch_slots_and_partial_tail_match_native_reference() {
-    let r = WgpuRasterizer::new_headless().unwrap();
-    let encoder = NativeTileEncoder::new(&r.device);
+    slots(false);
+}
+#[test]
+fn native_in_place_color_dispatch_slots_and_partial_tail_match_native_reference() {
+    slots(true);
+}
+fn slots(in_place: bool) {
+    let r = if in_place {
+        WgpuRasterizer::new_native_headless(Default::default()).unwrap()
+    } else {
+        WgpuRasterizer::new_headless().unwrap()
+    };
+    let encoder = if in_place {
+        NativeTileEncoder::validated_in_place(&r.device)
+    } else {
+        NativeTileEncoder::new(&r.device)
+    };
     let status = NativeEncodeStatus::new(&r.device);
     let working: Vec<_> = (0..3)
         .map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float))
         .collect();
-    let canonical: Vec<_> = (0..3)
-        .map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float))
-        .collect();
+    let canonical: Vec<_> = if in_place {
+        working.clone()
+    } else {
+        (0..3)
+            .map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float))
+            .collect()
+    };
     for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
         let transfer = NativeTransfer::new(&r.device, space).unwrap();
         for depth in [IntegerDepth::U8, IntegerDepth::U16] {
@@ -93,10 +112,12 @@ fn color_dispatch_slots_and_partial_tail_match_native_reference() {
                                 },
                             );
                             let canonical_bytes = page_bytes(&r, &canonical[i]);
-                            assert!(
-                                page_bytes(&r, &working[i]) == originals[i],
-                                "source changed at slot {i}"
-                            );
+                            if !in_place {
+                                assert!(
+                                    page_bytes(&r, &working[i]) == originals[i],
+                                    "source changed at slot {i}"
+                                );
+                            }
                             if grouped {
                                 together.push((bytes, canonical_bytes));
                             } else {

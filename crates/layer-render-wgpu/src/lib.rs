@@ -895,7 +895,8 @@ impl WgpuRasterizer {
                 label: Some("layer canvas device"),
                 required_features: (adapter.features()
                     & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE))
-                    | working_features,
+                    | working_features
+                    | if format == wgpu::TextureFormat::Rgba32Float { native_tiles::native_in_place_features(&adapter) } else { wgpu::Features::empty() },
                 required_limits: limits,
                 ..Default::default()
             })

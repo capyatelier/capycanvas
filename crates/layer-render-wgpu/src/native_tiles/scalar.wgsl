@@ -21,6 +21,7 @@ fn store_canonical(tile:u32,pixel:vec2<u32>,value:vec4<f32>) {
 // read/modify/write race with their neighboring pixels.
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
+    PUBLICATION_GUARD
     let first=settings.region.x/settings.components;
     let end=(settings.region.x+settings.region.z+settings.components-1u)/settings.components;
     let word_x=first+invocation.x;

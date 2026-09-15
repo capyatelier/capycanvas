@@ -679,3 +679,24 @@ fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
     replacement.submit(packet(&checkpoint, true)).unwrap();
     assert_eq!(backing(&checkpoint[0].raster), expected);
 }
+
+#[test]
+fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
+    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        let color = DocumentColor { space: RgbSpace::ProPhoto, depth };
+        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+        assert!(r.native_edit.as_ref().unwrap().promoter.is_none(), "in-place feature must be active for this comparison");
+        let mut layers = restored_fixture(&mut r);
+        let expected = backing(&layers[0].raster);
+        let mask_expected = backing(&layers[0].mask.as_ref().unwrap().raster);
+        for in_place in [false, true] {
+            let transfer = r.prepare_native_transfer(color.space).unwrap();
+            r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
+            mark_changed(&mut r, &mut layers);
+            while !r.raster_ready() { std::thread::yield_now(); }
+            r.submit(packet(&layers, false)).unwrap();
+            assert_eq!(backing(&layers[0].raster), expected);
+            assert_eq!(backing(&layers[0].mask.as_ref().unwrap().raster), mask_expected);
+        }
+    }
+}

@@ -144,6 +144,7 @@ impl NativeScalarBatch {
     }
 }
 pub struct NativeScalarEncoder {
+    in_place: bool,
     layouts: Vec<wgpu::BindGroupLayout>,
     pipelines: Vec<wgpu::ComputePipeline>,
     tiles_per_dispatch: usize,
@@ -156,6 +157,20 @@ impl NativeScalarEncoder {
         Self::with_device(&device.clone().into())
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
+        Self::with_mode(device, false)
+    }
+    /// The caller must first scan the complete publication with the same status.
+    /// Each invocation then owns every pixel of one complete packed native word.
+    pub(crate) fn validated_in_place(device: &PipelineDevice) -> Self {
+        assert!(
+            device
+                .features()
+                .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+        );
+        Self::with_mode(device, true)
+    }
+    fn with_mode(device: &PipelineDevice, in_place: bool) -> Self {
+        let bindings = if in_place { 2 } else { 3 };
         let tiles_per_dispatch = 2usize
             .min(device.limits().max_sampled_textures_per_shader_stage as usize)
             .min(device.limits().max_storage_textures_per_shader_stage as usize)
@@ -176,27 +191,45 @@ impl NativeScalarEncoder {
             let mut store_words = String::new();
             let mut stores = String::new();
             for i in 0..count as u32 {
-                entries.extend([
-                    super::sampled_entry(i * 3),
-                    buffer_entry(
-                        i * 3 + 1,
-                        wgpu::BufferBindingType::Storage { read_only: false },
-                        false,
-                        65536,
-                    ),
-                    super::storage_texture_entry(i * 3 + 2, wgpu::TextureFormat::R32Float),
-                ]);
-                textures.push_str(&format!("@group(0) @binding({}) var working{i}:texture_2d<f32>;\n@group(0) @binding({}) var<storage,read_write> encoded{i}:array<u32>;\n@group(0) @binding({}) var canonical{i}:texture_storage_2d<r32float,write>;\n", i * 3, i * 3 + 1, i * 3 + 2));
-                loads.push_str(&format!(
-                    "case {i}u: {{ return textureLoad(working{i},pixel,0).r; }}\n"
+                let base = i * bindings;
+                if in_place {
+                    entries.push(super::read_write_texture_entry(
+                        base,
+                        wgpu::TextureFormat::R32Float,
+                    ));
+                    textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_storage_2d<r32float,read_write>;\n"));
+                    loads.push_str(&format!(
+                        "case {i}u: {{ return textureLoad(working{i},pixel).r; }}\n"
+                    ));
+                } else {
+                    entries.push(super::sampled_entry(base));
+                    entries.push(super::storage_texture_entry(
+                        base + 2,
+                        wgpu::TextureFormat::R32Float,
+                    ));
+                    textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_2d<f32>;\n@group(0) @binding({}) var canonical{i}:texture_storage_2d<r32float,write>;\n", base + 2));
+                    loads.push_str(&format!(
+                        "case {i}u: {{ return textureLoad(working{i},pixel,0).r; }}\n"
+                    ));
+                }
+                entries.push(buffer_entry(
+                    base + 1,
+                    wgpu::BufferBindingType::Storage { read_only: false },
+                    false,
+                    65536,
+                ));
+                textures.push_str(&format!(
+                    "@group(0) @binding({}) var<storage,read_write> encoded{i}:array<u32>;\n",
+                    base + 1
                 ));
                 load_words.push_str(&format!("case {i}u: {{ return encoded{i}[address]; }}\n"));
                 store_words.push_str(&format!("case {i}u: {{ encoded{i}[address]=word; }}\n"));
+                let destination = if in_place { "working" } else { "canonical" };
                 stores.push_str(&format!(
-                    "case {i}u: {{ textureStore(canonical{i},pixel,value); }}\n"
+                    "case {i}u: {{ textureStore({destination}{i},pixel,value); }}\n"
                 ));
             }
-            let shared = count as u32 * 3;
+            let shared = count as u32 * bindings;
             entries.extend([
                 buffer_entry(shared, wgpu::BufferBindingType::Uniform, true, 32),
                 buffer_entry(
@@ -211,6 +244,14 @@ impl NativeScalarEncoder {
                 entries: &entries,
             });
             let body = include_str!("scalar.wgsl")
+                .replace(
+                    "PUBLICATION_GUARD",
+                    if in_place {
+                        "if atomicLoad(&status.invalid)!=0u {return;}"
+                    } else {
+                        ""
+                    },
+                )
                 .replace("TEXTURES", &textures)
                 .replace("LOAD_WORDS", &load_words)
                 .replace("STORE_WORDS", &store_words)
@@ -259,6 +300,7 @@ impl NativeScalarEncoder {
         });
         let (full_parameters, parameter_stride) = super::full_parameters(device, &records);
         Self {
+            in_place,
             layouts,
             pipelines,
             tiles_per_dispatch,
@@ -290,7 +332,7 @@ impl NativeScalarEncoder {
             ));
         }
         for (i, r) in requests.iter().enumerate() {
-            validate(r)?;
+            validate(r, self.in_place)?;
             if requests[..i].iter().any(|old| {
                 old.encoded == r.encoded
                     || old.canonical == r.canonical
@@ -356,6 +398,7 @@ impl NativeScalarEncoder {
                 .iter()
                 .map(|r| [views.get(r.working), views.get(r.canonical)])
                 .collect();
+            let bindings = if self.in_place { 2 } else { 3 };
             let mut entries = Vec::new();
             for (i, (request, views)) in requests[first..first + count]
                 .iter()
@@ -364,20 +407,22 @@ impl NativeScalarEncoder {
             {
                 entries.extend([
                     wgpu::BindGroupEntry {
-                        binding: i as u32 * 3,
+                        binding: i as u32 * bindings,
                         resource: wgpu::BindingResource::TextureView(&views[0]),
                     },
                     wgpu::BindGroupEntry {
-                        binding: i as u32 * 3 + 1,
+                        binding: i as u32 * bindings + 1,
                         resource: request.encoded.as_entire_binding(),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: i as u32 * 3 + 2,
-                        resource: wgpu::BindingResource::TextureView(&views[1]),
-                    },
                 ]);
+                if !self.in_place {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: i as u32 * bindings + 2,
+                        resource: wgpu::BindingResource::TextureView(&views[1]),
+                    });
+                }
             }
-            let shared = count as u32 * 3;
+            let shared = count as u32 * bindings;
             entries.extend([
                 wgpu::BindGroupEntry {
                     binding: shared,
@@ -438,14 +483,15 @@ impl NativeScalarEncoder {
         }
     }
 }
-fn validate(r: &NativeScalarRequest<'_>) -> Result<(), GpuRasterError> {
+fn validate(r: &NativeScalarRequest<'_>, in_place: bool) -> Result<(), GpuRasterError> {
     if !scalar_dimensions(r.working)
         || !scalar_dimensions(r.canonical)
-        || r.working == r.canonical
-        || !r
-            .working
-            .usage()
-            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
+        || (r.working == r.canonical) != in_place
+        || !r.working.usage().contains(if in_place {
+            wgpu::TextureUsages::STORAGE_BINDING
+        } else {
+            wgpu::TextureUsages::TEXTURE_BINDING
+        })
         || !r
             .canonical
             .usage()

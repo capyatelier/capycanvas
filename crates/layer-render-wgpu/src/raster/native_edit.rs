@@ -1,6 +1,7 @@
 //! Native commit ownership for the Float32 renderer. Each frame validates every
-//! changed page, then quantizes into immutable native outputs and promotes
-//! through fixed Float32 scratch. Readback follows canvas presentation.
+//! changed page, then quantizes into immutable native outputs and canonical
+//! Float32 working pixels. Optional in-place storage avoids candidate scratch;
+//! other devices promote through bounded scratch. Readback follows presentation.
 use super::*;
 use crate::native_tiles::{
     MAX_BATCH_TILES, NativeTileEncoder, NativeTileRequest, NativeTransfer,
@@ -22,13 +23,21 @@ pub(crate) struct NativeEdit {
     transfer: NativeTransfer,
     color: NativeTileEncoder,
     scalar: NativeScalarEncoder,
-    promoter: NativePromoter,
+    promoter: Option<NativePromoter>,
     validator: validate::Validator,
     colors: Vec<wgpu::Texture>,
     scalars: Vec<wgpu::Texture>,
 }
 impl NativeEdit {
     fn new(r: &WgpuRasterizer, transfer: NativeTransfer) -> Self {
+        let in_place = !crate::native_tiles::native_in_place_features(&r.adapter).is_empty()
+            && r.device
+                .features()
+                .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        Self::with_mode(r, transfer, in_place)
+    }
+    fn with_mode(r: &WgpuRasterizer, transfer: NativeTransfer, in_place: bool) -> Self {
+        let scratch_count = if in_place { 0 } else { MAX_BATCH_TILES };
         let texture = |format| {
             r.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bounded native commit scratch"),
@@ -47,10 +56,10 @@ impl NativeEdit {
                 view_formats: &[],
             })
         };
-        let colors = (0..MAX_BATCH_TILES)
+        let colors = (0..scratch_count)
             .map(|_| texture(wgpu::TextureFormat::Rgba32Float))
             .collect();
-        let scalars = (0..MAX_BATCH_TILES)
+        let scalars = (0..scratch_count)
             .map(|_| texture(wgpu::TextureFormat::R32Float))
             .collect();
         Self {
@@ -62,14 +71,24 @@ impl NativeEdit {
             transfer,
             colors,
             scalars,
-            color: NativeTileEncoder::with_device(&r.device),
-            scalar: NativeScalarEncoder::with_device(&r.device),
-            promoter: NativePromoter::with_device(&r.device),
+            color: if in_place {
+                NativeTileEncoder::validated_in_place(&r.device)
+            } else {
+                NativeTileEncoder::with_device(&r.device)
+            },
+            scalar: if in_place {
+                NativeScalarEncoder::validated_in_place(&r.device)
+            } else {
+                NativeScalarEncoder::with_device(&r.device)
+            },
+            promoter: (!in_place).then(|| NativePromoter::with_device(&r.device)),
             validator: validate::Validator::new(&r.device),
         }
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.promoter.storage_bytes()
+        self.promoter
+            .as_ref()
+            .map_or(0, NativePromoter::storage_bytes)
             + self.color.storage_bytes()
             + self.scalar.storage_bytes()
             + self.colors.iter().map(texture_bytes).sum::<u64>()
@@ -241,8 +260,9 @@ impl WgpuRasterizer {
         native
             .validator
             .encode(self, encoder, &inputs, status, &mut views)?;
-        // Every input is validated before any promotion. Only canonical Float32
-        // scratch is reused; encoded samples belong to this publication.
+        // Every input is validated before any working write. On supporting
+        // devices, quantization writes back in place; otherwise only canonical
+        // Float32 scratch is reused. Encoded samples belong to this publication.
         for chunk in inputs.chunks(MAX_BATCH_TILES) {
             let first = capture.outputs.len();
             capture.outputs.extend(chunk.iter().map(|(_, tile)| {
@@ -258,7 +278,7 @@ impl WgpuRasterizer {
             let mut promotions = Vec::new();
             for ((texture, tile), output) in chunk.iter().zip(&capture.outputs[first..]) {
                 let canonical = if tile.descriptor().channels == 4 {
-                    let canonical = &native.colors[color.len()];
+                    let canonical = native.colors.get(color.len()).unwrap_or(texture);
                     let pool::Resource::Texture(encoded) = &output.resource else {
                         unreachable!()
                     };
@@ -273,7 +293,7 @@ impl WgpuRasterizer {
                     });
                     canonical
                 } else {
-                    let canonical = &native.scalars[scalar.len()];
+                    let canonical = native.scalars.get(scalar.len()).unwrap_or(texture);
                     let pool::Resource::Buffer(encoded) = &output.resource else {
                         unreachable!()
                     };
@@ -300,19 +320,22 @@ impl WgpuRasterizer {
                 native
                     .scalar
                     .prepare_with_views(&self.device, &scalar, status, &mut views)?;
-            let promotions = native.promoter.prepare_with_views(
-                &self.device,
-                &promotions,
-                status,
-                &mut views,
-            )?;
+            let promotions = native
+                .promoter
+                .as_ref()
+                .map(|promoter| {
+                    promoter.prepare_with_views(&self.device, &promotions, status, &mut views)
+                })
+                .transpose()?;
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 native.color.encode(&mut pass, &color);
                 native.scalar.encode(&mut pass, &scalar);
             }
-            encoder.reserve_passes(promotions.pass_count());
-            native.promoter.encode(encoder, &promotions);
+            if let (Some(promoter), Some(promotions)) = (&native.promoter, promotions) {
+                encoder.reserve_passes(promotions.pass_count());
+                promoter.encode(encoder, &promotions);
+            }
         }
         Ok(Some(frame))
     }
