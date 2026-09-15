@@ -24,6 +24,8 @@ use std::{collections::VecDeque, fmt};
 
 #[path = "corrections.rs"]
 mod corrections;
+#[path = "color_transition.rs"]
+mod color_transition;
 
 const TRANSFORM_HISTORY: usize = 16;
 const INPUT_BATCH: usize = 4096;
@@ -361,6 +363,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.allocate_stroke_id()
     }
     pub fn preview_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.require_renderer_color(edit.resulting_color(self.document().color))?;
         let image = edit.changes_image();
         self.editor.preview(edit)?;
         self.composite_all |= image;
@@ -675,7 +678,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn require_renderer_color(&self, color: layer_core::color::DocumentColor) -> Result<(), DocumentError> {
-        if self.backend.document_color() != color {
+        if color != self.document().color || self.backend.document_color() != color {
             return Err(DocumentError::InvalidLayerOperation(
                 "Prepare the matching renderer before applying document color or its history",
             ));
@@ -1961,6 +1964,10 @@ impl<E: fmt::Display> fmt::Display for EngineError<E> {
 
 impl<E: std::error::Error + 'static> std::error::Error for EngineError<E> {}
 
+impl<E> From<DocumentError> for EngineError<E> {
+    fn from(error: DocumentError) -> Self { Self::Document(error) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1971,6 +1978,9 @@ mod tests {
     #[derive(Default)]
     struct RecordingRenderer {
         color: layer_core::color::DocumentColor,
+        prepared_color: Option<layer_core::color::DocumentColor>,
+        fail_color_adoption: bool,
+        color_adoptions: usize,
         capture_blocked: bool,
         restore_blocked: bool,
         time_seconds: f32,
@@ -1990,6 +2000,14 @@ mod tests {
         type Error = BackendError;
         fn document_color(&self) -> layer_core::color::DocumentColor {
             self.color
+        }
+        fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
+            self.color_adoptions += 1;
+            if self.fail_color_adoption { return Err(BackendError("color adoption failed")); }
+            if self.prepared_color != Some(color) { return Ok(false); }
+            self.color = color;
+            self.prepared_color = None;
+            Ok(true)
         }
         fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
             !self.restore_blocked
@@ -3072,6 +3090,7 @@ mod tests {
         input.push(event(1, PenPhase::Down, 8.)).unwrap();
         input.push(event(2, PenPhase::Up, 24.)).unwrap();
         for edit in [edit.clone(), Edit::Batch(vec![edit.clone()])] {
+            assert!(engine.preview_edit(edit.clone()).unwrap_err().to_string().contains("matching renderer"));
             assert!(engine.apply_edit(edit).unwrap_err().to_string().contains("matching renderer"));
             assert_eq!(engine.document(), &original);
             assert_eq!(engine.checkpoint(), 0);
@@ -3094,6 +3113,109 @@ mod tests {
         assert_eq!(engine.metrics().input_events, 0);
         engine.render_frame().unwrap();
         assert_eq!(engine.metrics().input_events, 2);
+    }
+
+    #[test]
+    fn prepared_color_and_history_publish_together_and_reject_failure_or_staleness() {
+        use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbSpace}};
+        let (_, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(), Document::new("atomic color", 64, 64),
+            consumer, view(64, 64), ViewTransform::IDENTITY,
+        ).unwrap();
+        engine.render_frame().unwrap();
+        let original = engine.document().clone();
+        let old_brush = engine.brush().clone();
+        let target = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+        let prepare = |engine: &CanvasEngine<RecordingRenderer>| engine.prepare_color_transition(ColorTransition::Apply {
+            color: target, layers: engine.document().layers.clone(),
+        }).unwrap();
+        for fail in [false, true] {
+            let prepared = prepare(&engine);
+            engine.backend.fail_color_adoption = fail;
+            let error = engine.commit_color_transition(prepared).unwrap_err();
+            assert_eq!(matches!(error, EngineError::Backend(_)), fail);
+            assert_eq!(engine.document(), &original);
+            assert_eq!(engine.checkpoint(), 0);
+            assert!(!engine.can_undo());
+            assert_eq!(engine.backend.color, original.color);
+            assert_eq!(engine.brush(), &old_brush);
+        }
+        engine.backend.fail_color_adoption = false;
+        let stale = prepare(&engine);
+        engine.set_layer_opacity(original.active_layer, 0.5).unwrap();
+        let changed = engine.document().clone();
+        let adoptions = engine.backend.color_adoptions;
+        engine.backend.prepared_color = Some(target);
+        assert!(engine.commit_color_transition(stale).unwrap_err().to_string().contains("changed during"));
+        assert_eq!(engine.document(), &changed);
+        assert_eq!(engine.backend.color_adoptions, adoptions);
+        assert_eq!(engine.backend.color, original.color);
+        let before_color_checkpoint = engine.checkpoint();
+        let prepared = prepare(&engine);
+        let expected = prepared.document().clone();
+        engine.commit_color_transition(prepared).unwrap();
+        assert_eq!(engine.document(), &expected);
+        assert_eq!(engine.backend.color, target);
+        let after_color_checkpoint = engine.checkpoint();
+        assert_eq!(engine.history_color(false), original.color);
+        engine.render_frame().unwrap();
+        assert!(engine.backend.saw_reset);
+        for _ in 0..3 {
+            let prepared = engine.prepare_color_transition(ColorTransition::Undo).unwrap();
+            engine.backend.prepared_color = Some(original.color);
+            engine.commit_color_transition(prepared).unwrap();
+            assert_eq!(engine.document().color, original.color);
+            assert_eq!(engine.backend.color, original.color);
+            assert_eq!(engine.document().layers, changed.layers);
+            assert_eq!(engine.checkpoint(), before_color_checkpoint);
+            let prepared = engine.prepare_color_transition(ColorTransition::Redo).unwrap();
+            engine.backend.prepared_color = Some(target);
+            engine.commit_color_transition(prepared).unwrap();
+            assert_eq!(engine.document().color, target);
+            assert_eq!(engine.backend.color, target);
+            assert_eq!(engine.document().layers, expected.layers);
+            assert_eq!(engine.checkpoint(), after_color_checkpoint);
+        }
+    }
+
+    #[test]
+    fn prepared_color_does_not_consume_queued_input_or_overflow_tool_coordinates() {
+        use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbSpace}};
+        let (mut input, consumer) = input_queue(8);
+        let mut document = Document::new("color input", 64, 64);
+        document.color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer { color: document.color, ..Default::default() }, document,
+            consumer, view(64, 64), ViewTransform::IDENTITY,
+        ).unwrap();
+        engine.render_frame().unwrap();
+        let target = DocumentColor::default();
+        let prepare = |engine: &CanvasEngine<RecordingRenderer>| engine.prepare_color_transition(ColorTransition::Apply {
+            color: target, layers: engine.document().layers.clone(),
+        }).unwrap();
+        let mut brush = engine.configured_brush().clone();
+        brush.color_rgba_linear = [f32::MAX, 0., 0., 1.];
+        engine.set_brush(brush).unwrap();
+        let prepared = prepare(&engine);
+        let before = engine.document().clone();
+        engine.backend.prepared_color = Some(target);
+        assert!(matches!(engine.commit_color_transition(prepared), Err(EngineError::Document(DocumentError::InvalidBrush(_)))));
+        assert_eq!(engine.document(), &before);
+        assert_eq!(engine.backend.color_adoptions, 0);
+        engine.set_brush(default_brush(DefaultBrushPreset::GPen)).unwrap();
+        let prepared = prepare(&engine);
+        input.push(event(1, PenPhase::Down, 8.)).unwrap();
+        assert!(engine.commit_color_transition(prepared).unwrap_err().to_string().contains("current canvas operation"));
+        assert_eq!(engine.document(), &before);
+        assert_eq!(engine.backend.color_adoptions, 0);
+        assert_eq!(engine.metrics().input_events, 0);
+        engine.render_frame().unwrap();
+        assert_eq!(engine.metrics().input_events, 1);
+        assert!(engine.has_active_stroke());
+        assert!(engine.prepare_color_transition(ColorTransition::Apply {
+            color: target, layers: engine.document().layers.clone(),
+        }).is_err());
     }
 
     #[test]

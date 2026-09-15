@@ -362,6 +362,13 @@ pub trait CanvasRenderer {
     fn document_color(&self) -> layer_core::color::DocumentColor {
         Default::default()
     }
+    /// Adopt an already prepared color configuration without blocking or
+    /// compiling. Return false if it is unavailable. False/error must leave the
+    /// live configuration intact; success sets document_color to this mode.
+    /// Host-specific asynchronous preparation owns the candidate resources.
+    fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
+        Ok(color == self.document_color())
+    }
     /// Expose source-backed documents only when the renderer can interpret and
     /// compose their retained samples. Unsupported hosts must reject adoption.
     fn supports_tiled_sources(&self) -> bool {

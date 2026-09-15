@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{Document, Editor, Layer, LayerKind, LayerMask, Point};
+use layer_core::{ColorTransition, Document, Editor, Layer, LayerKind, LayerMask, Point};
 
 const LIMIT: usize = 16 * 1024 * 1024;
 
@@ -482,17 +482,39 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
         editor.validate_edit(&prepared.edit()).unwrap();
         assert_eq!(editor.document(), &project.document);
         assert!(!editor.can_undo());
-        editor.perform(prepared.edit()).unwrap();
+        let transition = editor
+            .prepare_color_transition(ColorTransition::Apply {
+                color: prepared.project.document.color,
+                layers: prepared.project.document.layers.clone(),
+            })
+            .unwrap();
+        assert_eq!(transition.document(), &prepared.project.document);
+        editor
+            .commit_color_transition::<layer_core::DocumentError>(transition, |candidate| {
+                assert_eq!(candidate, &prepared.project.document);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(editor.document(), &prepared.project.document);
         let checkpoint = editor.checkpoint();
         for _ in 0..3 {
-            assert!(editor.undo().unwrap());
+            let transition = editor
+                .prepare_color_transition(ColorTransition::Undo)
+                .unwrap();
+            editor
+                .commit_color_transition::<layer_core::DocumentError>(transition, |_| Ok(()))
+                .unwrap();
             assert!(!editor.can_undo());
             assert_eq!(editor.checkpoint(), 0);
             let mut restored = editor.document().clone();
             restored.revision = project.document.revision;
             assert_eq!(restored, project.document);
-            assert!(editor.redo().unwrap());
+            let transition = editor
+                .prepare_color_transition(ColorTransition::Redo)
+                .unwrap();
+            editor
+                .commit_color_transition::<layer_core::DocumentError>(transition, |_| Ok(()))
+                .unwrap();
             assert!(!editor.can_redo());
             assert_eq!(editor.checkpoint(), checkpoint);
             let mut restored = editor.document().clone();

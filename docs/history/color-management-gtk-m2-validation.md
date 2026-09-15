@@ -5044,3 +5044,53 @@ cargo check -p layer-linux -p layer-ffi --offline
 runs correctness tests only. Fresh performance baselines, frame-creation
 regression investigation, optimization and final memory/latency qualification
 remain last; other platform integration still requires approval after GTK.
+
+## Prepared renderer/document color transitions (2026-09-15)
+
+The model can now prepare Apply, Undo or Redo as an immutable color transition.
+Its candidate is available before publication for GPU preparation and comparison.
+Commit rechecks the exact document and history state, calls the host's final
+fallible resource-adoption step, then publishes the matching model/history state.
+Failure or stale preparation leaves the document, checkpoint and history intact.
+Ordinary drawing and ordinary history navigation retain their existing paths.
+
+The engine requires idle input and a prepared renderer configuration, clears
+obsolete stroke-correction/display restoration state after success, and updates
+the dab generator's space. Tool/background coordinates retain their appearance;
+their conversion is validated before resource adoption, including finite-range
+failure. The generic preview path now has the same color guard as Apply/history.
+`CanvasRenderer::adopt_prepared_color` defaults to refusing a different mode;
+no other host acquires color-transition support implicitly.
+
+This completes the shared transition mechanism, **not the GTK journey**. GTK's
+asynchronous configuration preparation, cancellation acknowledgement, color
+dialogs and history request routing remain to be connected. No new color-edit
+command is exposed in this stage.
+
+Evidence under `artifacts/color-m2/color-transition-*`:
+
+- `shared-suite.log`: 43 color, 65 core, 57 engine and 389 UI tests pass
+  (12.23/0.90/0.39/18.69 s); four explicit/fixture color tests remain ignored.
+  The sample-bearing worker history test now uses prepared transitions for
+  Assign, Convert, reduction and repeated exact Undo/Redo.
+- `reviewed-engine-tests.log`: all eight selected color tests pass (0.49 s),
+  including the final overflow and queued-input test. The engine refuses absent
+  resources, backend failure and stale preparation without changing the live
+  mode; a stale candidate does not invoke the resource-adoption callback. Apply
+  and three Undo/Redo cycles pair renderer/document modes and checkpoints.
+  Unconsumed input and active contacts prevent transition publication.
+- `production-check.log`: GTK and shared FFI compile cleanly (8.21 s).
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-core -p layer-engine -p layer-color -p layer-ui --offline
+cargo test -p layer-engine --offline color -- --test-threads=1
+cargo check -p layer-linux -p layer-ffi --offline
+```
+
+`color-transition-provenance.json` identifies the parent and source/log hashes.
+The reviewed engine check follows the full suite's final tool-coordinate
+validation and extra failure test. No performance workloads were run. GTK
+functional completion still precedes fresh benchmarks and optimization, and
+other platform hosts remain approval-gated.

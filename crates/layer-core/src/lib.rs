@@ -28,6 +28,8 @@ mod project;
 mod project_storage;
 mod history_budget;
 mod color_edit;
+mod color_history;
+pub use color_history::{ColorTransition, PreparedColorTransition};
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
