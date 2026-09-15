@@ -948,6 +948,13 @@ impl WgpuRasterizer {
         changed: &BTreeSet<[u32; 2]>,
         revision: &RasterRevision,
     ) -> Result<Option<RasterCapture>, GpuRasterError> {
+        // This path reads the original normalized attachments. Native SDR
+        // publication uses encode_native_rasters and its canonical descriptors.
+        let descriptor = |plane| if plane == RasterPlane::Color {
+            layer_core::color::PixelDescriptor::SRGB8_PAINT
+        } else {
+            layer_core::color::PixelDescriptor::COVERAGE8
+        };
         let (textures, watercolor) = self.raster_textures(target);
         let mut data = RasterData {
             tiles: BTreeMap::new(),
@@ -963,9 +970,7 @@ impl WgpuRasterizer {
             {
                 data.tiles.insert(key, tile.clone());
             } else {
-                let size = key
-                    .plane
-                    .descriptor(self.document_color())
+                let size = descriptor(key.plane)
                     .byte_len([PAGE_SIZE; 2])
                     .unwrap() as u64;
                 total += size;
@@ -974,7 +979,7 @@ impl WgpuRasterizer {
                         "Raster capture exceeds the 256 MiB staging budget".into(),
                     ));
                 }
-                let tile = RasterTile::pending(key.plane.descriptor(self.document_color()));
+                let tile = RasterTile::pending(descriptor(key.plane));
                 data.tiles.insert(key, tile.clone());
                 copies.push(TileCapture {
                     source: crate::raster::CaptureSource::Texture(texture),
@@ -1133,7 +1138,7 @@ impl WgpuRasterizer {
                 continue;
             }
             let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
-            if blob.descriptor != key.plane.descriptor(self.document_color()) {
+            if !key.plane.accepts_descriptor(self.document_color(), blob.descriptor) {
                 return Err(GpuRasterError::Effect(
                     "Raster plane has the wrong pixel representation".into(),
                 ));
@@ -1199,6 +1204,16 @@ impl WgpuRasterizer {
                 }
                 replacements.push(replacement);
                 continue;
+            }
+            let attachment_descriptor = if key.plane == RasterPlane::Color {
+                layer_core::color::PixelDescriptor::SRGB8_PAINT
+            } else {
+                layer_core::color::PixelDescriptor::COVERAGE8
+            };
+            if blob.descriptor != attachment_descriptor {
+                return Err(GpuRasterError::Color(
+                    "This renderer cannot restore native SDR paint; use a host with native color support".into(),
+                ));
             }
             let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
             self.queue.write_texture(

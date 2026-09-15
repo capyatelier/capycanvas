@@ -25,19 +25,8 @@ impl DocumentColor {
         PixelDescriptor {
             channels: 4,
             bits_per_channel: self.depth.bits(),
-            encoding: if self == Self::default() {
-                TransferEncoding::Srgb
-            } else {
-                TransferEncoding::Profile
-            },
-            // New native modes retain straight RGB codes at low coverage.
-            // The currently exposed sRGB8 renderer still stores encoded linear
-            // premultiplication; its replacement is a separate mode adoption.
-            alpha: if self == Self::default() {
-                AlphaAssociation::PremultipliedLinear
-            } else {
-                AlphaAssociation::Straight
-            },
+            encoding: TransferEncoding::Profile,
+            alpha: AlphaAssociation::Straight,
         }
     }
     pub fn coverage_descriptor(self) -> PixelDescriptor {
@@ -81,6 +70,8 @@ impl PixelDescriptor {
         encoding: TransferEncoding::Srgb,
         alpha: AlphaAssociation::Straight,
     };
+    /// Explicit attachment layout used by hosts awaiting native SDR adoption.
+    /// Canonical document paint uses `DocumentColor::paint_descriptor()`.
     pub const SRGB8_PAINT: Self = Self {
         alpha: AlphaAssociation::PremultipliedLinear,
         ..Self::SRGB8_STRAIGHT

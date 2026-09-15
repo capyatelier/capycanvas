@@ -260,7 +260,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         for tile in &raster.tiles {
             let blob = manifest.blobs.get(tile.blob).ok_or("Missing raster blob")?;
             if !keys.insert(tile.key)
-                || blob.descriptor != tile.key.plane.descriptor(manifest.document.color)
+                || !tile.key.plane.accepts_descriptor(manifest.document.color, blob.descriptor)
                 || mask != (tile.key.plane == RasterPlane::Mask)
                 || tile.key.coordinate[0] >= manifest.document.width.div_ceil(TILE_SIZE)
                 || tile.key.coordinate[1] >= manifest.document.height.div_ceil(TILE_SIZE)

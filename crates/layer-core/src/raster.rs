@@ -84,6 +84,15 @@ impl RasterPlane {
             color.coverage_descriptor()
         }
     }
+    /// Native paint is straight profile RGB. The original sRGB attachment
+    /// representation remains explicit for hosts awaiting native integration;
+    /// it must never be inferred from the document color/depth alone.
+    pub fn accepts_descriptor(self, color: crate::color::DocumentColor, descriptor: PixelDescriptor) -> bool {
+        descriptor == self.descriptor(color)
+            || (self == Self::Color
+                && color == crate::color::DocumentColor::default()
+                && descriptor == PixelDescriptor::SRGB8_PAINT)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -332,7 +341,7 @@ impl RasterData {
     ) -> Result<(), String> {
         self.validate_index(extent, mask, color)?;
         for (key, tile) in &self.tiles {
-            if tile.wait_backing()?.descriptor != key.plane.descriptor(color) {
+            if !key.plane.accepts_descriptor(color, tile.wait_backing()?.descriptor) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }
@@ -364,7 +373,7 @@ impl RasterData {
             {
                 return Err("Invalid raster tile coordinates or plane".into());
             }
-            if tile.descriptor() != key.plane.descriptor(color) {
+            if !key.plane.accepts_descriptor(color, tile.descriptor()) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }

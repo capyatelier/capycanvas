@@ -14,12 +14,17 @@ independent integer8/integer16 SDR depth. The GTK working renderer uses linear
 Float32 math; editing and effect processing domains are independent of stored
 precision. No FP16 working buffer is an implicit integer16 boundary.
 
-Paint descriptors currently retain the sRGB8 premultiplied-linear encoding:
-`sRGB_encode(linear_RGB × alpha)` plus linear alpha. Other native modes store
-straight encoded RGB and linear coverage at their declared integer depth. This
-sRGB8 descriptor exception is still a cleanup prerequisite; the GTK live renderer
-itself already uses the native Float32 path. Mask/wetness backing uses linear
-integer coverage at the document depth. Descriptors identify each stored plane.
+GTK paint stores straight profile-encoded RGB and linear coverage at the declared
+integer depth in all four spaces, including sRGB8. Working composition associates
+RGB in linear light. Mask/wetness backing uses linear integer coverage at the
+document depth. Descriptors identify each stored plane.
+
+Hosts awaiting native integration still produce an explicit sRGB8 attachment
+layout: `sRGB_encode(linear_RGB × alpha)` plus linear alpha. Shared storage accepts
+that descriptor only for sRGB8 color planes; it is no longer inferred from the
+document mode. The normalized-attachment renderer rejects native straight tiles
+instead of uploading them with the wrong alpha semantics. Integrating other hosts
+remains separate work requiring approval.
 
 A tiled image can be an **Original** with its independent RGB/gray/CMYK samples,
 integer depth, profile bytes or explicit assumption, or **Rasterized** RGBA pixels

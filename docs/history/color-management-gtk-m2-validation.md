@@ -4899,3 +4899,84 @@ output UI, managed wide viewing and the remaining precision/memory/job gates are
 still unfinished. Fresh baselines, frame-creation regression investigation,
 optimization and memory/latency qualification remain last. Other platform hosts
 remain approval-gated after GTK completion.
+
+## Canonical straight sRGB8 paint (2026-09-15)
+
+GTK sRGB8 paint now uses the same straight, profile-encoded integer backing as
+all other native SDR modes. This closes the default-paint descriptor prerequisite
+recorded above: `DocumentColor::paint_descriptor()` has no default-mode alpha or
+encoding exception. Working math remains Float32 linear premultiplied RGB; output,
+source preservation and artistic processing domains are unchanged.
+
+The shared normalized-attachment capture path explicitly labels its own sRGB8
+premultiplied representation. Shared archive validation accepts that layout only
+for sRGB8 color planes, while all native modes use the canonical descriptor.
+Restoration checks the actual representation: an unintegrated normalized renderer
+rejects native straight tiles before modifying its live pages. No other platform
+host was integrated or built. The native v4 container already stores each tile's
+full descriptor; this change requires no new container structure or migration.
+
+The analytical transfer reference was independently checked against W3C's
+[CSS Color 4 sRGB conversion example](https://www.w3.org/TR/2026/CRD-css-color-4-20260913/#color-conversion-code).
+A new native publication check covers every 8-bit RGB code at every nonzero
+coverage code, verifies premultiplied working values against an independent f64
+calculation within 2e-7, and preserves the stored codes exactly over 16 repeated
+publications. Alpha-zero paint uses canonical black; immutable image sources
+retain their independent hidden RGB samples.
+
+Evidence under `artifacts/color-m2/straight-srgb-*`:
+
+- `shared-suite.log`: 35 color, 65 core, 55 engine and 389 UI tests pass
+  (14.14/2.70/0.84/32.50 s); four fixture-dependent/explicit color tests remain
+  ignored. Core archive checks include every code and scalar plane in all modes.
+- `native-publication.log`: five GPU tests pass (51.84 s), including the new
+  code/coverage grid, all eight SDR paint/Undo/save/reopen/continued-paint/device
+  replacement workflows, multi-chunk color/mask canonicalization and invalid or
+  abandoned publication recovery.
+- `gtk-modes.log`: the real GTK eight-mode pen/edit/Undo/native-window reopen
+  journey passes (39.08 s). `files.log`: GTK save, profile output, file failure,
+  cancellation and recovery pass (36.08 s), with the installed CMYK fixture.
+- `external-handoff.log`: ImageMagick independently reproduces all 983,040 U16
+  RGB/gray/CMYK output samples and embedded profiles from process 1848963 exactly.
+- `production.log`: GTK and shared FFI check without warnings (3.19 s).
+- `gtk-recovery.log`: default-mode GTK diagnostics and intentional GPU failure
+  recovery pass (3.32 s) with the canonical sRGB8 backing.
+- `attachment-regression.log` selected zero tests because of an incorrect module
+  filter; it is not passing coverage. `attachment-reviewed.log` uses the actual
+  `layer_tests::raster::` module: all six tests pass (13.08 s), including the new
+  explicit native-layout rejection assertion in the existing failed-restore test.
+
+The captured `native-gpu-tests` hash is
+`5b69bbfa45395cbaf1e5fa2e596cefabb1e6d7af33c0254e6a062e82b8a7804c`;
+`native-gtk-tests` is
+`760ebb22f3f538b623e1752d45af3efac4b830ce6f81b42dde3a939b62b12d45`.
+`native-build.{json,log}` and `native-sources.json` identify their inputs. The
+reviewed GPU binary adds only the attachment rejection assertion and formats the
+new code/coverage test; its hash is
+`a468e1c8b2e8f587e76c953949781a6ad9f083aa6f6a06c576a7bbe12d7238fa`,
+with `reviewed-gpu-build.{json,log}` and `reviewed-sources.json` provenance.
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-core -p layer-color -p layer-engine -p layer-ui --offline -- --test-threads=1
+cargo test -p layer-render-wgpu -p layer-linux --offline --no-run --message-format=json
+artifacts/color-m2/straight-srgb-native-gpu-tests raster::native_edit::tests --test-threads=1
+artifacts/color-m2/straight-srgb-reviewed-gpu-tests layer_tests::raster:: --test-threads=1
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/straight-srgb-native-gtk-exact" \
+  workspace::tests::color_management::native_sdr_document_modes \
+  "$PWD/artifacts/color-m2/straight-srgb-gtk-modes"
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/straight-srgb-native-gtk-exact" \
+  workspace::tests::native_document_files \
+  "$PWD/artifacts/color-m2/straight-srgb-files"
+python3 tools/validation/icc_export_handoff.py artifacts/familiar-workspace/files 1848963
+```
+
+`straight-srgb-provenance.json` records source/build/output hashes. No performance
+workloads were run; these durations identify correctness checks only. Document
+assignment/conversion/depth, managed wide viewing, remaining inspection/settings/
+output controls and full precision/memory/job gates remain open. Fresh benchmarks,
+regression investigation and optimization remain last; other hosts require approval.

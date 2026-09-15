@@ -422,3 +422,90 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
     );
     assert_eq!(working(&r, LayerId(1)), before);
 }
+
+#[test]
+fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
+    use layer_core::color::{AlphaAssociation, TransferEncoding};
+    let color = DocumentColor::default();
+    let descriptor = color.paint_descriptor();
+    assert_eq!(descriptor.alpha, AlphaAssociation::Straight);
+    assert_eq!(descriptor.encoding, TransferEncoding::Profile);
+    // Every 8-bit RGB code at every nonzero alpha. Paint canonicalizes unused
+    // alpha-zero RGB, while retained image sources preserve their hidden codes.
+    let bytes: Vec<u8> = (0..256u32)
+        .flat_map(|a| {
+            (0..256u32).flat_map(move |x| {
+                if a == 0 {
+                    [0; 4]
+                } else {
+                    [x as u8, (255 - x) as u8, (x * 71) as u8, a as u8]
+                }
+            })
+        })
+        .collect();
+    let key = TileKey {
+        plane: RasterPlane::Color,
+        coordinate: [0, 0],
+    };
+    let mut layer = Layer::paint(LayerId(1), "sRGB code/coverage grid");
+    layer.raster = RasterRevision::backed(RasterData {
+        tiles: [(
+            key,
+            RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()),
+        )]
+        .into(),
+        watercolor: None,
+    });
+    let mut layers = [layer];
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let submit = |r: &mut WgpuRasterizer, layers: &[Layer], reset| {
+        r.submit(FramePacket {
+            document_extent: [256, 256],
+            ..packet(layers, reset)
+        })
+        .unwrap();
+    };
+    submit(&mut r, &layers, true);
+    let samples = working(&r, LayerId(1));
+    for (i, (encoded, actual)) in bytes
+        .chunks_exact(4)
+        .zip(samples[&key].chunks_exact(16))
+        .enumerate()
+    {
+        let alpha = encoded[3] as f64 / 255.;
+        for c in 0..4 {
+            let v = encoded[c] as f64 / 255.;
+            let expected = if c == 3 {
+                alpha
+            } else {
+                let linear = if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                };
+                linear * alpha
+            };
+            let actual = f32::from_ne_bytes(actual[c * 4..c * 4 + 4].try_into().unwrap()) as f64;
+            assert!(
+                (actual - expected).abs() < 2e-7,
+                "pixel {i} channel {c}: {actual} vs {expected}"
+            );
+        }
+    }
+    for _ in 0..16 {
+        layers[0].raster = RasterRevision::pending();
+        r.raster
+            .as_mut()
+            .unwrap()
+            .targets
+            .get_mut(&LayerId(1))
+            .unwrap()
+            .changed
+            .insert([0, 0]);
+        while !r.raster_ready() {
+            std::thread::yield_now();
+        }
+        submit(&mut r, &layers, false);
+        assert_eq!(backing(&layers[0].raster)[&key], bytes);
+    }
+}

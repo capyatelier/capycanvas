@@ -69,6 +69,25 @@ fn failed_restore_keeps_live_pages_after_staging_a_replacement() {
     assert!(r.restore_raster(LayerId(1), &previous, &invalid).is_err());
     submit(&mut r, &layers, &[], &[], false);
     assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
+    // Shared storage may carry canonical straight native tiles, but this
+    // normalized-attachment renderer must not upload them as premultiplied data.
+    let native = RasterData {
+        tiles: [(
+            layer_core::raster::TileKey {
+                plane: RasterPlane::Color,
+                coordinate: [0, 0],
+            },
+            RasterTile::backed(TileBlob::encode(
+                layer_core::color::DocumentColor::default().paint_descriptor(),
+                &vec![127; 256 * 256 * 4],
+            ).unwrap()),
+        )].into(),
+        watercolor: None,
+    };
+    assert!(r.restore_raster(LayerId(1), &previous, &native).unwrap_err()
+        .to_string().contains("cannot restore native SDR paint"));
+    submit(&mut r, &layers, &[], &[], false);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
     // Failure must also leave the renderer usable for the next real edit.
     submit(
         &mut r,
