@@ -313,7 +313,8 @@ private struct HeaderItemControl: View {
     }
     private func tile(_ icon: String, action: @escaping () -> Void) -> some View {
         IconTile(icon: icon, label: description["label"].string, selected: description["selected"].bool,
-            enabled: editing || description["enabled"].bool, size: size["icon"].number,
+            enabled: editing || description["enabled"].bool,
+            size: kind == "capy" ? size["tile"].number * 440 / 512 : size["icon"].number,
             active: hovering, joinedEdge: drawerOpen ? "bottom" : nil, background: palette.headerBackground(light: light),
             keepsBackground: light, drawerBackground: drawerOpen ? palette["panel"] : nil, action: action)
     }

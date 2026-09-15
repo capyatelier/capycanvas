@@ -13,7 +13,7 @@ fn main() {
         .unwrap()
         .replace(
             "width=\"24\" height=\"24\"",
-            "x=\"96\" y=\"96\" width=\"320\" height=\"320\" color=\"#f6f5f4\"",
+            "x=\"36\" y=\"36\" width=\"440\" height=\"440\" color=\"#f6f5f4\"",
         );
     let icon = output.join("art.capycanvas.CapyCanvas.svg");
     std::fs::write(&icon, format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\"><rect width=\"512\" height=\"512\" rx=\"76.8\" fill=\"#767676\"/>{mark}</svg>")).unwrap();

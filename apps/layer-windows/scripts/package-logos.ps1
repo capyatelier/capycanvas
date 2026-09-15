@@ -17,8 +17,9 @@ foreach($size in @(44,50,150)){
         $ink=[Windows.Media.BrushConverter]::new().ConvertFromString('#f6f5f4')
         $draw.DrawRoundedRectangle($background,$null,[Windows.Rect]::new(0,0,$size,$size),$size*.15,$size*.15)
         $geometry=[Windows.Media.Geometry]::Parse('F0 '+$paths[0].GetAttribute('d')).Clone()
-        $scale=$size*.625/$view[2]
-        $geometry.Transform=[Windows.Media.MatrixTransform]::new($scale,0,0,$scale,$size*.1875-$view[0]*$scale,$size*.1875-$view[1]*$scale)
+        $scale=$size*(440.0/512.0)/$view[2]
+        $inset=$size*(36.0/512.0)
+        $geometry.Transform=[Windows.Media.MatrixTransform]::new($scale,0,0,$scale,$inset-$view[0]*$scale,$inset-$view[1]*$scale)
         $draw.DrawGeometry($ink,$null,$geometry)
     }finally{$draw.Close()}
     $bitmap=[Windows.Media.Imaging.RenderTargetBitmap]::new($size,$size,96,96,[Windows.Media.PixelFormats]::Pbgra32)

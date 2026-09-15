@@ -363,8 +363,10 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 }else if(kind==L"tool"&&ctlKind==L"divider"){
                     Border line;line.Height(1);line.Margin({6,6,6,6});line.Background(data->brush(L"tabbar"));pick.Content(line);
                 }else if(!iconName.empty()){
-                    auto iconKey=iconName+L":"+to_hstring(iconSize);
-                    if(native.iconKey!=iconKey){pick.Content(icon(iconName,data->theme(),iconSize));native.iconKey=iconKey;}
+                    auto glyphSize=kind==L"capy"?tile*440./512.:iconSize;
+                    auto iconKey=iconName+L":"+to_hstring(glyphSize);
+                    if(native.iconKey!=iconKey){pick.Content(icon(iconName,data->theme(),glyphSize));native.iconKey=iconKey;}
+                    if(kind==L"capy")pick.Padding({0,0,0,0});
                 }
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true));pick.Opacity(editing||flag(spec,L"enabled",true)?1.:.36);
                 auto anchor=object(object(object(data->state,L"customization"),L"drawer"),L"anchor");

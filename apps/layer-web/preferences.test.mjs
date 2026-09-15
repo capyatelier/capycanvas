@@ -38,7 +38,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(metrics.step, 16);
     assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 24);
   }
-  assert.equal(await evaluate("document.querySelector('#zen-button svg').getBoundingClientRect().width"), await evaluate("layerApp.app.catalog().zen_icon_size"));
+  assert.ok(await evaluate("(() => { const button = document.querySelector('#zen-button'); return Math.abs(button.querySelector('svg').getBoundingClientRect().width - button.getBoundingClientRect().height * 440 / 512) < .02; })()"), 'Capy button uses the enlarged favicon proportions');
   assert.equal(await evaluate("document.querySelector('#zen-button svg').dataset.asset"), 'zen-looking-up');
   assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='zen_mode').shortcut"), 'Tab');
   await evaluate("document.activeElement?.blur()");

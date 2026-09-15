@@ -587,7 +587,12 @@ impl Header {
                 } else {
                     crate::icons::image(&format!("layer-{icon}-symbolic"))
                 };
-                image.set_pixel_size(size.icon());
+                image.set_pixel_size(if entry.item == HeaderItem::Capy {
+                    b.add_css_class("capy-button");
+                    (size.tile() * 440. / 512.).round() as i32
+                } else {
+                    size.icon()
+                });
                 b.set_child(Some(&image));
                 if entry.item
                     == (HeaderItem::Tool {

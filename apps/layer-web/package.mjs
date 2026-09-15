@@ -175,8 +175,8 @@ export function packageWeb() {
     cpSync(join(root,"assets/filters"),join(runtime,"filters"),{recursive:true});
     const brand = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"));
     for (const size of [32, 180, 192, 512]) {
-      // Enlarge the capy in the compact favicon while keeping it centered.
-      const markSize = size === 32 ? 440 : 320;
+      // Favicon and installation icons share the approved enlarged artwork.
+      const markSize = 440;
       const inset = (512 - markSize) / 2;
       const mark = brand.replace('width="24" height="24"',
         `x="${inset}" y="${inset}" width="${markSize}" height="${markSize}" color="#f6f5f4"`);

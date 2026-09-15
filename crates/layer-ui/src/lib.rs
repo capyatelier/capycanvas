@@ -219,7 +219,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
     ],
 };
 pub const WORKSPACE_MENU_LABEL: &str = "Window";
-pub const ZEN_ICON_SIZE: u32 = 28;
+pub const ZEN_ICON_SIZE: u32 = 31;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {

@@ -278,7 +278,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                         }
                     }) {
                     val fill = if (item.objectOrNull("control")?.optString("kind") == "color") snapshot.getJSONObject("state").getJSONObject("brush").array("color").let { Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat()) } else null
-                    SharedIcon(icon, label, Modifier.size(size.number("icon").dp), fill = fill)
+                    val iconSize = if (kind == "capy") size.number("tile") * 440f / 512f else size.number("icon")
+                    SharedIcon(icon, label, Modifier.size(iconSize.dp), fill = fill)
                 }
             }
             if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, it) { menu = null } }

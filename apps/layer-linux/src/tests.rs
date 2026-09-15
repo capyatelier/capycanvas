@@ -6060,7 +6060,7 @@ fn native_zen_icons() {
     let bounds = zen.compute_bounds(&w.surface).unwrap();
     assert_eq!(
         image.pixel_size(),
-        state(&w).workspace.layout.header.size.icon()
+        (state(&w).workspace.layout.header.size.tile() * 440. / 512.).round() as i32
     );
     assert_eq!(w.preferences.dialog.content_height(), 744);
     assert_eq!(
@@ -6108,7 +6108,7 @@ fn native_zen_icons() {
             );
             assert_eq!(
                 image.pixel_size(),
-                state(&w).workspace.layout.header.size.icon()
+                (state(&w).workspace.layout.header.size.tile() * 440. / 512.).round() as i32
             );
             assert_eq!(zen.compute_bounds(&w.surface).unwrap(), bounds);
             for other in 0..4 {

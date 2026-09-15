@@ -688,7 +688,8 @@ body[data-theme="light"] #header { --header-surface:color-mix(in srgb,var(--bg) 
 }
 #header .header-tool, .header-drag-preview .header-tool { width:100%; }
 #header .header-tool > svg, #header .header-menu > summary > svg, .header-drag-preview .header-tool > svg { width:var(--header-icon); height:var(--header-icon); }
-#header #zen-button { position:static; z-index:auto; }
+#header #zen-button, .header-drag-preview[data-kind="capy"] .header-tool { position:static; z-index:auto; padding:0; }
+#header #zen-button > svg, .header-drag-preview[data-kind="capy"] .header-tool > svg { width:calc(var(--header-tile) * 440 / 512); height:calc(var(--header-tile) * 440 / 512); }
 #header .header-menu-overflow > summary { width:100%; }
 #header .header-menu-labels { gap:0; }
 #header .header-menu-labels summary { padding:0 8px; }
