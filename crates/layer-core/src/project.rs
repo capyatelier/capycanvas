@@ -327,6 +327,7 @@ fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<()
 }
 
 pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String> {
+    if let Some(resolution) = doc.resolution { resolution.validate()?; }
     if doc.width == 0
         || doc.height == 0
         || doc.width > limits.dimension

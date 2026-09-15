@@ -40,8 +40,10 @@ pub fn read_jpeg(mut input: impl Read + Seek, limits: DecodeLimits) -> Result<So
         builder.push_row(&row)?;
     }
     decoder.finish()?;
+    let mut source = builder.finish()?;
+    source.resolution = metadata.resolution;
     super::orientation::normalize(
-        builder.finish()?,
+        source,
         metadata.orientation.unwrap_or(1),
         limits.source_bytes,
     )
@@ -54,6 +56,7 @@ pub fn write_jpeg(output: impl Write, source: &SourceImage, quality: u8) -> Resu
         output,
         source.extent,
         &source.interpretation,
+        source.resolution,
         quality,
         |y, row| rows.read(y, row),
     )
@@ -67,6 +70,7 @@ pub fn write_jpeg_rows(
     output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
+    resolution: Option<layer_core::ImageResolution>,
     quality: u8,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -88,7 +92,16 @@ pub fn write_jpeg_rows(
         interpretation.profile.clone()
     };
     let icc = profile_bytes(&profile)?;
-    let mut encoder = Encoder::new(output, extent, interpretation.channels.count(), quality)?;
+    let mut encoder = Encoder::new(
+        output,
+        extent,
+        interpretation.channels.count(),
+        quality,
+        resolution,
+    )?;
+    if let Some(resolution) = resolution {
+        encoder.marker(1, &super::metadata::exif_output(resolution)?)?;
+    }
     encoder.profile(&icc)?;
     let mut row = vec![0; row_bytes];
     for y in 0..extent[1] {

@@ -104,6 +104,13 @@ impl ExportSize {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportResolution {
+    Master,
+    Ppi(u32),
+    Omit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportRecipe<P = ExportProfile> {
     pub format: ExportFormat,
     pub profile: P,
@@ -112,6 +119,7 @@ pub struct ExportRecipe<P = ExportProfile> {
     pub jpeg_quality: u8,
     pub encoding: OutputEncoding,
     pub size: ExportSize,
+    pub resolution: ExportResolution,
 }
 impl<P> ExportRecipe<P> {
     /// Storage can intern large ICC profiles without duplicating delivery policy.
@@ -124,6 +132,7 @@ impl<P> ExportRecipe<P> {
             jpeg_quality: self.jpeg_quality,
             encoding: self.encoding,
             size: self.size,
+            resolution: self.resolution,
         }
     }
 }
@@ -137,6 +146,7 @@ impl ExportRecipe {
             jpeg_quality: 90,
             encoding: Default::default(),
             size: ExportSize::Original,
+            resolution: ExportResolution::Master,
         }
     }
     pub fn wide_color() -> Self {
@@ -154,6 +164,7 @@ impl ExportRecipe {
             jpeg_quality: 90,
             encoding: Default::default(),
             size: ExportSize::Original,
+            resolution: ExportResolution::Master,
         }
     }
     pub fn interpretation(&self) -> SourceInterpretation {
@@ -174,6 +185,11 @@ impl ExportRecipe {
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        if let ExportResolution::Ppi(value) = self.resolution
+            && !(1..=65535).contains(&value)
+        {
+            return Err("Resolution must be between 1 and 65535 pixels per inch".into());
+        }
         self.size.extent([1, 1])?;
         self.encoding.validate(self.depth)?;
         if self.profile.channels == ProfileChannels::Cmyk {
@@ -202,6 +218,30 @@ impl ExportRecipe {
             .rsplit_once('.')
             .map_or(suggested, |(stem, _)| stem);
         format!("{stem}.{}", self.format.extension())
+    }
+    pub fn output_resolution(
+        &self,
+        master: Option<layer_core::ImageResolution>,
+    ) -> Result<Option<layer_core::ImageResolution>, String> {
+        let value = match self.resolution {
+            ExportResolution::Master => master,
+            ExportResolution::Ppi(value) => Some(layer_core::ImageResolution::ppi(value)),
+            ExportResolution::Omit => None,
+        };
+        if let Some(value) = value {
+            match self.format {
+                ExportFormat::Png => {
+                    value.png_density()?;
+                }
+                ExportFormat::Tiff => {
+                    value.tiff_density()?;
+                }
+                ExportFormat::Jpeg => {
+                    value.jfif_density()?;
+                }
+            }
+        }
+        Ok(value)
     }
 }
 

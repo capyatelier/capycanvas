@@ -41,10 +41,14 @@ unsafe extern "C" {
         h: u32,
         channels: c_int,
         quality: c_int,
+        density_unit: c_int,
+        density_x: u32,
+        density_y: u32,
         error: *mut c_char,
     ) -> *mut c_void;
     fn capy_jpeg_encoder_marker(
         codec: *mut c_void,
+        marker: c_int,
         bytes: *const u8,
         size: usize,
         error: *mut c_char,
@@ -181,7 +185,17 @@ pub(super) struct Encoder<W> {
     failed: bool,
 }
 impl<W: Write> Encoder<W> {
-    pub fn new(output: W, [w, h]: [u32; 2], channels: usize, quality: u8) -> Result<Self, String> {
+    pub fn new(
+        output: W,
+        [w, h]: [u32; 2],
+        channels: usize,
+        quality: u8,
+        resolution: Option<layer_core::ImageResolution>,
+    ) -> Result<Self, String> {
+        let (unit, [x, y]) = resolution
+            .map(layer_core::ImageResolution::jfif_density)
+            .transpose()?
+            .unwrap_or((0, [1, 1]));
         let mut io = Box::new(Io {
             value: output,
             error: None,
@@ -195,6 +209,9 @@ impl<W: Write> Encoder<W> {
                 h,
                 channels as c_int,
                 quality as c_int,
+                c_int::from(unit),
+                u32::from(x),
+                u32::from(y),
                 error.as_mut_ptr().cast(),
             )
         };
@@ -229,9 +246,14 @@ impl<W: Write> Encoder<W> {
             data.extend_from_slice(b"ICC_PROFILE\0");
             data.extend_from_slice(&[index as u8 + 1, count]);
             data.extend_from_slice(chunk);
-            self.call(|c, e| unsafe { capy_jpeg_encoder_marker(c, data.as_ptr(), data.len(), e) })?;
+            self.marker(2, &data)?;
         }
         Ok(())
+    }
+    pub fn marker(&mut self, marker: u8, data: &[u8]) -> Result<(), String> {
+        self.call(|c, e| unsafe {
+            capy_jpeg_encoder_marker(c, c_int::from(marker), data.as_ptr(), data.len(), e)
+        })
     }
     pub fn row(&mut self, row: &[u8]) -> Result<(), String> {
         self.call(|c, e| unsafe { capy_jpeg_encoder_row(c, row.as_ptr(), row.len(), e) })

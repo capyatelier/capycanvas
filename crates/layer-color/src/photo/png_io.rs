@@ -20,12 +20,23 @@ pub fn read_png(
         return Err("The PNG declares an unreadable ICC profile".into());
     }
     let extent = [info.width, info.height];
-    let orientation = info
+    let metadata = info
         .exif_metadata
         .as_deref()
-        .map(super::orientation::exif)
+        .map(super::metadata::exif)
         .transpose()?
-        .unwrap_or(1);
+        .unwrap_or_default();
+    // Explicit PNG physical dimensions take precedence over duplicate Exif data.
+    let resolution = match info.pixel_dims {
+        Some(p) if p.unit == png::Unit::Meter && p.xppu > 0 && p.yppu > 0 => {
+            Some(layer_core::ImageResolution {
+                unit: layer_core::ResolutionUnit::Metre,
+                density: [[p.xppu, 1], [p.yppu, 1]],
+            })
+        }
+        Some(_) => None,
+        None => metadata.resolution,
+    };
     limits.extent(extent)?;
     if info.animation_control.is_some() {
         return Err("Animated PNG is not a still-photo source".into());
@@ -82,7 +93,9 @@ pub fn read_png(
         }
     }
     reader.finish().map_err(err)?;
-    super::orientation::normalize(builder.finish()?, orientation, limits.source_bytes)
+    let mut source = builder.finish()?;
+    source.resolution = resolution;
+    super::orientation::normalize(source, metadata.orientation, limits.source_bytes)
 }
 
 fn profile_chunk_present(
@@ -178,9 +191,13 @@ fn interpretation_from_tags(info: &png::Info<'_>) -> Result<(ColorProfile, bool)
 pub fn write_png(output: impl Write, source: &SourceImage) -> Result<(), String> {
     source.validate()?;
     let mut rows = source.rows();
-    write_png_rows(output, source.extent, &source.interpretation, |y, row| {
-        rows.read(y, row)
-    })
+    write_png_rows(
+        output,
+        source.extent,
+        &source.interpretation,
+        source.resolution,
+        |y, row| rows.read(y, row),
+    )
 }
 
 /// Stream top-to-bottom encoded rows, with little-endian integer16 samples.
@@ -190,10 +207,19 @@ pub fn write_png_rows(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
+    resolution: Option<layer_core::ImageResolution>,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
     let mut info = png::Info::with_size(extent[0], extent[1]);
+    if let Some(resolution) = resolution {
+        let [xppu, yppu] = resolution.png_density()?;
+        info.pixel_dims = Some(png::PixelDimensions {
+            xppu,
+            yppu,
+            unit: png::Unit::Meter,
+        });
+    }
     info.bit_depth = match interpretation.depth {
         IntegerDepth::U8 => png::BitDepth::Eight,
         IntegerDepth::U16 => png::BitDepth::Sixteen,

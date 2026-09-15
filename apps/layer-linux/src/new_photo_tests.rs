@@ -263,7 +263,11 @@ fn native_new_presets_and_profiled_photo_master() {
             .collect();
         builder.push_row(&row).unwrap();
     }
-    let source = builder.finish().unwrap();
+    let mut source = builder.finish().unwrap();
+    source.resolution = Some(layer_core::ImageResolution {
+        unit: layer_core::ResolutionUnit::Inch,
+        density: [[601, 2], [300, 1]],
+    });
     let source_path = output.join(format!("Developed photo-{}.tif", std::process::id()));
     layer_color::photo::write_tiff(std::fs::File::create(&source_path).unwrap(), &source).unwrap();
     let original_bytes = std::fs::read(&source_path).unwrap();
@@ -284,6 +288,7 @@ fn native_new_presets_and_profiled_photo_master() {
         }
     );
     assert_eq!(project.document.layers[0].source.as_deref(), Some(&source));
+    assert_eq!(project.document.resolution, source.resolution);
     let photo = Workspace::with_project(&app, Some((project, None)));
     photo.window.present();
     ready(&photo);
@@ -325,6 +330,7 @@ fn native_new_presets_and_profiled_photo_master() {
             .is_empty()
     );
     assert_eq!(edited.document.layers[0].source.as_deref(), Some(&source));
+    assert_eq!(edited.document.resolution, source.resolution);
     let master_path = output.join(format!("Photo master-{}.capy", std::process::id()));
     invoke(&photo, CommandId::SaveDocument);
     let save = chooser();
@@ -392,6 +398,7 @@ fn native_new_presets_and_profiled_photo_master() {
     )
     .unwrap();
     assert_eq!(delivered.interpretation.depth, IntegerDepth::U16);
+    assert_eq!(delivered.resolution, source.resolution);
     assert_eq!(
         delivered.interpretation.profile,
         source.interpretation.profile

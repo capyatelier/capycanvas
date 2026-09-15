@@ -109,6 +109,7 @@ pub(crate) fn read(
     let space = layer_color::suggested_working_space(&source.interpretation.profile)?
         .unwrap_or(RgbSpace::ProPhoto);
     let mut document = Document::new("untitled", source.extent[0], source.extent[1]);
+    document.resolution = source.resolution;
     document.color = layer_core::color::DocumentColor {
         space,
         depth: policy.editing_depth(source.interpretation.depth),

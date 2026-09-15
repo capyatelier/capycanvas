@@ -11,6 +11,7 @@ enum ProfileReference {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ImageRecord {
+    resolution: Option<crate::ImageResolution>,
     kind: SourceKind,
     extent: [u32; 2],
     channels: SourceChannels,
@@ -95,6 +96,7 @@ impl SourceIndex {
                         .collect();
                     let id = result.images.len();
                     result.images.push(ImageRecord {
+                        resolution: source.resolution,
                         kind: source.kind,
                         extent: source.extent,
                         channels: source.interpretation.channels,
@@ -170,6 +172,7 @@ impl SourceIndex {
         let mut source_blobs = BTreeSet::new();
         let mut bytes = 0u64;
         for image in &self.images {
+            if let Some(resolution) = image.resolution { resolution.validate()?; }
             if image.kind == SourceKind::Rasterized
                 && (image.channels != SourceChannels::Rgba
                     || image.depth != document.color.depth
@@ -259,6 +262,7 @@ impl SourceIndex {
         let mut images = Vec::new();
         for image in self.images {
             images.push(Arc::new(SourceImage {
+                resolution: image.resolution,
                 kind: image.kind,
                 extent: image.extent,
                 interpretation: SourceInterpretation {

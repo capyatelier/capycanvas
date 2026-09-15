@@ -95,6 +95,7 @@ pub enum SourceKind {
 pub struct SourceImage {
     pub kind: SourceKind,
     pub extent: [u32; 2],
+    pub resolution: Option<crate::ImageResolution>,
     pub interpretation: SourceInterpretation,
     pub tiles: BTreeMap<[u32; 2], Arc<TileBlob>>,
 }
@@ -102,6 +103,7 @@ impl PartialEq for SourceImage {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
             && self.extent == other.extent
+            && self.resolution == other.resolution
             && self.interpretation == other.interpretation
             && self.tiles.len() == other.tiles.len()
             && self.tiles.iter().zip(&other.tiles).all(|((a, x), (b, y))| {
@@ -128,6 +130,7 @@ impl SourceImage {
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(resolution) = self.resolution { resolution.validate()?; }
         if self.kind == SourceKind::Rasterized
             && (self.interpretation.channels != SourceChannels::Rgba
                 || !matches!(self.interpretation.profile, ColorProfile::Builtin(_))
@@ -224,6 +227,7 @@ impl SourceBuilder {
             .map_err(|_| "Source row-band allocation failed")?;
         Ok(Self {
             image: SourceImage {
+                resolution: None,
                 kind: SourceKind::Original,
                 extent,
                 interpretation,

@@ -62,6 +62,7 @@ pub fn rasterize_source(
     }
     check(&mut cancelled)?;
     let mut result = builder.finish()?;
+    result.resolution = source.resolution;
     result.kind = SourceKind::Rasterized;
     result.validate()?;
     Ok((result, statistics))

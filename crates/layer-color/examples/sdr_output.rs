@@ -121,9 +121,9 @@ fn main() -> Result<(), String> {
     };
     let file = BufWriter::new(File::create(&args[4]).map_err(err)?);
     if args[4].ends_with(".png") {
-        write_png_rows(file, extent, encoder.interpretation(), &mut provider)?;
+        write_png_rows(file, extent, encoder.interpretation(), None, &mut provider)?;
     } else {
-        write_tiff_rows(file, extent, encoder.interpretation(), &mut provider)?;
+        write_tiff_rows(file, extent, encoder.interpretation(), None, &mut provider)?;
     }
     println!(
         "extent={extent:?} target={} noise={noise} output_ms={:.3} file_bytes={} clipped_channels={clipped}",

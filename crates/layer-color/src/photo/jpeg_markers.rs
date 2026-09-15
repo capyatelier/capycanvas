@@ -8,6 +8,7 @@ use std::io::BufRead;
 pub(super) struct Metadata {
     pub profile: Option<Vec<u8>>,
     pub orientation: Option<u16>,
+    pub resolution: Option<layer_core::ImageResolution>,
 }
 
 fn byte(input: &mut impl BufRead) -> Result<u8, String> {
@@ -27,6 +28,7 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
     let mut scans = 0;
     let mut entropy = false;
     let mut result = Metadata::default();
+    let mut jfif_resolution = None;
     loop {
         if entropy {
             loop {
@@ -94,12 +96,24 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
             }
             total = Some(count);
             chunks.insert(sequence, segment[14..].to_vec());
+        } else if marker == 0xe0 && segment.starts_with(b"JFIF\0") {
+            if segment.len() >= 12 {
+                jfif_resolution = super::metadata::physical(u16::from(segment[7]) + 1, [
+                    Some([u32::from(u16::from_be_bytes([segment[8], segment[9]])), 1]),
+                    Some([u32::from(u16::from_be_bytes([segment[10], segment[11]])), 1]),
+                ]);
+            }
         } else if marker == 0xe1 && segment.starts_with(b"Exif\0\0") {
-            let orientation = super::orientation::exif(&segment)?;
+            let metadata = super::metadata::exif(&segment)?;
+            let orientation = metadata.orientation;
             if result.orientation.is_some_and(|v| v != orientation) {
                 return Err("Conflicting JPEG EXIF orientations".into());
             }
             result.orientation = Some(orientation);
+            if let Some(resolution) = metadata.resolution {
+                if result.resolution.is_some_and(|r| r != resolution) { return Err("Conflicting JPEG EXIF resolutions".into()); }
+                result.resolution = Some(resolution);
+            }
         } else if marker == 0xe2 && segment.starts_with(b"urn:iso:std:iso:ts:21496:-1")
             || marker == 0xe1
                 && [
@@ -124,6 +138,8 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
         }
         result.profile = Some(profile);
     }
+    // Rational Exif print density takes precedence over rounded JFIF values.
+    result.resolution = result.resolution.or(jfif_resolution);
     Ok(result)
 }
 

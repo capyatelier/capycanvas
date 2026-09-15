@@ -189,7 +189,8 @@ void capy_jpeg_encoder_free(struct encoder *encoder) {
   free(encoder);
 }
 struct encoder *capy_jpeg_encoder_new(write_fn write, void *opaque, uint32_t width,
-                                     uint32_t height, int channels, int quality, char *message) {
+                                     uint32_t height, int channels, int quality,
+                                     int density_unit, uint32_t density_x, uint32_t density_y, char *message) {
   struct encoder *volatile encoder = calloc(1, sizeof(*encoder));
   if (!encoder) { strcpy(message, "JPEG context allocation failed"); return NULL; }
   init_error(&encoder->error, message);
@@ -208,6 +209,9 @@ struct encoder *capy_jpeg_encoder_new(write_fn write, void *opaque, uint32_t wid
   encoder->jpeg.in_color_space = channels == 1 ? JCS_GRAYSCALE : channels == 4 ? JCS_CMYK : JCS_RGB;
   jpeg_set_defaults(&encoder->jpeg);
   jpeg_set_quality(&encoder->jpeg, quality, TRUE);
+  encoder->jpeg.density_unit = (UINT8)density_unit;
+  encoder->jpeg.X_density = (UINT16)density_x;
+  encoder->jpeg.Y_density = (UINT16)density_y;
   /* Full chroma resolution and baseline sequential coding. No full coefficient
    * buffer for optimization/progressive output, and no quality-dependent switch. */
   for (int i = 0; i < encoder->jpeg.num_components; i++) {
@@ -219,11 +223,11 @@ struct encoder *capy_jpeg_encoder_new(write_fn write, void *opaque, uint32_t wid
   jpeg_start_compress(&encoder->jpeg, TRUE);
   return encoder;
 }
-int capy_jpeg_encoder_marker(struct encoder *encoder, const unsigned char *data, size_t size, char *message) {
+int capy_jpeg_encoder_marker(struct encoder *encoder, int marker, const unsigned char *data, size_t size, char *message) {
   encoder->error.message = message;
   if (setjmp(encoder->error.jump)) return 0;
-  if (size > 65533) { strcpy(message, "JPEG ICC chunk is too large"); return 0; }
-  jpeg_write_marker(&encoder->jpeg, JPEG_APP0 + 2, data, (unsigned int)size);
+  if (size > 65533 || (marker != 1 && marker != 2)) { strcpy(message, "Invalid JPEG metadata segment"); return 0; }
+  jpeg_write_marker(&encoder->jpeg, JPEG_APP0 + marker, data, (unsigned int)size);
   return 1;
 }
 int capy_jpeg_encoder_row(struct encoder *encoder, const unsigned char *row, size_t size, char *message) {

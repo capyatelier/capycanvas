@@ -10,6 +10,8 @@ mod atomic_file;
 pub use atomic_file::{atomic_write, atomic_write_checked};
 
 pub mod color;
+mod image_metadata;
+pub use image_metadata::{ImageResolution, ResolutionUnit};
 mod effect_catalog;
 mod effects;
 pub mod raster;
@@ -1223,6 +1225,7 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
     pub color: color::DocumentColor,
+    pub resolution: Option<ImageResolution>,
     /// Front-to-back display order.
     pub layers: Vec<Layer>,
     pub active_layer: LayerId,
@@ -1262,6 +1265,7 @@ impl Document {
             width,
             height,
             color: color::DocumentColor::default(),
+            resolution: None,
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),
                 Layer {

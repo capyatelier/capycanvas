@@ -32,6 +32,21 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
         .find_tag_unsigned::<u16>(Tag::Orientation)
         .map_err(err)?
         .unwrap_or(1);
+    let mut density = [None; 2];
+    for (out, tag) in density.iter_mut().zip([Tag::XResolution, Tag::YResolution]) {
+        if let Some(tiff::decoder::ifd::Value::Rational(n, d)) =
+            decoder.find_tag(tag).map_err(err)?
+        {
+            *out = Some([n, d]);
+        }
+    }
+    let resolution = super::metadata::physical(
+        decoder
+            .find_tag_unsigned::<u16>(Tag::ResolutionUnit)
+            .map_err(err)?
+            .unwrap_or(2),
+        density,
+    );
     if decoder
         .find_tag_unsigned_vec::<u16>(Tag::SampleFormat)
         .map_err(err)?
@@ -134,7 +149,9 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
             builder.push_row(row)?;
         }
     }
-    super::orientation::normalize(builder.finish()?, orientation, limits.source_bytes)
+    let mut source = builder.finish()?;
+    source.resolution = resolution;
+    super::orientation::normalize(source, orientation, limits.source_bytes)
 }
 
 // The pinned TIFF encoder exposes RGB alpha types but no gray-alpha types.
@@ -167,9 +184,13 @@ gray_alpha!(GrayAlpha16, u16, 16);
 pub fn write_tiff(output: impl Write + Seek, source: &SourceImage) -> Result<(), String> {
     source.validate()?;
     let mut rows = source.rows();
-    write_tiff_rows(output, source.extent, &source.interpretation, |y, row| {
-        rows.read(y, row)
-    })
+    write_tiff_rows(
+        output,
+        source.extent,
+        &source.interpretation,
+        source.resolution,
+        |y, row| rows.read(y, row),
+    )
 }
 
 /// Stream top-to-bottom encoded rows, with little-endian integer16 samples.
@@ -178,6 +199,7 @@ pub fn write_tiff_rows(
     mut output: impl Write + Seek,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
+    resolution: Option<layer_core::ImageResolution>,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
@@ -191,6 +213,9 @@ pub fn write_tiff_rows(
         interpretation.profile.clone()
     };
     let icc = profile_bytes(&profile)?;
+    let density = resolution
+        .map(layer_core::ImageResolution::tiff_density)
+        .transpose()?;
     let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(err)?;
     let mut codes = Vec::<u16>::new();
     macro_rules! write {
@@ -198,6 +223,21 @@ pub fn write_tiff_rows(
             let mut image = encoder
                 .new_image::<$ty>(extent[0], extent[1])
                 .map_err(err)?;
+            if let Some((unit, density)) = density {
+                image
+                    .encoder()
+                    .write_tag(Tag::ResolutionUnit, unit)
+                    .map_err(err)?;
+                for (tag, [n, d]) in [Tag::XResolution, Tag::YResolution]
+                    .into_iter()
+                    .zip(density)
+                {
+                    image
+                        .encoder()
+                        .write_tag(tag, tiff::encoder::Rational { n, d })
+                        .map_err(err)?;
+                }
+            }
             image
                 .encoder()
                 .write_tag(Tag::IccProfile, icc.as_slice())

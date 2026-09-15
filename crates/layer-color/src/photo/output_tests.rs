@@ -29,7 +29,7 @@ fn working_rows_stream_into_profiled_files_without_an_intermediate_image() {
                     write_tiff_rows(
                         &mut file,
                         source.extent,
-                        encoder.interpretation(),
+                        encoder.interpretation(), None,
                         &mut provider,
                     )
                     .unwrap();
@@ -37,7 +37,7 @@ fn working_rows_stream_into_profiled_files_without_an_intermediate_image() {
                     write_png_rows(
                         &mut file,
                         source.extent,
-                        encoder.interpretation(),
+                        encoder.interpretation(), None,
                         &mut provider,
                     )
                     .unwrap();
@@ -65,9 +65,9 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
             let mut output = Cursor::new(Vec::new());
             let provider = |_, _: &mut [u8]| panic!("invalid output called provider");
             let result = if tiff {
-                write_tiff_rows(&mut output, extent, &interpretation, provider)
+                write_tiff_rows(&mut output, extent, &interpretation, None, provider)
             } else {
-                write_png_rows(&mut output, extent, &interpretation, provider)
+                write_png_rows(&mut output, extent, &interpretation, None, provider)
             };
             assert!(result.is_err());
             assert!(output.into_inner().is_empty());
@@ -83,9 +83,9 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
         };
         let mut output = Cursor::new(Vec::new());
         let result = if tiff {
-            write_tiff_rows(&mut output, [513, 257], &interpretation, provider)
+            write_tiff_rows(&mut output, [513, 257], &interpretation, None, provider)
         } else {
-            write_png_rows(&mut output, [513, 257], &interpretation, provider)
+            write_png_rows(&mut output, [513, 257], &interpretation, None, provider)
         };
         assert_eq!(result.unwrap_err(), "cancelled row provider");
         assert_eq!(calls, 4);

@@ -2,6 +2,16 @@
 use super::*;
 
 impl SnapshotRenderer {
+    pub fn set_output_resolution(
+        &mut self,
+        resolution: Option<layer_core::ImageResolution>,
+    ) -> Result<(), String> {
+        if let Some(resolution) = resolution {
+            resolution.validate()?;
+        }
+        self.output_resolution = resolution;
+        Ok(())
+    }
     pub fn set_output_extent(&mut self, extent: [u32; 2]) -> Result<(), String> {
         if extent.into_iter().any(|v| v == 0 || v > 32768) {
             return Err("Image dimensions must be between 1 and 32768 pixels".into());
@@ -18,8 +28,9 @@ impl SnapshotRenderer {
         options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
         self.write_rows(target, options, matte, |extent, target, row| {
-            layer_color::photo::write_png_rows(output, extent, target, row)
+            layer_color::photo::write_png_rows(output, extent, target, resolution, row)
         })
     }
     pub fn write_tiff(
@@ -29,8 +40,9 @@ impl SnapshotRenderer {
         options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
         self.write_rows(target, options, matte, |extent, target, row| {
-            layer_color::photo::write_tiff_rows(output, extent, target, row)
+            layer_color::photo::write_tiff_rows(output, extent, target, resolution, row)
         })
     }
     pub fn write_jpeg(
@@ -41,8 +53,9 @@ impl SnapshotRenderer {
         matte: [f32; 3],
         quality: u8,
     ) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
         self.write_rows(target, options, Some(matte), |extent, target, row| {
-            layer_color::photo::write_jpeg_rows(output, extent, target, quality, row)
+            layer_color::photo::write_jpeg_rows(output, extent, target, resolution, quality, row)
         })
     }
     fn identity_source(

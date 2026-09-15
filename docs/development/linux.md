@@ -124,8 +124,16 @@ premultiplied composition before output profile conversion, matte application an
 integer quantization. Reductions integrate covered source pixels; enlargements
 use Catmull–Rom interpolation. PNG/TIFF/JPEG share the bounded row pipeline, and
 an unchanged-size identity export retains exact integer samples. Resizing never
-changes the editable master or its dirty state. Resolution metadata remains under
-implementation.
+changes the editable master or its dirty state.
+
+Photo Open retains valid physical density in the master and original source;
+native save/reopen preserves its rational values. Export can retain that density,
+set an explicit pixels-per-inch value, or omit it. The footer shows physical and
+pixel dimensions separately. Density changes do not resample artwork; resizing
+with retained density changes the physical size. PNG uses rounded pixels/metre,
+TIFF uses rational density, and JPEG carries rational Exif plus applicable JFIF
+density. Unknown physical size stays unspecified. Document Properties reports
+the master density. See the [resolution validation](../history/color-management-gtk-m2-validation.md#2026-09-15--preserve-and-select-physical-resolution-metadata).
 
 Export offers named presets with embedded ICC profiles, Save as/Update/Remove,
 and Reset for the built-in destinations. Successful delivery remembers each

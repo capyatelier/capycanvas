@@ -60,6 +60,7 @@ fn fixture(color: DocumentColor) -> Project {
         watercolor: None,
     });
     let rasterized = Arc::new(SourceImage {
+        resolution: None,
         kind: SourceKind::Rasterized,
         // Includes a complete tile outside the document, shared with paint.
         extent: [512, 256],

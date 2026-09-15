@@ -94,7 +94,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
         };
         let mut bytes = Vec::new();
         assert!(
-            write_jpeg_rows(&mut bytes, source.extent, &target, quality, |_, _| panic!(
+            write_jpeg_rows(&mut bytes, source.extent, &target, None, quality, |_, _| panic!(
                 "invalid output requested pixels"
             ))
             .is_err()
@@ -106,7 +106,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
     let error = write_jpeg_rows(
         &mut bytes,
         source.extent,
-        &source.interpretation,
+        &source.interpretation, None,
         90,
         |y, row| {
             assert_eq!(y, calls);
@@ -161,7 +161,7 @@ fn jpeg_ffi_io_errors_and_panics_return_to_rust_without_reusing_failed_codec_sta
         }
     }
     for panic in [false, true] {
-        let mut encoder = jpeg_codec::Encoder::new(BrokenWrite(panic), [8, 8], 3, 90).unwrap();
+        let mut encoder = jpeg_codec::Encoder::new(BrokenWrite(panic), [8, 8], 3, 90, None).unwrap();
         for _ in 0..8 {
             encoder.row(&[128; 24]).unwrap();
         }
@@ -188,7 +188,7 @@ fn baseline_60mp_jpeg_decodes_with_an_eight_mib_codec_limit() {
         profile_assumed: false,
     };
     let mut bytes = Vec::new();
-    write_jpeg_rows(&mut bytes, extent, &interpretation, 100, |_, row| {
+    write_jpeg_rows(&mut bytes, extent, &interpretation, None, 100, |_, row| {
         for p in row.chunks_exact_mut(3) {
             p.copy_from_slice(&[40, 100, 170]);
         }

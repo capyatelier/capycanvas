@@ -14,6 +14,7 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
     let document = project.document;
     let color = document.color;
     let extent = [document.width, document.height];
+    let resolution = document.resolution;
     // Profiles can contain substantial metadata. Parse once off the GTK owner.
     let sources = gtk::gio::spawn_blocking(move || {
         document
@@ -67,6 +68,10 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         &format!("{} × {} pixels", extent[0], extent[1]),
     );
     add("Working color space", color.space.name());
+    add("Resolution metadata", &resolution.map_or_else(|| "Not specified".into(), |r| {
+        let [x, y] = r.pixels_per_inch();
+        format!("{x:.2} × {y:.2} pixels per inch")
+    }));
     add(
         "Bit depth",
         &format!("{}-bit integer SDR", color.depth.bits()),

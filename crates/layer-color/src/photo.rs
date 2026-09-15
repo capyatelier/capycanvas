@@ -9,6 +9,9 @@ mod jpeg_codec;
 mod jpeg_io;
 mod jpeg_markers;
 mod orientation;
+mod metadata;
+#[cfg(test)]
+mod metadata_tests;
 mod png_io;
 mod tiff_io;
 pub use jpeg_io::{read_jpeg, write_jpeg, write_jpeg_rows};

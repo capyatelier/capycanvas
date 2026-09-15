@@ -19,6 +19,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         space: RgbSpace::ProPhoto,
         depth: IntegerDepth::U16,
     };
+    project.document.resolution = Some(layer_core::ImageResolution::ppi(600));
     project.document.layers[1].visible = false;
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgba,
@@ -118,6 +119,15 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
             .downcast::<adw::SwitchRow>()
             .unwrap();
         allow.set_active(enlarge);
+        // Physical density remains independent of delivery pixel dimensions.
+        combo(&w, "export-resolution").set_selected(format);
+        if format == 1 {
+            find_named(dialog.upcast_ref(), "export-ppi")
+                .unwrap()
+                .downcast::<adw::SpinRow>()
+                .unwrap()
+                .set_value(300.);
+        }
         let note = find_named(dialog.upcast_ref(), "export-size-description")
             .unwrap()
             .downcast::<gtk::Label>()
@@ -207,6 +217,14 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         )
         .unwrap();
         assert_eq!(result.extent, expected);
+        match format {
+            0 => assert!((result.resolution.unwrap().pixels_per_inch()[0] - 600.).abs() < 0.013),
+            1 => assert_eq!(
+                result.resolution,
+                Some(layer_core::ImageResolution::ppi(300))
+            ),
+            _ => assert!(result.resolution.is_none()),
+        }
         if format != 2 {
             // Both lossless copies fit the preview without further reduction.
             // Interpret actual file samples and independently composite the
@@ -358,6 +376,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
             .into(),
     );
     custom.profile.name = "Embedded lab RGB".into();
+    custom.resolution = ExportResolution::Ppi(240);
     custom.size = ExportSize::Fit {
         bounds: [37, 29],
         enlarge: false,
@@ -396,6 +415,14 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     assert_eq!(combo(&w, "export-space").selected(), 4);
     assert_eq!(combo(&w, "export-format").selected(), 1);
     assert_eq!(combo(&w, "export-depth").selected(), 1);
+    assert_eq!(combo(&w, "export-resolution").selected(), 1);
+    assert_eq!(
+        widget("export-ppi")
+            .downcast::<adw::SpinRow>()
+            .unwrap()
+            .value(),
+        240.
+    );
     assert_eq!(
         widget("export-width")
             .downcast::<adw::SpinRow>()
@@ -429,6 +456,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
         }
     );
     assert_eq!(saved.profile, custom.profile);
+    assert_eq!(saved.resolution, custom.resolution);
     let preview = widget("color-preview-after")
         .downcast::<gtk::Picture>()
         .unwrap();

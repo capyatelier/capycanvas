@@ -6053,3 +6053,100 @@ qualification, monitor/profile/alternate-renderer checks, and the existing
 workspace/toolbar native harness gaps. Fresh baseline comparisons and all
 performance/memory qualification and optimization remain last. Other platform
 hosts still require approval after GTK completion and qualification.
+
+## 2026-09-15 — Preserve and select physical resolution metadata
+
+Implementation starts from `30a7423a`. Native documents and retained sources now
+carry optional physical density as two positive rational values and an explicit
+inch/centimetre/metre unit. Native save/reopen preserves these values exactly;
+photo Open adopts the source density, while Place retains it with the source.
+Source rasterization and document color conversion preserve the metadata.
+Orientation normalization swaps density axes whenever it swaps pixel axes.
+Resolution is independent of color, precision and pixel dimensions.
+
+GTK Document Properties reports the master density. Export offers From master,
+Custom (1–65535 pixels per inch) or Omit, with physical dimensions and density
+shown beside the resolved pixel size. Presets retain the choice. From master
+keeps density when resizing, so the physical size changes with the pixel count;
+choosing Custom changes metadata without resampling. A single complete-recipe
+validator now controls export availability, replacing the partial profile/matte
+validator. Metadata-only changes do not restart pixel preview work.
+
+The shared row writers accept resolution explicitly. PNG writes integer pixels
+per metre in [pHYs](https://www.w3.org/TR/png-3/#11pHYs); the maximum rounding error
+is half a pixel per metre (0.0127 ppi). Explicit PNG physical metadata takes
+precedence over duplicate Exif density. TIFF uses its rational X/YResolution and
+ResolutionUnit tags ([LibTIFF tag documentation](https://libtiff.gitlab.io/libtiff/functions/TIFFSetField.html)).
+JPEG writes rounded whole-unit JFIF density where JFIF applies and a minimal Exif
+APP1 IFD with rational density and normalized orientation. JFIF's integer fields
+and inch/cm units follow the [JFIF 1.02 specification](https://www.w3.org/Graphics/JPEG/jfif.pdf).
+On JPEG import, supported rational Exif density takes precedence over rounded
+JFIF density. The C wrapper's existing bounded marker writer now handles APP1
+and ICC APP2; its setjmp boundary remains wholly in C.
+
+No arbitrary input Exif block is copied to exports: stale dimensions, thumbnails,
+camera settings and orientation tags are not reattached after edits. Unknown
+physical units and zero/invalid print density do not invent a physical size;
+otherwise supported pixels still open. This work does not add non-square-pixel
+editing or complete Exif/XMP preservation, nor claim full Exif-file conformance.
+Density values outside a selected container's representation produce an explicit
+export validation error rather than being silently clamped.
+
+Artifacts are under `artifacts/color-m2/`. No benchmarks or optimization ran.
+Correctness results:
+
+- `resolution-core-tests.log`: rational/unit/rounding/boundary test passed.
+- `resolution-ui-tests.log`: 5 shared export/preset/snapshot tests passed.
+- `resolution-photo-checked-tests.log`: 18 photo tests passed, 2 existing ignored
+  tests not run (11.64 s). Covers both depths, exact PNG/TIFF samples, fractional
+  TIFF/JPEG density, unchanged JPEG decoded samples, raw JFIF bytes, PNG/Exif
+  precedence and axis normalization, grayscale and CMYK JPEG metadata. Existing
+  codec I/O panic tests deliberately panic inside callbacks and verify errors
+  return safely. The first build missed the new metadata argument at one such
+  test-only codec constructor; it was fixed before execution.
+- `resolution-native_new_presets_and_profiled_photo_master.log`: passed (21.89 s).
+  A ProPhoto16 TIFF with 300.5×300 ppi completes Open, brush edit, native Save,
+  reopen and TIFF delivery. Original file bytes, retained source and exact
+  canonical editable archive remain preserved, including resolution.
+- `resolution-native_export_sizes_preserve_master_and_release_cancelled_dialogs.log`:
+  passed (17.60 s). The 600 ppi master exports a fitted PNG preserving density,
+  TIFF at explicit 300 ppi, and enlarged JPEG with density omitted. Existing
+  preview/sample/profile/lifetime and master-state assertions still pass.
+- `resolution-native_export_presets_save_update_remove_reset_and_remember_after_delivery.log`:
+  passed (8.64 s), including restoration and persistence of a custom 240 ppi
+  recipe, successful delivery, cancellation and independent New/Open settings.
+- `resolution-production-check.log`: GTK/shared FFI passed (1.69 s). Other
+  platform hosts were not integrated or built.
+
+Native runs use the private Mutter 1600×1000@120 harness, GTK 4.22.4,
+libadwaita 1.9.3, GSK Vulkan and RTX PRO 6000 Blackwell Max-Q / NVIDIA 610.57.04.
+Exact executable `resolution-gtk-tests` SHA-256:
+`d11b9834c53bcd7ea9b63f7ef5440ce196a4d02dae5786142431238e73f2f4b6`.
+Its source manifest includes the C codec and all 28 changed/new Rust sources;
+all hashes match. `resolution-provenance.json` records those and 20 artifacts.
+
+`resolution-external-identify.log` records independent ImageMagick inspection:
+513×257 TIFF16 at 300.5×300 ppi, 75×50 PNG16 at 236.22 pixels/cm (approximately
+600 ppi), 192×128 TIFF16 at 300 ppi, and 300×200 JPEG8 with undefined physical
+units. ImageMagick displays a 72×72 fallback for the last file; it is not a stored
+72 ppi tag, and the production decoder reports no physical resolution. All retain
+ICC profiles. This is decoder inspection, not manual external-editor or print
+qualification. `export-resize-native/2175896/tif-sizing.png` was visually inspected;
+its physical dimensions and resolution remain visible above the action buttons.
+
+Reproduce using local JPEG headers in `PKG_CONFIG_PATH`: run `cargo test -p
+layer-core --offline image_metadata::`, `cargo test -p layer-ui --offline export`,
+and `cargo test -p layer-color --offline photo:: -- --test-threads=1 --nocapture`
+with `LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm`. Build GTK tests
+with `cargo test -p layer-linux --offline --no-run`, then use
+`tools/performance/gtk-raster.sh` with the three full names under
+`workspace::tests::new_photo::` or `workspace::tests::export_resize::` above.
+The saved exact wrapper prevents substring selection.
+
+Remaining GTK work is TIFF/HDR-input policy completion, combined job scheduling,
+cancellation and resource budgets, coarse-first source/display and final zoom
+quality, full tool/filter/large-document precision qualification, managed-display
+and alternate-renderer qualification, and the previously recorded workspace and
+toolbar test gaps. Fresh baseline/frame-creation comparisons, memory and latency
+measurements and necessary optimization remain last. Other platform host work
+requires approval after GTK completion and qualification.

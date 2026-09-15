@@ -2,67 +2,6 @@ use super::*;
 use layer_core::raster::{TILE_SIZE, TileBlob};
 use std::{collections::BTreeMap, sync::Arc};
 
-pub(super) fn exif(bytes: &[u8]) -> Result<u16, String> {
-    let bytes = bytes.strip_prefix(b"Exif\0\0").unwrap_or(bytes);
-    if bytes.len() < 8 {
-        return Err("Incomplete EXIF header".into());
-    }
-    let little = match &bytes[..2] {
-        b"II" => true,
-        b"MM" => false,
-        _ => return Err("Invalid EXIF byte order".into()),
-    };
-    let u16_at = |at: usize| -> Result<u16, String> {
-        let b: [u8; 2] = bytes
-            .get(at..at.checked_add(2).ok_or("EXIF offset overflow")?)
-            .ok_or("Incomplete EXIF value")?
-            .try_into()
-            .unwrap();
-        Ok(if little {
-            u16::from_le_bytes(b)
-        } else {
-            u16::from_be_bytes(b)
-        })
-    };
-    let u32_at = |at: usize| -> Result<u32, String> {
-        let b: [u8; 4] = bytes
-            .get(at..at.checked_add(4).ok_or("EXIF offset overflow")?)
-            .ok_or("Incomplete EXIF value")?
-            .try_into()
-            .unwrap();
-        Ok(if little {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
-        })
-    };
-    if u16_at(2)? != 42 {
-        return Err("Unsupported EXIF TIFF header".into());
-    }
-    let ifd = u32_at(4)? as usize;
-    if ifd == 0 {
-        return Ok(1);
-    }
-    let count = usize::from(u16_at(ifd)?);
-    for index in 0..count {
-        let at = ifd
-            .checked_add(2 + index * 12)
-            .ok_or("EXIF directory overflow")?;
-        if u16_at(at)? == 274 {
-            if u16_at(at + 2)? != 3 || u32_at(at + 4)? != 1 {
-                return Err("Invalid EXIF orientation field".into());
-            }
-            let value = u16_at(at + 8)?;
-            return if (1..=8).contains(&value) {
-                Ok(value)
-            } else {
-                Err("Invalid EXIF orientation".into())
-            };
-        }
-    }
-    Ok(1)
-}
-
 /// Normalize the source's sample positions losslessly. At most four input tiles
 /// and one output tile are decoded; no rotated full-size image is allocated.
 pub(super) fn normalize(
@@ -81,6 +20,9 @@ pub(super) fn normalize(
     let bpp = source.interpretation.pixel_bytes();
     let descriptor = source.interpretation.descriptor();
     let mut result = SourceImage {
+        resolution: source
+            .resolution
+            .map(|r| if orientation >= 5 { r.swapped() } else { r }),
         kind: source.kind,
         extent,
         interpretation: source.interpretation.clone(),

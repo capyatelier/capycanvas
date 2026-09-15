@@ -73,6 +73,7 @@ pub(crate) fn write_snapshot(
             snapshot.project.document.width,
             snapshot.project.document.height,
         ])?;
+        let resolution = recipe.output_resolution(snapshot.project.document.resolution)?;
         let mut renderer = SnapshotRenderer::with_control(
             snapshot.project,
             snapshot.background,
@@ -82,6 +83,7 @@ pub(crate) fn write_snapshot(
         )
         .map_err(|e| e.to_string())?;
         renderer.set_output_extent(extent)?;
+        renderer.set_output_resolution(resolution)?;
         let target = recipe.interpretation();
         let mut clipped = 0;
         layer_core::atomic_write_checked(
@@ -148,6 +150,7 @@ struct Choice {
 
 async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
     let document = snapshot.project.document.color;
+    let master_resolution = snapshot.project.document.resolution;
     let library = Rc::new(std::cell::RefCell::new(presets::load(document).await?));
     let destination = Rc::new(std::cell::Cell::new(0usize));
     let extent = [
@@ -196,6 +199,32 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         .build();
     enlarge.set_widget_name("export-enlarge");
     group.add(&enlarge);
+    let resolution = combo(
+        &group,
+        "Resolution metadata",
+        "export-resolution",
+        &["From master", "Custom", "Omit"],
+    );
+    let ppi = adw::SpinRow::with_range(1., 65535., 1.);
+    ppi.set_title("Pixels per inch");
+    ppi.set_widget_name("export-ppi");
+    ppi.set_value(300.);
+    ppi.set_snap_to_ticks(true);
+    ppi.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+    group.add(&ppi);
+    let chosen_resolution: Rc<dyn Fn() -> ExportResolution> = Rc::new(glib::clone!(
+        #[weak]
+        resolution,
+        #[weak]
+        ppi,
+        #[upgrade_or]
+        ExportResolution::Omit,
+        move || match resolution.selected() {
+            1 => ExportResolution::Ppi(ppi.value() as u32),
+            2 => ExportResolution::Omit,
+            _ => ExportResolution::Master,
+        }
+    ));
     let size_note = gtk::Label::builder().wrap(true).xalign(0.).build();
     size_note.set_widget_name("export-size-description");
     size_note.add_css_class("dim-label");
@@ -219,6 +248,8 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
     let refresh_size: Rc<dyn Fn()> = Rc::new({
         let size_note = size_note.downgrade();
         let output_size = output_size.clone();
+        let chosen_resolution = chosen_resolution.clone();
+        let ppi = ppi.downgrade();
         let dimensions = dimensions.each_ref().map(|row| row.downgrade());
         let enlarge = enlarge.downgrade();
         move || {
@@ -226,6 +257,15 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
                 return;
             };
             let choice = output_size();
+            let resolution = chosen_resolution();
+            if let Some(ppi) = ppi.upgrade() {
+                ppi.set_visible(matches!(resolution, ExportResolution::Ppi(_)));
+            }
+            let physical = match resolution {
+                ExportResolution::Master => master_resolution,
+                ExportResolution::Ppi(value) => Some(layer_core::ImageResolution::ppi(value)),
+                ExportResolution::Omit => None,
+            };
             let fitted = matches!(choice, layer_ui::ExportSize::Fit { .. });
             for row in dimensions.iter().filter_map(|row| row.upgrade()) {
                 row.set_visible(fitted);
@@ -235,7 +275,20 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
             }
             match choice.extent(extent) {
                 Ok([width, height]) => {
-                    size_note.set_label(&format!("Output: {width} × {height} px"))
+                    let metadata = physical.map_or_else(
+                        || "No physical resolution specified".into(),
+                        |r| {
+                            let [x, y] = r.pixels_per_inch();
+                            format!(
+                                "{:.2} × {:.2} cm · {:.2} × {:.2} ppi",
+                                f64::from(width) / x * 2.54,
+                                f64::from(height) / y * 2.54,
+                                x,
+                                y
+                            )
+                        },
+                    );
+                    size_note.set_label(&format!("Output: {width} × {height} px\n{metadata}"))
                 }
                 Err(error) => size_note.set_label(&error),
             }
@@ -252,6 +305,14 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         });
     }
     enlarge.connect_active_notify({
+        let refresh = refresh_size.clone();
+        move |_| refresh()
+    });
+    resolution.connect_selected_notify({
+        let refresh = refresh_size.clone();
+        move |_| refresh()
+    });
+    ppi.connect_value_notify({
         let refresh = refresh_size.clone();
         move |_| refresh()
     });
@@ -371,34 +432,6 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         .build();
     validation.add_css_class("error");
     validation.set_widget_name("export-validation");
-    background.connect_selected_notify(glib::clone!(
-        #[weak]
-        format,
-        #[weak]
-        space,
-        #[weak]
-        validation,
-        #[weak]
-        dialog,
-        #[strong]
-        selected_profile,
-        move |background| {
-            let result = selected_profile(space.selected()).and_then(|profile| {
-                if format.selected() == 0 && profile.channels == ProfileChannels::Cmyk {
-                    Err("Choose TIFF or JPEG for a CMYK profile".into())
-                } else if background.selected() == 0
-                    && (format.selected() == 2 || profile.channels == ProfileChannels::Cmyk)
-                {
-                    Err("Choose a background for this output".into())
-                } else {
-                    Ok(())
-                }
-            });
-            dialog.set_response_enabled("export", result.is_ok());
-            validation.set_label(result.as_ref().err().map_or("", String::as_str));
-            validation.set_visible(result.is_err());
-        }
-    ));
     space.connect_selected_notify(glib::clone!(
         #[weak]
         background,
@@ -431,6 +464,10 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         let restore_profile = profile.restore.clone();
         let dimensions = dimensions.each_ref().map(|r| r.downgrade());
         glib::clone!(
+            #[weak]
+            resolution,
+            #[weak]
+            ppi,
             #[weak]
             format,
             #[weak]
@@ -466,6 +503,14 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
                     ExportBackground::Black => 2,
                 });
                 quality.set_value(f64::from(recipe.jpeg_quality));
+                match recipe.resolution {
+                    ExportResolution::Master => resolution.set_selected(0),
+                    ExportResolution::Ppi(value) => {
+                        ppi.set_value(f64::from(value));
+                        resolution.set_selected(1);
+                    }
+                    ExportResolution::Omit => resolution.set_selected(2),
+                }
                 intent.set_selected(match recipe.encoding.conversion.intent {
                     RenderingIntent::RelativeColorimetric => 0,
                     RenderingIntent::Perceptual => 1,
@@ -513,7 +558,15 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
             }
         }
     ));
-    for row in [&format, &space, &depth, &background, &intent, &size] {
+    for row in [
+        &format,
+        &space,
+        &depth,
+        &background,
+        &intent,
+        &size,
+        &resolution,
+    ] {
         row.connect_selected_notify(glib::clone!(
             #[weak]
             preset,
@@ -543,7 +596,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
             }
         ));
     }
-    for row in dimensions.iter().chain(std::iter::once(&quality)) {
+    for row in dimensions.iter().chain([&quality, &ppi]) {
         row.connect_value_notify(glib::clone!(
             #[weak]
             preset,
@@ -606,11 +659,14 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         selected_profile,
         #[strong]
         output_size,
+        #[strong]
+        chosen_resolution,
         #[upgrade_or]
         Err("Export options closed".into()),
         move || {
             let recipe = ExportRecipe {
                 size: output_size(),
+                resolution: chosen_resolution(),
                 format: match format.selected() {
                     1 => ExportFormat::Tiff,
                     2 => ExportFormat::Jpeg,
@@ -646,9 +702,50 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
                 },
             };
             recipe.validate()?;
+            recipe.output_resolution(master_resolution)?;
             Ok(recipe)
         }
     ));
+    let validate: Rc<dyn Fn()> = Rc::new(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        validation,
+        #[strong]
+        read_recipe,
+        move || {
+            let result = read_recipe();
+            dialog.set_response_enabled("export", result.is_ok());
+            validation.set_label(result.as_ref().err().map_or("", String::as_str));
+            validation.set_visible(result.is_err());
+        }
+    ));
+    for row in [
+        &format,
+        &space,
+        &depth,
+        &background,
+        &intent,
+        &size,
+        &resolution,
+    ] {
+        row.connect_selected_notify({
+            let validate = validate.clone();
+            move |_| validate()
+        });
+    }
+    for row in [&bpc, &dither, &enlarge] {
+        row.connect_active_notify({
+            let validate = validate.clone();
+            move |_| validate()
+        });
+    }
+    for row in dimensions.iter().chain([&quality, &ppi]) {
+        row.connect_value_notify({
+            let validate = validate.clone();
+            move |_| validate()
+        });
+    }
     let comparison =
         super::preview::Comparison::for_output(snapshot.project.clone(), w.view_color());
     let compression_note = gtk::Label::builder()
