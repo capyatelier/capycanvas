@@ -27,8 +27,37 @@ impl Default for CaptureLimits {
 pub struct CaptureControl {
     cancelled: Arc<AtomicBool>,
     output_rows: Arc<AtomicU32>,
+    allocation_peaks: Option<Arc<std::sync::Mutex<CaptureAllocationPeaks>>>,
+}
+/// Allocator observations at capture allocation boundaries, including readback
+/// staging. Driver-private memory and retained CPU sources are separate charges.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CaptureAllocationPeaks {
+    pub observations: u64,
+    pub allocated_bytes: u64,
+    pub reserved_bytes: u64,
 }
 impl CaptureControl {
+    /// Opt-in diagnostics; ordinary capture does not query the GPU allocator.
+    pub fn with_allocation_tracking() -> Self {
+        Self {
+            allocation_peaks: Some(Default::default()),
+            ..Self::default()
+        }
+    }
+    pub fn allocation_peaks(&self) -> Option<CaptureAllocationPeaks> {
+        self.allocation_peaks.as_ref().map(|p| *p.lock().unwrap())
+    }
+    fn observe_allocations(&self, device: &wgpu::Device) {
+        if let Some(peaks) = &self.allocation_peaks
+            && let Some(report) = device.generate_allocator_report()
+        {
+            let mut peaks = peaks.lock().unwrap();
+            peaks.observations += 1;
+            peaks.allocated_bytes = peaks.allocated_bytes.max(report.total_allocated_bytes);
+            peaks.reserved_bytes = peaks.reserved_bytes.max(report.total_reserved_bytes);
+        }
+    }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -183,17 +212,42 @@ impl SnapshotRenderer {
     /// checkerboard, proof, monitor conversion, selection or warning overlays.
     pub fn histogram(&mut self) -> Result<layer_core::color::histogram::Histogram, GpuRasterError> {
         let mut result = layer_core::color::histogram::Histogram::new(self.color());
-        for y in (0..self.extent[1]).step_by(16) {
+        let mut y = 0;
+        while y < self.extent[1] {
             self.check_cancelled()?;
-            let height = 16.min(self.extent[1] - y);
-            let pixels = self.read_region([0, y, self.extent[0], height])?;
-            result.add(&pixels).map_err(|e| GpuRasterError::Color(e.into()))?;
+            let (height, pixels) = self.read_band(y)?;
+            result
+                .add(&pixels)
+                .map_err(|e| GpuRasterError::Color(e.into()))?;
+            y += height;
         }
         self.check_cancelled()?;
         Ok(result)
     }
     fn check_cancelled(&self) -> Result<(), GpuRasterError> {
         self.control.check()
+    }
+
+    /// Capture complete tile rows when the dependency budget permits. Sixteen
+    /// separate captures of one tile row repeat composition, source decoding and
+    /// mapping. The CPU band is at most 32 MiB; planning includes its GPU target
+    /// and readback copy. Complex dependencies shrink the band before GPU work.
+    fn read_band(&mut self, y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
+        let [width, height] = self.extent;
+        if y >= height {
+            return Err(GpuRasterError::InvalidExtent);
+        }
+        let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
+        let mut rows = maximum.min(height - y);
+        loop {
+            match self.read_region([0, y, width, rows]) {
+                Ok(pixels) => return Ok((rows, pixels)),
+                Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => {
+                    rows = (rows / 2).max(16);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Exact linear-premultiplied document RGB. No display conversion, proof,
@@ -276,10 +330,10 @@ impl SnapshotRenderer {
             }
         }
         if planned > self.limits.planned_pixel_bytes {
-            return Err(GpuRasterError::Color(format!(
-                "Snapshot dependency plan requires {planned} bytes; limit is {}",
-                self.limits.planned_pixel_bytes
-            )));
+            return Err(GpuRasterError::CaptureBudget {
+                required: planned,
+                limit: self.limits.planned_pixel_bytes,
+            });
         }
         let r = &mut self.renderer;
         if let Some(scene) = &mut r.scene {
@@ -389,6 +443,7 @@ impl SnapshotRenderer {
         );
         r.uploads.finish(&encoder);
         let submission = encoder.submit(&r.queue);
+        self.control.observe_allocations(&r.device);
         let (tx, rx) = mpsc::channel();
         buffer
             .slice(..)

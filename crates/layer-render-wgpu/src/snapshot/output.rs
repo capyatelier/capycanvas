@@ -153,8 +153,8 @@ impl SnapshotRenderer {
     }
 }
 
-/// Small source bands amortize GPU mappings while the resampler retains only
-/// four filtered rows. No output size requires a full document readback.
+/// Bounded source bands amortize tile composition and GPU mappings while the
+/// resampler retains only four filtered rows. Never a full document readback.
 pub(super) struct Rows<'a> {
     renderer: &'a mut SnapshotRenderer,
     band: Vec<[f32; 4]>,
@@ -179,11 +179,9 @@ impl<'a> Rows<'a> {
         if y < self.first || y >= self.end {
             self.band = Vec::new();
             self.first = y;
-            self.end = (y + 16).min(height);
-            self.band = self
-                .renderer
-                .read_region([0, y, width, self.end - y])
-                .map_err(|e| e.to_string())?;
+            let (rows, band) = self.renderer.read_band(y).map_err(|e| e.to_string())?;
+            self.end = y + rows;
+            self.band = band;
         }
         let start = (y - self.first) as usize * width as usize;
         Ok(&self.band[start..start + width as usize])

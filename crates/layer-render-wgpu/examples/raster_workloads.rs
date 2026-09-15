@@ -18,6 +18,8 @@ use std::{
 
 type Engine = CanvasEngine<WgpuRasterizer>;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+#[path = "raster_workloads/photo.rs"]
+mod photo;
 struct Canvas {
     engine: Engine,
     input: InputProducer<PenEvent>,
@@ -151,6 +153,13 @@ impl Canvas {
         Ok(Project::snapshot(self.engine.document(), &BTreeMap::new())?)
     }
     fn stroke(&mut self, ordinal: u64) -> Result<(Vec<f64>, Vec<f64>)> {
+        self.stroke_observed(ordinal, |_, _, _, _, _| {})
+    }
+    fn stroke_observed(
+        &mut self,
+        ordinal: u64,
+        mut observe: impl FnMut(&Self, Instant, f64, f64, bool),
+    ) -> Result<(Vec<f64>, Vec<f64>)> {
         let mut brush = default_brush(DefaultBrushPreset::GPen);
         brush.diameter = 96.;
         brush.color_rgba_linear = [0.8, 0.04, 0.2, 0.5];
@@ -225,6 +234,7 @@ impl Canvas {
             }
             cpu.push(frame_cpu);
             complete.push(completed);
+            observe(self, start, frame_cpu, completed, misses != 0);
         }
         Ok((cpu, complete))
     }
@@ -353,6 +363,7 @@ fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
         ProjectLimits::default(),
     )?;
     assert_eq!(reopened.document.color, snapshot.document.color);
+    assert_eq!(reopened.document.layers.len(), snapshot.document.layers.len());
     for (before, after) in snapshot
         .document
         .layers
@@ -363,14 +374,17 @@ fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
             before.source == after.source,
             "Original source samples/profile changed"
         );
-        let before = before.raster.wait_data()?;
-        let after = after.raster.wait_data()?;
-        assert_eq!(before.tiles.len(), after.tiles.len());
-        for (key, tile) in &before.tiles {
-            assert_eq!(
-                tile.wait_backing()?.digest,
-                after.tiles[key].wait_backing()?.digest
-            );
+        assert_eq!(before.effect, after.effect);
+        assert_eq!(before.masks().count(), after.masks().count());
+        for (a, b) in std::iter::once((&before.raster, &after.raster))
+            .chain(before.masks().zip(after.masks()).map(|(a, b)| (&a.raster, &b.raster)))
+        {
+            let before = a.wait_data()?;
+            let after = b.wait_data()?;
+            assert_eq!(before.tiles.len(), after.tiles.len());
+            for (key, tile) in &before.tiles {
+                assert_eq!(tile.wait_backing()?.digest, after.tiles[key].wait_backing()?.digest);
+            }
         }
     }
     println!(
@@ -382,10 +396,16 @@ fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut selected = "all";
+    let mut photo = false;
+    let mut capture_only = false;
+    let mut output = PathBuf::from("artifacts/color-m2/final-performance/dense");
     let mut color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
     let mut arguments = args.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--photo" => photo = true,
+            "--photo-capture" => { photo = true; capture_only = true; },
+            "--output-dir" => output = PathBuf::from(arguments.next().ok_or("--output-dir needs a path")?),
             "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
             "--space" => color.space = match arguments.next().map(String::as_str) {
                 Some("srgb") => RgbSpace::Srgb,
@@ -399,12 +419,14 @@ fn main() -> Result<()> {
                 Some("16") => IntegerDepth::U16,
                 _ => return Err("--depth needs 8 or 16".into()),
             },
-            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
+            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
         }
     }
     println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");
-    let output = PathBuf::from("artifacts/color-m2/final-performance/dense");
     std::fs::create_dir_all(&output)?;
+    if photo {
+        return photo::run(selected, color, &output, capture_only);
+    }
     for (name, extent) in [
         ("24mp", [6000, 4000]),
         ("45mp", [8192, 5504]),

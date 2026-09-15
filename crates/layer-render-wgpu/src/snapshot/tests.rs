@@ -365,6 +365,55 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
 }
 
 #[test]
+fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let project = rich_project(color, 1);
+    let control = CaptureControl::with_allocation_tracking();
+    let mut reader = SnapshotRenderer::with_control(project, [0.; 4], 0., Default::default(), control.clone()).unwrap();
+    let [width, height] = reader.extent();
+    let mut reference = Vec::new();
+    for y in (0..height).step_by(16) {
+        reference.extend(reader.read_region([0, y, width, 16.min(height-y)]).unwrap());
+    }
+    let mut actual = Vec::new();
+    let mut y = 0;
+    let mut bands = 0;
+    while y < height {
+        let (rows, pixels) = reader.read_band(y).unwrap();
+        assert!(pixels.len() * 16 <= 32 * 1024 * 1024);
+        actual.extend(pixels);
+        y += rows;
+        bands += 1;
+    }
+    assert_eq!(bands, 2);
+    assert_eq!(actual, reference, "band boundaries must not change exact capture pixels");
+    let mut expected = layer_core::color::histogram::Histogram::new(color);
+    expected.add(&reference).unwrap();
+    assert_eq!(reader.histogram().unwrap(), expected);
+    let peaks = control.allocation_peaks().unwrap();
+    assert!(peaks.observations > 0 && peaks.reserved_bytes >= peaks.allocated_bytes);
+
+    // Budget rejections happen during dependency planning. Let exactly the
+    // original 16-row request fit and require the wider band to shrink to it.
+    reader.limits.planned_pixel_bytes = 0;
+    let required = |error| match error {
+        GpuRasterError::CaptureBudget { required, .. } => required,
+        other => panic!("unexpected capture error: {other}"),
+    };
+    let small = required(reader.read_region([0, 0, width, 16]).unwrap_err());
+    let large = required(reader.read_region([0, 0, width, 256]).unwrap_err());
+    assert!(large > small);
+    reader.limits.planned_pixel_bytes = small;
+    let observations = control.allocation_peaks().unwrap().observations;
+    let (rows, pixels) = reader.read_band(0).unwrap();
+    assert_eq!(rows, 16);
+    assert_eq!(pixels, reference[..width as usize * 16]);
+    assert_eq!(control.allocation_peaks().unwrap().observations, observations + 1);
+    reader.control().cancel();
+    assert!(reader.read_band(0).is_err());
+}
+
+#[test]
 fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
     for color in [
         DocumentColor::default(),

@@ -1221,3 +1221,186 @@ Final navigation/lifecycle executable SHA-256:
 `e79e0750fecff48d909cd4c917b043d5e9a40f7461f63beec009e9c0e9615ac0`.
 Their exact build/source manifests and logs use `native-terminal-final-*`,
 `native-terminal-idle-*` and `native-terminal-integrated-*` prefixes.
+
+## Expanded photo and concurrent-worker baseline
+
+The earlier dense-photo run qualified only its measured drawing/save subset.
+The expanded `raster_workloads --photo` workload uses the production snapshot
+renderer for profiled ProPhoto U16 PNG output and full-resolution inspection.
+It adds five retained corrections, an actual native scalar mask crossing tile
+boundaries, 64 exposure previews, repeated fitted-to-4× pan/zoom, 16 Gaussian
+radius changes, archive reopen and exact paint/mask undo restoration. A barrier
+starts save and export together; CSVs record operation/frame overlap. These
+initial end timestamps preceded renderer destruction; the corrected worker
+boundary and cleanup measurements are recorded below. Editing
+is paced at 120 Hz during worker overlap, with an explicit GPU completion wait.
+This is offscreen work latency, not GTK input-to-present evidence.
+
+The same captured executable, SHA-256
+`bafcdc483bdbbce245f521790f67d6fd11388f62a7d1498fb8ac6caa47518390`, ran
+serially at `/tmp/capy-m2-photo-expanded-path-control/raster-workloads`, with no
+builds or other validation overlapping. Production renderer code is `339129bc`
+plus opt-in snapshot allocation observations; the new example is retained in
+`photo-expanded-before-source/`. Commands, hashes, environment, GPU/process
+samples and logs are in `photo-expanded-before-*`, `photo-expanded-before-large-*`
+and `photo-expanded-summary.json` under `final-performance/`. The runner's first
+large-case invocation failed before launching because its executable alias had
+not yet been copied; no failed measurement is included below.
+
+| Case | Slider completed p95 / p99 ms | Warm navigation p99 ms | Cold navigation p95 / p99 ms | Three histogram times ms | Process RSS high-water MiB | Sum of GPU reservation peaks MiB |
+| --- | --- | --- | --- | --- | --- | --- |
+| 24 MP | 375.5 / 380.4 | 2.043 | 231.0 / 310.2 | 4749, 4428, 4782 | 940.7 | 896 |
+| 45 MP | 708.2 / 711.5 | 0.638 | 415.7 / 701.3 | 7325, 9322, 8276 | 1200.3 | 1152 |
+| 60 MP | 948.1 / 960.4 | 0.668 | 598.8 / 780.5 | 13295, 12815, 11797 | 1231.6 | 1152 |
+| Three documents, active 60 MP | 950.7 / 955.5 | 0.558 | 601.3 / 937.4 | 12623, 12072, 12418 | 2222.9 | 2432 |
+
+Source-cache misses define cold frames; repeatedly changing mip levels can
+require another fill. There are 64 slider samples in each reported case, and
+146/144/180/180 cold navigation samples versus 366/368/396/396 warm samples.
+The histogram column reports three individual operations, not a qualified p99.
+Gaussian preview p99 is 455/1012/1596/1554 ms (16 samples each). Slider, cold
+navigation, histogram and blur clearly fail their declared response budgets.
+Current code rebuilds the reduced display composite from full-resolution tiles
+on adjustment changes; the bounded 16-slot decoded-source cache repeatedly
+refills. This is substantial work to address, not a claim that ordinary brush
+computation became that slow.
+
+Warm painting during worker overlap has completed p99 2.727/2.614/2.867/2.691 ms
+(302/263/283/283 frames). Source-missing paint p99 is
+6.891/3.748/5.810/8.615 ms (82/121/165/165 frames). Individual startup stalls are
+still visible: warm paint maxima 103.9/76.9/82.3/90.7 ms, with CPU time near
+1 ms on the stalled thread. These establish waiting/contending work, without
+yet establishing its precise cause. Snapshot construction currently warms
+unused brush pipelines; isolating that work is a follow-up. Maxima and deadline
+misses remain reported even where p99 passes.
+
+Save durations are 64.6/111.8/159.1/170.7 ms; PNG export takes
+8.61/13.42/18.65/18.04 seconds, including setup and sync but excluding renderer
+destruction. Only 6/6/9/9 paint
+frames actually overlap save; 384/384/448/448 overlap export. Navigation overlap
+is separately recorded; these initial overlap counts exclude cleanup. Do not
+describe the whole editing interval as save contention. All archives retain
+source/profile, editable effect values and exact
+native paint/mask digests; undo/redo restores the measured native roots.
+
+The memory observations fit the declared envelopes for these operations. GPU
+figures sum each live renderer's observed allocator peak and the larger of the
+export/histogram worker peaks (those two workers run serially). They include
+allocator reservations and staging, exclude driver-private memory, and are not
+a measurement of one simultaneous instant or a proof of every transient maximum.
+Process RSS high-water covers all workers and archive reopening. Whole-image
+transforms, dense active edit pins, dense masks, global effects and codec pressure
+remain outside this particular matrix; this is not overall memory acceptance.
+
+## Bounded tile-row capture
+
+The production snapshot consumer previously read 16 output rows at a time,
+although `Scene::capture_region` composes complete 256-row tiles. A full-width
+photo exceeding the 16 decoded-source slots repeatedly decoded and recomposed
+those tiles for each small strip. Histogram and profiled output now share a
+bounded band reader: up to 256 rows, at most 32 MiB of CPU Float32 pixels. The
+existing dependency planner still charges GPU output, mapping and dependencies.
+A typed planning-budget failure halves the request down to the former 16-row
+size before any GPU work starts. Unsupported dependencies still fail explicitly;
+no pixel, filter, profile or precision contract changes. Cancellation remains
+checked during capture and between output rows.
+
+A focused regression test compares exact Float32 pixel values with 16-row captures
+through native masks, translated groups, watercolor and neighborhood sampling.
+It also checks histogram equality, exact budget fallback, cancellation and
+opt-in allocator observations. It passes (3.63 s). All 12 affected snapshot tests
+pass (29.57 s), covering all eight space/depth identity modes, hidden RGB,
+PNG/TIFF/JPEG, matte, dither, resampling, output previews and master preservation.
+Exact GPU test executable SHA-256:
+`2b7e2eba813589e7fe1760aa9bcddb24dd6293a11fe3e3b63f305f8784433206`.
+
+The fixed-snapshot `--photo-capture` comparison omits variable-duration editing,
+so both arms export and inspect the same committed pixels. The same executable
+pathname, power policy and serialized measurement rules apply. This comparison
+is a diagnosis of new photo consumers, not a replacement for the fixed drawing
+baseline or native presentation gate.
+
+| Case | PNG through sync, before / after seconds | Histogram before milliseconds | Histogram after milliseconds | RSS high-water before / after MiB | Aggregate GPU reservation bound before / after MiB |
+| --- | --- | --- | --- | --- | --- |
+| 24 MP | 7.507 / 3.855 | 6183, 5187, 4815 | 1406, 1231, 1285 | 714.5 / 728.1 | 640 / 640 |
+| 60 MP | 19.963 / 7.820 | 14789, 15232, 14095 | 3168, 3147, 3164 | 1051.8 / 1042.0 | 896 / 896 |
+
+Each export drops from 250 to 16 captures at 24 MP, and 458 to 29 at 60 MP.
+Worker live allocation peaks increase from 71.4 to 115.3 MiB and from 89.6 to
+149.6 MiB; worker allocator reservations remain 256 MiB. The explicit buffer
+increase stays within the declared process/GPU envelopes for these cases.
+Decoded PNG sample CRCs agree (`059569d1`, `1dbe9195`); every histogram repetition
+matches the before-arm bin/endpoint CRC (`217b99ae`, `9cd46a99`). No identity
+shortcut is eligible for these layered, masked, adjusted images.
+
+These first paired PNG times end before GPU renderer destruction. Histogram
+times likewise describe the operation on a retained worker, with setup logged
+separately. The concurrency follow-up below corrects export's full worker
+boundary; the stable-snapshot comparison still isolates the repeated capture
+work and verifies unchanged samples.
+
+Exact release executables:
+
+- Before: `1bb5193859b128dbf777daf2a83da23421c43dc5facebde312cdc8c6a5f50438`.
+- After: `6bef1f7da9ed7cce9fb930ff2fcde2e06d07c7bb0b0e86aeb52b86deb512f291`.
+
+`build-photo-bands.py`, `photo-expanded-bands-builds.json`, both source snapshots,
+`run-photo-expanded.py`, per-arm run/environment records, raw logs and the
+analysis script retain the complete reproduction under `final-performance/`.
+The final example also fixes `all` to run all four cases and writes separate
+case CSVs; those dispatch/report-name changes do not alter the measured explicit
+24/60 MP cases. Production snapshot code matches the captured after arm.
+
+GTK release compilation succeeds. Native histogram refresh/document preservation
+and profiled export sizing/cancel/dialog-release journeys pass separately on the
+private Wayland display (8.46 s and 13.18 s). Exact GTK test executable SHA-256:
+`fc4f5ef4cec1274f57f1eb7734e6d8cf3485e58f3e6cea9dc11faa6a1dabc7d9`.
+Logs and reports are `photo-bands-*` under `artifacts/color-m2/` and
+`final-performance/`. This is an intermediate improvement: histogram latency
+still exceeds 500/1000 ms, and full-resolution adjustment rebuilds, cold view
+fills, worker-startup stalls, the existing stroke tail and the remaining stress
+matrix are open. No GTK milestone acceptance or other-host approval is claimed.
+
+### Concurrent editing and corrected worker cleanup boundary
+
+A full 24 MP after run (`photo-expanded-bands-after-full-24mp`, same after
+executable) exposed a 31.6 ms paint stall just beyond export's recorded end.
+The harness had timestamped the returned `Job` before Rust destroyed its local
+GPU renderer. It now explicitly drops the renderer and output file before the
+worker end timestamp, and records `export-cleanup` separately. The previous
+through-sync durations remain retained and labeled; they are not full worker
+lifetime measurements.
+
+Both production arms were rebuilt with that same corrected harness and run
+serially at the same staged pathname. Exact executable hashes:
+
+- 16-row capture: `da55bd2e4ec2876d3abbda53b9c91675558bc0cd6add5477ceccee7f4c7eecd8`.
+- Bounded bands: `92c34e81afce0d1baf195a2434f53c1f7cf567b0487932175deeaba99407002d`.
+
+`photo-expanded-bands2-*`, `build-photo-bands-cleanup.py`, and
+`photo-expanded-cleanup-analysis.json` retain the binaries, sources, measurements
+and timestamp analysis. GPU cleanup takes **41.896 ms before and 39.619 ms after**.
+Before, that interval overlaps an already slow 264.36 ms cold navigation frame.
+After, it overlaps a **40.241 ms paint frame** (39.753 ms call-return time,
+5.303 ms thread CPU). The paint call starts 0.148 ms after cleanup starts.
+This strongly locates the remaining wait at worker retirement; it does not yet
+identify the specific driver/wgpu lock. Both arms also retain two startup paint
+stalls near the same event positions.
+
+Comparing the identical first 192 paint events, completed p50/p95 changes from
+0.850/3.141 to 0.865/3.164 ms; p99 is 26.722 → 40.241 ms, with two → three
+8.33 ms misses. Maxima are 88.169 → 73.189 ms. This **does not pass** the frame
+latency gate. A shorter export moves its unchanged cleanup cost into a different
+interaction phase; neither the small steady-frame times nor the lower maximum
+excuses the missed frames. Worker lifecycle contention must be addressed before
+acceptance. The new band reader remains useful: it removes repeated capture
+work with matching samples and measured bounded memory, while exposing this
+separate remaining lifecycle cost.
+
+The variable-length editing loop leaves different painted tile populations when
+export finishes. Its subsequent histogram/blur/undo times must not be used as an
+unchanged-work rendering regression comparison. Use the fixed-snapshot capture
+arms for that comparison and the recorded matched input prefix for foreground
+work. Native GTK histogram/export correctness checks above remain applicable;
+no live renderer, brush math, saving, history, diagnostics or recovery code was
+changed by the band reader.

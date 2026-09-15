@@ -231,6 +231,7 @@ pub struct GpuAdapterInfo {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GpuRasterError {
     Color(String),
+    CaptureBudget { required: u64, limit: u64 },
     AdapterUnavailable,
     HardwareAdapterRequired,
     DeviceRequest(String),
@@ -253,6 +254,8 @@ impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Color(message) => write!(formatter, "color: {message}"),
+            Self::CaptureBudget { required, limit } => write!(formatter,
+                "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
             Self::AdapterUnavailable => {
                 formatter.write_str("no compatible wgpu adapter is available")

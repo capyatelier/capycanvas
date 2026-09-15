@@ -25,8 +25,10 @@ records comparison arms and declared budgets.
 It reports two time boundaries:
 
 - **submit**: event validation, queueing, shared brush dynamics/contact
-  generation, wgpu command encoding, uploads, and queue submission; this is the
-  non-blocking production call;
+  generation, wgpu command encoding, uploads, and queue submission. Call-return
+  time includes any internal capacity/dependency wait; it is not necessarily
+  nonblocking. Thread CPU time, where recorded, distinguishes computation from
+  waiting;
 - **completed**: the same work plus a benchmark-only wait for that exact GPU
   submission, including changed-tile capture copies and any backing-capacity
   delay needed to consume the measured input. Compression finishes asynchronously.
@@ -53,6 +55,37 @@ pipeline and GPU clocks, then contributes every measured frame to the aggregate
 distribution. The release painter record uses three repetitions per brush.
 
 ## Workloads
+
+The `raster_workloads` example separately exercises tiled native photos. Build
+with `cargo build -p layer-render-wgpu --example raster_workloads --release` and
+run the resulting executable with `24mp`, `45mp`, `60mp`, or `multiple`.
+`--space` and `--depth` use the modes above; this example defaults to ProPhoto U16.
+
+Add `--photo --output-dir PATH` for masked Exposure, White Balance, Levels,
+Hue/Saturation and Color Balance, slider previews, cyclic pan/zoom, simultaneous
+native save and profiled ProPhoto U16 PNG export, full-resolution histograms,
+Gaussian blur and exact native paint/mask undo restoration. `multiple` retains
+all three adjusted documents and edits the 60 MP document while save/export run.
+The synthetic source includes low-order U16 variation; it is a reproducible
+resource workload, not a photographic accuracy corpus.
+
+Frame and worker CSVs share one monotonic clock. Use their overlap fields to
+select frames actually concurrent with save/export, and separate source misses
+from warm frames. Whole-operation durations include worker setup, file sync and
+GPU renderer destruction; a separate cleanup interval identifies that last cost.
+These are offscreen CPU/GPU completion measurements, not native presentation
+latency. Optional allocator observations occur outside frame timings and at
+capture allocation boundaries. The sum of component reservation peaks is a
+conservative overlap estimate; record process RSS high-water and driver memory
+separately. Three histogram repetitions are individual observations, not a
+well-sampled p99 distribution.
+
+`--photo-capture` omits the variable-length editing interval, slider/navigation
+loops and blur. It supplies identical snapshots to capture comparison arms;
+decoded PNG sample checksums and histogram bin/endpoint checksums must agree.
+Archive reopen compares retained source/profile, editable effects, and exact
+native paint and mask digests. Serialize hardware runs and retain exact
+executables, source hashes, environment and raw output for each arm.
 
 | Scenario | Workload |
 | --- | --- |
