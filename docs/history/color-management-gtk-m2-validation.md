@@ -3990,3 +3990,133 @@ its explicitly requested API, not the interactive display ceiling. No performanc
 workload or benchmark comparison ran in this stage. Fresh frame baselines,
 regression investigation, optimization and final memory/latency qualification
 remain last, as requested. Other platform host integration remains unapproved.
+
+## GTK native SDR factory and recovery (2026-09-14)
+
+Parent: `d669cefd`. GTK now constructs its GPU owner for the document's explicit
+RGB space and integer depth. The surface-compatible staged constructor selects
+Float32 color and scalar working attachments before creating any immediate or
+deferred pipeline recipes. It shares native transfer, integer publication and
+backing initialization with the headless renderer. GTK requests and checks both
+`FLOAT32_FILTERABLE` and `FLOAT32_BLENDABLE`; a device lacking either reports an
+unsupported editing-format error rather than selecting a narrower working format.
+Pipeline construction and native scratch preparation stay on `canvas-gpu`.
+
+The main-thread transport reports the same document interpretation and retained
+source capability before session adoption. New windows derive these from their
+project; blank windows use sRGB8. Restart derives them from the surviving document,
+so replacing a failed GPU owner cannot reinterpret P3 or ProPhoto paint as sRGB8.
+The GTK factory's previous encoded8 working-renderer selection is removed. Other
+platform factories are unchanged. Default sRGB8 still uses its existing declared
+premultiplied-linear encoded integer backing descriptor; unifying that descriptor
+with the other native modes remains separate cleanup, not an archive migration.
+
+The presentation route remains explicitly tagged sRGB. This stage connects native
+document rendering, including wide-gamut source composition through that fallback;
+it does not complete wide-color numeric/picker controls or managed wide-gamut GTK
+widgets/monitor transitions. The current compact picker still assumes sRGB and
+must be connected to portable color definitions before wide-document paint-color
+selection and sampling can be qualified. New/Open/Place/profile/depth controls,
+source policy and the other outstanding photo journeys remain unfinished.
+
+New native-window checks cover every combination of sRGB, Display P3, Adobe RGB
+and ProPhoto with integer8/integer16. Each retains an independently tiled photo
+with matching embedded ICC bytes, paints across two tile boundaries, checks
+committed descriptors, restores undo/redo pixels, writes/reads an editable project,
+and opens the result in another real GTK window. Original source samples/profile
+and committed tile bytes survive exactly. A 4097×1025 ProPhoto16 window also checks
+the host's initial paper presentation, bounded-display startup, painting and an
+exact composite sample. P3 8-bit and ProPhoto16 cases extend the existing deliberate
+GPU validation failure test: failed producers resolve, the last backed checkpoint
+remains saveable, Restart restores exact pixels and interpretation, and earlier
+undo/redo plus subsequent drawing remain usable.
+
+Validation exposed stale native fixtures as well as a new fixture setup error:
+
+- The first wide-recovery fixture registered the same GTK application twice in
+  one test. It now owns one application for both cases; the first case's actual
+  GPU recovery had already passed before registration of the second failed.
+- Selected brushes, operation controls and Navigator overlap fail identically
+  with the saved parent executable (`gtk-native-parent-*.log`). The first two
+  begin contacts before the native brush-readiness gate; the third places its
+  sample using obsolete panel coordinates. Native pen-path fixtures now wait for
+  actual readiness, sharing the connected-tools gate. Navigator overlap uses
+  allocated image/panel positions and still checks both pixel occlusion orders.
+- Operation controls now check published raster identities instead of a pending
+  operation count from the removed reconstruction model. Their real pixel,
+  linked/unlinked mask, cancellation and exact undo checks remain. Narrow-control
+  checks select the actual column divider and distinguish the control's unchanged
+  three-tile minimum from larger minima imposed by neighboring panels.
+- Navigator resizing selects current panel groups instead of historical IDs,
+  specifies explicit column sizes instead of automatic tab-label fitting, and
+  explicitly expands the column before testing collapse. A visible open member
+  of a collapsed stack is a different legitimate starting state. Each GTK case
+  runs in its own test process; serial Rust test threads still cannot initialize
+  GTK successively on different threads in one process.
+
+No production drag, layout, contact suppression or readiness policy changed.
+The required drag convention was read while checking the resize fixture; it uses
+an existing divider handle with immediate movement after slop. The parent and
+intermediate failures, diagnosis logs, snapshots and exact executables remain in
+`artifacts/color-m2/gtk-native-*`.
+
+All **13 final targeted GTK checks pass**, one per process, on the reviewed
+executable `gtk-native-expanded-tests` from
+`gtk-native-expanded-build.{json,log}`. `gtk-native-verified-results.json` records
+the exact test names/results; `gtk-native-expanded-sources.json` records code
+hashes. Final correctness durations are:
+
+| Native GTK check | Result / duration |
+| --- | --- |
+| All eight SDR source/paint/save/reopen modes | pass, 35.76 s |
+| Bounded-canvas startup and exact sampling after paint | pass, 2.02 s |
+| P3 8-bit and ProPhoto16 GPU failure/restart | pass, 5.98 s |
+| Ordinary diagnostics/GPU failure/restart | pass, 3.28 s |
+| Point/average sampling controls | pass, 2.42 s |
+| Selected G-Pen, wet round and watercolor brushes | pass, 6.50 s |
+| Transform controls, linked/unlinked masks and undo | pass, 7.19 s |
+| Gradient tools | pass, 7.08 s |
+| Navigator layering, clipping and idle behavior | pass, 8.99 s |
+| Navigator held column collapse/reopening on both sides | pass, 8.16 s |
+| Runtime filter packages | pass, 2.97 s |
+| Connected drawing tools | pass, 5.59 s |
+| Native files and profiled delivery | pass, 35.81 s |
+
+These durations do not establish frame-creation or interaction latency budgets.
+Production GTK checks in 2.24 s (`gtk-native-check.log`). Earlier factory,
+fixture and layout checks, including failures, remain recorded separately.
+Code/artifact hashes and retained image hashes are in `gtk-native-provenance.json`.
+The selected-brush and Navigator overlap snapshots were also visually inspected;
+that inspection does not qualify calibrated physical monitor agreement.
+
+Independent ImageMagick decoding of process 1630194's reviewed GTK exports
+matches all 983,040 U16 RGB/gray/CMYK samples and ICC bytes exactly
+(`gtk-native-verified-handoff.log`, copies in `gtk-native-ui/`). The previous
+factory build's process 1607462 also matches exactly (`gtk-native-handoff.log`).
+Reproduce the independent check with:
+
+```sh
+python3 tools/validation/icc_export_handoff.py \
+  artifacts/familiar-workspace/files PROCESS_ID
+```
+
+All three reported maximum code differences are zero in these runs. This tests
+delivery through the native GTK factory; it does not establish arbitrary-profile
+paint-color UI support.
+
+Reproduce using the local JPEG dependency setup above and the same Linux/Vulkan
+reference GPU. Build with `cargo test -p layer-linux --offline --no-run
+--message-format=json`; run each fully qualified native test through
+`tools/performance/gtk-raster.sh` in a separate process. The retained
+`gtk-native-expanded-tests-exact` wrapper adds `--exact`, avoiding accidental
+substring matches such as Navigator plus Navigator column resizing. Pass
+`LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm` for document files.
+Use `cargo check -p layer-linux --offline` for the production configuration.
+
+This is an intermediate integration checkpoint. Combined memory accounting,
+scheduling/cancellation, all color/photo UI, wide display agreement and final
+24/45/60 MP/multiple-document workload limits remain open. The reference GPU has
+both required Float32 features; constrained and unsupported GPU policies are not
+qualified by these checks. No performance workloads ran. Fresh baseline and parent
+comparisons, regression investigation, optimization and memory/latency acceptance
+remain last. Other platform host integration still requires the user's approval.

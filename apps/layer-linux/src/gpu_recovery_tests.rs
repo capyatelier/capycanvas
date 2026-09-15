@@ -12,7 +12,33 @@ fn until(mut ready: impl FnMut() -> bool) {
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_diagnostics_and_gpu_failure_recovery() {
     let app = native_test_app("art.capycanvas.GpuRecovery");
-    let w = Workspace::with_project(&app, Some((new_drawing(384, 256).unwrap(), None)));
+    check_gpu_failure_recovery(&app, Default::default());
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_wide_color_gpu_failure_recovery() {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    let app = native_test_app("art.capycanvas.WideColorGpuRecovery");
+    for color in [
+        DocumentColor {
+            space: RgbSpace::DisplayP3,
+            depth: IntegerDepth::U8,
+        },
+        DocumentColor {
+            space: RgbSpace::ProPhoto,
+            depth: IntegerDepth::U16,
+        },
+    ] {
+        check_gpu_failure_recovery(&app, color);
+    }
+}
+
+fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::DocumentColor) {
+    use layer_render::CanvasRenderer;
+    let mut project = new_drawing(384, 256).unwrap();
+    project.document.color = color;
+    let w = Workspace::with_project(app, Some((project, None)));
     w.window.present();
     until(|| {
         w.gpu.borrow().as_ref().is_some_and(|g| {
@@ -140,7 +166,9 @@ fn native_diagnostics_and_gpu_failure_recovery() {
             .unwrap()
             .write(&mut bytes)
             .unwrap();
-        layer_core::Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
+        let project =
+            layer_core::Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
+        assert_eq!(project.document.color, color);
     }
     for _ in 0..5 {
         w.wake();
@@ -157,6 +185,17 @@ fn native_diagnostics_and_gpu_failure_recovery() {
     let after = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 8002))
         .unwrap();
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .backend()
+            .document_color(),
+        color
+    );
     assert_eq!(
         after.bytes, before.bytes,
         "restart restores exact surviving pixels"

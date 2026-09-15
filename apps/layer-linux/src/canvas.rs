@@ -20,7 +20,11 @@ impl GpuCanvas {
             .native()
             .and_then(|native| native.surface())
             .ok_or("GTK surface unavailable")?;
-        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into())?;
+        let renderer = RenderWorker::new(
+            Parent::new(&parent)?,
+            area.downgrade().into(),
+            self.session.engine().document().color,
+        )?;
         let (previous, _) = self.session.replace_renderer(renderer)?;
         drop(previous);
         self._parent = parent;
@@ -47,7 +51,10 @@ impl GpuCanvas {
             .native()
             .and_then(|native| native.surface())
             .ok_or("GTK surface unavailable")?;
-        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into())?;
+        let color = project
+            .as_ref()
+            .map_or_else(Default::default, |(p, _)| p.document.color);
+        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;
         let mut session = if let Some((project, location)) = project {
             UiSession::from_project(renderer, project, location, extent(area))?
         } else {

@@ -24,8 +24,8 @@ pub(crate) struct NativeEdit {
     pub(crate) display_dense_bytes: u64,
     pub(crate) display_cache_bytes: u64,
     /// Provisional ceiling for live physical-filter pixel allocations, separate
-    /// from source, paint and composite residency. Qualify the host budget before
-    /// enabling native photo documents in GTK.
+    /// from source, paint and composite residency. Host release qualification
+    /// must establish the combined workload budget as well.
     pub image_pixel_bytes: u64,
     transfer: NativeTransfer,
     color: NativeTileEncoder,
@@ -132,19 +132,43 @@ impl Drop for NativeFrame {
 }
 
 impl WgpuRasterizer {
-    /// Native document renderer for headless workflow qualification. GTK enables
-    /// this mode only after its UI, managed presentation and workload gates pass.
+    /// Surface-compatible native SDR renderer. Configure the working format
+    /// before creating any pipeline recipes, including deferred startup jobs.
+    /// Construction belongs to the host's GPU owner, outside the input thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_wgpu_native_staged_cached(
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        directory: &std::path::Path,
+        color: DocumentColor,
+    ) -> Result<Self, GpuRasterError> {
+        let device = PipelineDevice::cached(device, &adapter, directory)
+            .with_working_format(wgpu::TextureFormat::Rgba32Float)?
+            .with_working_space(color.space);
+        let mut r = Self::from_wgpu_inner(adapter, device, queue, true)?;
+        r.startup.as_mut().unwrap().host_catalog_pending = true;
+        r.initialize_native(color)?;
+        Ok(r)
+    }
+
+    /// Native document renderer for headless workflow qualification.
     /// Dab RGB values are linear coordinates in `color.space`.
     pub fn new_native_headless(color: DocumentColor) -> Result<Self, GpuRasterError> {
         let mut r = pollster::block_on(Self::headless_with_working_format(
             wgpu::TextureFormat::Rgba32Float,
             color.space,
         ))?;
-        r.document_color = color;
-        r.scene = None;
-        let transfer = r.prepare_native_transfer(color.space)?;
-        r.native_edit = Some(NativeEdit::new(&r, transfer));
+        r.initialize_native(color)?;
         Ok(r)
+    }
+
+    fn initialize_native(&mut self, color: DocumentColor) -> Result<(), GpuRasterError> {
+        self.document_color = color;
+        self.scene = None;
+        let transfer = self.prepare_native_transfer(color.space)?;
+        self.native_edit = Some(NativeEdit::new(self, transfer));
+        Ok(())
     }
 
     pub(crate) fn encode_native_rasters(

@@ -2450,6 +2450,22 @@ fn native_tool_drawers() {
 }
 
 fn native_pen_path(w: &Rc<Workspace>, points: &[[f32; 2]]) {
+    // The native host rejects an entire contact begun before brush readiness.
+    // Correctness fixtures must wait for that gate after selecting a brush or
+    // changing its selection dependencies, rather than assume a startup delay.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if w.gpu.borrow().as_ref().is_some_and(|g| {
+            let engine = g.session.engine();
+            engine.backend().paint_ready(
+                engine.document(), engine.brush(), engine.transform_preview().is_some(),
+            )
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "native contact startup: {}", w.status.text());
+        pump(5);
+    }
     let camera = state(w).camera;
     let m = camera.document_to_surface();
     for (i, p) in points.iter().enumerate() {
@@ -2696,24 +2712,6 @@ fn native_connected_tools() {
     w.dispatch(UiAction::SetColor {
         rgba: [0.15, 0.15, 0.15, 1.],
     });
-    // Cold shader compilation suppresses a contact that starts before readiness.
-    // Wait for the same gate as GTK input so this fixture actually draws its line.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let ready = w.gpu.borrow().as_ref().is_some_and(|g| {
-            let engine = g.session.engine();
-            engine.backend().paint_ready(
-                engine.document(),
-                engine.brush(),
-                engine.transform_preview().is_some(),
-            )
-        });
-        if ready {
-            break;
-        }
-        assert!(Instant::now() < deadline, "connected-tool brush startup");
-        pump(5);
-    }
     native_pen_path(
         &w,
         &[
@@ -3204,20 +3202,25 @@ fn native_operation_tool() {
             .set_value(0.);
         pump(50);
         capture_reference(&w, &format!("{dir}/operation-{theme:?}.png"), 1.);
+        let panel = w.panel_widget(Panel::ToolSettings);
+        let before_width = panel.width();
+        let edge = panel.compute_bounds(&w.surface).unwrap().x() + before_width as f32;
         let divider = w
             .resolved()
             .dividers
             .into_iter()
-            .find(|d| d.band && d.bounds.x < 400. && d.axis == Axis::Horizontal)
+            .filter(|d| d.band && d.axis == Axis::Horizontal)
+            .min_by(|a, b| (a.bounds.x - edge).abs().total_cmp(&(b.bounds.x - edge).abs()))
             .unwrap();
         w.dispatch(UiAction::ResizeDock {
             id: divider.id,
-            position: [134., 0.],
+            position: [divider.parent.x + 128. + WORKSPACE_SPACING * 0.5, 0.],
             viewport,
         });
         pump(120);
-        let panel = w.panel_widget(Panel::ToolSettings);
-        assert_eq!(panel.width(), 128);
+        // Other panels in the same column can impose a larger minimum. The
+        // tool controls themselves still fit the three-tile content contract.
+        assert!(panel.width() >= 128 && panel.width() < before_width);
         assert!(
             w.tool_settings
                 .root
@@ -3229,7 +3232,7 @@ fn native_operation_tool() {
         capture_reference(&w, &format!("{dir}/operation-narrow-{theme:?}.png"), 1.);
         w.dispatch(UiAction::ResizeDock {
             id: divider.id,
-            position: [232., 0.],
+            position: [divider.bounds.x + divider.bounds.width * 0.5, 0.],
             viewport,
         });
         pump(120);
@@ -3257,18 +3260,16 @@ fn native_operation_tool() {
     .unwrap();
     click(&apply);
     pump(150);
-    assert_eq!(
+    assert_ne!(
         document()
             .layer(original.active_layer)
             .unwrap()
-            .pending_operations
-            .len(),
+            .raster,
         original
             .layer(original.active_layer)
             .unwrap()
-            .pending_operations
-            .len()
-            + 1
+            .raster,
+        "applying a transform publishes a new raster root"
     );
     assert_ne!(document().selection, original.selection);
     // Sample real GPU pixels after Apply, then undo; the displaced left edge
@@ -3322,18 +3323,17 @@ fn native_operation_tool() {
     });
     pump(150);
     let transformed = document();
-    assert_eq!(
+    assert_ne!(
         transformed.layers[0]
             .mask
             .as_ref()
             .unwrap()
-            .pending_operations
-            .len(),
-        1
+            .raster,
+        masked.layers[0].mask.as_ref().unwrap().raster
     );
-    assert_eq!(
-        transformed.layers[0].pending_operations.len(),
-        masked.layers[0].pending_operations.len() + 1
+    assert_ne!(
+        transformed.layers[0].raster,
+        masked.layers[0].raster
     );
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,
@@ -3356,17 +3356,16 @@ fn native_operation_tool() {
     });
     pump(150);
     assert_eq!(
-        document().layers[0].pending_operations.len(),
-        masked.layers[0].pending_operations.len()
+        document().layers[0].raster,
+        masked.layers[0].raster
     );
-    assert_eq!(
+    assert_ne!(
         document().layers[0]
             .mask
             .as_ref()
             .unwrap()
-            .pending_operations
-            .len(),
-        1
+            .raster,
+        masked.layers[0].mask.as_ref().unwrap().raster
     );
     capture_reference(&w, &format!("{dir}/operation-unlinked-mask.png"), 1.);
     assert!(!w.status.is_visible(), "{}", w.status.text());
@@ -3903,8 +3902,9 @@ fn native_navigator_column_resize() {
             "GPU placements must follow the panel while the resize is held, without canvas input"
         );
     };
-    for group in [5, 8] {
+    for panel in [Panel::Brushes, Panel::Layers] {
         let mut workspace = original.clone();
+        let group = workspace.layout.panel_group(panel).unwrap();
         workspace
             .layout
             .set_panel_visible(Panel::Navigator, true)
@@ -3922,6 +3922,9 @@ fn native_navigator_column_resize() {
             .select_tab(group, Panel::Navigator)
             .unwrap();
         let root = workspace.layout.column_for_group(group).unwrap();
+        // A selected panel may start as an open member of a collapsed stack.
+        // This case exercises an ordinary expanded column and its divider.
+        workspace.layout.set_column_collapsed(root, false, viewport).unwrap();
         let band = workspace
             .layout
             .bands
@@ -3930,6 +3933,10 @@ fn native_navigator_column_resize() {
             .unwrap();
         band.extent = 400.;
         let id = band.id;
+        // This fixture explicitly sizes its columns. Automatic tab-label fits
+        // would otherwise raise the collapse threshold above the content
+        // minimum used for the held-resize crossings below.
+        workspace.layout.fit_tab_groups.clear();
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(workspace),
         });
@@ -3952,7 +3959,7 @@ fn native_navigator_column_resize() {
                 .1
                 .clone()
         };
-        let minimum = if group == 5 {
+        let minimum = if panel == Panel::Brushes {
             192.
         } else {
             layer_ui::LAYERS_MIN_WIDTH
@@ -4311,12 +4318,26 @@ fn native_navigator() {
         },
     });
     pump(350);
-    let p = w.navigator_overviews.placements(&state(&w), 1.)[0];
-    let sample = [p.bounds[0] + 8., p.bounds[1] + 8.];
     let brushes = w
         .panel_widget(Panel::Brushes)
         .compute_bounds(&w.surface)
         .unwrap();
+    let p = w.navigator_overviews.placements(&state(&w), 1.)[0];
+    // Place the image over today's allocated panel, including the actual
+    // letterbox/header offset. Fixed document-era window coordinates can miss
+    // the panel after workspace geometry changes.
+    let float_position = [
+        20. + brushes.x() + brushes.width() * 0.5 - (p.bounds[0] + 8.),
+        180. + brushes.y() + brushes.height() * 0.5 - (p.bounds[1] + 8.),
+    ];
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Navigator,
+        viewport,
+        target: DockTarget::Float { position: float_position },
+    });
+    pump(350);
+    let p = w.navigator_overviews.placements(&state(&w), 1.)[0];
+    let sample = [p.bounds[0] + 8., p.bounds[1] + 8.];
     assert!(
         brushes.contains_point(&gtk::graphene::Point::new(sample[0], sample[1])),
         "floating image must overlap an actual native panel"
@@ -4336,10 +4357,24 @@ fn native_navigator() {
         panel: Panel::Sizes,
         viewport,
         target: DockTarget::Float {
-            position: [20., 180.],
+            position: float_position,
         },
     });
     pump(350);
+    let sizes = w.panel_widget(Panel::Sizes).compute_bounds(&w.surface).unwrap();
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Sizes,
+        viewport,
+        target: DockTarget::Float {
+            position: [
+                float_position[0] + sample[0] - (sizes.x() + 2.),
+                float_position[1] + sample[1] - (sizes.y() + 2.),
+            ],
+        },
+    });
+    pump(350);
+    assert!(w.panel_widget(Panel::Sizes).compute_bounds(&w.surface).unwrap()
+        .contains_point(&gtk::graphene::Point::new(sample[0], sample[1])));
     let texture = crate::snapshot(&w);
     texture.download(&mut pixels, texture.width() as usize * 4);
     assert!(

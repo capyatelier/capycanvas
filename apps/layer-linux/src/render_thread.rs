@@ -123,6 +123,7 @@ pub struct RenderWorker {
     replies: mpsc::Receiver<Reply>,
     in_flight: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
+    color: layer_core::color::DocumentColor,
     outlines: HashMap<AssetId, TipOutline>,
     readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
@@ -148,6 +149,7 @@ impl RenderWorker {
     pub(super) fn new(
         parent: Parent,
         area: gtk::glib::SendWeakRef<gtk::Picture>,
+        color: layer_core::color::DocumentColor,
     ) -> Result<Self, String> {
         let (commands, receiver) = mpsc::channel();
         let (reply, replies) = mpsc::channel();
@@ -170,7 +172,7 @@ impl RenderWorker {
                 // A panic retires this entire owner; no encoder or renderer
                 // state is reused after unwinding.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Worker::new(parent, area, worker_clock)?.run(
+                    Worker::new(parent, area, worker_clock, color)?.run(
                         &receiver,
                         &reply,
                         &worker_telemetry,
@@ -217,6 +219,7 @@ impl RenderWorker {
             replies,
             in_flight,
             thread: Some(thread),
+            color,
             outlines: HashMap::new(),
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
@@ -335,6 +338,8 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
+    fn supports_tiled_sources(&self) -> bool { true }
     fn supports_raster_damage(&self) -> bool { true }
     fn can_submit(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) < 2
@@ -867,6 +872,7 @@ impl Worker {
         parent: Parent,
         area: gtk::glib::SendWeakRef<gtk::Picture>,
         clock: Arc<crate::wayland::FrameClock>,
+        color: layer_core::color::DocumentColor,
     ) -> Result<Self, String> {
         let child = Child::new(parent, clock)?;
         // One process-lifetime loader/instance, not one per window. On the
@@ -915,8 +921,14 @@ impl Worker {
         }
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
-        let features =
-            adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE | wgpu::Features::FLOAT32_FILTERABLE);
+        let working_features =
+            wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE;
+        if !adapter.features().contains(working_features) {
+            return Err("This GPU cannot sample and blend the SDR editing format".into());
+        }
+        let features = working_features
+            | (adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE));
         #[cfg(test)]
         let features = features
             | (adapter.features()
@@ -938,8 +950,9 @@ impl Worker {
         let cache = gtk::glib::user_cache_dir()
             .join("capycanvas")
             .join("shaders");
-        let renderer = WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, &cache)
-            .map_err(error)?;
+        let renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
+            adapter, device, queue, &cache, color,
+        ).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, layer_render_wgpu::SdrSurfaceColor::Srgb)
             .map_err(error)?;
