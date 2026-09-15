@@ -661,6 +661,16 @@ fn native_document_files() {
         if command == CommandId::ExportDocument {
             pump(200);
             let options = w.window.visible_dialog().unwrap();
+            // This codec matrix explicitly starts from the original Web choices.
+            // Successful delivery now remembers the destination between sheets.
+            let reset = find_named(options.upcast_ref(), "export-preset-reset").unwrap()
+                .downcast::<gtk::Button>().unwrap();
+            click(&reset);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !reset.is_sensitive() {
+                pump(20);
+                assert!(Instant::now() < deadline, "reset export destination");
+            }
             for (name, selected) in [
                 ("export-preset", "Web / Share"), ("export-format", "PNG"),
                 ("export-space", "sRGB"), ("export-depth", "8-bit SDR"),

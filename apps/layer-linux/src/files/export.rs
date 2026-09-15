@@ -1,11 +1,11 @@
 //! GTK output choices and a cancellable, immutable document worker.
 use super::*;
 use layer_core::color::{
-    ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels,
-    RenderingIntent, RgbSpace,
+    ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels, RenderingIntent,
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
 use std::sync::{Arc, Mutex};
+mod presets;
 
 use super::profile::{ProfileChooser, ProfilePurpose};
 
@@ -140,8 +140,16 @@ fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
     row
 }
 
-async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<ExportRecipe> {
+struct Choice {
+    recipe: ExportRecipe,
+    destination: usize,
+    library: ExportPresets,
+}
+
+async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
     let document = snapshot.project.document.color;
+    let library = Rc::new(std::cell::RefCell::new(presets::load(document).await?));
+    let destination = Rc::new(std::cell::Cell::new(0usize));
     let extent = [
         snapshot.project.document.width,
         snapshot.project.document.height,
@@ -153,8 +161,9 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<Expor
         .build();
     dialog.set_widget_name("export-options");
     let group = adw::PreferencesGroup::new();
+    let preset_group = adw::PreferencesGroup::new();
     let preset = combo(
-        &group,
+        &preset_group,
         "Preset",
         "export-preset",
         &[
@@ -418,49 +427,90 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<Expor
         }
     ));
     let updating = Rc::new(std::cell::Cell::new(false));
+    let apply_recipe: Rc<dyn Fn(&ExportRecipe)> = Rc::new({
+        let restore_profile = profile.restore.clone();
+        let dimensions = dimensions.each_ref().map(|r| r.downgrade());
+        glib::clone!(
+            #[weak]
+            format,
+            #[weak]
+            size,
+            #[weak]
+            depth,
+            #[weak]
+            background,
+            #[weak]
+            quality,
+            #[weak]
+            intent,
+            #[weak]
+            bpc,
+            #[weak]
+            dither,
+            #[weak]
+            enlarge,
+            #[strong]
+            updating,
+            move |recipe: &ExportRecipe| {
+                updating.set(true);
+                format.set_selected(match recipe.format {
+                    ExportFormat::Png => 0,
+                    ExportFormat::Tiff => 1,
+                    ExportFormat::Jpeg => 2,
+                });
+                restore_profile(recipe.profile.clone());
+                depth.set_selected(u32::from(recipe.depth == IntegerDepth::U16));
+                background.set_selected(match recipe.background {
+                    ExportBackground::Preserve => 0,
+                    ExportBackground::White => 1,
+                    ExportBackground::Black => 2,
+                });
+                quality.set_value(f64::from(recipe.jpeg_quality));
+                intent.set_selected(match recipe.encoding.conversion.intent {
+                    RenderingIntent::RelativeColorimetric => 0,
+                    RenderingIntent::Perceptual => 1,
+                    RenderingIntent::Saturation => 2,
+                    RenderingIntent::AbsoluteColorimetric => 3,
+                });
+                bpc.set_active(recipe.encoding.conversion.black_point_compensation);
+                dither.set_active(recipe.encoding.dither != OutputDither::None);
+                match recipe.size {
+                    ExportSize::Original => size.set_selected(0),
+                    ExportSize::Fit {
+                        bounds,
+                        enlarge: allow,
+                    } => {
+                        for (row, value) in dimensions.iter().zip(bounds) {
+                            if let Some(row) = row.upgrade() {
+                                row.set_value(f64::from(value));
+                            }
+                        }
+                        enlarge.set_active(allow);
+                        size.set_selected(1);
+                    }
+                }
+                updating.set(false);
+            }
+        )
+    });
     preset.connect_selected_notify(glib::clone!(
-        #[weak]
-        format,
-        #[weak]
-        size,
-        #[weak]
-        space,
-        #[weak]
-        depth,
-        #[weak]
-        background,
-        #[weak]
-        intent,
-        #[weak]
-        bpc,
-        #[weak]
-        dither,
+        #[strong]
+        library,
+        #[strong]
+        destination,
         #[strong]
         updating,
+        #[strong]
+        apply_recipe,
         move |preset| {
-            let recipe = match preset.selected() {
-                0 => ExportRecipe::web_share(),
-                1 => ExportRecipe::wide_color(),
-                2 => ExportRecipe::further_editing(document),
-                _ => return,
-            };
-            updating.set(true);
-            size.set_selected(0);
-            format.set_selected(u32::from(recipe.format == ExportFormat::Tiff));
-            space.set_selected(
-                RgbSpace::ALL
-                    .iter()
-                    .position(|s| {
-                        recipe.profile.profile == layer_core::color::ColorProfile::Builtin(*s)
-                    })
-                    .unwrap() as u32,
-            );
-            depth.set_selected(u32::from(recipe.depth == IntegerDepth::U16));
-            background.set_selected(0);
-            intent.set_selected(0);
-            bpc.set_active(true);
-            dither.set_active(false);
-            updating.set(false);
+            if updating.get() {
+                return;
+            }
+            let index = preset.selected() as usize;
+            if let Ok(recipe) = library.borrow().recipe(index, document) {
+                destination.set(index);
+                apply_recipe(&recipe);
+            }
         }
     ));
     for row in [&format, &space, &depth, &background, &intent, &size] {
@@ -471,12 +521,14 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<Expor
             updating,
             move |_| {
                 if !updating.get() {
+                    updating.set(true);
                     preset.set_selected(3);
+                    updating.set(false);
                 }
             }
         ));
     }
-    for row in [&bpc, &dither] {
+    for row in [&bpc, &dither, &enlarge] {
         row.connect_active_notify(glib::clone!(
             #[weak]
             preset,
@@ -484,7 +536,24 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<Expor
             updating,
             move |_| {
                 if !updating.get() {
+                    updating.set(true);
                     preset.set_selected(3);
+                    updating.set(false);
+                }
+            }
+        ));
+    }
+    for row in dimensions.iter().chain(std::iter::once(&quality)) {
+        row.connect_value_notify(glib::clone!(
+            #[weak]
+            preset,
+            #[strong]
+            updating,
+            move |_| {
+                if !updating.get() {
+                    updating.set(true);
+                    preset.set_selected(3);
+                    updating.set(false);
                 }
             }
         ));
@@ -655,6 +724,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<Expor
         ),
     );
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.append(&preset_group);
     content.append(&group);
     content.append(&jpeg_hint);
     content.append(&profile.error);
@@ -679,14 +749,29 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<Expor
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("export"));
     dialog.set_response_appearance("export", adw::ResponseAppearance::Suggested);
+    presets::install(
+        &w.window,
+        &preset_group,
+        &preset,
+        library.clone(),
+        destination.clone(),
+        updating.clone(),
+        read_recipe.clone(),
+    );
+    // Loading the destination follows the same control and preview path as a click.
+    preset.notify("selected");
     refresh_preview();
     let response = crate::alert::choose(dialog, &w.window).await;
     comparison.close();
     comparison.finish().await;
     if response != "export" {
-        return None;
+        return Ok(None);
     }
-    read_recipe().ok()
+    Ok(Some(Choice {
+        recipe: read_recipe()?,
+        destination: destination.get(),
+        library: library.borrow().clone(),
+    }))
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
@@ -698,9 +783,10 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         .ok_or("Canvas unavailable")?
         .session
         .capture_project_export(id)?;
-    let Some(recipe) = choose_recipe(w, &snapshot).await else {
+    let Some(choice) = choose_recipe(w, &snapshot).await? else {
         return Ok(false);
     };
+    let recipe = choice.recipe;
     recipe.validate()?;
     let dialog = gtk::FileDialog::builder()
         .title("Export image")
@@ -798,6 +884,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
             glib::ControlFlow::Continue
         }
     });
+    let remembered = recipe.clone();
     let result = gio::spawn_blocking({
         let job = job.clone();
         move || write_snapshot(snapshot, recipe, &path, &job)
@@ -811,6 +898,13 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         Ok(false)
     } else {
         result??;
+        let mut next = choice.library.clone();
+        next.remember(choice.destination.min(3), remembered)?;
+        if next != choice.library {
+            presets::save(choice.library, next).await.map_err(|e| {
+                format!("The image was exported, but its choices could not be remembered: {e}")
+            })?;
+        }
         Ok(true)
     }
 }

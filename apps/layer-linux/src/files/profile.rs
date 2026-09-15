@@ -13,7 +13,7 @@ pub(super) enum ProfilePurpose {
     Source(SourceInterpretation),
 }
 impl ProfilePurpose {
-    fn validate(&self, profile: &ExportProfile, working: RgbSpace) -> Result<(), String> {
+    pub(super) fn validate(&self, profile: &ExportProfile, working: RgbSpace) -> Result<(), String> {
         match self {
             Self::Output => {
                 // An input profile need not be usable for delivery.
@@ -63,6 +63,8 @@ pub(super) struct ProfileChooser {
     pub row: adw::ActionRow,
     pub error: gtk::Label,
     pub selected: Rc<dyn Fn(u32) -> Result<ExportProfile, String>>,
+    /// Restore a profile already validated by the preset-loading worker.
+    pub restore: Rc<dyn Fn(ExportProfile)>,
 }
 impl ProfileChooser {
     pub fn new(
@@ -168,6 +170,24 @@ impl ProfileChooser {
                 ));
             }
         ));
+        let restore = Rc::new(glib::clone!(
+            #[weak] row,
+            #[weak] error,
+            #[weak] space,
+            #[strong] profile,
+            move |value: ExportProfile| {
+                let index = match value.profile {
+                    ColorProfile::Builtin(rgb) => RgbSpace::ALL.iter().position(|s| *s == rgb).unwrap() as u32,
+                    ColorProfile::Icc(_) => 4,
+                };
+                row.set_subtitle(if index == 4 { &value.name } else { "Choose an ICC profile" });
+                error.set_label("");
+                // A builtin choice must not masquerade as a selected custom ICC.
+                *profile.borrow_mut() = (index == 4).then_some(value);
+                space.set_selected(index);
+                space.notify("selected");
+            }
+        ));
         let selected = Rc::new(move |index| {
             if loading.get() {
                 return Err(format!("Reading the {role} profile…"));
@@ -191,6 +211,7 @@ impl ProfileChooser {
             row,
             error,
             selected,
+            restore,
         }
     }
 }

@@ -5960,3 +5960,96 @@ and the two previously recorded native workspace/toolbar harness gaps remain.
 Fresh frame-creation baseline comparisons, memory/latency measurements and any
 necessary optimization remain last. Other platform host work requires approval
 only after GTK completion and qualification.
+
+## 2026-09-15 — Reusable export presets and remembered destinations
+
+Implementation starts from `782ad2cc`. GTK Export now restores named presets with
+embedded ICC bytes and all current delivery choices. Save as creates a name;
+Update replaces its choices; Remove deletes it. Reset restores a built-in
+destination's original recipe. Successful file delivery remembers the chosen
+Web / Share, Wide-color, Further editing or Custom destination. Temporary edits
+and cancelled/failed exports do not update that memory. Updating a named preset
+requires its explicit Update action. Named preset saves are application preference
+actions and survive cancelling the export sheet. New/Open settings and editable
+project state are independent.
+
+The portable `ExportPresets` model interns profiles separately from recipe data;
+matching profile bytes/channels reuse the retained profile, and unused profiles
+retire on changes. Limits are 64 names, 16 MiB of retained profile data and 64 MiB
+of serialized JSON. These are storage/admission limits, not measured process
+memory budgets. GTK reads, validates actual ICC channel/CMM support and writes on
+workers. Its separate `export-presets.json` is atomically replaced only if the
+expected prior library still matches disk; a stale window reports a conflict
+instead of overwriting newer choices. Missing/corrupt profile references cannot
+silently become sRGB. Source profile-library files are not dependencies of saved
+presets. Restoring a builtin clears the custom-ICC slot; choosing Custom ICC then
+requires an explicit profile selection.
+
+The shared export recipe now permits an interned profile reference for storage,
+while normal rendering/host recipes retain their typed `ExportProfile`. No
+alternative output path or settings migration was introduced. GTK controls reuse
+one recipe reader and application path, including size, quality, profile/depth,
+matte, intent/BPC and dithering. Preset actions sit directly below the selector.
+
+Validation artifacts are under `artifacts/color-m2/`. No benchmarking or
+optimization was performed; test durations are correctness-run durations. Other
+platform hosts were not integrated or built.
+
+- `export-presets-shared-qualified-tests.log`: 5 tests passed, including recipe
+  validation/resizing, immutable snapshot capture, named/remembered round trips,
+  profile reuse/retirement, duplicate names, storage limits and atomic rejection.
+- `export-presets-store-tests.log`: 1 native storage unit test passed. Exact ICC
+  bytes survive reopening; stale or corrupt files cannot be overwritten through
+  the normal update operation.
+- `export-presets-native_export_sizes_preserve_master_and_release_cancelled_dialogs.log`:
+  1 passed (20.43 s), with resizing, actual-file preview comparison, JPEG
+  disclosure, unchanged master and repeated cancelled-sheet retirement.
+  Executable `export-presets-gtk-checked-tests` SHA-256:
+  `675a85c93d2091e3fec03beb416d874d12f4370a614b02bc659c9e386d12513a`.
+  Subsequent changes place preset actions beside the selector and fix the
+  builtin/custom profile restoration described above; final native runs below
+  exercise those changes.
+
+Final executable `export-presets-gtk-accepted-tests` SHA-256:
+`f8bcedda51bbcef322d3ce312df2fc88d1f57dd2f0695a3c84d2ed6962445b46`.
+Its eight changed/new Rust source hashes match the final implementation. Native
+logs with prefix `export-presets-accepted-` report the preset journey passing in
+8.79 s and `native_document_files` passing in 37.96 s. The corresponding GTK/FFI
+production check passed in 1.00 s. `export-presets-provenance.json` records the
+source hashes and 42 build/run artifacts. The layout screenshot
+`export-presets-native/2157715/saved-presets.png` was visually inspected; all four
+preset buttons fit beside the selector and output dimensions remain pinned.
+The final run also saves its screenshot under `export-presets-native/2161881/`.
+
+The first native file regression assumed every sheet discarded previous choices;
+it now explicitly invokes Reset before its codec matrix. Its next run exposed a
+real restoration defect: a builtin could occupy the custom-ICC slot. That defect
+was fixed, preserving disabled export after choosing Custom ICC and after
+cancelling or failing profile selection. Both failed logs remain. The first test
+build also had a test-only widget/button type mismatch, fixed before execution.
+
+The focused preset journey covers restoring a retained ICC, Save as/Update,
+reopening, cancelled file selection, successful resized PNG delivery, remembered
+destination, Reset/Remove, and unchanged serialized master and New/Open settings.
+The file regression additionally covers native saving/reopening, autosave, surface
+recovery, all three delivery formats and custom RGB/gray/CMYK profiles. Tests run
+on the isolated Mutter 1600×1000@120 harness with GTK 4.22.4/libadwaita 1.9.3,
+GSK Vulkan and the local RTX PRO 6000 Blackwell Max-Q / NVIDIA 610.57.04. The CMYK
+fixture remains `/usr/share/color/icc/krita/cmyk.icm` with the hash recorded above.
+
+Reproduction: build with local JPEG headers in `PKG_CONFIG_PATH`; run
+`cargo test -p layer-ui --offline export -- --test-threads=1`,
+`cargo test -p layer-linux --offline --no-run` and
+`cargo check -p layer-linux -p layer-ffi --offline`. Use the GTK test executable
+through `tools/performance/gtk-raster.sh` with full test names
+`workspace::tests::export_resize::native_export_presets_save_update_remove_reset_and_remember_after_delivery`
+and `workspace::tests::native_document_files`; set `LAYER_TEST_CMYK_PROFILE` as
+above. Saved `*-exact` wrappers prevent accidental substring selection.
+
+Remaining functionality and qualification are resolution metadata, TIFF/HDR-input
+policies, aggregate job scheduling/cancellation/resource budgets, coarse-first
+source/display and zoom quality, full tool/filter precision and large-document
+qualification, monitor/profile/alternate-renderer checks, and the existing
+workspace/toolbar native harness gaps. Fresh baseline comparisons and all
+performance/memory qualification and optimization remain last. Other platform
+hosts still require approval after GTK completion and qualification.

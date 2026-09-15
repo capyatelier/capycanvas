@@ -104,14 +104,28 @@ impl ExportSize {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExportRecipe {
+pub struct ExportRecipe<P = ExportProfile> {
     pub format: ExportFormat,
-    pub profile: ExportProfile,
+    pub profile: P,
     pub depth: IntegerDepth,
     pub background: ExportBackground,
     pub jpeg_quality: u8,
     pub encoding: OutputEncoding,
     pub size: ExportSize,
+}
+impl<P> ExportRecipe<P> {
+    /// Storage can intern large ICC profiles without duplicating delivery policy.
+    pub fn with_profile<Q>(self, profile: Q) -> ExportRecipe<Q> {
+        ExportRecipe {
+            profile,
+            format: self.format,
+            depth: self.depth,
+            background: self.background,
+            jpeg_quality: self.jpeg_quality,
+            encoding: self.encoding,
+            size: self.size,
+        }
+    }
 }
 impl ExportRecipe {
     pub fn web_share() -> Self {

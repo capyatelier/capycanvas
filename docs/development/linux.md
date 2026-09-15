@@ -124,8 +124,15 @@ premultiplied composition before output profile conversion, matte application an
 integer quantization. Reductions integrate covered source pixels; enlargements
 use Catmull–Rom interpolation. PNG/TIFF/JPEG share the bounded row pipeline, and
 an unchanged-size identity export retains exact integer samples. Resizing never
-changes the editable master or its dirty state. Named recipes and resolution
-metadata remain under implementation.
+changes the editable master or its dirty state. Resolution metadata remains under
+implementation.
+
+Export offers named presets with embedded ICC profiles, Save as/Update/Remove,
+and Reset for the built-in destinations. Successful delivery remembers each
+destination's choices; cancellation leaves that memory alone. Preset preferences
+are separate from New/Open and the master. Shared validation bounds names/profile
+storage; GTK validates CMM support and atomically saves on a worker, rejecting
+stale-window overwrites. See the [preset validation](../history/color-management-gtk-m2-validation.md#2026-09-15--reusable-export-presets-and-remembered-destinations).
 
 Export's Master/Output comparison uses the same immutable snapshot as the final
 file. Output rows pass through size, profile, depth, dithering and matte before

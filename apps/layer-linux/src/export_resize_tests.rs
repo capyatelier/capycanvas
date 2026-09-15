@@ -332,3 +332,186 @@ fn native_alert_wait_releases_responses_and_abandoned_futures() {
     parent.destroy();
     pump(50);
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() {
+    glib::set_prgname(Some("capy-canvas-test"));
+    let app = native_test_app("art.capycanvas.ExportPresets");
+    let directory = std::path::Path::new("../../artifacts/color-m2/export-presets-native")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
+    let directory = directory.canonicalize().unwrap();
+    let path = std::env::var_os("LAYER_SETTINGS_FILE")
+        .map(std::path::PathBuf::from)
+        .unwrap()
+        .with_file_name("export-presets.json");
+    let mut library = ExportPresets::default();
+    let mut custom = ExportRecipe::further_editing(DocumentColor {
+        space: RgbSpace::DisplayP3,
+        depth: IntegerDepth::U16,
+    });
+    custom.profile.profile = ColorProfile::Icc(
+        layer_color::profile_bytes(&custom.profile.profile)
+            .unwrap()
+            .into(),
+    );
+    custom.profile.name = "Embedded lab RGB".into();
+    custom.size = ExportSize::Fit {
+        bounds: [37, 29],
+        enlarge: false,
+    };
+    library.save("Lab RGB", custom.clone()).unwrap();
+    std::fs::write(&path, library.encode().unwrap()).unwrap();
+    let w = Workspace::with_project(&app, Some((new_drawing(64, 48).unwrap(), None)));
+    w.window.present();
+    ready(&w);
+    let master = snapshot(&w);
+    let settings = state(&w).settings.clone();
+    let widget =
+        |name: &str| find_named(w.window.visible_dialog().unwrap().upcast_ref(), name).unwrap();
+    let press = |name: &str| click(&widget(name).downcast::<gtk::Button>().unwrap());
+    let wait_saved = || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            pump(20);
+            if let Some(dialog) = w.window.visible_dialog()
+                && dialog.widget_name() == "export-options"
+                && let Some(status) = find_named(dialog.upcast_ref(), "export-presets-status")
+                && status.is_visible()
+                && find_named(dialog.upcast_ref(), "export-preset-save")
+                    .unwrap()
+                    .is_sensitive()
+            {
+                let row = status.downcast::<adw::ActionRow>().unwrap();
+                assert!(!row.has_css_class("error"), "{}", row.title());
+                return;
+            }
+            assert!(Instant::now() < deadline, "preset save");
+        }
+    };
+    invoke(&w, CommandId::ExportDocument);
+    combo(&w, "export-preset").set_selected(4);
+    assert_eq!(combo(&w, "export-space").selected(), 4);
+    assert_eq!(combo(&w, "export-format").selected(), 1);
+    assert_eq!(combo(&w, "export-depth").selected(), 1);
+    assert_eq!(
+        widget("export-width")
+            .downcast::<adw::SpinRow>()
+            .unwrap()
+            .value(),
+        37.
+    );
+    press("export-preset-save");
+    pump(150);
+    widget("export-preset-name")
+        .downcast::<adw::EntryRow>()
+        .unwrap()
+        .set_text("Lab copy");
+    response(&w, "save");
+    wait_saved();
+    assert_eq!(combo(&w, "export-preset").selected(), 5);
+    widget("export-width")
+        .downcast::<adw::SpinRow>()
+        .unwrap()
+        .set_value(21.);
+    assert_eq!(combo(&w, "export-preset").selected(), 3);
+    press("export-preset-update");
+    wait_saved();
+    let persisted = ExportPresets::decode(&std::fs::read(&path).unwrap()).unwrap();
+    let saved = persisted.recipe(5, Default::default()).unwrap();
+    assert_eq!(
+        saved.size,
+        ExportSize::Fit {
+            bounds: [21, 29],
+            enlarge: false
+        }
+    );
+    assert_eq!(saved.profile, custom.profile);
+    let preview = widget("color-preview-after")
+        .downcast::<gtk::Picture>()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while preview.paintable().is_none() {
+        pump(20);
+        assert!(Instant::now() < deadline, "saved preset preview");
+    }
+    capture_ui(&w, &directory, "saved-presets.png");
+    response(&w, "cancel");
+    finish(&w);
+    invoke(&w, CommandId::ExportDocument);
+    combo(&w, "export-preset").set_selected(5);
+    assert_eq!(
+        widget("export-width")
+            .downcast::<adw::SpinRow>()
+            .unwrap()
+            .value(),
+        21.
+    );
+    // Cancelling a file chooser must not remember temporary destination changes.
+    combo(&w, "export-preset").set_selected(1);
+    combo(&w, "export-depth").set_selected(1);
+    response(&w, "export");
+    chooser().response(gtk::ResponseType::Cancel);
+    finish(&w);
+    assert_eq!(
+        ExportPresets::decode(&std::fs::read(&path).unwrap()).unwrap(),
+        persisted
+    );
+    invoke(&w, CommandId::ExportDocument);
+    combo(&w, "export-preset").set_selected(1);
+    assert_eq!(combo(&w, "export-depth").selected(), 0);
+    combo(&w, "export-size").set_selected(1);
+    for name in ["export-width", "export-height"] {
+        widget(name)
+            .downcast::<adw::SpinRow>()
+            .unwrap()
+            .set_value(31.);
+    }
+    response(&w, "export");
+    let file = chooser();
+    file.set_current_folder(Some(&gtk::gio::File::for_path(&directory)))
+        .unwrap();
+    file.set_current_name("remembered.png");
+    pump(200);
+    file.response(gtk::ResponseType::Accept);
+    finish(&w);
+    let remembered = ExportPresets::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        remembered.recipe(1, Default::default()).unwrap().size,
+        ExportSize::Fit {
+            bounds: [31, 31],
+            enlarge: false
+        }
+    );
+    let image = layer_color::photo::read_photo(
+        std::io::BufReader::new(std::fs::File::open(directory.join("remembered.png")).unwrap()),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(image.extent, [31, 23]);
+    invoke(&w, CommandId::ExportDocument);
+    combo(&w, "export-preset").set_selected(1);
+    assert_eq!(combo(&w, "export-size").selected(), 1);
+    press("export-preset-reset");
+    wait_saved();
+    assert_eq!(combo(&w, "export-size").selected(), 0);
+    combo(&w, "export-preset").set_selected(5);
+    press("export-preset-remove");
+    wait_saved();
+    assert_eq!(
+        ExportPresets::decode(&std::fs::read(&path).unwrap())
+            .unwrap()
+            .names()
+            .collect::<Vec<_>>(),
+        vec!["Lab RGB"]
+    );
+    response(&w, "cancel");
+    finish(&w);
+    assert_eq!(snapshot(&w), master);
+    assert_eq!(state(&w).settings, settings);
+    assert!(!state(&w).document_file.modified);
+    w.window.destroy();
+    pump(200);
+}
