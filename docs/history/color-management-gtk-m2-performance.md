@@ -770,3 +770,50 @@ that run was stopped and retained under `native-dispatch-invalid-stale-build/`
 with an explicit invalid marker. None of its timings supports the comparison
 above. The corrected builder updates source mtimes, records actual compilation,
 and both builder and runner require distinct executable hashes.
+
+## Batch native color and scalar encoding
+
+The native encoders now group two adjacent compatible tiles per dispatch,
+within sampled/storage texture and buffer limits. Exact-size layouts cover the
+one-tile tail without writable aliases. Color transfer, quantization, alpha,
+clipping and scalar packed-edge arithmetic are unchanged. Complete preflight
+still precedes recording, and partial regions keep their independent settings.
+
+Sixteen native primitive tests pass (43.04 s; four separate benchmarks ignored),
+including all 160 numerical cases / 10,485,760 pixels with zero native-code
+error. New tests compare grouped slots and a trailing tile with independent
+encodes and CPU references across U8/U16, sRGB/ProPhoto, alpha modes, full/odd
+partial regions and packed scalar edges. Six native-owner tests pass (58.44 s),
+including save/undo/reopen, multi-chunk scratch reuse, abandonment, invalid
+inputs and device replacement. Exact test SHA-256:
+`18f69f923fe3c91d303374720f945cb7e7a900cfe663f0bbdeaf3a2b4a5b51d6`.
+
+Four serial nine-repeat palette-knife / ProPhoto U16 arms use the same staged
+executable pathname, with no build or GPU test overlapping measurements. Each
+arm has 1,278 moves and 36 pen-ups; frame records and the analyzer validate counts.
+
+| Arm | Pen-up CPU p50 / p95 / p99 ms | Completed pen-up p50 / p95 / p99 ms | CPU move p99 ms | Completed move p99 ms | Move misses |
+| --- | --- | --- | ---: | ---: | ---: |
+| Before | 4.428 / 6.547 / 7.734 | 10.302 / 14.110 / 15.743 | 4.058 | 6.592 | 1 |
+| After | 4.030 / 6.027 / 6.212 | 9.437 / 12.921 / 13.074 | 4.342 | 6.823 | 2 |
+| Before repeat | 4.910 / 6.907 / 7.010 | 10.582 / 14.245 / 14.628 | 4.259 | 6.946 | 3 |
+| After repeat | 4.370 / 6.146 / 7.247 | 9.479 / 13.043 / 14.176 | 4.461 | 6.904 | 3 |
+
+Completed pen-up medians improve for every individual stroke in both rounds;
+the largest third stroke changes 13.997 → 12.797 ms and 14.125 → 12.934 ms.
+Completed pen-up tails also improve in both rounds. CPU move p99 increases
+0.284 / 0.202 ms; the initial round crosses the declared investigation threshold
+(0.203 ms), while the repeat is just below its 0.213 ms threshold. Completed
+move tails remain below 8.33 ms and do not increase consistently. This small CPU
+move concern remains open for the full matrix; these measurements alone do not
+qualify unchanged frame creation. Pen-up misses decrease from 36 to 29 / 33,
+but the absolute latency gate still fails. The batching change is retained for
+its repeated completed pen-up improvement and exact numerical behavior.
+
+`run-native-encoding-dispatch.py`, `analyze-native-encoding-dispatch.py` and
+`native-encoding-dispatch-*` under `final-performance/` retain the exact source
+patch (including the new test file), source hashes, immutable executables,
+individual samples, hardware/power records and commands. Exact release SHA-256:
+
+- Before: `d7e73cf7fb6e46288bf4929ebd3e458c58e96a84ab9b374d3ad20e8c35c8f51b`.
+- After: `13fe9db473334f44441ec98ecc970c8bfb659a40e5dcc37669a8792889a15c67`.

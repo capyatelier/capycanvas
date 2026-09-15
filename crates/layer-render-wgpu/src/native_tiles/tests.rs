@@ -1034,3 +1034,5 @@ fn native_restore_workloads() {
         }
     }
 }
+
+mod batched;

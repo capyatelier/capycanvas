@@ -426,3 +426,45 @@ fn scalar_native_restore_capture_cycles_preserve_codes_and_bound_uploads() {
     .unwrap();
     assert!(page_bytes(&r, &working[0]) == before);
 }
+
+#[test]
+fn scalar_dispatch_slots_preserve_odd_packed_edges_and_partial_tail() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let encoder = NativeScalarEncoder::new(&r.device);
+    let status = NativeEncodeStatus::new(&r.device);
+    let working: Vec<_> = (0..3).map(|_| texture(&r)).collect();
+    let canonical: Vec<_> = (0..3).map(|_| texture(&r)).collect();
+    let values: Vec<Vec<f32>> = (0..3).map(|slot| (0..65536u32).map(|i| {
+        ((i.wrapping_mul(113) + slot * 17) & 65535) as f32 / 65535.
+    }).collect()).collect();
+    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        let encoded: Vec<_> = (0..3).map(|_| buffer(&r, depth)).collect();
+        let seed = vec![0x39; 65536 * depth.bytes()];
+        for region in [[0, 0, 256, 256], [1, 3, 253, 251]] {
+            for i in 0..3 {
+                upload(&r, &working[i], &values[i]);
+                upload(&r, &canonical[i], &vec![-7.; 65536]);
+                r.queue.write_buffer(&encoded[i], 0, &seed);
+            }
+            let requests: Vec<_> = (0..3).map(|i| NativeScalarRequest {
+                working: &working[i], encoded: &encoded[i], canonical: &canonical[i], depth, region,
+            }).collect();
+            let batch = encoder.prepare(&r.device, &requests, &status).unwrap();
+            submit(&r, &encoder, &status, &batch);
+            for slot in 0..3 {
+                let bytes = capture(&r, &encoded[slot], requests[slot].descriptor(), &status);
+                let canonical_bytes = page_bytes(&r, &canonical[slot]);
+                for (i, value) in values[slot].iter().enumerate() {
+                    let (x, y) = (i as u32 % 256, i as u32 / 256);
+                    let inside = x >= region[0] && y >= region[1] && x < region[0] + region[2] && y < region[1] + region[3];
+                    let expected = if inside { (f64::from(*value) * f64::from(depth.maximum())).round() as u32 }
+                        else if depth == IntegerDepth::U8 { 0x39 } else { 0x3939 };
+                    assert_eq!(code(&bytes, i, depth), expected, "slot {slot} pixel {i}");
+                    let actual = f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
+                    let expected = if inside { f64::from(expected) / f64::from(depth.maximum()) } else { -7. };
+                    assert!((f64::from(actual) - expected).abs() < 6e-8, "canonical slot {slot} pixel {i}");
+                }
+            }
+        }
+    }
+}

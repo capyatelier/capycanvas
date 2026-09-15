@@ -132,7 +132,7 @@ impl NativeScalarRequest<'_> {
     }
 }
 pub struct NativeScalarBatch {
-    jobs: Vec<(wgpu::BindGroup, u32, [u32; 2])>,
+    jobs: Vec<(wgpu::BindGroup, usize, u32, [u32; 3])>,
     parameter_bytes: u64,
 }
 impl NativeScalarBatch {
@@ -144,8 +144,9 @@ impl NativeScalarBatch {
     }
 }
 pub struct NativeScalarEncoder {
-    layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
+    layouts: Vec<wgpu::BindGroupLayout>,
+    pipelines: Vec<wgpu::ComputePipeline>,
+    tiles_per_dispatch: usize,
     full_parameters: wgpu::Buffer,
     parameter_stride: u32,
 }
@@ -155,67 +156,95 @@ impl NativeScalarEncoder {
         Self::with_device(&device.clone().into())
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("native scalar encoder inputs"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+        let tiles_per_dispatch = 2usize
+            .min(device.limits().max_sampled_textures_per_shader_stage as usize)
+            .min(device.limits().max_storage_textures_per_shader_stage as usize)
+            .min(
+                device
+                    .limits()
+                    .max_storage_buffers_per_shader_stage
+                    .saturating_sub(1) as usize,
+            );
+        assert!(tiles_per_dispatch > 0);
+        let mut layouts = Vec::new();
+        let mut pipelines = Vec::new();
+        for count in 1..=tiles_per_dispatch {
+            let mut entries = Vec::new();
+            let mut textures = String::new();
+            let mut loads = String::new();
+            let mut load_words = String::new();
+            let mut store_words = String::new();
+            let mut stores = String::new();
+            for i in 0..count as u32 {
+                entries.extend([
+                    super::sampled_entry(i * 3),
+                    buffer_entry(
+                        i * 3 + 1,
+                        wgpu::BufferBindingType::Storage { read_only: false },
+                        false,
+                        65536,
+                    ),
+                    super::storage_texture_entry(i * 3 + 2, wgpu::TextureFormat::R32Float),
+                ]);
+                textures.push_str(&format!("@group(0) @binding({}) var working{i}:texture_2d<f32>;\n@group(0) @binding({}) var<storage,read_write> encoded{i}:array<u32>;\n@group(0) @binding({}) var canonical{i}:texture_storage_2d<r32float,write>;\n", i * 3, i * 3 + 1, i * 3 + 2));
+                loads.push_str(&format!(
+                    "case {i}u: {{ return textureLoad(working{i},pixel,0).r; }}\n"
+                ));
+                load_words.push_str(&format!("case {i}u: {{ return encoded{i}[address]; }}\n"));
+                store_words.push_str(&format!("case {i}u: {{ encoded{i}[address]=word; }}\n"));
+                stores.push_str(&format!(
+                    "case {i}u: {{ textureStore(canonical{i},pixel,value); }}\n"
+                ));
+            }
+            let shared = count as u32 * 3;
+            entries.extend([
+                buffer_entry(shared, wgpu::BufferBindingType::Uniform, true, 32),
                 buffer_entry(
-                    1,
-                    wgpu::BufferBindingType::Storage { read_only: false },
-                    false,
-                    65536,
-                ),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                buffer_entry(3, wgpu::BufferBindingType::Uniform, true, 32),
-                buffer_entry(
-                    4,
+                    shared + 1,
                     wgpu::BufferBindingType::Storage { read_only: false },
                     false,
                     STATUS_BYTES,
                 ),
-            ],
-        });
-        let source = format!(
-            "{}\n{}\n{}",
-            include_str!("coverage.wgsl"),
-            include_str!("validity.wgsl"),
-            include_str!("scalar.wgsl")
-        );
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("native scalar writeback"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("native scalar writeback"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("native scalar writeback"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+            ]);
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("native scalar encoder inputs"),
+                entries: &entries,
+            });
+            let body = include_str!("scalar.wgsl")
+                .replace("TEXTURES", &textures)
+                .replace("LOAD_WORDS", &load_words)
+                .replace("STORE_WORDS", &store_words)
+                .replace("LOADS", &loads)
+                .replace("STORES", &stores)
+                .replace("SETTINGS_BINDING", &shared.to_string())
+                .replace("STATUS_BINDING", &(shared + 1).to_string());
+            let source = format!(
+                "{}\n{}\n{}",
+                include_str!("coverage.wgsl"),
+                include_str!("validity.wgsl"),
+                body
+            );
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("native scalar writeback"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("native scalar writeback"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            pipelines.push(
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("native scalar writeback"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                }),
+            );
+            layouts.push(layout);
+        }
         let records = [IntegerDepth::U8, IntegerDepth::U16].map(|depth| {
             [
                 depth.maximum(),
@@ -230,8 +259,9 @@ impl NativeScalarEncoder {
         });
         let (full_parameters, parameter_stride) = super::full_parameters(device, &records);
         Self {
-            layout,
-            pipeline,
+            layouts,
+            pipelines,
+            tiles_per_dispatch,
             full_parameters,
             parameter_stride,
         }
@@ -313,63 +343,82 @@ impl NativeScalarEncoder {
             parameters.unmap();
             (parameters, size)
         };
-        let jobs = requests
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                let source = views.get(r.working);
-                let canonical = views.get(r.canonical);
-                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("native scalar writeback"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&source),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: r.encoded.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&canonical),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &parameters,
-                                offset: 0,
-                                size: wgpu::BufferSize::new(32),
-                            }),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: status.buffer().as_entire_binding(),
-                        },
-                    ],
-                });
-                let components = 4 / r.depth.bytes() as u32;
-                let words =
-                    (r.region[0] + r.region[2]).div_ceil(components) - r.region[0] / components;
-                (
-                    binding,
-                    if full {
-                        u32::from(r.depth == IntegerDepth::U16) * stride
-                    } else {
-                        i as u32 * stride
+        let mut jobs = Vec::new();
+        let mut first = 0;
+        while first < requests.len() {
+            let r = &requests[first];
+            let count = requests[first..]
+                .iter()
+                .take(self.tiles_per_dispatch)
+                .take_while(|next| next.region == r.region && next.depth == r.depth)
+                .count();
+            let tile_views: Vec<_> = requests[first..first + count]
+                .iter()
+                .map(|r| [views.get(r.working), views.get(r.canonical)])
+                .collect();
+            let mut entries = Vec::new();
+            for (i, (request, views)) in requests[first..first + count]
+                .iter()
+                .zip(&tile_views)
+                .enumerate()
+            {
+                entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: i as u32 * 3,
+                        resource: wgpu::BindingResource::TextureView(&views[0]),
                     },
-                    [
-                        if r.region[2] == 0 {
-                            0
-                        } else {
-                            words.div_ceil(8)
-                        },
-                        r.region[3].div_ceil(8),
-                    ],
-                )
-            })
-            .collect();
+                    wgpu::BindGroupEntry {
+                        binding: i as u32 * 3 + 1,
+                        resource: request.encoded.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: i as u32 * 3 + 2,
+                        resource: wgpu::BindingResource::TextureView(&views[1]),
+                    },
+                ]);
+            }
+            let shared = count as u32 * 3;
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: shared,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &parameters,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(32),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shared + 1,
+                    resource: status.buffer().as_entire_binding(),
+                },
+            ]);
+            let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("native scalar writeback"),
+                layout: &self.layouts[count - 1],
+                entries: &entries,
+            });
+            let components = 4 / r.depth.bytes() as u32;
+            let words = (r.region[0] + r.region[2]).div_ceil(components) - r.region[0] / components;
+            jobs.push((
+                binding,
+                count - 1,
+                if full {
+                    u32::from(r.depth == IntegerDepth::U16) * stride
+                } else {
+                    first as u32 * stride
+                },
+                [
+                    if r.region[2] == 0 {
+                        0
+                    } else {
+                        words.div_ceil(8)
+                    },
+                    r.region[3].div_ceil(8),
+                    count as u32,
+                ],
+            ));
+            first += count;
+        }
         Ok(NativeScalarBatch {
             jobs,
             parameter_bytes: size,
@@ -379,13 +428,13 @@ impl NativeScalarEncoder {
         if batch.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
-        for (binding, offset, groups) in &batch.jobs {
+        for (binding, pipeline, offset, groups) in &batch.jobs {
             if groups.contains(&0) {
                 continue;
             }
+            pass.set_pipeline(&self.pipelines[*pipeline]);
             pass.set_bind_group(0, binding, &[*offset]);
-            pass.dispatch_workgroups(groups[0], groups[1], 1);
+            pass.dispatch_workgroups(groups[0], groups[1], groups[2]);
         }
     }
 }

@@ -174,7 +174,7 @@ struct Job {
     binding: wgpu::BindGroup,
     format: usize,
     offset: u32,
-    groups: [u32; 2],
+    groups: [u32; 3],
 }
 pub struct NativeTileBatch {
     jobs: Vec<Job>,
@@ -192,8 +192,9 @@ impl NativeTileBatch {
 /// Compile while preparing the document mode, never on a brush/commit hot path.
 /// Pipelines are independent of working primaries, transfer curve and alpha.
 pub struct NativeTileEncoder {
-    layouts: [wgpu::BindGroupLayout; 2],
-    pipelines: [wgpu::ComputePipeline; 2],
+    layouts: Vec<wgpu::BindGroupLayout>,
+    pipelines: Vec<wgpu::ComputePipeline>,
+    tiles_per_dispatch: usize,
     full_parameters: wgpu::Buffer,
     parameter_stride: u32,
 }
@@ -202,93 +203,90 @@ impl NativeTileEncoder {
         Self::with_device(&device.clone().into())
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
-        let layouts = std::array::from_fn(|index| {
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("native tile encoder inputs"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: if index == 0 {
-                                wgpu::TextureFormat::Rgba8Uint
-                            } else {
-                                wgpu::TextureFormat::Rgba16Uint
-                            },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
+        let tiles_per_dispatch = 2usize
+            .min(device.limits().max_sampled_textures_per_shader_stage as usize)
+            .min(device.limits().max_storage_textures_per_shader_stage as usize / 2);
+        assert!(tiles_per_dispatch > 0);
+        let mut layouts = Vec::new();
+        let mut pipelines = Vec::new();
+        for (output_format, output_name) in [
+            (wgpu::TextureFormat::Rgba8Uint, "rgba8uint"),
+            (wgpu::TextureFormat::Rgba16Uint, "rgba16uint"),
+        ] {
+            for count in 1..=tiles_per_dispatch {
+                let mut entries = Vec::new();
+                let mut textures = String::new();
+                let mut loads = String::new();
+                let mut stores = String::new();
+                for i in 0..count as u32 {
+                    entries.extend([
+                        sampled_entry(i * 3),
+                        storage_texture_entry(i * 3 + 1, output_format),
+                        storage_texture_entry(i * 3 + 2, wgpu::TextureFormat::Rgba32Float),
+                    ]);
+                    textures.push_str(&format!("@group(0) @binding({}) var working{i}:texture_2d<f32>;\n@group(0) @binding({}) var encoded{i}:texture_storage_2d<{output_name},write>;\n@group(0) @binding({}) var canonical{i}:texture_storage_2d<rgba32float,write>;\n", i * 3, i * 3 + 1, i * 3 + 2));
+                    loads.push_str(&format!(
+                        "case {i}u: {{ return textureLoad(working{i},pixel,0); }}\n"
+                    ));
+                    stores.push_str(&format!("case {i}u: {{ textureStore(encoded{i},pixel,result); textureStore(canonical{i},pixel,linear); }}\n"));
+                }
+                let shared = count as u32 * 3;
+                entries.extend([
                     buffer_entry(
-                        2,
+                        shared,
                         wgpu::BufferBindingType::Storage { read_only: true },
                         false,
                         transfer::TABLE_BYTES,
                     ),
-                    buffer_entry(3, wgpu::BufferBindingType::Uniform, true, 32),
+                    buffer_entry(shared + 1, wgpu::BufferBindingType::Uniform, true, 32),
                     buffer_entry(
-                        4,
+                        shared + 2,
                         wgpu::BufferBindingType::Storage { read_only: false },
                         false,
                         STATUS_BYTES,
                     ),
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba32Float,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            })
-        });
-        let pipelines = std::array::from_fn(|index| {
-            let source = format!(
-                "{}\n{}\n{}\n{}",
-                include_str!("sdr_color.wgsl"),
-                include_str!("native_tiles/validity.wgsl"),
-                include_str!("native_tiles/coverage.wgsl"),
-                include_str!("native_tiles/encode.wgsl").replace(
-                    "OUTPUT_FORMAT",
-                    if index == 0 {
-                        "rgba8uint"
-                    } else {
-                        "rgba16uint"
-                    }
-                )
-            );
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("native SDR tile writeback"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("native SDR tile writeback"),
-                bind_group_layouts: &[Some(&layouts[index])],
-                immediate_size: 0,
-            });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("native SDR tile writeback"),
-                layout: Some(&layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        });
+                ]);
+                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("native tile encoder inputs"),
+                    entries: &entries,
+                });
+                let body = include_str!("native_tiles/encode.wgsl")
+                    .replace("TEXTURES", &textures)
+                    .replace("LOADS", &loads)
+                    .replace("STORES", &stores)
+                    .replace("TRANSFER_BINDING", &shared.to_string())
+                    .replace("SETTINGS_BINDING", &(shared + 1).to_string())
+                    .replace("STATUS_BINDING", &(shared + 2).to_string());
+                let source = format!(
+                    "{}\n{}\n{}\n{}",
+                    include_str!("sdr_color.wgsl"),
+                    include_str!("native_tiles/validity.wgsl"),
+                    include_str!("native_tiles/coverage.wgsl"),
+                    body
+                );
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("native SDR tile writeback"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                });
+                let pipeline_layout =
+                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("native SDR tile writeback"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    });
+                pipelines.push(
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("native SDR tile writeback"),
+                        layout: Some(&pipeline_layout),
+                        module: &shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+                );
+                layouts.push(layout);
+            }
+        }
         let records = std::array::from_fn::<_, 16, _>(|i| {
             let depth = if i / 2 % 2 == 0 {
                 IntegerDepth::U8
@@ -312,6 +310,7 @@ impl NativeTileEncoder {
             pipelines,
             full_parameters,
             parameter_stride,
+            tiles_per_dispatch,
         }
     }
     pub(crate) fn storage_bytes(&self) -> u64 {
@@ -398,63 +397,84 @@ impl NativeTileEncoder {
             parameters.unmap();
             (parameters, size)
         };
-        let jobs = requests
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                let format = usize::from(r.depth == IntegerDepth::U16);
-                let source = views.get(r.working);
-                let target = views.get(r.encoded);
-                let canonical = views.get(r.canonical);
-                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("native SDR tile writeback"),
-                    layout: &self.layouts[format],
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&source),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&target),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: r.transfer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &parameters,
-                                offset: 0,
-                                size: wgpu::BufferSize::new(32),
-                            }),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: status.0.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: wgpu::BindingResource::TextureView(&canonical),
-                        },
-                    ],
-                });
-                Job {
-                    binding,
-                    format,
-                    offset: if full {
-                        (r.transfer.curve * 4
-                            + format as u32 * 2
-                            + u32::from(r.alpha == AlphaAssociation::Straight))
-                            * stride
-                    } else {
-                        i as u32 * stride
-                    },
-                    groups: [r.region[2].div_ceil(8), r.region[3].div_ceil(8)],
-                }
-            })
-            .collect();
+        let mut jobs = Vec::new();
+        let mut first = 0;
+        while first < requests.len() {
+            let r = &requests[first];
+            let count = requests[first..]
+                .iter()
+                .take(self.tiles_per_dispatch)
+                .take_while(|next| {
+                    next.region == r.region
+                        && next.depth == r.depth
+                        && next.alpha == r.alpha
+                        && next.transfer == r.transfer
+                })
+                .count();
+            let depth = usize::from(r.depth == IntegerDepth::U16);
+            let format = depth * self.tiles_per_dispatch + count - 1;
+            let tile_views: Vec<_> = requests[first..first + count]
+                .iter()
+                .map(|r| {
+                    [
+                        views.get(r.working),
+                        views.get(r.encoded),
+                        views.get(r.canonical),
+                    ]
+                })
+                .collect();
+            let mut entries: Vec<_> = tile_views
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, view)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource: wgpu::BindingResource::TextureView(view),
+                })
+                .collect();
+            let shared = count as u32 * 3;
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: shared,
+                    resource: r.transfer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shared + 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &parameters,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(32),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shared + 2,
+                    resource: status.0.as_entire_binding(),
+                },
+            ]);
+            let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("native SDR tile writeback"),
+                layout: &self.layouts[format],
+                entries: &entries,
+            });
+            jobs.push(Job {
+                binding,
+                format,
+                offset: if full {
+                    (r.transfer.curve * 4
+                        + depth as u32 * 2
+                        + u32::from(r.alpha == AlphaAssociation::Straight))
+                        * stride
+                } else {
+                    first as u32 * stride
+                },
+                groups: [
+                    r.region[2].div_ceil(8),
+                    r.region[3].div_ceil(8),
+                    count as u32,
+                ],
+            });
+            first += count;
+        }
         Ok(NativeTileBatch {
             jobs,
             parameter_bytes: size,
@@ -469,7 +489,7 @@ impl NativeTileEncoder {
             }
             pass.set_pipeline(&self.pipelines[job.format]);
             pass.set_bind_group(0, &job.binding, &[job.offset]);
-            pass.dispatch_workgroups(job.groups[0], job.groups[1], 1);
+            pass.dispatch_workgroups(job.groups[0], job.groups[1], job.groups[2]);
         }
     }
 }
@@ -490,6 +510,31 @@ fn full_parameters(device: &wgpu::Device, records: &[[u32; 8]]) -> (wgpu::Buffer
         usage: wgpu::BufferUsages::UNIFORM,
     });
     (buffer, stride)
+}
+
+fn sampled_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+fn storage_texture_entry(binding: u32, format: wgpu::TextureFormat) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    }
 }
 
 pub(crate) fn buffer_entry(
