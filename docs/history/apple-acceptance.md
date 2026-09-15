@@ -108,6 +108,24 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Settings text and shared tile hashing — 2026-09-15
+
+Theme-color fields now honor shared text metadata, retain reachable native Reset
+menus and avoid invalidating their whole form when focus changes. Inactive Mac
+catalog shortcuts release Command-A. Actual Mac and UIKit workflows pass text
+limits, focused valid/invalid-draft Reset and Done/reopen for both fields; Mac
+uses keyboard selection and UIKit uses touch. Numeric Done/navigation also
+passes on both hosts after the focus refactor. Both final Release builds pass
+without compiler warnings, and final Settings captures are reviewed.
+
+The grouped shared change enables the existing AArch64 SHA backend. Six tile
+encoding cases improve 4.5–5.6 times with identical output, and shared checks
+plus four short physical workload runs complete. Both drawing cadence gates
+still fail. UIKit text Command-A remains a retained failure; broader feature,
+visual, keyboard/window, physical input/provider/lifecycle and sustained
+performance acceptance remain open. The [handoff](../development/apple-handoff.md)
+records exact evidence and scope. The overall goal remains **incomplete**.
+
 ## Numeric Settings Reset and color popup fit — 2026-09-15
 
 Reset to Default now discards the selected numeric setting's unfinished editor

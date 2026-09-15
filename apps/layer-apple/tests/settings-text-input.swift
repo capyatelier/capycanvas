@@ -47,6 +47,9 @@ import SwiftUI
                 for character in draft { try key(String(character), code: 0, window: window); try await drain(0.01) }
                 try await drain()
                 try require((window.firstResponder as? NSTextView)?.string == draft, "Native typing must reach the theme-color field")
+                for character in "89" { try key(String(character), code: 0, window: window); try await drain() }
+                try require((window.firstResponder as? NSTextView)?.string == draft,
+                    "The theme-color field must enforce the shared seven-character limit")
                 func nodes(_ node: Any) -> [any NSAccessibilityProtocol] {
                     guard let item = node as? any NSAccessibilityProtocol else { return [] }
                     return [item] + (item.accessibilityChildren() ?? []).flatMap(nodes)

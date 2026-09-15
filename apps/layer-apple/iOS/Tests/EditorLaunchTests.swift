@@ -19,6 +19,14 @@ final class EditorLaunchTests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkSettingsNumericReset(in: editorCaptureApplication())
     }
+    @MainActor func testSettingsTextState() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSettingsTextState(in: editorCaptureApplication(), keyboardSelection: false)
+    }
+    @MainActor func testSettingsTextSelectionShortcut() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSettingsTextState(in: editorCaptureApplication())
+    }
     @MainActor func testSettingsChoicePresentation() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkSettingsChoicePresentation(in: editorCaptureApplication())

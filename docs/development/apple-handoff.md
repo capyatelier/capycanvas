@@ -26,14 +26,38 @@ require new evidence and a specific hypothesis before another run or input
 workaround. Keep unresolved acceptance explicit while continuing independent
 parity fixes. Commit only major milestones. All eleven recovery stashes remain.
 
-Use a bounded implementation loop: inspect the shared/reference behavior, make
-the smallest fix, and run the existing focused check that exercises it. Batch
-related visible gaps before native workflow acceptance. Simulator startup and
-XCTest fixture repair have consumed too much of the critical path; an
-inconclusive run needs new evidence before another attempt. Keep a short list of
-actual remaining gaps and use existing screenshots for presentation review;
-do not build new automation infrastructure for each control. Hardware-only
-acceptance and unresolved native delivery cases remain separate explicit gates.
+Do not build new automation infrastructure for each control. Simulator startup
+and XCTest fixture repair have consumed too much of the critical path. Keep
+unresolved native delivery cases explicit and continue independent parity fixes.
+
+The Settings text milestone consumes the shared placeholder and seven-character
+limit and disables spelling/capitalization assistance for the hex fields.
+Observing the focused commit callback in the Done button instead of the entire
+form resolves the observed UIKit update loop when a text field gains focus.
+Inactive catalog shortcuts no longer reserve Command-A while Mac Settings is
+open. A simple bounded field keeps the label available for the native Reset
+menu; its explicit accessibility label preserves the field's name on UIKit.
+No input adapter, gesture override or new preference behavior is introduced.
+
+Mac `mac-v4` and UIKit `simulator-v6` pass the actual focused text workflow:
+selection, shared length limit, Done/reopen, valid/invalid-draft Reset and
+retaining defaults after reopening for both theme colors. Mac uses Command-A;
+UIKit uses native touch selection. Numeric Done/navigation also passes on both
+hosts in `v3` after the focused-value refactor; subsequent changes affect only
+text rows. Both final Release builds pass without compiler warnings, and final
+Settings captures are reviewed. Evidence and stopped-app checks are under
+`artifacts/apple-settings-text-state-v1/`. The final Release metadata is in its
+`release/` directory; older performance build hashes do not describe these files.
+
+Retained failures explain the fixes: Mac `v1` reserves Command-A, UIKit `v2`
+hangs before typing, `v4` cannot reach the label under the editor's hit area,
+and `v5` exposes the missing field accessibility name after the layout change.
+UIKit `v3` still fails Command-A; `testSettingsTextSelectionShortcut` retains
+that separate acceptance case. Do not expand this completed batch into another
+keyboard investigation. Full feature/visual coverage, compact-menu Command-Z,
+windowed-iPad behavior and physical input/provider/lifecycle gates remain open.
+The shared tile-hashing optimization below is grouped with this milestone;
+sustained drawing performance still fails on both hosts.
 
 The numeric Settings Reset milestone fixes an actual native-menu failure:
 Reset left the focused expression `2 + 0.25` in the field. Settings now changes
@@ -54,8 +78,9 @@ are stopped. The first Mac run assumed Settings reopened on Pen & Input; its
 hierarchy shows Appearance. The corrected test explicitly opens Pen & Input,
 and `mac-v2` then reproduces the stale draft before the production fix. Those
 failures remain recorded. Main fetch finds no new commits; eleven recovery
-stashes remain. No physical workflow is repeated. Focused UIKit text Reset,
-remaining feature/window/keyboard states and hardware/performance gates stay open.
+stashes remain. No physical workflow is repeated. The later text milestone above
+closes focused UIKit text Reset; remaining feature/window/keyboard states and
+hardware/performance gates stay open.
 
 The same batch fixes the explicit color popup at narrow widths: its fixed
 320-point wheel consumed the 24-point side margins and clipped the foreground
@@ -1377,6 +1402,29 @@ connection query above; no commit or push is part of this batch. Evidence is
 ignored under `artifacts/apple-mac-files-v1/`.
 
 ## Current physical drawing performance
+
+The shared CPU change enables sha2's existing runtime-detected
+AArch64 SHA backend through its dependency feature, without changing tile data
+or capture scheduling. Six local tile-encoding cases improve 4.5–5.6 times with
+identical digests and compressed bytes. The 48 default core/workspace checks,
+86 native workspace checks and iOS core compilation pass; dependency resolution
+keeps the feature off Wasm and Intel targets. Both changed Release builds pass
+without compiler warnings. One 45-second before/after pair completes on each
+physical host, with no rejected input, renderer errors, overflow or missing/
+zero-time measured presentation callbacks. Mac long intervals change from
+57/3,734 to 49/3,772; iPad changes from 28/5,017 to 18/5,008. Presentation p99
+is unchanged on both hosts, and both cadence gates still fail. The pairs do not
+establish reliable cadence or memory improvement; do not repeat ten-minute runs
+or CPU sampling on this evidence. Mac captures show the expected artwork and
+Navigator. No simulator or XCTest setup is needed for these direct workloads.
+Evidence is under `artifacts/performance/tile-sha-acceleration-v1/`; details are in
+[performance observations](../../apps/layer-apple/PERFORMANCE.md).
+This validated optimization is grouped with the Settings text milestone above.
+Resume the remaining feature/state acceptance.
+Reuse the saved benchmark results: rebuilding its baseline with the changed
+core manifest would enable acceleration. The current Release products include
+this change; their old pre-change build metadata is not suitable for launching
+them. Use the Settings text milestone's final Release metadata above.
 
 Both current Release builds pass after the shared contact-renderer integration.
 Serial 45-second `layered-4k` runs use the unchanged eight-paint-layer G-Pen

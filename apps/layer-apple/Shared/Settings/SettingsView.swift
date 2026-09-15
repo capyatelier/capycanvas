@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: EditorStore
-    @FocusedValue(\.editorTextCommit) private var commitText
     @FocusState private var searching: Bool
     @State private var numberResets: [String: UInt64] = [:]
     private var model: JSON { store.snapshot["preferences"] }
@@ -33,10 +32,7 @@ struct SettingsView: View {
         } detail: {
             detail.navigationTitle(page["title"].string)
                 .toolbar { ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        commitText?()
-                        store.dispatch(["type": "close_settings"])
-                    }.accessibilityIdentifier("settings-done")
+                    SettingsDoneButton(store: store)
                 } }
         }.frame(minHeight: 420)
             #if os(macOS)
@@ -94,7 +90,8 @@ struct SettingsView: View {
             case "choice":
                 choice(row)
             case "text":
-                PreferenceText(label: row["title"].string, value: kind["value"].string) { edit(row, $0) }
+                PreferenceText(label: row["title"].string, value: kind["value"].string,
+                    placeholder: kind["placeholder"].string, maxLength: Int(kind["max_length"].uint)) { edit(row, $0) }
             case "number":
                 let reset = numberResets[row["id"].string, default: 0]
                 NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"]) { value, completion in
@@ -154,21 +151,48 @@ struct SettingsView: View {
     }
 }
 
+private struct SettingsDoneButton: View {
+    let store: EditorStore
+    // Observing a child's focused callback must not invalidate the form that
+    // publishes it; a native text field can otherwise trigger a focus loop.
+    @FocusedValue(\.editorTextCommit) private var commitText
+    var body: some View {
+        Button("Done") {
+            commitText?()
+            store.dispatch(["type": "close_settings"])
+        }.accessibilityIdentifier("settings-done")
+    }
+}
+
 private struct PreferenceText: View {
     let label: String
     let value: String
+    let placeholder: String
+    let maxLength: Int
     let commit: (String) -> Void
     @State private var text = ""
     @FocusState private var editing: Bool
     var body: some View {
-        // iPad TextField titles are placeholders and disappear once populated.
-        // Keep the setting name visible beside its value on both Apple hosts.
-        LabeledContent(label) { field.labelsHidden().multilineTextAlignment(.trailing) }
+        // Keep the label outside the native editor's hit area so its Reset menu
+        // remains available while the field owns text selection and editing.
+        HStack {
+            Text(label)
+            Spacer()
+            field.labelsHidden().accessibilityLabel(label)
+                .multilineTextAlignment(.trailing).frame(width: 132)
+        }
     }
     private var field: some View {
-        TextField(label, text: $text).focused($editing).onSubmit { commit(text) }
+        TextField(label, text: $text, prompt: Text(placeholder)).focused($editing).onSubmit { commit(text) }
+            .autocorrectionDisabled()
+            #if os(iOS)
+            .textInputAutocapitalization(.never).keyboardType(.asciiCapable)
+            #endif
             .focusedValue(\.editorTextCommit, { commit(text) })
             .onAppear { text = value }.onChange(of: value) { _, next in text = next }
+            .onChange(of: text) { _, next in
+                if next.count > maxLength { text = String(next.prefix(maxLength)) }
+            }
             .onChange(of: editing) { old, next in if old && !next { commit(text) } }
     }
 }

@@ -15,6 +15,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
     @MainActor func testNumericSettingsDone() { checkNumericSettingsDone(in: editorCaptureApplication()) }
     @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }
+    @MainActor func testSettingsTextState() { checkSettingsTextState(in: editorCaptureApplication()) }
     @MainActor func testSettingsChoicePresentation() { checkSettingsChoicePresentation(in: editorCaptureApplication()) }
 
     @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }

@@ -4,6 +4,60 @@ import AppKit
 #endif
 
 extension XCTestCase {
+    @MainActor func checkSettingsTextState(in app: XCUIApplication, keyboardSelection: Bool = true) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"appearance"}}]"#
+        app.launch()
+        func reopen() {
+            workspaceActivate(app.buttons["settings-done"])
+            XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
+            workspaceActivate(app.buttons["settings-button"])
+            XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
+        }
+        for label in ["Dark theme base color", "Light theme base color"] {
+            let field = app.textFields[label]
+            XCTAssertTrue(field.waitForExistence(timeout: 20))
+            let defaultValue = field.value as? String ?? ""
+            XCTAssertTrue(defaultValue.hasPrefix("#")); XCTAssertEqual(defaultValue.count, 7)
+            func replace(_ value: String) {
+                workspaceActivate(field)
+                #if os(macOS)
+                field.typeKey("a", modifierFlags: .command)
+                #else
+                if keyboardSelection { field.typeKey("a", modifierFlags: .command) }
+                else { field.tap(withNumberOfTaps: 3, numberOfTouches: 1) }
+                #endif
+                field.typeText(value)
+            }
+            for draft in ["#abcdef", "invalid"] {
+                replace("#12ab3489")
+                expectation(for: NSPredicate(format: "value == %@", "#12ab34"), evaluatedWith: field)
+                waitForExpectations(timeout: 5)
+                reopen()
+                XCTAssertEqual(field.value as? String, "#12ab34", "Done must commit the limited native draft")
+                replace(draft)
+                XCTAssertEqual(field.value as? String, draft)
+                let title = app.staticTexts[label].firstMatch
+                #if os(macOS)
+                title.rightClick()
+                let reset = app.menuItems["Reset to Default"]
+                #else
+                title.press(forDuration: 0.7)
+                let reset = app.buttons["Reset to Default"]
+                #endif
+                XCTAssertTrue(reset.waitForExistence(timeout: 5)); XCTAssertTrue(reset.isEnabled)
+                workspaceActivate(reset)
+                expectation(for: NSPredicate(format: "value == %@", defaultValue), evaluatedWith: field)
+                waitForExpectations(timeout: 5)
+                reopen()
+                XCTAssertEqual(field.value as? String, defaultValue,
+                    "Done/reopen must retain Reset instead of restoring the focused draft")
+            }
+        }
+        attachEditor(in: app, name: "settings-text-state")
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkSettingsNumericReset(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"reveal","id":"pressure"}}]"#
         app.launch()

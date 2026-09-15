@@ -17,6 +17,53 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Hardware tile hashing, short physical comparison — 2026-09-15
+
+The retained valid CPU profile identifies software SHA-256 work inside
+`RasterCapture.finish` workers calling `TileBlob::encode`. The installed sha2
+0.10 dependency gates its runtime-detected AArch64 SHA instructions behind its
+`asm` feature. Enabling that existing feature only on AArch64 avoids another
+hash implementation, tile-format change or capture-scheduling change. Wasm and
+Intel dependency resolution retain their previous features.
+
+A local Release benchmark encodes real 256-square paint and mask tiles with
+solid, diagonal-stroke and deterministic-noise contents. Two runs per variant
+use baseline/accelerated/accelerated/baseline order, each with 16 warm-up and
+512 measured encodes per case. The six cases improve 4.5–5.6 times; every case
+retains identical digests and compressed bytes and passes decoding. This measures
+CPU tile encoding with output checks, not whole-app throughput or drawing cadence.
+
+The 48 default core/workspace checks, 86 native workspace checks, iOS core
+compilation and both Release app builds pass; the builds have no compiler
+warnings. A 45-second before/after pair on each physical host uses the existing
+eight-layer 4K G-Pen workload, 240 Hz synthetic input, prediction and ten-second
+warm-up/postlude. GPU timestamps, CPU sampling and UI automation are disabled.
+The Mac baseline precedes compilation and the changed run follows both builds.
+The physical iPad baseline overlaps compilation on the Mac.
+
+| Measurement | Mac before | Mac after | iPad before | iPad after |
+| --- | ---: | ---: | ---: | ---: |
+| CPU owner p99 / max, ms | 3.922 / 15.762 | 3.878 / 15.338 | 8.892 / 17.654 | 8.776 / 10.481 |
+| CPU frames over host budget | 28 | 28 | 57 | 56 |
+| Long continuous intervals / total | 57 / 3,734 | 49 / 3,772 | 28 / 5,017 | 18 / 5,008 |
+| Continuous interval p99 / max, ms | 22.222 / 22.222 | 22.222 / 22.222 | 8.334 / 25.001 | 8.334 / 25.000 |
+| Peak measured footprint, MiB | 1,262.58 | 1,324.11 | 1,299.03 | 1,310.92 |
+| Measured footprint growth, MiB | 5.95 | 9.81 | 10.86 | 8.70 |
+
+All four intervals and postludes complete, with nominal thermal state and no
+rejected input, renderer errors, recorder overflow, or missing/zero-time measured
+presentations. Mac captures show the expected artwork and live Navigator.
+The unchanged presentation p99 and these single short pairs do not establish
+reliable cadence or memory improvement. Both cadence gates still fail; no
+ten-minute rerun follows. Physical-input latency, isolated GPU execution,
+recorder overhead and sustained memory behavior remain unqualified.
+
+This optimization accompanies the Settings text milestone. Evidence,
+exact source/build hashes, original benchmark binaries and native trace summaries
+are ignored under `artifacts/performance/tile-sha-acceleration-v1/`. Rebuilding
+the benchmark's baseline against the changed core manifest would also enable
+acceleration; retain the original binaries/results for any future comparison.
+
 ## Current contact renderer, eight-layer 4K ink — 2026-09-14
 
 A later 20-second CPU sample of the retained milestone Release app completes
