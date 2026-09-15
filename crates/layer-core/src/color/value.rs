@@ -35,6 +35,17 @@ impl RgbColor {
         Ok(())
     }
 
+    /// Validate every supported conversion before accepting persistent state.
+    /// Extreme finite values must not break a later document or view change.
+    pub fn validate_working_spaces(self) -> Result<(), String> {
+        self.validate()?;
+        for space in RgbSpace::ALL {
+            self.encoded_in(space)?;
+            self.linear_in(space)?;
+        }
+        Ok(())
+    }
+
     /// Capture a document sample without clipping its RGB or associating alpha.
     pub fn from_linear(space: RgbSpace, rgba: [f32; 4]) -> Result<Self, String> {
         Self::new(space, rgba)?;

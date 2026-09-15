@@ -2,6 +2,37 @@ use super::super::curve_reference::evaluate as curve_reference;
 use super::*;
 
 #[test]
+fn native_tagged_effect_and_gradient_colors_match_document_rgb_in_both_depths() {
+    use layer_core::{GradientStop, color::RgbColor};
+    let color = RgbColor::new(RgbSpace::DisplayP3, [0.9, 0.2, 0.15, 0.37]).unwrap();
+    for space in RgbSpace::ALL {
+        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
+            for image in [false, true] {
+                for alpha in [0., 1. / 65535., 0.37, 1.] {
+                    let mut ink = effect(2, "halftone", image);
+                    set(&mut ink, "ink", EffectValue::Color(color));
+                    // Halftone's opaque ink/paper semantics retain input coverage.
+                    let expected = color.linear_in(space).unwrap();
+                    close(frame(&mut r, &[ink, source([0.; 3], alpha)]),
+                        expected[..3].try_into().unwrap(), alpha, &format!("ink {space:?} {depth:?} {image}"));
+                    let mut gradient = effect(3, "gradient_map", image);
+                    set(&mut gradient, "gradient", EffectValue::Gradient(vec![
+                        GradientStop { position: 0., color }, GradientStop { position: 1., color },
+                    ]));
+                    // Gradient alpha is mapping strength; RGB interpolation occurs
+                    // before document decoding, as declared by the table shader.
+                    let encoded = color.encoded_in(space).unwrap();
+                    let expected = std::array::from_fn(|c| space.decode(f64::from(encoded[c] * color.rgba[3])) as f32);
+                    close(frame(&mut r, &[gradient, source([0.; 3], alpha)]), expected, alpha,
+                        &format!("gradient {space:?} {depth:?} {image}"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn native_neutral_tone_chains_preserve_extended_rgb_and_low_alpha_exactly() {
     for space in RgbSpace::ALL {
         for depth in [IntegerDepth::U8, IntegerDepth::U16] {
@@ -161,7 +192,7 @@ fn native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots
             .enumerate()
             .map(|(i, position)| layer_core::GradientStop {
                 position,
-                color: [0.1, 0.3, 0.7, 0.9].map(|v| if i % 2 == 0 { v } else { 1. - v }),
+                color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::ProPhoto, [0.1, 0.3, 0.7, 0.9].map(|v| if i % 2 == 0 { v } else { 1. - v })).unwrap(),
             })
             .collect();
         for component in 0..4 {
@@ -175,8 +206,8 @@ fn native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots
                     .min(stops.len() - 2);
                 let t = (x - f64::from(stops[i].position))
                     / (f64::from(stops[i + 1].position) - f64::from(stops[i].position));
-                let expected = f64::from(stops[i].color[component]) * (1. - t)
-                    + f64::from(stops[i + 1].color[component]) * t;
+                let expected = f64::from(stops[i].color.rgba[component]) * (1. - t)
+                    + f64::from(stops[i + 1].color.rgba[component]) * t;
                 assert!(
                     (f64::from(actual) - expected).abs() <= 1. / 65535.,
                     "gradient image={image}, {component}, {code}: {actual} vs {expected}"

@@ -107,6 +107,16 @@ color state and converts the explicitly tagged artwork textures into it. A
 Wayland protocol trace verifies both surfaces, while physical monitor moves,
 profile changes and alternate GTK renderers still require qualification.
 
+Effect colors, gradient stops and retained brush-color controls use the shared
+numeric editor with explicit defining spaces, extended RGB and separate alpha.
+Switching input models or cancelling preserves exact definitions; accepting an
+unchanged effect value creates no history entry. Gradient previews interpolate
+encoded document RGB, then convert for viewing and composite their alpha over
+the checkerboard in linear light. Toolbar and title-bar paint swatches use the
+original icon geometry with tagged artwork fills. None of these display textures
+feeds edits, sampling or export. The saved color and GPU-coordinate contracts are
+specified in [Runtime filters](../reference/runtime-filters.md).
+
 File → Import Image as Layer and Edit → Paste Image as Layer retain original
 PNG/JPEG/TIFF source data while keeping the destination document's working mode.
 Paste prefers TIFF, then PNG, then JPEG; transfer and worker decoding can be

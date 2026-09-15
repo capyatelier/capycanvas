@@ -31,12 +31,13 @@ pub(super) fn tile_button(
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
-    let icon = if tile.control == ToolbarControl::Color {
-        crate::icons::color_pair()
+    let icon: gtk::Widget = if tile.control == ToolbarControl::Color {
+        w.customization.color_pair(w, config.tile_style.icon_size() as i32)
     } else {
-        crate::icons::image(&format!("layer-{}-symbolic", choice.icon))
+        let image = crate::icons::image(&format!("layer-{}-symbolic", choice.icon));
+        image.set_pixel_size(config.tile_style.icon_size() as i32);
+        image.upcast()
     };
-    icon.set_pixel_size(config.tile_style.icon_size() as i32);
     let label_lines = config.tile_style.label_lines();
     if label_lines > 0 {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -81,14 +82,6 @@ pub(super) fn tile_button(
             w.dispatch(UiAction::ActivateTile { panel, tile: id });
         }
     ));
-    if tile.control == ToolbarControl::Color {
-        button.add_css_class("brush-color");
-        #[allow(deprecated)]
-        button.style_context().add_provider(
-            &w.customization.palette,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
     if tile.control == ToolbarControl::Divider {
         let line = gtk::Separator::new(gtk::Orientation::Horizontal);
         line.set_halign(gtk::Align::Center);
@@ -110,7 +103,7 @@ pub(super) struct ToolbarView {
 enum FieldValue {
     Size(crate::number_control::NumberControl),
     Opacity(crate::number_control::NumberControl),
-    Color(gtk::ColorDialogButton),
+    Color(Rc<crate::color_editor::ColorButton>),
     Brush(gtk::DropDown),
     Layer(gtk::DropDown),
     LayerOpacity(crate::number_control::NumberControl),
@@ -284,8 +277,8 @@ impl ToolbarManagerUi {
 
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
-    pub(super) palette: gtk::CssProvider,
-    palette_colors: Cell<Option<[[f32; 4]; 2]>>,
+    color_patches: RefCell<Vec<glib::WeakRef<crate::display_color::ColorPair>>>,
+    palette_colors: Cell<Option<([layer_core::color::RgbColor; 2], crate::display_color::ViewColor)>>,
     context: gtk::PopoverMenu,
     context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     popup: gtk::Popover,
@@ -327,7 +320,7 @@ impl Customization {
         picker.add_css_class("layer-preferences");
         Self {
             toolbars: RefCell::new(Vec::new()),
-            palette: gtk::CssProvider::new(),
+            color_patches: RefCell::new(Vec::new()),
             palette_colors: Cell::new(None),
             context: gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>),
             context_focus: RefCell::new(None),
@@ -906,26 +899,31 @@ impl Customization {
         }
     }
 
-    fn refresh_color_palette(&self, colors: &layer_ui::ColorState) -> bool {
-        let next = [colors.preview(colors.foreground), colors.preview(colors.background)];
-        if self.palette_colors.replace(Some(next)) == Some(next) {
-            return false;
+    pub(super) fn color_pair(&self, w: &Workspace, size: i32) -> gtk::Widget {
+        let pair = crate::display_color::ColorPair::new(size);
+        if let Some(g) = w.gpu.borrow().as_ref() {
+            let colors = &g.session.state().colors;
+            pair.set_colors([colors.foreground, colors.background], w.view_color());
         }
-        // All toolbar projections in this window share these colors. Reloading
-        // unchanged CSS invalidates GTK styling during unrelated tool updates.
-        let rgba = |[r, g, b, a]: [f32; 4]| gdk::RGBA::new(r, g, b, a);
-        self.palette.load_from_string(&format!(
-            ".brush-color {{ -gtk-icon-palette: success {}, warning {}; }}",
-            rgba(next[0]),
-            rgba(next[1])
-        ));
-        true
+        let mut retained = self.color_patches.borrow_mut();
+        retained.retain(|pair| pair.upgrade().is_some());
+        retained.push(pair.downgrade());
+        pair.upcast()
+    }
+    fn refresh_color_palette(&self, colors: &layer_ui::ColorState, view: crate::display_color::ViewColor) {
+        let next = ([colors.foreground, colors.background], view);
+        if self.palette_colors.replace(Some(next)) == Some(next) { return; }
+        self.color_patches.borrow_mut().retain(|pair| {
+            let Some(pair) = pair.upgrade() else { return false; };
+            pair.set_colors([colors.foreground, colors.background], view);
+            true
+        });
     }
 
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
         let Some((views, picker, control, prompt, manager)) = w.gpu.borrow().as_ref().map(|g| {
-            self.refresh_color_palette(&g.session.state().colors);
+            self.refresh_color_palette(&g.session.state().colors, w.view_color());
             (
                 g.session
                     .state()
@@ -974,8 +972,8 @@ impl Customization {
                 Some(FieldValue::Size(input)) => input.set_value(brush.diameter as f64),
                 Some(FieldValue::Opacity(input)) => input.set_value(brush.opacity as f64),
                 Some(FieldValue::Color(input)) => {
-                    let [r, g, b, a] = brush.color;
-                    input.set_rgba(&gdk::RGBA::new(r, g, b, a));
+                    let definition = w.gpu.borrow().as_ref().unwrap().session.state().colors.definition();
+                    input.set_color(definition, w.view_color());
                 }
                 None => (),
                 Some(FieldValue::Brush(input)) => input.set_selected(
@@ -1012,7 +1010,7 @@ impl Customization {
                 margins(&body, 12);
                 body.append(&gtk::Label::new(Some(control.label())));
                 match control {
-                    PanelControl::BrushColor => body.append(&w.color),
+                    PanelControl::BrushColor => body.append(&w.color.widget),
                     PanelControl::BrushOpacity => body.append(&w.opacity),
                     _ => unreachable!("core validates popup controls"),
                 }
@@ -1233,20 +1231,11 @@ impl Workspace {
                 FieldValue::Opacity(input)
             }
             PanelControl::BrushColor => {
-                let input = gtk::ColorDialogButton::new(Some(
-                    gtk::ColorDialog::builder().with_alpha(false).build(),
-                ));
-                input.connect_rgba_notify(glib::clone!(
-                    #[weak(rename_to = w)]
-                    self,
-                    move |input| {
-                        let c = input.rgba();
-                        w.dispatch(UiAction::SetColor {
-                            rgba: [c.red(), c.green(), c.blue(), c.alpha()],
-                        });
-                    }
-                ));
-                group.append(&input);
+                let input = crate::color_editor::ColorButton::new();
+                input.bind(self, |workspace, color| workspace.dispatch(UiAction::Color {
+                    action: layer_ui::ColorAction::Definition { color },
+                }));
+                group.append(&input.widget);
                 FieldValue::Color(input)
             }
             PanelControl::Brushes => {
@@ -1617,38 +1606,4 @@ fn owns_context(widget: &gtk::Widget, x: f64, y: f64) -> bool {
         child = current.parent();
     }
     false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "native GTK palette: requires a Wayland display"]
-    fn toolbar_palette_changes_only_with_paint_colors() {
-        adw::init().unwrap();
-        let view = Customization::new();
-        let mut colors = layer_ui::ColorState::default();
-        assert!(view.refresh_color_palette(&colors));
-        assert!(!view.refresh_color_palette(&colors));
-        let initial_css = view.palette.to_str();
-        colors.slot = layer_ui::ColorSlot::Background;
-        colors.space = layer_ui::ColorSpace::Hls;
-        assert!(!view.refresh_color_palette(&colors));
-        assert_eq!(view.palette.to_str(), initial_css);
-        colors.foreground.rgba = [0.8, 0.2, 0.4, 1.];
-        assert!(view.refresh_color_palette(&colors));
-        assert_ne!(view.palette.to_str(), initial_css);
-        assert!(!view.refresh_color_palette(&colors));
-        colors.background.rgba = [0.1, 0.3, 0.9, 0.5];
-        assert!(view.refresh_color_palette(&colors));
-        assert!(!view.refresh_color_palette(&colors));
-        // Each window owns its own provider, including first initialization
-        // when every channel happens to be zero.
-        let other = Customization::new();
-        colors.foreground.rgba = [0.; 4];
-        colors.background.rgba = [0.; 4];
-        assert!(other.refresh_color_palette(&colors));
-        assert_ne!(other.palette.to_str(), view.palette.to_str());
-    }
 }

@@ -149,7 +149,7 @@ impl GpuCanvas {
         let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
         changed.regions |= resized.regions;
-        if view_color_changed { changed.regions |= layer_ui::regions::BRUSH | layer_ui::regions::SETTINGS; }
+        if view_color_changed { changed.regions |= layer_ui::regions::BRUSH | layer_ui::regions::SETTINGS | layer_ui::regions::DOCUMENT; }
         self.needs_present = !self.session.engine().backend().startup.complete;
         #[cfg(test)]
         {

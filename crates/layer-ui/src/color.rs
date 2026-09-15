@@ -338,14 +338,7 @@ impl ColorState {
         Ok(())
     }
     fn validate_definition(color: RgbColor) -> Result<(), String> {
-        color.validate()?;
-        // Validate every supported conversion before accepting persistent state.
-        // A corrupt extreme value cannot cause a later document switch to fail.
-        for space in RgbSpace::ALL {
-            color.encoded_in(space)?;
-            color.linear_in(space)?;
-        }
-        Ok(())
+        color.validate_working_spaces()
     }
     /// Exact definition expressed in the picker's RGB space, without clipping.
     pub fn rgba(&self) -> [f32; 4] {

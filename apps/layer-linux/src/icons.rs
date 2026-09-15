@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*};
 use std::{cell::RefCell, collections::HashMap};
 
 thread_local! {
-    static PAINTABLES: RefCell<HashMap<(String, bool), gtk::Svg>> = RefCell::default();
+    static PAINTABLES: RefCell<HashMap<String, gtk::Svg>> = RefCell::default();
 }
 
 pub fn register() {
@@ -13,10 +13,10 @@ pub fn register() {
     });
 }
 
-fn paintable(name: &str, live_colors: bool) -> Option<gtk::Svg> {
+fn paintable(name: &str) -> Option<gtk::Svg> {
     register();
     PAINTABLES.with_borrow_mut(|cache| {
-        let cache_key = (name.to_owned(), live_colors);
+        let cache_key = name.to_owned();
         if let Some(svg) = cache.get(&cache_key) {
             return Some(svg.clone());
         }
@@ -28,13 +28,6 @@ fn paintable(name: &str, live_colors: bool) -> Option<gtk::Svg> {
         let mut source = std::str::from_utf8(&bytes)
             .expect("SVG is UTF-8")
             .replace("currentColor", "url(#gpa:foreground)");
-        // The color tile is an explicit live preview. Other uses of the
-        // same artwork preserve its fixed black and white swatches.
-        if live_colors {
-            source = source
-                .replace("fill=\"#000\"", "fill=\"url(#gpa:success)\"")
-                .replace("fill=\"#fff\"", "fill=\"url(#gpa:warning)\"");
-        }
         if name == "layer-color-symbolic" {
             source = source.replace("#33d17a", "url(#gpa:success)");
         }
@@ -58,15 +51,6 @@ pub fn image(name: &str) -> gtk::Image {
     image
 }
 
-pub fn color_pair() -> gtk::Image {
-    let image = gtk::Image::from_paintable(Some(
-        &paintable("layer-colors-symbolic", true).expect("bundled color swatches"),
-    ));
-    image.set_pixel_size(16);
-    image.set_widget_name("layer-colors-symbolic");
-    image
-}
-
 pub fn name(image: &gtk::Image) -> Option<glib::GString> {
     let name = image.widget_name();
     if name.starts_with("layer-") {
@@ -81,7 +65,7 @@ pub fn set(image: &gtk::Image, icon: Option<&str>) {
         return;
     }
     if let Some(icon) = icon.filter(|n| n.starts_with("layer-"))
-        && let Some(svg) = paintable(icon, false)
+        && let Some(svg) = paintable(icon)
     {
         image.set_paintable(Some(&svg));
         image.set_widget_name(icon);

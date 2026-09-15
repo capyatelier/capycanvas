@@ -372,7 +372,7 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
     for id in ["curves", "exposure"] {
         let effect = filter(fixtures().iter().find(|p| p.id() == id).unwrap());
         let instance = effect.effect.as_ref().unwrap().clone();
-        let values = instance.gpu_parameters();
+        let values = instance.gpu_parameters(layer_core::color::RgbSpace::Srgb).unwrap();
         let curve = |channel: usize, x: f64| {
             let EffectValue::Curve(points) = instance.value(&format!("curve_{channel}")).unwrap()
             else {
@@ -445,7 +445,7 @@ fn halftone_endpoints_match_scalar_color_oracles() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [32, 32];
     let effect = filter(fixtures().iter().find(|p| p.id() == "halftone").unwrap());
-    let parameters = effect.effect.as_ref().unwrap().gpu_parameters();
+    let parameters = effect.effect.as_ref().unwrap().gpu_parameters(layer_core::color::RgbSpace::Srgb).unwrap();
     for (source, parameter) in [(0, 4), (255, 5)] {
         let asset = AssetId(format!("test:halftone-endpoint-{source}").into());
         let bytes = [source, source, source, 255].repeat((extent[0] * extent[1]) as usize);

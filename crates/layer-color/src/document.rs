@@ -271,8 +271,8 @@ pub fn prepare_document_color(
             allocated_bytes: 0,
         });
     }
-    // Effect Color and Gradient parameters are explicitly encoded sRGB; changing
-    // document primaries must not reinterpret or rewrite those portable values.
+    // Effect colors retain their defining RGB space. GPU preparation derives
+    // new document coordinates; assignment/conversion never rewrites definitions.
     if candidate.document.layers.iter().any(|l| {
         !l.pending_operations.is_empty()
             || l.mask

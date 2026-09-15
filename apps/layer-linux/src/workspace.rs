@@ -810,7 +810,7 @@ pub struct Workspace {
     size_buttons: RefCell<Vec<(f32, gtk::Button)>>,
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
-    color: gtk::ColorDialogButton,
+    color: Rc<crate::color_editor::ColorButton>,
     tool_settings: crate::tool_panels::ToolSettings,
     color_panel: crate::tool_panels::ColorPanel,
     navigator: crate::navigator::Navigator,
@@ -932,9 +932,7 @@ impl Workspace {
         let opacity =
             crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "");
         opacity.set_width_request(100);
-        let color = gtk::ColorDialogButton::new(Some(
-            gtk::ColorDialog::builder().with_alpha(false).build(),
-        ));
+        let color = crate::color_editor::ColorButton::new();
         let status = gtk::Label::new(None);
         status.set_visible(false);
         status.add_css_class("error");
@@ -1127,16 +1125,9 @@ impl Workspace {
                 value: v.value() as f32
             })
         ));
-        self.color.connect_rgba_notify(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |v| {
-                let c = v.rgba();
-                this.dispatch(UiAction::SetColor {
-                    rgba: [c.red(), c.green(), c.blue(), c.alpha()],
-                });
-            }
-        ));
+        self.color.bind(self, |workspace, color| workspace.dispatch(UiAction::Color {
+            action: layer_ui::ColorAction::Definition { color },
+        }));
         let keys = gtk::EventControllerKey::new();
         keys.set_name(Some("workspace-shortcuts"));
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -2058,8 +2049,7 @@ impl Workspace {
             self.color_panel.refresh(&state.colors, self.view_color());
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
-            let [r, g, b, a] = state.brush.color;
-            self.color.set_rgba(&gdk::RGBA::new(r, g, b, a));
+            self.color.set_color(state.colors.definition(), self.view_color());
             self.toolbar.queue_draw();
             for (value, button) in self.size_buttons.borrow().iter() {
                 selected(button, *value == state.brush.diameter);

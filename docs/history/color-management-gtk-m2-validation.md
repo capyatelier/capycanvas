@@ -5530,3 +5530,149 @@ precision/workload matrix remain open. Benchmarking, fresh frame-creation
 baselines, regression investigation and optimization remain last. Other platform
 hosts have not been integrated or built for this checkpoint and require approval
 after GTK completion.
+
+## GTK effect colors, gradients and retained paint controls — 2026-09-15
+
+This checkpoint follows `bb8a0300`. It completes the remaining GTK effect-color,
+gradient-stop and retained paint-control integration, not milestone 2 as a whole.
+Benchmarking and optimization remain deferred to the final phase. Correctness
+run durations below are not frame-creation or interaction-latency measurements.
+
+Current code contradicted its old comment: `EffectValue::Color` and gradient
+stops were documented as sRGB arrays, but the built-in shaders consumed encoded
+document RGB. In particular, `fx_rgba` decodes using `FX_SPACE`; Black & White,
+Split Tone, Halftone, Crosshatch and Pencil pass their color parameters through
+that domain. Parameter preparation now converts portable `RgbColor` definitions
+to encoded document RGB. Stored defining spaces, extended RGB and alpha remain
+unchanged. Assign/Convert/depth changes preserve these definitions, and derived
+GPU coordinates follow the new document space. GPU record layout stays ABI 3;
+untagged serialized color arrays are rejected, without a compatibility reader.
+The current contract and examples are in [Runtime filters](../reference/runtime-filters.md).
+
+The existing RGB conversion implementation was checked against the
+[CSS Color 4 conversion reference](https://www.w3.org/TR/2026/CRD-css-color-4-20260913/#color-conversion-code).
+A new upload oracle checks P3 red against independent linear-sRGB coordinates
+`[1.2249402, -0.0420570, -0.0196376]`, including the negative components and exact
+low alpha. Persistent colors must remain finite in every supported working-space
+conversion; corrupt extreme values are rejected before publication.
+
+GTK uses one managed numeric draft for paint and effect colors. Input-model
+switches preserve untouched definitions; alpha-only edits preserve defining RGB.
+Cancel/invalid input leave the document untouched. Acceptance checks document
+identity and retained-control lifetime; gradient acceptance also checks the
+selected stop and complete stop list. Accepting an unchanged effect value now
+skips the shared edit, preserving history and dirty state. This fixes an existing
+no-op history defect exposed by the native test.
+
+The gradient ramp evaluates encoded document RGB and straight alpha, then
+converts and composites over its checker in linear light before view clamping.
+Only these preview textures are display data. Stop insertion uses the same
+shared interpolation domain and keeps one undo step. The original 65-vector
+analytic tables retain all knots, including intervals narrower than one U16 code.
+Existing effect alpha semantics remain: Gradient Map uses alpha as mapping
+strength; tint/ink/paper effects use their RGB components only.
+
+The generic GTK sRGB ColorDialogButton paths, raw Cairo gradient fill and live
+sRGB SVG-palette substitution are deleted. Toolbar and title-bar swatches retain
+the original shared icon coordinates and neutral outline, with tagged fills.
+Their weak view registry discards destroyed widgets when creating or updating
+views. Repeatedly rebuilding a toolbar with unchanged colors cannot grow that
+registry indefinitely. Gradient preview storage is two float RGBA rows at widget
+resolution, cached independently of the selected handle. These are implementation
+bounds, not measured peak-process/GPU-budget qualification.
+
+### Correctness evidence
+
+Artifacts use `artifacts/color-m2/effect-colors-` prefixes. The environment is the
+same Fedora 44 / GTK 4.22.4 / Mutter 50.4 / NVIDIA 610.57.04 RTX PRO 6000 Blackwell
+Max-Q reference setup as the preceding managed-view checkpoint. Native runs use
+a private 1600×1000@120 Wayland compositor with the GTK color-management flag.
+No physical calibrated-monitor or stylus qualification is claimed.
+
+| Check | Result and evidence |
+| --- | --- |
+| Core effect definitions | 10 passed; `core-tests.log`: tagged persistence, conversion coordinates, invalid-value atomicity, mixed-gamut insertion and existing catalog/table checks. |
+| Portable values | 3 passed; `values-tests.log`: extended coordinates, low alpha, conversion overflow and serialization. |
+| Shared effect actions | 1 passed; `session-qualified.log`: insertion, property/stop edits and undo through shared policy. |
+| Shared color/picker/editor | 38 passed; `color-tests.log`. |
+| Assign/Convert/depth/history | 8 passed, 12.06 s; `document-tests-2.log`. Fixtures now include P3 and ProPhoto live colors and gradient stops; original sources, samples, masks, wet planes and exact history remain covered. |
+| Native GPU color parameters | 1 passed, 28.32 s; `gpu-tagged.log`: all four working spaces × both depths × fused/physical gradient execution × four input-alpha cases; Halftone and Gradient Map scalar expectations. |
+| Full U16 analytic table precision | 1 passed, 5.01 s; `final-gpu-native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots.log`: every code, four gradient components, close knots and both execution paths. |
+| Existing Halftone oracle | 1 passed, 3.37 s; `final-gpu-halftone_endpoints_match_scalar_color_oracles.log`. |
+| Existing adjustment color oracles | 1 passed, 1.56 s; `final-gpu-builtin_adjustments_have_known_color_results.log`. |
+| GTK P3 workflow | 1 passed, 5.70 s; `complete-native_effect_colors_gradients_and_retained_controls.log`: exact model switching, invalid input/cancel, numeric changes, alpha-only edits, undo/redo, stop insertion, GTK ramp pixel comparison, native save/reopen and retained brush controls with independent brush opacity. |
+| GTK sRGB fallback workflow | 1 passed, 5.71 s; `complete-srgb.log`: the same wide-gamut document and portable definitions through fallback viewing. |
+| Canvas / GTK artwork agreement | 1 passed, 2.91 s; `complete-native_managed_canvas_and_gtk_artwork_agree.log`, after extracting the shared opaque-checker drawing helper. |
+| Native icons and retained swatches | 1 passed, 43.91 s; `complete-icons.log`: original vector geometry, both themes, three toolbar sizes, both paint slots and all forty filter controls/previews. |
+| Existing numeric / palette workflow | 1 passed, 10.95 s; `native_numeric_colors_and_saved_palettes.log`, before the final icon-only correction. |
+| Drawing and GPU recovery | 1 passed, 30.83 s; `recovery.log`: Assign/Convert/depth, complete comparisons, undo/redo, save/reopen, flat copy, continued drawing and deliberate GPU failure/restart. The logged GPU panic is the injected recovery condition. This run preceded the icon-only correction. |
+| Production GTK / shared FFI | Passed; `production-check.log`, 4.43 s. |
+| Real native pickup | 1 passed, 80.20 s; `native-pickup-run.log`: mouse/touch tile, drawer, column, tab and grip pickup, hold-release/context, cancellation and undo. Physical pen remains unqualified. |
+
+The final GTK executable `effect-colors-complete-tests` has SHA-256
+`ee2cca119b9154e48dcb0741cd50f7b314957bec7f33a9adaf8cb0a05874ec4f`.
+The final GPU executable `effect-colors-final-gpu-tests` has SHA-256
+`bc8e3c2e9505372f0b8722c29d43dbbe63a205973c671657bc6f48ea13c6da75`.
+The tagged GPU matrix used `effect-colors-gpu-tests`, SHA-256
+`f2d59a5c405786709bd333475b1998f5474db3fae2a0ac7b3a8e0555b2cbc3c1`;
+the subsequent renderer-test change only retagged the independent narrow-knot fixture to its
+actual ProPhoto space. Build JSON/logs and per-build source hashes accompany each.
+`effect-colors-provenance.json` records 34 inputs and 662 outputs; every captured
+final GTK Rust source hash matches the committed candidate.
+
+Reproduce from the repository root, with the local JPEG headers visible:
+
+```sh
+export PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+cargo test -p layer-core --offline effects:: --lib
+cargo test -p layer-color --offline document::tests:: --lib
+cargo test -p layer-ui --offline effect_creation_properties_and_navigation_are_shared --lib
+cargo test -p layer-ui --offline color:: --lib
+cargo test -p layer-linux --offline --no-run
+cargo test -p layer-render-wgpu --offline --no-run
+cargo check -p layer-linux -p layer-ffi --offline
+```
+
+Use Cargo's reported `layer-linux` executable with `tools/performance/gtk-raster.sh`
+and filter `workspace::tests::effect_color::native_effect_colors_gradients_and_retained_controls`.
+Repeat with `LAYER_TEST_VIEW_SRGB=1`. The captured `*-exact` wrappers add `--exact`;
+GPU executables use the full `tests::native_effects::tone::...` names recorded in
+the table, `--exact --test-threads=1`. Real mouse/touch pickup uses
+`GDK_DEBUG=color-mgmt LAYER_NATIVE_TEST_EXECUTABLE="$PWD/artifacts/color-m2/effect-colors-complete-tests" bash tools/performance/workspace-motion.sh gtk --drag-pickup`.
+This executes correctness tests despite the
+harness directory being named `performance`.
+
+### Findings and remaining qualification
+
+Earlier failing attempts are retained. `shared-tests.log` used a lowercase
+manifest enum before correcting it to `Srgb`; `document-tests.log` initially put
+the added effect fixtures below Paper. `final-build.json` records the test's
+missing `Project` qualification. `native-p3.log` exposed the no-op history defect.
+`qualified-p3.log` / `final-p3.log` reached the reopened document but failed to
+show its initially hidden Properties panel. `gpu-native_analytic_...log` tagged
+a numeric ProPhoto precision fixture as sRGB; the new upload correctly converted
+it, exposing the test setup error. These are not passing evidence.
+
+The first toolbar swatch implementation used GTK Frame corners. The icon oracle
+found red 58 instead of 51 at the background sample: theme rounding changed the
+square into a disc. `icon-probe.log` and its small-patch capture isolate this.
+The final custom snapshot uses the original SVG geometry; the same two-byte
+oracle passes without loosening its tolerance. P3 gradient/numeric screenshots
+under `effect-color-ui` and both themes/sizes under
+`effect-colors-complete-icon-ui/controls` were visually inspected.
+
+`complete-native_toolbar_sizing.log` fails its synthetic grip double-click reset.
+The saved parent executable fails identically in `parent-toolbar-sizing.log`
+(262×346 retained versus expected 112×286). Current input handling requires an
+actual GDK event and ignores that test's emitted signal without one. This is a
+pre-existing native harness gap, not accepted sizing evidence; it must be repaired
+or replaced with real-contact coverage before final broad qualification.
+
+Remaining GTK work still includes delivery resize/output-preview/recipes/DPI and
+format-policy gaps, combined job cancellation/scheduling and resource budgets,
+coarse-first source/display work and final zoom quality, complete tool/filter
+precision and large-document qualification, and monitor/profile/alternate-renderer
+validation. Fresh frame-creation baselines, regression investigation and all
+benchmarking/optimization remain last. Other host color controls and their JSON
+color projections have not been integrated or built for this checkpoint; shared
+Rust/FFI checks do not qualify them. They require approval after GTK completion.

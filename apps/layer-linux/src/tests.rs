@@ -5,6 +5,8 @@
 mod color_panel;
 #[path = "color_management_tests.rs"]
 mod color_management;
+#[path = "effect_color_tests.rs"]
+mod effect_color;
 #[path = "new_photo_tests.rs"]
 mod new_photo;
 #[path = "place_source_tests.rs"]
@@ -4989,15 +4991,15 @@ fn native_adjustment_panels_review() {
                 EffectValue::Gradient(vec![
                     layer_core::GradientStop {
                         position: 0.,
-                        color: [0.03, 0.05, 0.2, 1.],
+                        color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.03, 0.05, 0.2, 1.]).unwrap(),
                     },
                     layer_core::GradientStop {
                         position: 0.5,
-                        color: [0.8, 0.2, 0.1, 1.],
+                        color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.8, 0.2, 0.1, 1.]).unwrap(),
                     },
                     layer_core::GradientStop {
                         position: 1.,
-                        color: [1., 0.9, 0.5, 1.],
+                        color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [1., 0.9, 0.5, 1.]).unwrap(),
                     },
                 ]),
             ),

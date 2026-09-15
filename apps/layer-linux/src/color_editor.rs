@@ -1,10 +1,10 @@
 //! Native numeric color drafts. Shared Rust owns parsing, conversion and the
-//! palette definitions; this sheet publishes one accepted paint change.
+//! palette/effect definitions; this sheet publishes one accepted color change.
 use crate::display_color::{ColorPatch, ViewColor};
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::glib;
-use layer_core::color::RgbSpace;
+use layer_core::color::{RgbColor, RgbSpace};
 use layer_ui::{ColorAction, ColorEditor, ColorInputModel, ColorSlot, UiAction};
 use std::{
     cell::{Cell, RefCell},
@@ -52,7 +52,10 @@ impl Form {
                     text.push_str(" · Outside document gamut");
                 }
                 if !color.in_gamut(self.view.space()).unwrap() {
-                    text.push_str(&format!(" · Outside {} preview gamut", self.view.space().name()));
+                    text.push_str(&format!(
+                        " · Outside {} preview gamut",
+                        self.view.space().name()
+                    ));
                 }
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
@@ -70,12 +73,12 @@ impl Form {
 }
 
 pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
-    let Some((colors, epoch)) = workspace.gpu.borrow().as_ref().map(|g| {
-        (
-            g.session.state().colors.clone(),
-            g.session.state().document_file.epoch,
-        )
-    }) else {
+    let Some(colors) = workspace
+        .gpu
+        .borrow()
+        .as_ref()
+        .map(|g| g.session.state().colors.clone())
+    else {
         return;
     };
     let definition = match slot {
@@ -83,7 +86,26 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         ColorSlot::Background => colors.background,
         ColorSlot::Transparent => return,
     };
-    let space = colors.rgb_space();
+    choose(workspace, definition, move |workspace, color| {
+        workspace.dispatch(UiAction::Color {
+            action: ColorAction::SetSlot { slot, color },
+        });
+    });
+}
+
+pub fn choose(
+    workspace: &Rc<Workspace>,
+    definition: RgbColor,
+    accepted: impl FnOnce(&Rc<Workspace>, RgbColor) + 'static,
+) {
+    let Some((space, epoch)) = workspace.gpu.borrow().as_ref().map(|g| {
+        (
+            g.session.state().colors.rgb_space(),
+            g.session.state().document_file.epoch,
+        )
+    }) else {
+        return;
+    };
     let editor = match ColorEditor::new(definition, space) {
         Ok(editor) => editor,
         Err(error) => {
@@ -213,11 +235,64 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
                 return;
             }
             match form.editor.borrow().color() {
-                Ok(color) => workspace.dispatch(UiAction::Color {
-                    action: ColorAction::SetSlot { slot, color },
-                }),
+                Ok(color) => accepted(&workspace, color),
                 Err(error) => workspace.changed(Err(error)),
             }
         }
     ));
+}
+
+/// Retained native button with an explicitly tagged artwork patch. Refreshing
+/// coordinates never emits an edit; only accepting a live draft publishes one.
+pub struct ColorButton {
+    pub widget: gtk::Button,
+    definition: Cell<RgbColor>,
+    patch: ColorPatch,
+}
+impl ColorButton {
+    pub fn new() -> Rc<Self> {
+        let patch = ColorPatch::new(false);
+        patch.set_size_request(32, 20);
+        let widget = gtk::Button::builder()
+            .child(&patch)
+            .tooltip_text("Edit Color")
+            .build();
+        Rc::new(Self {
+            widget,
+            definition: Cell::new(RgbColor::BLACK),
+            patch,
+        })
+    }
+    pub fn color(&self) -> RgbColor {
+        self.definition.get()
+    }
+    pub fn set_color(&self, color: RgbColor, view: ViewColor) {
+        self.definition.set(color);
+        self.patch.set_color(color, view);
+    }
+    pub fn bind(
+        self: &Rc<Self>,
+        workspace: &Rc<Workspace>,
+        accepted: impl Fn(&Rc<Workspace>, RgbColor) + 'static,
+    ) {
+        let weak = Rc::downgrade(self);
+        let workspace = Rc::downgrade(workspace);
+        let accepted = Rc::new(accepted);
+        self.widget.connect_clicked(move |_| {
+            let (Some(button), Some(workspace)) = (weak.upgrade(), workspace.upgrade()) else {
+                return;
+            };
+            let original = button.color();
+            let weak = weak.clone();
+            let accepted = accepted.clone();
+            choose(&workspace, original, move |workspace, color| {
+                let Some(button) = weak.upgrade() else {
+                    return;
+                };
+                if button.widget.root().is_some() && button.color() == original {
+                    accepted(workspace, color);
+                }
+            });
+        });
+    }
 }

@@ -230,12 +230,9 @@ impl Effects {
         let mut data = Vec::new();
         let mut offsets = Vec::new();
         for (effect, properties) in effects.iter().zip(&properties) {
-            effect
-                .validate()
-                .map_err(|e| GpuRasterError::Effect(e.into()))?;
             offsets.push(data.len() as u32);
             data.push(*properties);
-            data.extend(effect.gpu_parameters());
+            data.extend(effect.gpu_parameters(r.device().working_space()).map_err(GpuRasterError::Effect)?);
         }
         let programs: Vec<_> = effects.iter().map(|e| e.program.clone()).collect();
         let bytes: Vec<_> = data

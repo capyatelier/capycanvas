@@ -1,4 +1,5 @@
 //! Pure effect descriptions and parameters. No graphics API or UI widget types.
+use crate::color::{RgbColor, RgbSpace};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -226,15 +227,15 @@ pub enum EffectValue {
     Number(f32),
     Toggle(bool),
     Choice(u32),
-    /// Straight sRGB UI color. The effect declares any conversion it needs.
-    Color([f32; 4]),
+    /// Portable straight color. GPU parameters use encoded document RGB.
+    Color(RgbColor),
     Curve(Vec<[f32; 2]>),
     Gradient(Vec<GradientStop>),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GradientStop {
     pub position: f32,
-    pub color: [f32; 4],
+    pub color: RgbColor,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -446,16 +447,17 @@ impl EffectInstance {
     }
     /// Small parameter upload, never image processing. Curves/gradients retain
     /// exact control data; shaders find the segment with a bounded binary search.
-    pub fn gpu_parameters(&self) -> Vec<[f32; 4]> {
+    pub fn gpu_parameters(&self, space: RgbSpace) -> Result<Vec<[f32; 4]>, String> {
+        self.validate()?;
         let mut data = vec![[0.; 4]];
         for value in &self.values {
             match value {
                 EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
                 EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
                 EffectValue::Choice(v) => data.push([*v as f32, 0., 0., 0.]),
-                EffectValue::Color(v) => data.push(*v),
+                EffectValue::Color(v) => data.push(v.encoded_in(space)?),
                 EffectValue::Curve(points) => data.extend(curve_parameters(points)),
-                EffectValue::Gradient(stops) => data.extend(gradient_parameters(stops)),
+                EffectValue::Gradient(stops) => data.extend(gradient_parameters(stops, space)?),
             }
         }
         let directory = data.len();
@@ -467,7 +469,7 @@ impl EffectInstance {
             // tables on edits, preserving previously prepared results.
             data.resize(data.len() + lookup.values as usize, [0.; 4]);
         }
-        data
+        Ok(data)
     }
 }
 
@@ -539,8 +541,8 @@ impl EffectParameter {
         }
     }
 }
-fn valid_color(c: &[f32; 4]) -> bool {
-    c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+fn valid_color(c: &RgbColor) -> bool {
+    c.validate_working_spaces().is_ok()
 }
 
 fn curve_tangent(points: &[[f32; 2]], j: usize) -> f64 {
@@ -593,14 +595,18 @@ fn curve_parameters(points: &[[f32; 2]]) -> [[f32; 4]; EFFECT_TABLE_VECTORS] {
     }
     data
 }
-fn gradient_parameters(stops: &[GradientStop]) -> [[f32; 4]; EFFECT_TABLE_VECTORS] {
+fn gradient_parameters(
+    stops: &[GradientStop],
+    space: RgbSpace,
+) -> Result<[[f32; 4]; EFFECT_TABLE_VECTORS], String> {
     let mut data = [[0.; 4]; EFFECT_TABLE_VECTORS];
     data[0] = [stops.len() as f32, 0., 2., 0.];
     for (i, stop) in stops.iter().enumerate() {
-        data[1 + i * 2] = [stop.position, stop.color[0], stop.color[1], stop.color[2]];
-        data[2 + i * 2] = [stop.color[3], 0., 0., 0.];
+        let color = stop.color.encoded_in(space)?;
+        data[1 + i * 2] = [stop.position, color[0], color[1], color[2]];
+        data[2 + i * 2] = [color[3], 0., 0., 0.];
     }
-    data
+    Ok(data)
 }
 
 /// Shape-preserving cubic Hermite interpolation in [0,1], with linear endpoint
@@ -630,18 +636,121 @@ pub fn curve_value(points: &[[f32; 2]], x: f32) -> f32 {
     (((coefficient[3] * t + coefficient[2]) * t + coefficient[1]) * t + coefficient[0])
         .clamp(coefficient[0].min(bounds[2]), coefficient[0].max(bounds[2]))
 }
-pub fn gradient_value(stops: &[GradientStop], x: f32) -> [f32; 4] {
+/// Interpolate straight, encoded document RGB and alpha, matching the effect
+/// table shader. The returned definition records those interpolation coordinates.
+pub fn gradient_value(stops: &[GradientStop], x: f32, space: RgbSpace) -> Result<RgbColor, String> {
+    if stops.len() < 2 || !x.is_finite() {
+        return Err("Invalid gradient sample".into());
+    }
     let i = stops
         .partition_point(|s| s.position < x)
         .saturating_sub(1)
         .min(stops.len() - 2);
     let t = ((x - stops[i].position) / (stops[i + 1].position - stops[i].position)).clamp(0., 1.);
-    std::array::from_fn(|c| stops[i].color[c] * (1. - t) + stops[i + 1].color[c] * t)
+    let a = stops[i].color.encoded_in(space)?;
+    let b = stops[i + 1].color.encoded_in(space)?;
+    RgbColor::new(space, std::array::from_fn(|c| a[c] * (1. - t) + b[c] * t))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tagged_effect_colors_upload_document_coordinates_and_preserve_definitions() {
+        let red = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 123. / 65535.]).unwrap();
+        let mut effect = EffectInstance::new(fixture("black_white").program());
+        effect.set("tint_color", EffectValue::Color(red)).unwrap();
+        let original = serde_json::to_vec(&effect).unwrap();
+        let restored: EffectInstance = serde_json::from_slice(&original).unwrap();
+        assert_eq!(restored, effect);
+        // Independent CSS Color 4 D65 P3/XYZ/sRGB matrix reference, including
+        // the negative coordinates that an untagged or clamped UI loses.
+        let uploaded = effect.gpu_parameters(RgbSpace::Srgb).unwrap()[8];
+        for (actual, expected) in uploaded[..3]
+            .iter()
+            .zip([1.2249402, -0.0420570, -0.0196376])
+        {
+            assert!((RgbSpace::Srgb.decode(f64::from(*actual)) - expected).abs() < 2e-6);
+        }
+        assert_eq!(uploaded[3], red.rgba[3]);
+        for space in RgbSpace::ALL {
+            assert_eq!(
+                effect.gpu_parameters(space).unwrap()[8],
+                red.encoded_in(space).unwrap()
+            );
+            assert_eq!(serde_json::to_vec(&effect).unwrap(), original);
+        }
+        for color in [
+            RgbColor {
+                space: RgbSpace::ProPhoto,
+                rgba: [f32::MAX, 0., 0., 1.],
+            },
+            RgbColor {
+                space: RgbSpace::Srgb,
+                rgba: [0., 0., 0., -0.1],
+            },
+        ] {
+            assert!(effect.set("tint_color", EffectValue::Color(color)).is_err());
+            assert_eq!(effect, restored);
+        }
+        assert!(
+            serde_json::from_str::<EffectValue>(r#"{"kind":"color","value":[1,0,0,1]}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn mixed_gamut_gradient_insertion_matches_encoded_document_interpolation() {
+        let stops = vec![
+            GradientStop {
+                position: 0.,
+                color: RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 0.125]).unwrap(),
+            },
+            GradientStop {
+                position: 1.,
+                color: RgbColor::new(RgbSpace::ProPhoto, [0.2, 0.4, 0.8, 0.75]).unwrap(),
+            },
+        ];
+        let mut effect = EffectInstance::new(fixture("gradient_map").program());
+        effect
+            .set("gradient", EffectValue::Gradient(stops.clone()))
+            .unwrap();
+        for space in RgbSpace::ALL {
+            let original = effect.gpu_parameters(space).unwrap();
+            let middle = gradient_value(&stops, 0.375, space).unwrap();
+            let a = stops[0].color.encoded_in(space).unwrap();
+            let b = stops[1].color.encoded_in(space).unwrap();
+            assert_eq!(middle.space, space);
+            for c in 0..4 {
+                assert!((middle.rgba[c] - (a[c] * 0.625 + b[c] * 0.375)).abs() < 1e-7);
+            }
+            assert_eq!(original[2], [0., a[0], a[1], a[2]]);
+            assert_eq!(original[3][0], a[3]);
+            let inserted = [
+                stops[0].clone(),
+                GradientStop {
+                    position: 0.375,
+                    color: middle,
+                },
+                stops[1].clone(),
+            ];
+            for i in 0..=100 {
+                let x = i as f32 / 100.;
+                let before = gradient_value(&stops, x, space).unwrap();
+                let after = gradient_value(&inserted, x, space).unwrap();
+                assert!(
+                    before
+                        .rgba
+                        .into_iter()
+                        .zip(after.rgba)
+                        .all(|(a, b)| (a - b).abs() < 5e-7)
+                );
+            }
+        }
+        assert_eq!(
+            effect.value("gradient"),
+            Some(&EffectValue::Gradient(stops))
+        );
+    }
     fn fixtures() -> &'static [crate::EffectDefinition] {
         crate::bundled_effect_catalog().filters()
     }
@@ -699,7 +808,7 @@ mod tests {
         for kind in fixtures() {
             let fx = EffectInstance::new(kind.program());
             fx.validate().unwrap();
-            assert!(!fx.gpu_parameters().is_empty());
+            assert!(!fx.gpu_parameters(RgbSpace::Srgb).unwrap().is_empty());
         }
         let mut fx = EffectInstance::new(fixture("levels").program());
         assert!(fx.set("gamma", EffectValue::Number(f32::NAN)).is_err());
@@ -755,7 +864,7 @@ mod tests {
         assert!(program.parameters[9].section.is_none());
         let fx = EffectInstance::new(program);
         assert_eq!(
-            fx.gpu_parameters(),
+            fx.gpu_parameters(RgbSpace::Srgb).unwrap(),
             [[11., 0., 0., 0.]]
                 .into_iter()
                 .chain(vec![[0., 0., 0., 0.]; 9])
@@ -788,7 +897,7 @@ mod tests {
         let mut fx = EffectInstance::new(fixture("curves").program());
         fx.set("curve_0", EffectValue::Curve(points.clone()))
             .unwrap();
-        let data = fx.gpu_parameters();
+        let data = fx.gpu_parameters(RgbSpace::Srgb).unwrap();
         assert_eq!(data.len(), 1 + 4 * EFFECT_TABLE_VECTORS);
         assert_eq!(data[1], [3., 0., 1., 0.]);
         for p in &points {

@@ -89,6 +89,24 @@ fn fixture(color: DocumentColor) -> Project {
     source.kind = LayerKind::ImportedImage;
     source.source = Some(Arc::new(original));
     document.layers.insert(2, source);
+    // Live color definitions are independent of document assignment/conversion.
+    // All existing sample, metadata and history checks also cover these layers.
+    use layer_core::{EffectInstance, EffectValue, GradientStop, color::RgbColor};
+    let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0.234567, 123. / 65535.]).unwrap();
+    for (id, key, value) in [
+        ("black_white", "tint_color", EffectValue::Color(color)),
+        ("gradient_map", "gradient", EffectValue::Gradient(vec![
+            GradientStop { position: 0., color },
+            GradientStop { position: 1., color: RgbColor::new(RgbSpace::ProPhoto, [0.123456, 0.75, 0.5, 0.37]).unwrap() },
+        ])),
+    ] {
+        let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program());
+        effect.set(key, value).unwrap();
+        let mut layer = Layer::paint(document.allocate_layer_id(), id);
+        layer.kind = LayerKind::Effect;
+        layer.effect = Some(Arc::new(effect));
+        document.layers.insert(document.layers.len() - 1, layer);
+    }
     let project = Project {
         document,
         assets: Default::default(),

@@ -166,7 +166,7 @@ pub enum EffectAction {
         key: String,
         index: Option<usize>,
         position: f32,
-        color: Option<[f32; 4]>,
+        color: Option<layer_core::color::RgbColor>,
         remove: bool,
     },
 }
@@ -417,8 +417,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else if stops.len() < 32 && !remove {
                     let position = position.clamp(0., 1.);
                     if stops.iter().all(|s| (s.position - position).abs() > 0.002) {
-                        let color =
-                            color.unwrap_or_else(|| layer_core::gradient_value(&stops, position));
+                        let color = match color {
+                            Some(color) => color,
+                            None => layer_core::gradient_value(&stops, position, self.engine.document().color.space)?,
+                        };
                         stops.push(layer_core::GradientStop { position, color });
                         stops.sort_by(|a, b| a.position.total_cmp(&b.position));
                     }
@@ -576,9 +578,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     };
                 }
                 let mut layer = self.editable_layer(id)?;
-                Arc::make_mut(layer.effect.as_mut().ok_or("Not an effect layer")?)
+                let effect = layer.effect.as_mut().ok_or("Not an effect layer")?;
+                let original = effect.clone();
+                Arc::make_mut(effect)
                     .set(&key, value)
                     .map_err(str::to_string)?;
+                if *effect == original {
+                    return Ok(());
+                }
                 self.layer_edit(Edit::ReplaceLayer(Box::new(layer)))?;
             }
         }

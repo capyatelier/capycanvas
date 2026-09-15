@@ -570,30 +570,19 @@ impl Header {
                     HeaderItem::Fullscreen => "fullscreen-enter",
                     _ => ZenIcon::LookingUp.icon(),
                 };
-                let image = if matches!(
+                let image: gtk::Widget = if matches!(
                     entry.item,
                     HeaderItem::Tool {
                         control: ToolbarControl::Color
                     }
                 ) {
-                    crate::icons::color_pair()
+                    w.customization.color_pair(w, size.icon())
                 } else {
-                    crate::icons::image(&format!("layer-{icon}-symbolic"))
+                    let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
+                    image.set_pixel_size(size.icon());
+                    image.upcast()
                 };
-                image.set_pixel_size(size.icon());
                 b.set_child(Some(&image));
-                if entry.item
-                    == (HeaderItem::Tool {
-                        control: ToolbarControl::Color,
-                    })
-                {
-                    b.add_css_class("brush-color");
-                    #[allow(deprecated)]
-                    b.style_context().add_provider(
-                        &w.customization.palette,
-                        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-                    );
-                }
                 if entry.item
                     == (HeaderItem::Tool {
                         control: ToolbarControl::Divider,

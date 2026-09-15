@@ -124,6 +124,19 @@ impl ViewColor {
             bytes,
         )
     }
+    /// Match the canvas: linear alpha-over-checker, then display encoding/clamp.
+    pub fn checker_colors(self, color: RgbColor) -> [[f32; 4]; 2] {
+        let linear = color.linear_in(self.space()).expect("validated artwork color");
+        [0.94, 0.80].map(|checker| {
+            let mut rgba = [1.; 4];
+            for c in 0..3 {
+                rgba[c] = (self.space().encode(f64::from(
+                    linear[c] * linear[3] + checker * (1. - linear[3]),
+                )) as f32).clamp(0., 1.);
+            }
+            rgba
+        })
+    }
     pub fn solid(self, rgba: [f32; 4]) -> gdk::Texture {
         self.texture(
             [1, 1],
@@ -132,6 +145,25 @@ impl ViewColor {
             rgba.into_iter().flat_map(f32::to_ne_bytes).collect(),
         )
     }
+}
+
+#[path = "color_pair.rs"]
+mod pair;
+pub use pair::ColorPair;
+
+pub(crate) fn append_checker(snapshot: &gtk::Snapshot, bounds: gtk::graphene::Rect, radius: f32, textures: &[gdk::Texture; 2]) {
+    snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(bounds, radius));
+    // An opaque base avoids alpha seams at fractional checker edges.
+    snapshot.append_texture(&textures[0], &bounds);
+    for y in 0..(bounds.height() / 8.).ceil() as i32 {
+        for x in 0..(bounds.width() / 8.).ceil() as i32 {
+            if (x + y) % 2 == 0 { continue; }
+            snapshot.append_texture(&textures[1], &gtk::graphene::Rect::new(
+                bounds.x() + (x * 8) as f32, bounds.y() + (y * 8) as f32, 8., 8.,
+            ));
+        }
+    }
+    snapshot.pop();
 }
 
 mod patch {
@@ -156,30 +188,9 @@ mod patch {
             let Some(textures) = self.textures.borrow().clone() else {
                 return;
             };
-            snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(
-                bounds,
-                if self.round.get() {
-                    bounds.width().min(bounds.height()) * 0.5
-                } else {
-                    0.
-                },
-            ));
-            // Keep an opaque base under fractional checker edges. Independently
-            // antialiased adjacent rectangles otherwise leave alpha seams when
-            // GTK scales a widget or the display uses fractional scaling.
-            snapshot.append_texture(&textures[0], &bounds);
-            for y in 0..(obj.height() + 7) / 8 {
-                for x in 0..(obj.width() + 7) / 8 {
-                    if (x + y) % 2 == 0 {
-                        continue;
-                    }
-                    snapshot.append_texture(
-                        &textures[1],
-                        &gtk::graphene::Rect::new((x * 8) as f32, (y * 8) as f32, 8., 8.),
-                    );
-                }
-            }
-            snapshot.pop();
+            append_checker(snapshot, bounds, if self.round.get() {
+                bounds.width().min(bounds.height()) * 0.5
+            } else { 0. }, &textures);
         }
     }
 }
@@ -198,21 +209,7 @@ impl ColorPatch {
         if self.imp().key.replace(Some((color, view))) == Some((color, view)) {
             return;
         }
-        let linear = color
-            .linear_in(view.space())
-            .expect("validated paint color");
-        // Composite coverage in linear light before the display gamut clamp,
-        // using the same neutral checker values as the canvas presenter.
-        let textures = [0.94, 0.80].map(|checker| {
-            let mut rgba = [1.; 4];
-            for c in 0..3 {
-                rgba[c] = view.space().encode(f64::from(
-                    linear[c] * linear[3] + checker * (1. - linear[3]),
-                )) as f32;
-                rgba[c] = rgba[c].clamp(0., 1.);
-            }
-            view.solid(rgba)
-        });
+        let textures = view.checker_colors(color).map(|rgba| view.solid(rgba));
         *self.imp().textures.borrow_mut() = Some(textures);
         self.queue_draw();
     }

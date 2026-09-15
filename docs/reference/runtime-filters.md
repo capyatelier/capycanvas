@@ -41,6 +41,23 @@ is removed. ABI 2 programs are rejected, including embedded document programs;
 there is no compatibility adapter. Native photo editing must not inherit a
 sampled LUT's error around closely spaced controls.
 
+Color parameters and gradient stops retain a tagged, straight `RgbColor` in
+their manifest and document definition, for example
+`{"kind":"color","value":{"space":"DisplayP3","rgba":[0.9,0.2,0.1,0.37]}}`.
+Gradient entries use `{"position":0,"color":{"space":"Srgb","rgba":[0,0,0,1]}}`.
+The four defining spaces are `Srgb`, `DisplayP3`, `AdobeRgb` and `ProPhoto`.
+RGB can be finite and extended; alpha is linear coverage in [0,1]. Every supported
+conversion is validated before accepting persistent state. Untagged arrays are
+rejected; there is no compatibility reader.
+
+GPU preparation converts these definitions to **encoded document RGB**, without
+clamping or changing their stored definitions. Gradient interpolation uses those
+straight RGB coordinates and alpha; inserting a stop records that interpolation
+in the document space. Assignment, conversion and depth changes retain the
+original endpoint definitions. The GPU record layout and shader contract remain
+ABI 3. Individual effects decide how alpha contributes: Gradient Map uses stop
+alpha as mapping strength; the built-in tint/ink/paper controls use RGB only.
+
 Native curves continue linearly beyond their endpoint controls. Identity curves
 preserve the input directly, including extended RGB. Gradient endpoints remain
 constant beyond their range, as an explicit color-mapping operation. Levels

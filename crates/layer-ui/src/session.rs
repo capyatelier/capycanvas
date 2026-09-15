@@ -13189,13 +13189,13 @@ mod tests {
                     key: "gradient".into(),
                     index: None,
                     position: 0.5,
-                    color: Some([0.7, 0.2, 0.1, 0.5]),
+                    color: Some(layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.7, 0.2, 0.1, 0.5]).unwrap()),
                     remove: false,
                 },
             );
             let edited = app.state.layer_properties.controls[0].value.clone();
             assert!(
-                matches!(&edited, EffectValue::Gradient(stops) if stops.len()==3 && stops[1].color[3]==0.5)
+                matches!(&edited, EffectValue::Gradient(stops) if stops.len()==3 && stops[1].color.rgba[3]==0.5)
             );
             app.dispatch(UiAction::Invoke {
                 command: CommandId::Undo,

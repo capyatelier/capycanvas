@@ -376,7 +376,7 @@
             "label": "Tint"
           },
           {
-            "default": {"kind":"color","value":[0.75,0.53,0.3,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.75,0.53,0.3,1]}},
             "key": "tint_color",
             "kind": {"kind":"color"},
             "label": "Tint color"
@@ -398,7 +398,7 @@
           {
             "default": {
               "kind": "gradient",
-              "value": [{"color":[0,0,0,1],"position":0},{"color":[1,1,1,1],"position":1}]
+              "value": [{"color":{"space":"Srgb","rgba":[0,0,0,1]},"position":0},{"color":{"space":"Srgb","rgba":[1,1,1,1]},"position":1}]
             },
             "key": "gradient",
             "kind": {"kind":"gradient"},
@@ -727,13 +727,13 @@
         "label": "Split Tone",
         "parameters": [
           {
-            "default": {"kind":"color","value":[0.16,0.33,0.58,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.16,0.33,0.58,1]}},
             "key": "shadows",
             "kind": {"kind":"color"},
             "label": "Shadows"
           },
           {
-            "default": {"kind":"color","value":[0.96,0.68,0.34,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.96,0.68,0.34,1]}},
             "key": "highlights",
             "kind": {"kind":"color"},
             "label": "Highlights"
@@ -978,13 +978,13 @@
             "label": "Contrast"
           },
           {
-            "default": {"kind":"color","value":[0.05,0.07,0.09,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.05,0.07,0.09,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
             "label": "Ink"
           },
           {
-            "default": {"kind":"color","value":[0.96,0.94,0.87,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.96,0.94,0.87,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
             "label": "Paper"
@@ -1028,13 +1028,13 @@
             "label": "Angle"
           },
           {
-            "default": {"kind":"color","value":[0.07,0.08,0.09,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.07,0.08,0.09,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
             "label": "Ink"
           },
           {
-            "default": {"kind":"color","value":[0.97,0.95,0.91,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.97,0.95,0.91,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
             "label": "Paper"
@@ -1232,13 +1232,13 @@
             "label": "Contrast"
           },
           {
-            "default": {"kind":"color","value":[0.07,0.06,0.05,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.07,0.06,0.05,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
             "label": "Ink"
           },
           {
-            "default": {"kind":"color","value":[0.97,0.95,0.9,1]},
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.97,0.95,0.9,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
             "label": "Paper"

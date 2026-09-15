@@ -503,6 +503,7 @@ fn controls(app: &adw::Application, output: &Path) {
             }
             let color_icon = find_named(&toolbar, "layer-colors-symbolic").unwrap();
             let color_texture = capture_widget(&w.window, &color_icon);
+            color_texture.save_to_png(output.join(format!("{label}-color-{style:?}.png"))).unwrap();
             let mut download = gdk::TextureDownloader::new(&color_texture);
             download.set_format(gdk::MemoryFormat::R8g8b8a8);
             download.set_color_state(&gdk::ColorState::srgb());
@@ -519,7 +520,7 @@ fn controls(app: &adw::Application, output: &Path) {
                     let at = (top + y * size / 16) * stride + (left + x * size / 16) * 4 + c;
                     assert!(
                         pixels[at].abs_diff((expected[c] * 255.).round() as u8) <= 2,
-                        "live color tile follows both color slots"
+                        "live color tile follows both color slots: {style:?} x={x} y={y} channel={c} actual={} expected={} size={size}", pixels[at], (expected[c] * 255.).round()
                     );
                 }
             }

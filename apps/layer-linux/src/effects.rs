@@ -1,4 +1,6 @@
 //! GTK views of the shared effect/property schemas. No filter-specific widgets.
+#[path = "gradient_preview.rs"]
+mod gradient_preview;
 use crate::{number_control::NumberControl, workspace::Workspace};
 use gtk::{glib, prelude::*};
 use layer_core::EffectValue;
@@ -51,7 +53,7 @@ enum Field {
     Number(NumberControl),
     Toggle(gtk::Switch),
     Choice(gtk::DropDown),
-    Color(gtk::ColorDialogButton),
+    Color(Rc<crate::color_editor::ColorButton>),
     Curve(CurveEditor),
     Gradient(GradientEditor),
 }
@@ -601,19 +603,10 @@ impl EffectPanels {
                             Field::Choice(input)
                         }
                         PropertyKind::Color => {
-                            let input = gtk::ColorDialogButton::new(Some(
-                                gtk::ColorDialog::builder().with_alpha(true).build(),
-                            ));
-                            input.connect_rgba_notify(move |i| {
-                                let c = i.rgba();
-                                dispatch(EffectValue::Color([
-                                    c.red(),
-                                    c.green(),
-                                    c.blue(),
-                                    c.alpha(),
-                                ]));
-                            });
-                            self.body.append(&row(&control.label, &input));
+                            let input = crate::color_editor::ColorButton::new();
+                            input.widget.set_widget_name(&format!("effect-color-{}", control.key));
+                            input.bind(w, move |_, color| dispatch(EffectValue::Color(color)));
+                            self.body.append(&row(&control.label, &input.widget));
                             Field::Color(input)
                         }
                         PropertyKind::Curve => {
@@ -637,7 +630,7 @@ impl EffectPanels {
                 (Field::Toggle(i), EffectValue::Toggle(v)) => i.set_active(*v),
                 (Field::Choice(i), EffectValue::Choice(v)) => i.set_selected(*v),
                 (Field::Color(i), EffectValue::Color(c)) => {
-                    i.set_rgba(&gtk::gdk::RGBA::new(c[0], c[1], c[2], c[3]))
+                    i.set_color(*c, w.view_color())
                 }
                 (Field::Curve(i), EffectValue::Curve(p)) => {
                     *i.points.borrow_mut() = p.clone();
@@ -696,18 +689,14 @@ struct GradientEditor {
 impl GradientEditor {
     fn new(w: &Rc<Workspace>, layer: u64, key: &str) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let bar = gtk::DrawingArea::builder()
-            .content_width(160)
-            .content_height(44)
-            .hexpand(true)
-            .build();
+        let bar = gradient_preview::GradientPreview::new();
         bar.set_tooltip_text(Some("Click to select a color stop or add one."));
         bar.set_widget_name("effect-gradient");
         let stops = Rc::new(RefCell::new(Vec::<layer_core::GradientStop>::new()));
         let selected = Rc::new(Cell::new(0usize));
         let updating = Rc::new(Cell::new(false));
-        let color =
-            gtk::ColorDialogButton::new(Some(gtk::ColorDialog::builder().with_alpha(true).build()));
+        let color = crate::color_editor::ColorButton::new();
+        color.widget.set_widget_name("effect-gradient-color");
         let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "");
         let remove = crate::icons::button("layer-minus-symbolic");
         remove.set_tooltip_text(Some("Remove color stop"));
@@ -718,7 +707,7 @@ impl GradientEditor {
         label.set_hexpand(true);
         label.set_xalign(0.);
         actions.append(&label);
-        actions.append(&color);
+        actions.append(&color.widget);
         actions.append(&remove);
         actions.append(&reset);
         root.append(&bar);
@@ -740,45 +729,6 @@ impl GradientEditor {
                 }
             })
         ));
-        bar.set_draw_func(glib::clone!(
-            #[strong]
-            stops,
-            #[strong]
-            selected,
-            move |area, cr, width, height| {
-                let stops = stops.borrow();
-                if stops.len() < 2 {
-                    return;
-                }
-                let ramp = gtk::cairo::LinearGradient::new(6., 0., width as f64 - 6., 0.);
-                for s in stops.iter() {
-                    ramp.add_color_stop_rgba(
-                        s.position as f64,
-                        s.color[0] as f64,
-                        s.color[1] as f64,
-                        s.color[2] as f64,
-                        s.color[3] as f64,
-                    );
-                }
-                cr.set_source(&ramp).ok();
-                cr.rectangle(6., 0., width as f64 - 12., height as f64 - 12.);
-                cr.fill().ok();
-                let c = area.color();
-                cr.set_source_rgb(c.red() as f64, c.green() as f64, c.blue() as f64);
-                for (i, s) in stops.iter().enumerate() {
-                    let x = 6. + s.position as f64 * (width as f64 - 12.);
-                    let y = height as f64 - 5.;
-                    cr.arc(
-                        x,
-                        y,
-                        if selected.get() == i { 4. } else { 2.5 },
-                        0.,
-                        std::f64::consts::TAU,
-                    );
-                    cr.fill().ok();
-                }
-            }
-        ));
         let update: Rc<dyn Fn()> = Rc::new(glib::clone!(
             #[strong]
             updating,
@@ -786,8 +736,10 @@ impl GradientEditor {
             stops,
             #[strong]
             selected,
-            #[weak]
+            #[strong]
             color,
+            #[weak]
+            w,
             #[weak]
             position,
             #[weak]
@@ -800,15 +752,15 @@ impl GradientEditor {
                 let index = selected.get().min(list.len().saturating_sub(1));
                 selected.set(index);
                 if let Some(s) = list.get(index) {
-                    color.set_rgba(&gtk::gdk::RGBA::new(
-                        s.color[0], s.color[1], s.color[2], s.color[3],
-                    ));
+                    color.set_color(s.color, w.view_color());
                     position.set_value(s.position as f64);
                     position.set_sensitive(index > 0 && index + 1 < list.len());
                     remove.set_sensitive(index > 0 && index + 1 < list.len());
                 }
                 updating.set(false);
-                bar.queue_draw();
+                if let Some(g) = w.gpu.borrow().as_ref() {
+                    bar.set_gradient(&list, index, g.session.state().colors.rgb_space(), w.view_color());
+                }
             }
         ));
         let click = gtk::GestureClick::new();
@@ -838,30 +790,31 @@ impl GradientEditor {
             }
         ));
         bar.add_controller(click);
-        color.connect_rgba_notify(glib::clone!(
-            #[strong]
-            updating,
+        color.widget.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            #[weak]
+            color,
             #[strong]
             selected,
             #[strong]
             stops,
             #[strong]
             change,
-            move |button| {
-                if updating.get() {
-                    return;
-                }
-                let i = selected.get();
-                let position = stops.borrow().get(i).map(|s| s.position);
-                if let Some(p) = position {
-                    let c = button.rgba();
-                    change(
-                        Some(i),
-                        p,
-                        Some([c.red(), c.green(), c.blue(), c.alpha()]),
-                        false,
-                    );
-                }
+            move |_| {
+                let index = selected.get();
+                let original = stops.borrow().clone();
+                let Some(stop) = original.get(index) else { return; };
+                let selected = selected.clone();
+                let stops = stops.clone();
+                let change = change.clone();
+                let weak = Rc::downgrade(&color);
+                crate::color_editor::choose(&w, stop.color, move |_, color| {
+                    if weak.upgrade().is_some_and(|button| button.widget.root().is_some())
+                        && selected.get() == index && *stops.borrow() == original {
+                        change(Some(index), original[index].position, Some(color), false);
+                    }
+                });
             }
         ));
         position.connect_value_changed(glib::clone!(

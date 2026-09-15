@@ -200,10 +200,7 @@ impl ColorEditor {
         Ok(color)
     }
     pub fn description(&self) -> String {
-        let mut text = format!(
-            "Document RGB: {}. Alpha is separate from brush opacity.",
-            self.document_space.name()
-        );
+        let mut text = format!("Document RGB: {}.", self.document_space.name());
         if self.model == ColorInputModel::SrgbHex {
             text.push_str(" Hex uses sRGB and rounds its preview to 8-bit. An unchanged entry keeps the original color.");
         }

@@ -739,11 +739,11 @@ fn builtin_adjustments_have_known_color_results() {
             EffectValue::Gradient(vec![
                 layer_core::GradientStop {
                     position: 0.,
-                    color: [0., 0., 1., 1.],
+                    color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0., 0., 1., 1.]).unwrap(),
                 },
                 layer_core::GradientStop {
                     position: 1.,
-                    color: [0., 0., 1., 1.],
+                    color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0., 0., 1., 1.]).unwrap(),
                 },
             ]),
             [0, 0, 255],
