@@ -75,7 +75,7 @@ export function fingerprintAssets(directory) {
   publish("workspace-switcher.js");
   publish("workspace-manager.js", replaceRequired(read(join(directory, "workspace-manager.js")), 'from "./workspace-switcher.js"', `from "./${names["workspace-switcher.js"]}"`));
   publish("system-status.js");
-  publish("header.js");
+  publish("header.js", replaceRequired(read(join(directory, "header.js")), "from './workspace-switcher.js'", `from "./${names["workspace-switcher.js"]}"`));
   publish("editor-panels.js");
   publish("workspace-chrome.js");
   publish("documents.js");
