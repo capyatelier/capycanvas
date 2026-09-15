@@ -209,15 +209,26 @@ For focused canvas checks without simulator startup:
 
 ```bash
 cargo test -p layer-apple apple_region_ -- --nocapture
+CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app \
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/canvas-native-input.swift
 ```
 
 The region checks exercise the Apple pointer/action bridge with Metal. The
-canvas fixture sends local AppKit mouse, key and focus events through the real
-canvas for lasso/fill and ruler workflows, checking exact exported pixels and
-saved ruler geometry through cancellation and Undo/Redo. Both shared Apple
-configurations run on Mac; these checks do not establish UIKit or physical
-Pencil/tablet delivery. Group full-editor UI runs at milestone boundaries.
+canvas fixture mounts the assembled editor with its visible panels and overlays.
+It sends local AppKit mouse, key and focus events through verified canvas hit
+targets for lasso/fill and ruler workflows, checking exact exported pixels and
+saved ruler geometry through cancellation and Undo/Redo. New Drawing uses the
+native Discard button and waits for its alert to close. The application's
+suspend/resume entry points and actual renderer restart also cancel unfinished
+contacts without a mouse-up, ignore stale movement and allow the next lasso,
+preserving exact artwork/history. Navigation checks supply AppKit wheel, pinch
+and rotation values to the real canvas callbacks, covering scroll units,
+modifiers, anchors and contact exclusion/recovery after a cancellation frame.
+The test does not sleep the machine or emulate a physical trackpad. Point
+`CAPY_TEST_ASSETS_APP` at a built Mac app to supply vector/filter resources.
+Both shared Apple configurations run on Mac; these checks do not establish
+external OS event posting, OS menu navigation or UIKit/Pencil/tablet delivery.
+Group full-application UI runs at milestone boundaries.
 
 Numeric labels truncate within compact panels, leaving values readable. Spin
 fields keep the shared unit suffix when idle, with the value and both step buttons

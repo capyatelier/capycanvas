@@ -38,6 +38,7 @@ final class MacCanvasView: NSView {
         setAccessibilityLabel("Canvas")
         setAccessibilityValue("Initializing")
         store.wake = { [weak self] in self?.wake() }
+        store.interruptInput = { [weak self] in self?.input.interrupt() }
         store.focusCanvas = { [weak self] in
             guard let self, self.window?.isKeyWindow == true, self.window?.attachedSheet == nil else { return }
             self.window?.makeFirstResponder(self)
@@ -56,7 +57,7 @@ final class MacCanvasView: NSView {
             window.makeFirstResponder(self)
             for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
                 windowObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.input.blur() }
+                    MainActor.assumeIsolated { self?.store.input(["type": "blur"]) }
                 })
             }
             windowObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
@@ -106,7 +107,7 @@ final class MacCanvasView: NSView {
     func wake() { frames.wake() }
     func stop() {
         documentDelegate.attach(nil)
-        frames.deactivate(); input.blur()
+        frames.deactivate(); store.input(["type": "blur"])
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
         displayLink?.invalidate(); displayLink = nil

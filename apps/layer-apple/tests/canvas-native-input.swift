@@ -1,9 +1,26 @@
 import AppKit
 import ImageIO
+import SwiftUI
 
-/// The real AppKit canvas, event queue, serial owner and Metal renderer. Actions
-/// choose tools; pointer/key/focus events use the native window. This is component
-/// evidence for both shared host configurations, not physical Pencil delivery.
+/// Public AppKit event values supplied to the real canvas callbacks. Pointer
+/// contacts below still use the native queue; this does not emulate a trackpad.
+private final class NavigationEvent: NSEvent {
+    var point = CGPoint.zero
+    var flags: NSEvent.ModifierFlags = []
+    var delta = CGPoint.zero
+    var precise = true
+    override var locationInWindow: CGPoint { point }
+    override var modifierFlags: NSEvent.ModifierFlags { flags }
+    override var scrollingDeltaX: CGFloat { delta.x }
+    override var scrollingDeltaY: CGFloat { delta.y }
+    override var hasPreciseScrollingDeltas: Bool { precise }
+    override var magnification: CGFloat { 0.25 }
+    override var rotation: Float { 30 }
+}
+
+/// The assembled editor, AppKit event queue, serial owner and Metal renderer.
+/// Actions choose tools; pointer/key/focus events use the native window through
+/// the visible editor's actual hit targets. Not physical Pencil/OS menu delivery.
 @main final class CanvasNativeInputChecks: NativeWorkspaceInputFixture {
     @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(30)
@@ -25,11 +42,18 @@ import ImageIO
         let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 1200, height: 870),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.animationBehavior = .none
-        let canvas = MacCanvasView(store: store)
-        window.contentView = canvas
+        let host = NSHostingView(rootView: EditorView(store: store) { MacMetalCanvas(store: store) }
+            .frame(minWidth: 700, minHeight: 500))
+        window.contentView = host
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-        defer { canvas.stop(); window.delegate = nil; window.contentView = nil; window.close() }
+        defer { window.delegate = nil; window.contentView = nil; window.close() }
         try await wait("Metal canvas") { store.canvasSubmitted && store.snapshot["shaders_ready"].bool }
+        func findCanvas(_ view: NSView) -> MacCanvasView? {
+            if let canvas = view as? MacCanvasView { return canvas }
+            return view.subviews.lazy.compactMap(findCanvas).first
+        }
+        guard let canvas = findCanvas(host) else { throw HostFailure(message: "The editor canvas is not mounted") }
+        defer { canvas.stop() }
         let originalWindow = window.frame
         var deliveredEvent = -1, nextEvent = 0
         let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { event in
@@ -54,10 +78,20 @@ import ImageIO
         }
         func newDocument() async throws {
             try await invoke("new_document")
-            if store.projectFiles.confirming { store.projectFiles.choose("discard") }
+            if store.projectFiles.confirming {
+                func discardButton(_ view: NSView) -> NSButton? {
+                    if let button = view as? NSButton, button.title == "Discard Changes" { return button }
+                    return view.subviews.lazy.compactMap(discardButton).first
+                }
+                try await wait("Native discard confirmation") {
+                    window.attachedSheet?.contentView.flatMap(discardButton)?.isEnabled == true
+                }
+                window.attachedSheet!.contentView.flatMap(discardButton)!.performClick(nil)
+            }
             try await wait("New 128px document") {
                 !store.projectFiles.busy && !store.projectFiles.confirming && store.state["requests"].array.isEmpty
             }
+            try await wait("Native confirmation dismissed") { window.attachedSheet == nil && window.isKeyWindow }
             try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             try await invoke("fit_canvas")
             try await action(["type":"set_color", "rgba":[0,0,1,1]])
@@ -105,6 +139,8 @@ import ImageIO
                 y: camera["translation"][1].number + point.y * camera["zoom"].number)
             let local = CGPoint(x: surface.x / scale, y: surface.y / scale)
             try require(canvas.bounds.contains(local), "The document point must be inside the real canvas")
+            try require(host.hitTest(canvas.convert(local, to: host.superview)) === canvas,
+                "Visible editor controls must not cover this drawing point")
             nextEvent += 1
             guard let event = NSEvent.mouseEvent(with: type, location: canvas.convert(local, to: nil),
                 modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
@@ -154,6 +190,134 @@ import ImageIO
             let painted = try await pixels()
             try require(blue(painted,32,32) && blue(painted,80,64) && !blue(painted,80,32), "Native lasso must follow its concave path")
             return painted
+        }
+        // Verify the native navigation adapter against camera geometry and
+        // exported artwork, including contact suppression and resumption.
+        do {
+            try await newDocument()
+            let paper = try await pixels(), painted = try await paintLasso("select")
+            let event = NavigationEvent(), scale = window.backingScaleFactor
+            let initial = store.state["camera"]
+            let anchor = CGPoint(x: initial["translation"][0].number + 64 * initial["zoom"].number,
+                y: initial["translation"][1].number + 64 * initial["zoom"].number)
+            let local = CGPoint(x: anchor.x / scale, y: anchor.y / scale)
+            try require(host.hitTest(canvas.convert(local, to: host.superview)) === canvas,
+                "Navigation must target the visible canvas")
+            event.point = canvas.convert(local, to: nil)
+            func flush() async throws {
+                await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                    store.native!.submit(2, JSON(["type":"catalog"])) { _ in
+                        DispatchQueue.main.async { done.resume() }
+                    }
+                }
+                try require(store.failure == nil, store.failure ?? "")
+            }
+            func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.005 }
+            func sameCamera(_ before: JSON) -> Bool {
+                ["translation", "zoom", "rotation"].allSatisfy {
+                    store.state["camera"][$0].stableKey == before[$0].stableKey
+                }
+            }
+            for precise in [true, false] {
+                let before = store.state["camera"], unit = precise ? 1.0 : 16.0
+                event.precise = precise; event.delta = CGPoint(x: 3, y: 4)
+                canvas.scrollWheel(with: event); try await flush()
+                let after = store.state["camera"]
+                try require(near(after["translation"][0].number - before["translation"][0].number, 3 * unit * scale)
+                    && near(after["translation"][1].number - before["translation"][1].number, 4 * unit * scale),
+                    "Wheel and precise scrolling must preserve native direction and backing density")
+            }
+            var before = store.state["camera"]
+            event.precise = true; event.flags = .shift; event.delta = CGPoint(x: 2, y: 7)
+            canvas.scrollWheel(with: event); try await flush()
+            try require(near(store.state["camera"]["translation"][0].number - before["translation"][0].number, 9 * scale)
+                && near(store.state["camera"]["translation"][1].number, before["translation"][1].number),
+                "Shift-scroll must pan horizontally")
+            before = store.state["camera"]
+            event.flags = .control; event.delta = CGPoint(x: 0, y: 40)
+            canvas.scrollWheel(with: event); try await flush()
+            try require(store.state["camera"]["zoom"].number > before["zoom"].number
+                && near(store.state["camera"]["rotation"].number, before["rotation"].number),
+                "Control-scroll must zoom without rotating")
+            before = store.state["camera"]
+            event.flags = []; canvas.magnify(with: event); try await flush()
+            try require(near(store.state["camera"]["zoom"].number, before["zoom"].number * 1.25),
+                "Pinch must apply incremental magnification")
+            for (i, coordinate) in [anchor.x, anchor.y].enumerated() {
+                try require(near(store.state["camera"]["translation"][i].number,
+                    coordinate + (before["translation"][i].number - coordinate) * 1.25),
+                    "Pinch must retain the document point under its physical anchor")
+            }
+            before = store.state["camera"]
+            canvas.rotate(with: event); try await flush()
+            let angle = -Double.pi / 6
+            let dx = before["translation"][0].number - anchor.x, dy = before["translation"][1].number - anchor.y
+            try require(near(store.state["camera"]["rotation"].number - before["rotation"].number, angle)
+                && near(store.state["camera"]["translation"][0].number, anchor.x + cos(angle) * dx - sin(angle) * dy)
+                && near(store.state["camera"]["translation"][1].number, anchor.y + sin(angle) * dx + cos(angle) * dy),
+                "Rotation must preserve its anchor and native direction")
+            try await invoke("fit_canvas")
+            before = store.state["camera"]
+            try await send(.leftMouseDown, lasso[0]); try await send(.leftMouseDragged, lasso[1])
+            canvas.scrollWheel(with: event); canvas.magnify(with: event); canvas.rotate(with: event)
+            try await flush()
+            try require(sameCamera(before), "Navigation cannot move the camera during a captured contact")
+            store.input(["type":"blur"]); try await flush()
+            // An owner-query acknowledgement does not finish queued input.
+            // Complete a real renderer frame before testing idle navigation.
+            let now = FrameTrace.now()
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                store.native!.frame(now: now, target: now + 16_000_000) { _, _, _ in
+                    DispatchQueue.main.async { done.resume() }
+                }
+            }
+            try await flush()
+            // No old mouse-up: the existing interruption callback must also
+            // release wheel/trackpad admission, not just the next stroke.
+            canvas.scrollWheel(with: event); try await flush()
+            try require(!sameCamera(before), "Fresh navigation must work after an interrupted contact")
+            let navigated = try await pixels()
+            try require(navigated == painted, "Navigation and cancelled contact must preserve every artwork pixel")
+            try await invoke("undo")
+            let undone = try await pixels(); try require(undone == paper, "Navigation cannot add an artwork Undo step")
+            try await invoke("redo")
+            let redone = try await pixels(); try require(redone == painted, "Navigation must retain exact artwork Redo")
+            try require(window.frame == originalWindow, "Navigation cannot move or resize the native window")
+            note("PASS platform \(platform): wheel/precise scrolling, Shift/Control, anchored pinch/rotation, contact exclusion/recovery and exact PNG history")
+        }
+        for interruption in ["suspend", "restart"] {
+            try await newDocument()
+            let paper = try await pixels()
+            let painted = try await paintLasso("select")
+            try await invoke("undo"); try await invoke("deselect")
+            try await invoke("add_layer"); try await invoke("undo")
+            try require(!enabled("fill_selection") && enabled("redo"), "Start with no selection and an existing Redo entry")
+            try await send(.leftMouseDown, lasso[0])
+            try await send(.leftMouseDragged, lasso[1])
+            if interruption == "suspend" {
+                // Use the application's sleep/wake callbacks without sleeping
+                // the machine or changing its real windows.
+                EditorStore.suspendWorkspaces(); EditorStore.resumeWorkspaces()
+            } else {
+                store.restartCanvas()
+                try await wait("Restarted Metal canvas") {
+                    !store.restartingCanvas && store.canvasSubmitted && store.snapshot["shaders_ready"].bool
+                }
+            }
+            try await drain()
+            // An interrupted device may never deliver its old mouseUp. Its
+            // remaining movement must not resume a cancelled path, and the
+            // next press must start a fresh contact.
+            try await send(.leftMouseDragged, lasso[2])
+            let cancelled = try await pixels()
+            try require(cancelled == paper && !enabled("fill_selection") && enabled("redo"),
+                "\(interruption) must cancel the unfinished lasso and retain artwork history: pixels=\(cancelled == paper), selection=\(enabled("fill_selection")), redo=\(enabled("redo"))")
+            let recovered = try await paintLasso("select")
+            try require(recovered == painted, "A fresh contact after \(interruption) must work without the old mouseUp")
+            try await invoke("undo")
+            let undone = try await pixels()
+            try require(undone == paper, "The first stroke after \(interruption) remains one Undo step")
+            note("PASS platform \(platform): \(interruption) without mouseUp, stale movement, fresh contact and exact PNG history")
         }
         for choice in ["select", "lasso_fill"] {
             try await newDocument()

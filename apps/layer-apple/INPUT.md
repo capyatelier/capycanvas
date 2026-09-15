@@ -7,6 +7,20 @@ nanoseconds and phase. The original camera revision travels with each batch.
 Ordinary Mac mouse/tablet input continues through this path; no native event
 object, device serial or vendor identifier crosses the queue.
 
+Both native canvas adapters register the shared input-interruption callback.
+On Mac it clears the captured contact and modifier state before lifecycle blur
+or renderer restart, so a missing mouse-up cannot block the next press.
+`tests/canvas-native-input.swift` checks the application's suspend/resume entry
+points and an actual Metal restart in the assembled AppKit editor, including
+stale movement, a fresh lasso and exact artwork/history. Both Apple policies
+run on Mac; physical sleep, tablet and UIKit interruption remain separate checks.
+
+The same assembled-editor fixture supplies AppKit wheel, pinch and rotation
+values to the real canvas callbacks. It checks precise/coarse scroll units,
+Shift/Control behavior, physical anchoring, contact exclusion and navigation
+after a cancellation frame, with exact artwork Undo/Redo. These supplied values
+do not establish physical trackpad recognition or OS gesture delivery.
+
 On iPad, the contact retains the mouse button selected at press time. Primary
 contacts paint, right/middle contacts pan, and other buttons follow the shared
 ignore policy. Normal and cancelled keyboard releases both end held shortcuts,

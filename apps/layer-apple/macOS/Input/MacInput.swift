@@ -127,11 +127,10 @@ import QuartzCore
             predicted: false, revision: store.cameraRevision)
         view?.wake()
     }
-    func blur() {
+    func interrupt() {
         // Focus loss is an explicit shared interruption policy. Native hover
         // and proximity exit above are normal lift, never cancellation.
         contact = nil; modifiers = []
-        store.input(["type": "blur"])
     }
     func scroll(_ event: NSEvent) {
         guard contact == nil else { return }

@@ -10,6 +10,46 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current canvas-input milestone
+
+Mac did not register the existing shared input-interruption callback. A lifecycle
+blur or renderer restart could leave its captured contact active when the old
+mouse-up never arrived, preventing the next lasso from starting. The corrected
+local reproduction fails before the fix. Mac now clears contact/modifier state
+through the same callback as UIKit; window focus/close also uses that shared path.
+No new input state or workaround is added.
+
+The existing native fixture now mounts the assembled `EditorView`, including
+visible panels and overlays, and verifies actual canvas hit targets. All 22
+workflow groups pass on the two Apple policies running on Mac: concave lasso
+selection/direct fill, all three ruler types, creation/edit cancellation,
+fresh-contact recovery, applicable Shift, exact PNG Undo/Redo, saved ruler
+geometry, suspend/resume entry points and actual Metal restart without mouse-up.
+Window bounds remain fixed. Navigation also checks precise/coarse scroll units,
+Shift/Control, pinch/rotation anchors, contact exclusion and recovery after a
+cancellation frame. Gesture values are supplied to the actual AppKit callbacks;
+lasso/ruler contacts use the native event queue. This does not establish physical
+trackpad/tablet/Pencil delivery, UIKit input, OS sleep or OS menu navigation.
+
+Final evidence is under `artifacts/apple-mac-navigation-v1/` (`run-v3.log`), with
+22 passing groups and no compiler warnings. Two earlier combined runs fail the
+immediate navigation-after-interruption check. A bounded navigation-only diagnostic
+confirms both contact callbacks and camera updates. The final fixture completes
+a real renderer frame before testing resumed navigation; it adds no product
+change. The exact timing of those earlier failures remains unproven.
+The Mac contact regression is under `artifacts/apple-mac-contact-interruption-v1/`;
+its initial missing-Redo precondition failure is retained separately from the
+corrected reproduction. Earlier assembled-editor evidence and its native-alert
+fixture correction remain under `artifacts/apple-assembled-canvas-v1/`.
+
+The final fixture closes its owned windows and removes its temporary documents.
+Main was fetched and current. Both final Release builds pass with no compiler
+warnings; current on-disk metadata is under
+`artifacts/apple-canvas-input-milestone-v1/release/`. The preceding published
+runtime is `64244d9`. No simulator/device or performance run is repeated for this
+Mac-only input fix. Full feature/visual, physical input/provider/lifecycle and
+sustained Mac 90 Hz/iPad 120 Hz acceptance remain open; the overall goal is incomplete.
+
 ## Current input and scene-recovery milestone
 
 Scene teardown could abandon an accepted lifecycle flush before artwork recovery
