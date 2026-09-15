@@ -30,6 +30,49 @@ Do not build new automation infrastructure for each control. Simulator startup
 and XCTest fixture repair have consumed too much of the critical path. Keep
 unresolved native delivery cases explicit and continue independent parity fixes.
 
+The property-state milestone prevents a retired native field from editing its
+former layer. The existing component fixture reproduces a delayed commit changing
+that layer's opacity from 80% to 37% after Add layer switches the target. All
+property controls now share the existing layer-opacity document/layer guard;
+the duplicate header guard is removed. Property view identities also include
+the document epoch. Former-layer cancellation still reaches Rust in the same
+document so interrupted previews can be restored.
+
+A related component failure shows a retired gradient-opacity field changing the
+gradient after another stop is selected. Gradient fields now capture their stop
+index and reject edits after selection moves to another index. The same guard
+covers position and color; no new selection-state or input system is added.
+The existing component suite passes all eighteen cases across both Apple
+policies, plus six layer/epoch/history and four gradient-opacity/color callback
+assertion groups. These are AppKit callback checks, not physical-key or actual
+document-replacement workflows. Retained reproductions and final component
+results are under `artifacts/apple-property-target-state-v1/` and
+`artifacts/apple-gradient-target-state-v1/` respectively.
+
+The same batch refines toolbar dialogs with the existing selected-row style,
+native bordered actions, white confirmation labels and red deletion. Four
+intermediate captures extend the existing customization workflow. Both final
+Mac and UIKit artwork/history and toolbar workflows pass: four workflows,
+no failures or skips. Final gradient and toolbar captures are reviewed on both
+hosts. Both Release builds pass without compiler warnings. Mac XCTest retains
+responsiveness/QoS warnings; these passes do not establish performance acceptance.
+Evidence and the current Release metadata are under
+`artifacts/apple-property-state-milestone-v1/` (`mac-v1`, `simulator-v1`,
+`simulator-v2`, `release`). The exact test apps and runner are verified stopped.
+No physical iPad workflow is repeated. All eleven recovery stashes remain.
+
+Manager-to-delete confirmation still retains the larger manager sheet size,
+including white margins on Mac. Removing content identity and using item-based
+sheets both failed to fix it; both experiments are removed. The earlier UIKit
+`v4` toolbar attempt was canceled after over eight minutes without a result.
+Its evidence remains under `artifacts/apple-workspace-dialog-presentation-v1/`.
+The successful milestone artwork run establishes working UIKit test delivery
+before reusing that build for the final toolbar check; no setup workaround is
+added. Do not repeat the sizing investigation without new evidence. Property
+Reset with an unfinished draft and gradient insertion/removal during field edits
+remain state-audit candidates, not verified fixes. Full feature/visual, physical
+input/provider/lifecycle and sustained Mac 90 Hz/iPad 120 Hz gates remain open.
+
 The Settings text milestone consumes the shared placeholder and seven-character
 limit and disables spelling/capitalization assistance for the hex fields.
 Observing the focused commit callback in the Done button instead of the entire

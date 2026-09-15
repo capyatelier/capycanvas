@@ -9,6 +9,7 @@ struct LayerPropertiesPanel: View {
     private var controls: [JSON] { view["controls"].array }
     private var curves: [JSON] { controls.filter { $0["kind"]["kind"].string == "curve" } }
     var body: some View {
+        let epoch = store.state["document_file"]["epoch"].uint
         VStack(alignment: .leading, spacing: 6) {
             Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
             if let curve = curves.first(where: { $0["key"].string == selectedCurve }) ?? curves.first {
@@ -17,8 +18,8 @@ struct LayerPropertiesPanel: View {
                     background: EditorPalette(source: store.state["palette"])["input"]) {
                     selectedCurve = curves[$0]["key"].string
                 }
-                CurveProperty(store: store, layer: view["layer"].uint, control: curve)
-                    .id("\(view["layer"].uint):\(curve["key"].string)")
+                CurveProperty(store: store, layer: view["layer"].uint, epoch: epoch, control: curve)
+                    .id("\(epoch):\(view["layer"].uint):\(curve["key"].string)")
             }
             ForEach(controls.indices, id: \.self) { index in
                 let control = controls[index]
@@ -27,8 +28,8 @@ struct LayerPropertiesPanel: View {
                         if index > 0 { Divider().padding(.vertical, 3) }
                         if !control["section"].isNull { Text(control["section"].string).fontWeight(.bold).padding(.leading, 6) }
                     }
-                    PropertyField(store: store, layer: view["layer"].uint, control: control)
-                        .id("\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
+                    PropertyField(store: store, layer: view["layer"].uint, epoch: epoch, control: control)
+                        .id("\(epoch):\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
                 }
             }
         }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
@@ -40,19 +41,20 @@ struct LayerPropertiesPanel: View {
 private struct PropertyField: View {
     @ObservedObject var store: EditorStore
     let layer: UInt64
+    let epoch: UInt64
     let control: JSON
     private var key: String { control["key"].string }
     private var kind: String { control["kind"]["kind"].string }
     private var label: String { control["label"].string }
     private var value: JSON { control["value"]["value"] }
     private func change(_ value: Any, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
-        store.effect(layer, key: key, action: ["op": "set", "value": ["kind": kind, "value": value]],
+        store.effect(layer, epoch: epoch, key: key, action: ["op": "set", "value": ["kind": kind, "value": value]],
             phase: phase, completion: completion)
     }
     private func change(_ value: Any) { change(value) { if let error = $0 { store.failure = error } } }
     var body: some View {
         field.contextMenu {
-            Button("Reset") { store.effect(layer, key: key, action: ["op": "reset"]) }
+            Button("Reset") { store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) }
         }
     }
     @ViewBuilder private var field: some View {
@@ -74,7 +76,7 @@ private struct PropertyField: View {
             }
         case "color":
             PropertyColor(store: store, label: label, identifier: "property-" + key, value: value) { change($0, phase: $1, completion: $2) }
-        case "gradient": GradientProperty(store: store, layer: layer, control: control)
+        case "gradient": GradientProperty(store: store, layer: layer, epoch: epoch, control: control)
         default: EmptyView()
         }
     }
@@ -118,6 +120,7 @@ private struct PropertyColor: View {
 private struct CurveProperty: View {
     @ObservedObject var store: EditorStore
     let layer: UInt64
+    let epoch: UInt64
     let control: JSON
     @Environment(\.isEnabled) private var enabled
     @GestureState private var contact = false
@@ -129,7 +132,7 @@ private struct CurveProperty: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var removable: Bool { selected.map { $0 > 0 && $0 < points.count - 1 } ?? false }
     private func change(_ point: [Double], index: Int?, remove: Bool = false, phase: String? = nil) {
-        store.effect(layer, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove], phase: phase)
+        store.effect(layer, epoch: epoch, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove], phase: phase)
     }
     private func cancelDrag() {
         if let point = dragPoint { change([0, 0], index: point.index, phase: "cancel") }
@@ -199,7 +202,7 @@ private struct CurveProperty: View {
                 Button("Remove point") { change([0, 0], index: selected, remove: true); selected = nil }
                     .disabled(!removable).accessibilityIdentifier("curve-remove")
                 Spacer(minLength: 0)
-                Button("Reset") { selected = nil; store.effect(layer, key: key, action: ["op": "reset"]) }
+                Button("Reset") { selected = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) }
                     .accessibilityIdentifier("curve-reset")
             }.buttonStyle(.plain)
         }.onChange(of: points.map { $0[0].number }) { previous, current in
@@ -216,6 +219,7 @@ private struct CurveProperty: View {
 private struct GradientProperty: View {
     @ObservedObject var store: EditorStore
     let layer: UInt64
+    let epoch: UInt64
     let control: JSON
     @Environment(\.isEnabled) private var enabled
     @GestureState private var contact = false
@@ -229,10 +233,13 @@ private struct GradientProperty: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private func change(_ position: Double, index: Int?, color: Any = NSNull(), remove: Bool = false, phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {
-        store.effect(layer, key: key, action: ["op": "gradient_stop", "index": index as Any? ?? NSNull(),
+        // A retired field keeps its original stop. Do not retarget a delayed
+        // edit after selection changes; cancellation still retires its preview.
+        guard index == nil || index == self.index || phase == "cancel" else { completion?(nil); return }
+        store.effect(layer, epoch: epoch, key: key, action: ["op": "gradient_stop", "index": index as Any? ?? NSNull(),
             "position": position, "color": color, "remove": remove], phase: phase, completion: completion)
     }
-    private func opacity(_ value: Double, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
+    private func opacity(_ value: Double, index: Int, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
         var color = stops[index]["color"].array.map(\.number)
         guard color.count == 4 else { completion("Invalid color"); return }
         color[3] = value
@@ -243,6 +250,7 @@ private struct GradientProperty: View {
         dragging = false; dragStop = nil
     }
     var body: some View {
+        let index = self.index
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geometry in
                 Canvas { context, size in
@@ -301,13 +309,13 @@ private struct GradientProperty: View {
                 }.id(index)
                 NumberControl(store: store, label: "Opacity", value: stops[index]["color"][3].number,
                     control: store.catalog["opacity"], identifier: "gradient-opacity",
-                    gestureChange: { opacity($1, phase: $0, completion: $2) }) { opacity($0, completion: $1) }.id(index)
+                    gestureChange: { opacity($1, index: index, phase: $0, completion: $2) }) { opacity($0, index: index, completion: $1) }.id(index)
             }
             HStack {
                 Button("Remove stop") { change(0, index: index, remove: true); selected = max(0, index - 1) }
                     .disabled(!removable).accessibilityIdentifier("gradient-remove")
                 Spacer(minLength: 0)
-                Button("Reset") { selected = 0; store.effect(layer, key: key, action: ["op": "reset"]) }
+                Button("Reset") { selected = 0; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) }
                     .accessibilityIdentifier("gradient-reset")
             }.buttonStyle(.plain)
         }.onChange(of: stops.map { $0["position"].number }) { previous, current in
@@ -320,8 +328,15 @@ private struct GradientProperty: View {
 }
 
 extension EditorStore {
-    func effect(_ layer: UInt64, key: String, action: [String: Any], phase: String? = nil,
+    func effect(_ layer: UInt64, epoch: UInt64, key: String, action: [String: Any], phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {
+        // Retired native fields must not edit their former layer or a new
+        // document reusing its ID. Rust still needs a former layer's cancel
+        // event to restore an interrupted preview in the same document.
+        guard state["document_file"]["epoch"].uint == epoch,
+            phase == "cancel" || state["layer_tools"]["editing_layer"]["id"].uint == layer else {
+            completion?(nil); return
+        }
         var action = action; action["layer"] = layer; action["key"] = key
         if let phase { action = ["op": "gesture", "phase": phase, "action": action] }
         let message: [String: Any] = ["type": "effect", "action": action]

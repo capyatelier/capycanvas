@@ -72,6 +72,25 @@ import SwiftUI
                         try event(type, at: point, marker: host, number: 1); try await drain()
                     }
                 }
+                func draft(_ identifier: String, _ text: String) async throws -> (NSTextField, any NSTextFieldDelegate) {
+                    guard let valueFrame = geometry.frames[identifier + ":value"] else {
+                        throw HostFailure(message: "Missing property readout before target switch")
+                    }
+                    try await click(CGPoint(x: valueFrame.midX, y: valueFrame.midY))
+                    func fields(_ view: NSView) -> [NSTextField] {
+                        (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+                    }
+                    guard let field = fields(host).first(where: { $0.accessibilityIdentifier() == "number-entry-" + identifier }),
+                        let delegate = field.delegate else {
+                        throw HostFailure(message: "Missing mounted property field before target switch")
+                    }
+                    delegate.controlTextDidBeginEditing?(Notification(name: NSControl.textDidBeginEditingNotification, object: field))
+                    field.stringValue = text
+                    delegate.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+                    try await drain()
+                    try require(field.stringValue == text, "The property draft must remain unfinished")
+                    return (field, delegate)
+                }
                 if effect == "curves" {
                     func points() -> JSON {
                         store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
@@ -146,6 +165,51 @@ import SwiftUI
                     try require(abs(value() - edited) < 0.0001, "Locked slider input must not change the property")
                     try await action(["type": "invoke", "command": "undo"])
                     try require(store.state["layer_properties"]["enabled"].bool, "Locked input must not add an Undo step")
+                }
+                if effect.isEmpty && ["opacity", "layer-opacity"].contains(mode) || mode == "brightness" {
+                    let (field, delegate) = try await draft(identifier, mode == "brightness" ? "0.37" : "37 %")
+                    try await action(["type": "invoke", "command": "add_layer"])
+                    let replacement = store.state["layer_properties"]["layer"].uint
+                    try require(replacement != layer, "Add layer must change the property target")
+                    let replacementValues = store.state["layer_properties"]["controls"].stableKey
+                    // Retain the old native delegate to deliver a delayed commit
+                    // after SwiftUI has retired its field. This is a callback
+                    // lifetime check, not a hardware-key delivery assertion.
+                    _ = delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+                    try await drain()
+                    try require(store.state["layer_properties"]["controls"].stableKey == replacementValues,
+                        "A retired property field must not edit the replacement layer")
+                    try await action(["type": "select_layer", "id": layer])
+                    try require(abs(value() - edited) < 0.0001,
+                        "A retired property draft must not edit its former layer: expected \(edited), found \(value())")
+                    let wrongEpoch = store.state["document_file"]["epoch"].uint &+ 1
+                    let error = await withCheckedContinuation { done in
+                        store.effect(layer, epoch: wrongEpoch, key: key,
+                            action: ["op": "set", "value": ["kind": "number", "value": 0.37]]) { done.resume(returning: $0) }
+                    }
+                    try await drain()
+                    try require(error == nil && abs(value() - edited) < 0.0001,
+                        "A property callback for another document epoch must be ignored")
+                    try await action(["type": "invoke", "command": "undo"])
+                    try require(!store.state["layers"].array.contains { $0["id"].uint == replacement },
+                        "Ignored field callbacks must not add history after Add layer")
+                    try require(abs(value() - edited) < 0.0001, "Undo must retain the former layer's accepted value")
+                    note("PASS: platform \(platform), \(identifier), retired field and document-epoch rejection preserve values and history")
+                }
+                if effect == "gradient_map" && ["opacity", "red"].contains(mode) {
+                    let markerY = geometry.frames["gradient-position:root"]!.minY - 6 - 52 + 43
+                    try await click(CGPoint(x: 150, y: markerY))
+                    if mode == "red" {
+                        try await click(CGPoint(x: 300 - 6 - 24, y: geometry.frames["gradient-position:root"]!.maxY + 6 + 14))
+                    }
+                    let (field, delegate) = try await draft(identifier, "37 %")
+                    try await click(CGPoint(x: 12, y: markerY))
+                    let accepted = store.state["layer_properties"]["controls"].stableKey
+                    _ = delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+                    try await drain()
+                    try require(store.state["layer_properties"]["controls"].stableKey == accepted,
+                        "A retired gradient field must not change either stop after selection switches")
+                    note("PASS: platform \(platform), gradient stop selection rejects a retired \(mode) field")
                 }
                 try require(store.failure == nil, store.failure ?? "")
                 note("PASS: platform \(platform), \(effect.isEmpty ? "paint" : effect)/\(mode), native slider, one-step history and cancellation")

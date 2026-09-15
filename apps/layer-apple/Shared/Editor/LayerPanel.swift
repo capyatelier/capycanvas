@@ -313,23 +313,17 @@ private struct LayerName: View {
 struct LayerOpacityField: View {
     @ObservedObject var store: EditorStore
     var inline = true
-    private func change(_ value: Double, layer: UInt64, epoch: UInt64, phase: String? = nil,
-        completion: @escaping @MainActor (String?) -> Void) {
-        // A late focus callback must not edit a replacement layer or document.
-        guard store.state["document_file"]["epoch"].uint == epoch,
-              store.state["layer_tools"]["editing_layer"]["id"].uint == layer else {
-            completion(nil); return
-        }
-        store.effect(layer, key: "opacity", action: ["op": "set", "value": ["kind": "number", "value": value]],
-            phase: phase, completion: completion)
-    }
     var body: some View {
         let layer = store.state["layer_tools"]["editing_layer"]
         let epoch = store.state["document_file"]["epoch"].uint
+        let change: (Double, String?, @escaping @MainActor (String?) -> Void) -> Void = { value, phase, completion in
+            store.effect(layer["id"].uint, epoch: epoch, key: "opacity",
+                action: ["op": "set", "value": ["kind": "number", "value": value]], phase: phase, completion: completion)
+        }
         NumberControl(store: store, label: "Layer opacity", value: layer["opacity"].number,
             control: store.catalog[inline ? "layer_opacity" : "opacity"], identifier: "layer-opacity", inline: inline,
-            gestureChange: { change($1, layer: layer["id"].uint, epoch: epoch, phase: $0, completion: $2) }) { value, completion in
-            change(value, layer: layer["id"].uint, epoch: epoch, completion: completion)
+            gestureChange: { change($1, $0, $2) }) { value, completion in
+            change(value, nil, completion)
         }.id("\(epoch):\(layer["id"].uint)")
     }
 }

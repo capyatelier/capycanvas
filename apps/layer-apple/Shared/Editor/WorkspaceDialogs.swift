@@ -23,6 +23,7 @@ private struct WorkspaceDialog: View {
             else if !snapshot["toolbar_manager"].isNull { manager(snapshot["toolbar_manager"]) }
             else { colorPopup }
         }.padding(24).frame(minWidth: 320, idealWidth: 500, maxWidth: 560)
+            .buttonStyle(.bordered).presentationSizing(.fitted)
             .id(!snapshot["toolbar_prompt"].isNull ? snapshot["toolbar_prompt"]["title"].string : "workspace")
     }
     private func action(_ name: String) { store.customize(["type": name]) }
@@ -64,6 +65,7 @@ private struct WorkspaceDialog: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { action("cancel_tools") }.keyboardShortcut(.cancelAction)
                 Button(view["confirm_label"].string) { action("confirm_tools") }
+                    .buttonStyle(.borderedProminent).foregroundStyle(.white)
                     .keyboardShortcut(.defaultAction).disabled(!view["can_confirm"].bool)
                     .accessibilityIdentifier("tool-picker-confirm")
             }
@@ -83,6 +85,8 @@ private struct WorkspaceDialog: View {
                 Button(view["cancel_label"].string, role: .cancel) { action("cancel_toolbar") }
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("toolbar-prompt-cancel")
                 Button(view["confirm_label"].string, role: view["destructive"].bool ? .destructive : nil) { action("confirm_toolbar") }
+                    .buttonStyle(.borderedProminent).foregroundStyle(.white)
+                    .tint(view["destructive"].bool ? .red : EditorPalette.sharedAccent)
                     .keyboardShortcut(.defaultAction).disabled(!view["can_confirm"].bool)
                     .accessibilityIdentifier("toolbar-prompt-confirm")
             }
@@ -96,6 +100,7 @@ private struct WorkspaceDialog: View {
                 VStack(spacing: 0) {
                     if view["toolbars"].array.isEmpty { Text(view["empty_label"].string).padding(40) }
                     ForEach(view["toolbars"].array, id: \.workspacePanelKey) { toolbar in
+                        let selected = toolbar["panel"].string == view["selected"].string
                         Button { store.customize(["type": "select_managed_toolbar", "panel": toolbar["panel"].raw]) } label: {
                             HStack(spacing: 12) {
                                 SharedIcon(name: toolbar["icon"].string)
@@ -103,9 +108,10 @@ private struct WorkspaceDialog: View {
                                     Text(toolbar["title"].string)
                                     Text(toolbar["subtitle"].string).foregroundStyle(.secondary).font(.caption)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
-                                SharedIcon(name: "check").opacity(toolbar["panel"].string == view["selected"].string ? 1 : 0)
                             }.padding(10).contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityIdentifier("managed-toolbar-" + toolbar["panel"].string)
+                        }.buttonStyle(EditorControlButtonStyle(selected: selected))
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .accessibilityIdentifier("managed-toolbar-" + toolbar["panel"].string)
                         Divider()
                     }
                 }
@@ -114,6 +120,7 @@ private struct WorkspaceDialog: View {
                 Button(view["close_label"].string, role: .cancel) { action("close_toolbar_manager") }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button(view["delete_label"].string, role: .destructive) { store.customize(view["delete_action"].object) }
+                    .buttonStyle(.borderedProminent).tint(.red).foregroundStyle(.white)
                     .disabled(view["delete_action"].isNull).accessibilityIdentifier("delete-managed-toolbar")
             }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("toolbar-manager")

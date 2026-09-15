@@ -71,6 +71,7 @@ extension XCTestCase {
             workspaceText(app.textFields["tool-picker-search"], query)
             workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tool-choice-" + query)).firstMatch)
         }
+        attachWorkspaceScreen(app, name: "toolbar-tool-picker")
         workspaceActivate(app.buttons["tool-picker-confirm"])
         let created = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-options-", "Toolbar options for Toolbar 1")).firstMatch
         XCTAssertTrue(created.waitForExistence(timeout: 10))
@@ -83,6 +84,7 @@ extension XCTestCase {
         }
         menu("Rename ")
         workspaceText(app.textFields["toolbar-name"], "Quick tools")
+        attachWorkspaceScreen(app, name: "toolbar-rename-prompt")
         workspaceActivate(app.buttons["toolbar-prompt-confirm"])
         menu("Duplicate ")
         workspaceText(app.textFields["toolbar-name"], "Copy tools")
@@ -94,7 +96,9 @@ extension XCTestCase {
         // Exercise the actual command installed by the picker, without OS menus.
         workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "toolbar-tile-" + panel + "-", "Manage Toolbars")).firstMatch)
         workspaceActivate(app.buttons["managed-toolbar-" + copyPanel])
+        attachWorkspaceScreen(app, name: "toolbar-manager-selection")
         workspaceActivate(app.buttons["delete-managed-toolbar"])
+        attachWorkspaceScreen(app, name: "toolbar-delete-prompt")
         workspaceActivate(app.buttons["toolbar-prompt-cancel"])
         workspaceActivate(app.buttons["delete-managed-toolbar"])
         workspaceActivate(app.buttons["toolbar-prompt-confirm"])
