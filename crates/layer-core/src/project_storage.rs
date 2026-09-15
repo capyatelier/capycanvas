@@ -10,7 +10,7 @@ use sources::SourceIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x03\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x04\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -466,6 +466,37 @@ mod tests {
         changed.extend_from_slice(&json);
         changed.extend_from_slice(&bytes[52 + length..]);
         changed
+    }
+
+    #[test]
+    fn rasterized_image_role_roundtrips_and_rejects_wrong_document_interpretation() {
+        use crate::color::{ColorProfile, source::SourceKind};
+        let mut project = source_fixture();
+        let mut image = (**project.document.layers[0].source.as_ref().unwrap()).clone();
+        image.kind = SourceKind::Rasterized;
+        image.interpretation.profile = ColorProfile::Builtin(project.document.color.space);
+        image.interpretation.profile_assumed = false;
+        project.document.color.depth = image.interpretation.depth;
+        for layer in &mut project.document.layers {
+            layer.raster = Default::default();
+            if let Some(mask) = &mut layer.mask { mask.raster = Default::default(); }
+        }
+        project.document.layers[0].source = Some(Arc::new(image.clone()));
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        assert_eq!(&bytes[..12], b"CAPYRASTER\x04\0");
+        let loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(loaded.document.layers[0].source.as_deref(), Some(&image));
+        assert!(loaded.document.layers[1].source.as_ref().unwrap().is_original());
+        let mut repeated = Vec::new(); loaded.write(&mut repeated).unwrap();
+        assert_eq!(bytes, repeated);
+        let invalid = rewrite_manifest(&bytes, |v| v["tiled_sources"]["images"][0]["profile_assumed"] = true.into());
+        let length = u64::from_le_bytes(invalid[12..20].try_into().unwrap()) as usize;
+        assert!(Project::read(&invalid[..52 + length], Default::default()).unwrap_err().contains("interpretation differs"));
+        let invalid = rewrite_manifest(&bytes, |v| v["tiled_sources"]["images"][0]["depth"] = "U8".into());
+        assert!(Project::read(invalid.as_slice(), Default::default()).unwrap_err().contains("interpretation differs"));
+        let mut obsolete = bytes.clone(); obsolete[10] = 3;
+        assert!(Project::read(obsolete.as_slice(), Default::default()).unwrap_err().contains("Unsupported"));
     }
 
     #[test]

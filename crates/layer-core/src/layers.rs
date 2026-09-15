@@ -1081,6 +1081,12 @@ impl Document {
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer source"));
         }
+        if layer.source.as_ref().is_some_and(|s| !s.is_original()
+            && (s.interpretation.depth != self.color.depth
+                || s.interpretation.profile != crate::color::ColorProfile::Builtin(self.color.space)))
+        {
+            return Err(DocumentError::InvalidLayerOperation("Rasterized image interpretation differs from the document"));
+        }
         if layer.source.as_ref().is_some_and(|s| s.validate().is_err()) {
             return Err(DocumentError::InvalidLayerOperation("Invalid tiled source"));
         }

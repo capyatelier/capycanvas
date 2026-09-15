@@ -14909,3 +14909,6 @@ async fn read_canvas_pixels(
 
 #[path = "source_repair_tests.rs"]
 mod source_repair;
+
+#[path = "source_rasterize_tests.rs"]
+mod source_rasterize;

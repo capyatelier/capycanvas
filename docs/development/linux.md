@@ -83,6 +83,15 @@ bytes; a layer with baked edits gets a separate corrected source layer. The nati
 `workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits`
 check covers correction, cancellation, mismatched profiles, history and reopening.
 
+Edit → Rasterize Source and the layer context menu explicitly convert an original
+image to document-space RGBA at the document depth. The complete Before/After
+comparison precedes Apply; cancellation discards the worker result. Full source
+extent, placement, painted overrides and masks survive, including content brought
+into the canvas by moving a larger photo. The original remains in Undo history;
+the native project saves the rasterized role and pixels. The native
+`workspace::tests::source_rasterize::native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen`
+check covers these boundaries, reopen and continued painting.
+
 File → Document Properties shows working color/depth and each retained source's
 profile or assumption. New/Open preserve the current drawing in its own window
 while the incoming document is validated. An opened photo has no native Save

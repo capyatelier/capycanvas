@@ -54,6 +54,7 @@ pub enum DocumentRequest {
     Paste,
     Properties,
     RepairSourceProfile { layer: u64 },
+    RasterizeSource { layer: u64 },
     New,
     Open,
     Save {
@@ -74,6 +75,7 @@ impl DocumentRequest {
             Self::Paste => "Paste image as layer",
             Self::Properties => "Document Properties",
             Self::RepairSourceProfile { .. } => "Repair Source Profile",
+            Self::RasterizeSource { .. } => "Rasterize Retained Source",
             Self::New => "New drawing",
             Self::Open => "Open drawing or photo",
             Self::Save { .. } => "Save drawing",
@@ -87,6 +89,7 @@ impl DocumentRequest {
             Self::Paste => "Paste",
             Self::Properties => "Done",
             Self::RepairSourceProfile { .. } => "Apply",
+            Self::RasterizeSource { .. } => "Rasterize",
             Self::New => "Create",
             Self::Open => "Open",
             Self::Export { .. } => "Export",

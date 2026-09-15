@@ -4705,3 +4705,112 @@ rasterization, document assignment/conversion/depth, histogram/clipping inspecti
 Color preferences, remaining output controls, managed wide viewing and the full
 precision/memory/job gates remain open. Fresh baselines, regression investigation
 and optimization remain last; other host integration remains approval-gated.
+
+## Explicit GTK source rasterization (2026-09-15)
+
+Edit → Rasterize Source and the layer context action convert an original image
+into RGBA samples in the document's built-in color space and integer depth. This
+is a worker conversion of the full tiled image, including content outside the
+canvas. Existing paint overrides, scalar planes, masks, layer properties and
+placement remain unchanged. The complete Before/After canvas uses the same
+candidate as Apply. Cancel waits for conversion/preview acknowledgement and
+leaves the document unchanged; Apply is one layer replacement in history.
+
+Current code required an explicit distinction between an original and a committed
+image base. Both use the existing immutable tiled-image storage; `SourceKind`
+records Original or Rasterized. A rasterized base must have RGBA channels, a
+non-assumed built-in profile and the document's depth/space. Source profile repair
+is offered only for originals. Rasterized bases will participate in document
+Assign/Convert/depth operations; those operations are still outstanding. The
+native container is version 4 with a required image role, validated before payload
+reading. Earlier versions are deliberately rejected; no migration reader was
+added. Other host integration and their old archive assertions remain an approval
+gap. The project-format reference now describes current code rather than its
+former version-1 design.
+
+The conversion reuses exact samples/Arc tile ownership when profile, RGBA channels
+and depth already match. Other conversions stream through the existing CMM and
+integer encoder in row/tile bands, checking cancellation each row. Conversion
+reports clipped channels before Apply. Its 512 MiB compressed-output ceiling is
+an individual component limit, not a qualified combined process budget. No source
+is downsampled or precision-reduced to relieve memory pressure.
+
+Review of the first passing native screenshot exposed a pre-existing composition
+bug: translated source coordinates were clamped to canvas dimensions, hiding the
+part of a larger image brought into view. Composition now considers the full
+source extent. The native check explicitly samples that translated photo region;
+reviewed Before/After now visibly includes the photo and independent paint layer.
+This corrects source presentation for Move; it does not qualify every applied
+resampling/transform or off-canvas painting path.
+
+Artifacts use `artifacts/color-m2/rasterize-*` on the setup recorded above:
+
+- `conversion.log` passes both conversion tests (1.51 s): all 65,536 U16 codes,
+  U8 identity, exact shared ownership, U8→U16 ×257 and nearest U16→U8 in all four
+  spaces, alpha/hidden RGB, gamut clipping, cancellation and allocation rejection.
+- `shared-policy.log` passes the candidate/Apply/history check (0.06 s), including
+  a 1500-pixel original wider than its canvas, fractional offset, existing paint,
+  mask ownership and command/host notification. `native-storage-reviewed.log`
+  passes seven archive checks (1.98 s), including role roundtrip, rejection of
+  mismatched interpretation and deliberate version-3 rejection.
+- `core-color-suite.log` passes 63 core and 35 color tests (2.79/12.58 s); four
+  separately invoked/fixture-dependent color tests are ignored by that suite.
+  `workspace-suite.log` passes 86 tests (9.38 s). `shared-suite.log` passes 387
+  tests with one command-copy length failure: shortening the command to
+  “Rasterize Source…” fixes it; `command-copy.log` passes that check (0.29 s).
+- `reviewed-journey.log` and `final-journey.log` precede the visibility correction.
+  `placement-journey.log` passes the corrected native journey (11.93 s): retained
+  P3 ICC U16 → sRGB8, real pen paint, moving the larger source, independent overlay,
+  Cancel, clipping preview, Apply, exact archive/display reopen, Undo/Redo and
+  continued source-layer painting. UI capture `ui/1816502/source-before-after.png`
+  was visually reviewed; earlier per-process captures remain as evidence.
+- `existing-files.log` passes native file/ICC export/failure/cancellation/recovery
+  checks (35.84 s) using `final-gtk-tests`, SHA-256
+  `855182c5bb8ad43a04f86f2b061eff2f4fc0dfa4a5498ee2ac1e7d4d865b32ac`.
+  ImageMagick independently decodes all 983,040 U16 RGB/gray/CMYK output samples
+  from process 1814212 with zero differences and matching ICC bytes
+  (`external-handoff.log`). The later composition fix changes only moved-source
+  gathering, not the archive or output encoders.
+- `gpu-recovery.log` passes the wide-color native diagnostics/failure/recovery
+  journey (11.90 s) on the corrected build. `production.log` checks GTK and shared
+  FFI without warnings (4.07 s).
+- `eight-modes.log` passes real painting, exact Undo/Redo and native archive/window
+  reopen in all four spaces at both depths (31.02 s) on the corrected build.
+
+The corrected native binary is `placement-gtk-tests`, SHA-256
+`0334b381156db0c58490026040aa18bf9d538948ed12f12e5ece372c60b9cc2a`.
+`placement-build.{json,log}` and `placement-sources.json` identify its inputs.
+The captured comparison is an sRGB fallback/layout check, not physical wide-color
+calibration. Private-session nonfatal GVFS warnings remain in the logs.
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-core -p layer-color --offline -- --test-threads=1
+cargo test -p layer-ui --offline rasterizing_an_image_preserves_full_extent_edits_masks_and_history
+cargo test -p layer-ui --offline settings_copy_is_short_on_every_platform
+cargo test -p layer-workspace --offline -- --test-threads=1
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/rasterize-placement-gtk-exact" \
+  workspace::tests::source_rasterize::native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen \
+  "$PWD/artifacts/color-m2/rasterize-placement-journey"
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/rasterize-final-gtk-exact" \
+  workspace::tests::native_document_files \
+  "$PWD/artifacts/color-m2/rasterize-existing-files"
+python3 tools/validation/icc_export_handoff.py artifacts/familiar-workspace/files 1814212
+```
+
+`rasterize-provenance.json` records source/build/artifact hashes. Combined source,
+paint, history, staging and worker budgets still require admission and measurement:
+current history trimming can drop an oversized newest entry, and aggregate placed
+sources can exceed native save limits. These large-operation boundaries must be
+resolved before claiming guaranteed Undo or complete large-photo acceptance.
+Document Assign/Convert/depth, inspection, Color preferences, managed wide viewing,
+remaining export controls and full precision/job qualification also remain open.
+These correctness durations are not benchmark acceptance. Fresh baselines,
+frame-creation regressions, optimization and the memory/latency matrix remain last;
+other host integration requires approval after GTK completion and qualification.

@@ -3,17 +3,31 @@
 [Technical documentation](../README.md)
 
 `layer-core::Project` stores editable `.capy` drawings. GTK uses the raster
-container described here. Other hosts have not yet been qualified for this
-replacement. Export remains a flattened, straight sRGB RGBA8 PNG.
+container described here. Other host integration and qualification remain
+outstanding. Profiled PNG/JPEG/TIFF exports transform a copy of the composition;
+they are separate from the editable project.
 
 ## Pixels and revisions
 
-The document mode is `Srgb8V1`: sRGB primaries, D65, SDR and eight-bit channels.
-Paint tiles store `sRGB_encode(linear_RGB × alpha)` with unencoded coverage in
-alpha. Hardware decodes RGB before sampling and encodes after blending; shader
-math remains Float32. This differs from multiplying already encoded RGB by alpha.
-Source images are straight sRGB RGBA8. Masks and persistent wetness are linear R8.
-Effect processing domains are independent of the storage transfer function.
+`DocumentColor` records one of sRGB, Display P3, Adobe RGB or ProPhoto RGB and
+independent integer8/integer16 SDR depth. The GTK working renderer uses linear
+Float32 math; editing and effect processing domains are independent of stored
+precision. No FP16 working buffer is an implicit integer16 boundary.
+
+Paint descriptors currently retain the sRGB8 premultiplied-linear encoding:
+`sRGB_encode(linear_RGB × alpha)` plus linear alpha. Other native modes store
+straight encoded RGB and linear coverage at their declared integer depth. This
+sRGB8 descriptor exception is still a cleanup prerequisite; the GTK live renderer
+itself already uses the native Float32 path. Mask/wetness backing uses linear
+integer coverage at the document depth. Descriptors identify each stored plane.
+
+A tiled image can be an **Original** with its independent RGB/gray/CMYK samples,
+integer depth, profile bytes or explicit assumption, or **Rasterized** RGBA pixels
+in the document's builtin profile and depth. Rasterization converts the original
+image without cropping its extent or replacing painted overrides, masks or layer
+placement. The rasterized image is no longer offered as an original for profile
+repair. Its original survives only through retained undo history; history is not
+saved in the project. Rasterized-image interpretation must match the document.
 
 Each layer or mask owns an immutable sparse raster revision. Tile size is 256².
 Changed physical pages are captured at a completed contact or raster-operation
@@ -31,14 +45,17 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x01\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x04\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
-blobs and source assets. Payload offsets are relative to the payload start.
+blobs, image roles/interpretations and source assets. Payload offsets are relative to the payload start.
 The manifest explicitly declares `tile_codec: "zstd"`. Each tile is an independent
 lossless Zstandard frame (fast level -20); its content digest covers its explicit
-pixel descriptor and exact decoded bytes. Sources use indexed packed bytes with
-their own digest. There are no paths to extract.
+pixel descriptor and exact decoded bytes. Immutable image tiles use level 1;
+integer16 byte-plane shuffling is reversible and digests cover original bytes.
+Image profiles are binary payloads with independent hashes; builtins are explicit
+identifiers. Packed brush/source assets also have their own digests. There are no
+paths to extract.
 
 Identical tile blobs are deduplicated in a save. Repeated saves reuse immutable
 compressed backing without readback, conversion or recompression. The writer
@@ -46,7 +63,9 @@ streams payload after indexing; it does not build another full archive in RAM.
 Readers reject malformed/unsupported headers, descriptors, references, duplicate
 keys, noncanonical offsets, truncated or trailing data, integrity failures and
 unused blobs before adopting a candidate. The former `CAPYPROJECT` codec is gone;
-old files produce an unsupported-version error. There is no migration reader.
+old files, including earlier raster-container versions, produce an unsupported-version
+error. There is no migration reader. Version 4 adds the required image role and
+validates rasterized-image interpretation before reading payloads.
 
 Default decoded limits are 64 MiB metadata, 512 MiB sources, 1 GiB raster data,
 16384 tile instances, 32768 pixels per axis and 4096 layers. Repeated references

@@ -323,3 +323,54 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
         Some(&corrected)
     );
 }
+
+#[test]
+fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
+    use layer_core::{color::source::*, raster::*};
+    use std::sync::Arc;
+    let mut session = session();
+    session.state.platform = Platform::Gtk;
+    session.engine.backend_mut().tiled_sources = true;
+    // The retained image is larger than the document. Materializing it must not
+    // crop off-canvas pixels or bake/shift the layer's existing paint and mask.
+    let mut builder = SourceBuilder::new([1500, 2], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: Default::default(), profile: Default::default(), profile_assumed: true,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..2 { builder.push_row(&vec![127; 1500 * 4]).unwrap(); }
+    session.import_layer_source("Reference", builder.finish().unwrap()).unwrap();
+    let id = session.engine.document().active_layer;
+    let original = session.engine.document().layer(id).unwrap().source.clone().unwrap();
+    let mut layer = session.engine.document().layer(id).unwrap().clone();
+    layer.properties.offset = layer_core::Point { x: -550., y: 3.5 };
+    layer.mask = Some(layer_core::LayerMask::reveal_all(session.engine.allocate_layer_id(), layer_core::Point { x: 17., y: 3. }));
+    let key = TileKey { plane: RasterPlane::Color, coordinate: [0, 0] };
+    layer.raster = RasterRevision::backed(RasterData { tiles: [(key, RasterTile::backed(TileBlob::encode(session.engine.document().color.paint_descriptor(), &vec![51; 256 * 256 * 4]).unwrap()))].into(), watercolor: None });
+    session.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(layer.clone()))).unwrap();
+    let before = session.engine.document().clone();
+    let mut converted = (*original).clone(); converted.kind = SourceKind::Rasterized; converted.interpretation.profile_assumed = false;
+    let converted = Arc::new(converted);
+    let mut invalid = (*converted).clone(); invalid.extent[0] = 1499;
+    assert!(session.apply_rasterized_source(id, &original, Arc::new(invalid)).is_err());
+    assert_eq!(session.engine.document(), &before);
+    let change = session.dispatch(UiAction::Layer { action: LayerAction::RasterizeSource { id: id.0 } }).unwrap();
+    assert_ne!(change.regions & regions::HOST, 0);
+    let request = session.state.requests.last().unwrap().id;
+    session.complete_document_request(request, Ok(false)).unwrap();
+    let preview = session.preview_rasterized_source(id, &original, converted.clone()).unwrap();
+    assert_eq!(session.engine.document(), &before);
+    session.apply_rasterized_source(id, &original, converted.clone()).unwrap();
+    assert_eq!(&preview.document, session.engine.document());
+    let mut expected = layer.clone(); expected.source = Some(converted.clone());
+    assert_eq!(session.engine.document().layer(id).unwrap(), &expected);
+    assert!(!session.command(CommandId::RepairSourceProfile).enabled);
+    assert!(!session.command(CommandId::RasterizeSource).enabled);
+    let mut bytes = Vec::new(); session.capture_project_recovery().unwrap().write(&mut bytes).unwrap();
+    let restored = layer_core::Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
+    assert_eq!(restored.document.layer(id).unwrap().source.as_deref(), Some(converted.as_ref()));
+    assert_eq!(restored.document.layer(id).unwrap().mask, expected.mask);
+    session.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+    assert_eq!(session.engine.document().layer(id).unwrap(), &layer);
+    assert!(session.command(CommandId::RepairSourceProfile).enabled);
+    session.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+    assert_eq!(session.engine.document().layer(id).unwrap(), &expected);
+}

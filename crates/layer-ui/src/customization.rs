@@ -932,6 +932,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             match command {
                 CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
                 CommandId::ImportImage => "Place a photo while retaining its original profile and depth",
+                CommandId::RasterizeSource => "Convert a retained original to document pixels",
                 CommandId::RepairSourceProfile => "Correct a retained image’s source profile while preserving baked edits",
                 CommandId::PasteImage => "Paste a retained image layer from the clipboard",
                 CommandId::Pen => "Draw ink lines with a pen",

@@ -1749,10 +1749,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .as_ref()
                         .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
             }
-            CommandId::RepairSourceProfile => {
+            CommandId::RepairSourceProfile | CommandId::RasterizeSource => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
                     && !self.engine.document().active_mask
-                    && self.can_repair_source(self.engine.document().active_layer)
+                    && self.can_edit_original(self.engine.document().active_layer)
             }
             CommandId::ImportImage | CommandId::PasteImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
@@ -2091,7 +2091,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
-                let host = matches!(action, LayerAction::RepairSourceProfile { .. });
+                let host = matches!(action, LayerAction::RepairSourceProfile { .. } | LayerAction::RasterizeSource { .. });
                 self.layer_action(action)?;
                 self.refresh_document();
                 (DOCUMENT | BRUSH | if host { HOST } else { 0 }, !host)
@@ -3393,6 +3393,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::RasterizeSource => {
+                self.request_source_rasterize(self.engine.document().active_layer)?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::RepairSourceProfile => {
                 self.request_source_repair(self.engine.document().active_layer)?;
                 Ok((DOCUMENT | HOST, false))

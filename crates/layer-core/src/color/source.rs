@@ -83,15 +83,25 @@ impl SourceInterpretation {
     }
 }
 
+/// Original files retain their independent interpretation. Explicit rasterization
+/// replaces them with a document-space tiled image while preserving its extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SourceKind {
+    Original,
+    Rasterized,
+}
+
 #[derive(Clone, Debug)]
 pub struct SourceImage {
+    pub kind: SourceKind,
     pub extent: [u32; 2],
     pub interpretation: SourceInterpretation,
     pub tiles: BTreeMap<[u32; 2], Arc<TileBlob>>,
 }
 impl PartialEq for SourceImage {
     fn eq(&self, other: &Self) -> bool {
-        self.extent == other.extent
+        self.kind == other.kind
+            && self.extent == other.extent
             && self.interpretation == other.interpretation
             && self.tiles.len() == other.tiles.len()
             && self.tiles.iter().zip(&other.tiles).all(|((a, x), (b, y))| {
@@ -101,6 +111,9 @@ impl PartialEq for SourceImage {
 }
 impl Eq for SourceImage {}
 impl SourceImage {
+    pub fn is_original(&self) -> bool {
+        self.kind == SourceKind::Original
+    }
     pub fn resident_bytes(&self) -> usize {
         self.tiles.values().map(|t| t.resident_bytes()).sum()
     }
@@ -115,6 +128,13 @@ impl SourceImage {
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        if self.kind == SourceKind::Rasterized
+            && (self.interpretation.channels != SourceChannels::Rgba
+                || !matches!(self.interpretation.profile, ColorProfile::Builtin(_))
+                || self.interpretation.profile_assumed)
+        {
+            return Err("Rasterized images require explicit working RGBA interpretation".into());
+        }
         let [w, h] = self.extent;
         if w == 0 || h == 0 || w > 32768 || h > 32768 {
             return Err("Unsupported source dimensions".into());
@@ -204,6 +224,7 @@ impl SourceBuilder {
             .map_err(|_| "Source row-band allocation failed")?;
         Ok(Self {
             image: SourceImage {
+                kind: SourceKind::Original,
                 extent,
                 interpretation,
                 tiles: BTreeMap::new(),

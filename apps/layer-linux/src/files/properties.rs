@@ -19,7 +19,7 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         document
             .layers
             .iter()
-            .filter_map(|l| l.source.as_ref().map(|s| (l.name.clone(), s)))
+            .filter_map(|l| l.source.as_ref().filter(|s| s.is_original()).map(|s| (l.name.clone(), s)))
             .map(|(name, source)| {
                 let interpretation = &source.interpretation;
                 let profile = layer_color::profile_description(&interpretation.profile)?;

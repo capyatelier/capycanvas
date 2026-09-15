@@ -39,15 +39,15 @@ fn repair_edit(
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn can_repair_source(&self, id: LayerId) -> bool {
+    pub(super) fn can_edit_original(&self, id: LayerId) -> bool {
         let document = self.engine.document();
         !document.is_locked(id)
-            && document
-                .layer(id)
-                .is_some_and(|l| l.kind == LayerKind::Paint && l.source.is_some())
+            && document.layer(id).is_some_and(|l| {
+                l.kind == LayerKind::Paint && l.source.as_ref().is_some_and(|s| s.is_original())
+            })
     }
     pub(super) fn request_source_repair(&mut self, id: LayerId) -> Result<(), String> {
-        if self.state.platform != Platform::Gtk || !self.can_repair_source(id) {
+        if self.state.platform != Platform::Gtk || !self.can_edit_original(id) {
             return Err("Select an unlocked retained image layer".into());
         }
         self.request_document(DocumentRequest::RepairSourceProfile { layer: id.0 })?;
@@ -60,7 +60,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         corrected: &SourceImage,
     ) -> Result<Layer, String> {
         self.require_document_idle()?;
-        if !self.can_repair_source(id) {
+        if !self.can_edit_original(id) {
             return Err("Select an unlocked retained image layer".into());
         }
         let layer = self.engine.document().layer(id).unwrap();
@@ -68,7 +68,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("The source changed while choosing its profile; try again".into());
         }
         corrected.validate()?;
-        if corrected.extent != original.extent
+        if corrected.kind != original.kind
+            || corrected.extent != original.extent
             || corrected.interpretation.channels != original.interpretation.channels
             || corrected.interpretation.depth != original.interpretation.depth
             || corrected.interpretation.profile_assumed
@@ -142,5 +143,73 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         self.layer_interaction.changed = true;
         Ok(result)
+    }
+}
+
+impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn request_source_rasterize(&mut self, id: LayerId) -> Result<(), String> {
+        if self.state.platform != Platform::Gtk || !self.can_edit_original(id) {
+            return Err("Select an unlocked retained image layer".into());
+        }
+        self.request_document(DocumentRequest::RasterizeSource { layer: id.0 })?;
+        Ok(())
+    }
+    fn rasterized_layer(
+        &self,
+        id: LayerId,
+        original: &Arc<SourceImage>,
+        converted: Arc<SourceImage>,
+    ) -> Result<Layer, String> {
+        self.require_document_idle()?;
+        if !self.can_edit_original(id) {
+            return Err("Select an unlocked retained image layer".into());
+        }
+        let document = self.engine.document();
+        let mut layer = document.layer(id).unwrap().clone();
+        if !Arc::ptr_eq(layer.source.as_ref().unwrap(), original) {
+            return Err("The source changed while rasterizing; try again".into());
+        }
+        converted.validate()?;
+        if converted.kind != layer_core::color::source::SourceKind::Rasterized
+            || converted.extent != original.extent
+            || converted.interpretation.profile
+                != layer_core::color::ColorProfile::Builtin(document.color.space)
+            || converted.interpretation.depth != document.color.depth
+        {
+            return Err(
+                "Rasterization must retain the full image extent in the document color mode".into(),
+            );
+        }
+        layer.source = Some(converted);
+        Ok(layer)
+    }
+    pub fn preview_rasterized_source(
+        &self,
+        id: LayerId,
+        original: &Arc<SourceImage>,
+        converted: Arc<SourceImage>,
+    ) -> Result<Project, String> {
+        let layer = self.rasterized_layer(id, original, converted)?;
+        let mut project = self.capture_project_recovery()?;
+        project
+            .document
+            .apply(Edit::ReplaceLayer(Box::new(layer)))
+            .map_err(error)?;
+        Ok(project)
+    }
+    pub fn apply_rasterized_source(
+        &mut self,
+        id: LayerId,
+        original: &Arc<SourceImage>,
+        converted: Arc<SourceImage>,
+    ) -> Result<(), String> {
+        let layer = self.rasterized_layer(id, original, converted)?;
+        self.engine
+            .apply_edit(Edit::ReplaceLayer(Box::new(layer)))
+            .map_err(error)?;
+        self.refresh_document();
+        self.refresh_commands();
+        self.layer_interaction.changed = true;
+        Ok(())
     }
 }

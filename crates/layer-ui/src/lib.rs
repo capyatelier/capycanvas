@@ -183,7 +183,7 @@ pub const EDIT_MENU: MenuSpec = MenuSpec {
     sections: &[
         &[CommandId::Undo, CommandId::Redo],
         &[CommandId::PasteImage],
-        &[CommandId::ClearLayer, CommandId::FillSelection],
+        &[CommandId::RasterizeSource, CommandId::ClearLayer, CommandId::FillSelection],
         &[CommandId::ScaleRotate],
         &[CommandId::Settings],
     ],
@@ -437,6 +437,7 @@ pub enum CommandId {
     PasteImage,
     DocumentProperties,
     RepairSourceProfile,
+    RasterizeSource,
     NewDocument,
     OpenDocument,
     SaveDocument,
@@ -506,7 +507,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
+            Self::RasterizeSource | Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
                 Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac
@@ -569,7 +570,7 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
-            Self::ImportImage | Self::PasteImage => "image",
+            Self::ImportImage | Self::PasteImage | Self::RasterizeSource => "image",
             Self::DocumentProperties | Self::RepairSourceProfile => "info",
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
@@ -632,11 +633,12 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 68] = [
         Self::ImportImage,
         Self::PasteImage,
         Self::DocumentProperties,
         Self::RepairSourceProfile,
+        Self::RasterizeSource,
         Self::NewDocument,
         Self::OpenDocument,
         Self::SaveDocument,
@@ -733,6 +735,7 @@ impl CommandId {
             Self::PasteImage => "Paste Image as Layer",
             Self::DocumentProperties => "Document Properties…",
             Self::RepairSourceProfile => "Repair Source Profile…",
+            Self::RasterizeSource => "Rasterize Source…",
             Self::NewDocument => "New…",
             Self::OpenDocument => "Open…",
             Self::SaveDocument => "Save",

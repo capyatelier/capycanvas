@@ -11,6 +11,7 @@ enum ProfileReference {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ImageRecord {
+    kind: SourceKind,
     extent: [u32; 2],
     channels: SourceChannels,
     depth: IntegerDepth,
@@ -94,6 +95,7 @@ impl SourceIndex {
                         .collect();
                     let id = result.images.len();
                     result.images.push(ImageRecord {
+                        kind: source.kind,
                         extent: source.extent,
                         channels: source.interpretation.channels,
                         depth: source.interpretation.depth,
@@ -168,6 +170,14 @@ impl SourceIndex {
         let mut source_blobs = BTreeSet::new();
         let mut bytes = 0u64;
         for image in &self.images {
+            if image.kind == SourceKind::Rasterized
+                && (image.channels != SourceChannels::Rgba
+                    || image.depth != document.color.depth
+                    || image.profile_assumed
+                    || !matches!(image.profile, ProfileReference::Builtin(space) if space == document.color.space))
+            {
+                return Err("Rasterized image interpretation differs from the document".into());
+            }
             if image
                 .extent
                 .iter()
@@ -249,6 +259,7 @@ impl SourceIndex {
         let mut images = Vec::new();
         for image in self.images {
             images.push(Arc::new(SourceImage {
+                kind: image.kind,
                 extent: image.extent,
                 interpretation: SourceInterpretation {
                     channels: image.channels,

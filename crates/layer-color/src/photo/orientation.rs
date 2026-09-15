@@ -81,6 +81,7 @@ pub(super) fn normalize(
     let bpp = source.interpretation.pixel_bytes();
     let descriptor = source.interpretation.descriptor();
     let mut result = SourceImage {
+        kind: source.kind,
         extent,
         interpretation: source.interpretation.clone(),
         tiles: BTreeMap::new(),
