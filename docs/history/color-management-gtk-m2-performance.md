@@ -522,3 +522,40 @@ after SHA-256 is
 `926711fd357375cbefe227d21430bec459f964daad287a8778582256b7322527`,
 with `native-views-build-sources.json` and `native-views-source.patch` recording
 its exact parent and source changes.
+
+## Larger staging retention does not resolve the pen-up delay
+
+An isolated allocation probe of `5a5d0978` counts staging reuse, misses and
+allocated bytes around each submitted frame. The same exact executable selects
+64, 128 or 256 MiB of pool retention once at process startup; no production
+setting or limit changes. Two rounds each run those three capacities in order
+at a common executable pathname, three repetitions per arm. The ProPhoto U16
+palette workload contributes 12 pen-ups per arm, 24 per capacity.
+
+At 64 MiB, each measured pen-up allocates 32.5–52 MiB of fresh staging; each
+12-pen-up arm has 132 misses totaling 508.5 MiB plus 456 bytes. At 128 and
+256 MiB, large allocation misses disappear: only 48 eight-byte status-buffer
+misses remain per arm (384 bytes total), due to the separate 16-status-buffer
+retention ceiling. This confirms the allocation hypothesis but **not** its
+proposed latency benefit.
+
+| Pool capacity | Round 1 / 2 pen-up CPU p99 ms | Round 1 / 2 completed pen-up p99 ms | Peak capture allocated/reserved MiB |
+| --- | --- | --- | ---: |
+| 64 MiB | 8.357 / 8.251 | 16.823 / 16.549 | 177.0 |
+| 128 MiB | 7.946 / 9.340 | 17.206 / 18.760 | 223.5 |
+| 256 MiB | 8.053 / 10.921 | 16.925 / 19.571 | 287.5 |
+
+All pen-ups miss 8.33 ms. Retaining more staging does not yield a repeatable
+improvement and increases reserved memory, so production remains at 64 MiB.
+These instrumented results do not identify the remaining completion-wait
+residual or justify treating it as allocation time. Query spans, owner CPU
+work and host-backed publication remain separate measurements.
+
+Exact probe SHA-256 is recorded in `native-pool-probe-build-sources.json`;
+`build-native-pool-probe.py` retains the parent archive and instrumentation,
+`run-native-pool-probe.py` records explicit capacity environment overrides,
+hardware/power state and serial run boundaries, and
+`analyze-native-pool-probe.py` joins the measured allocation/timing records.
+All files, per-frame samples, raw logs and reports use `native-pool-probe-*`
+under `artifacts/color-m2/final-performance/`. No CPU build or other GPU test
+runs during measurement. This experiment changes no production source.
