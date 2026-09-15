@@ -671,12 +671,6 @@
 			"path" = "iOS/Platform/EditorAppearance.swift";
 			"sourceTree" = "<group>";
 		};
-		"54E908E9376305EC20A1576E" = {
-			"isa" = "PBXFileReference";
-			"lastKnownFileType" = "sourcecode.swift";
-			"path" = "iOS/Platform/NativeContextMenu.swift";
-			"sourceTree" = "<group>";
-		};
 		"5DD976DC9A32119C714E5268" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -1197,10 +1191,6 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E1BA7907CD2F7A44A043BAAB";
 		};
-		"52E49FD9DE083A79A288EA7C" = {
-			"isa" = "PBXBuildFile";
-			"fileRef" = "54E908E9376305EC20A1576E";
-		};
 		"784DF5E7518C7F88871FE103" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "5DD976DC9A32119C714E5268";
@@ -1336,7 +1326,6 @@
 				"0AAB755A28F6FEEE1762BD43",
 				"A54EA1B42FDE69B923E0A57F",
 				"04A395B2EF830CA5FD8DDB22",
-				"52E49FD9DE083A79A288EA7C",
 				"784DF5E7518C7F88871FE103",
 				"4D74C50F6055C208741B5E50",
 				"7E69E8F237D3F717B7D32EF1",
@@ -2671,7 +2660,6 @@
 				"E0041892EC32CC1F566BEEB5",
 				"25EC3074B1CBAC53FDB152BF",
 				"E1BA7907CD2F7A44A043BAAB",
-				"54E908E9376305EC20A1576E",
 				"5DD976DC9A32119C714E5268",
 				"B6A91FAD38C90953906B7E60",
 				"50310923A19004D5BF8FDCCF",

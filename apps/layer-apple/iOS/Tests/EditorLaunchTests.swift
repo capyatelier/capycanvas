@@ -27,6 +27,16 @@ final class EditorLaunchTests: XCTestCase {
         checkMaskTransforms(in: editorCaptureApplication())
     }
 
+    @MainActor func testMaskActionsAndHistory() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkMaskActionsAndHistory(in: editorCaptureApplication())
+    }
+
+    @MainActor func testLayerContentActionsAndHistory() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkLayerContentActionsAndHistory(in: editorCaptureApplication())
+    }
+
     @MainActor func testGroupArtworkWorkflow() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkGroupArtworkWorkflow(in: editorCaptureApplication())

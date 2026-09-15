@@ -306,8 +306,8 @@ extension XCTestCase {
         #else
         element.press(forDuration: 0.6)
         #endif
-        let action = app.buttons[label]
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
+        let action = app.buttons["menu-action-" + label]
+        revealEditorControl(action, in: app.scrollViews.containing(.button, identifier: "menu-action-" + label).firstMatch)
         workspaceActivate(action)
         XCTAssertTrue(action.waitForNonExistence(timeout: 5))
     }
@@ -316,6 +316,287 @@ extension XCTestCase {
         let action = app.buttons["tool-action-" + (apply ? "apply_transform" : "cancel_transform")]
         revealTransform(action, in: app); workspaceActivate(action)
         XCTAssertTrue(app.buttons["number-value-tool-transform_x"].waitForNonExistence(timeout: 5))
+    }
+
+    @MainActor func checkMaskActionsAndHistory(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        func selectAll() { editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels") }
+        func fill() { editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection") }
+        selectAll(); fill()
+        expectation(for: NSPredicate { _, _ in
+            let pixel = self.editorPixels(in: app); return Int(pixel[2]) > Int(pixel[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let bounds = bluePaperBounds(in: app), frame = workspaceViewport(in: app).frame
+        let points = [0.1, 0.35, 0.65, 0.9].map { CGPoint(x: bounds.minX + bounds.width * $0, y: bounds.midY) }
+        let full = [true, true, true, true], center = [false, true, true, false]
+        let hole = [true, false, false, true], blank = [false, false, false, false]
+        let initialCount = artworkRows(in: app).count
+        let originalID = artworkRows(in: app).element(boundBy: 0).identifier
+        var rowID = originalID
+        func expectLayerCount(_ count: Int) {
+            expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: artworkRows(in: app))
+            waitForExpectations(timeout: 5)
+        }
+        func target(_ mask: Bool) -> XCUIElement {
+            artworkRows(in: app)[rowID].buttons[mask ? "Edit layer mask" : "Edit layer content"]
+        }
+        func samples() -> [Data] { editorPixelSamples(in: app, at: points, size: 8) }
+        func expectSamples(_ expected: [Data]) {
+            expectation(for: NSPredicate { _, _ in samples() == expected }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+        }
+        func expectMask(_ exists: Bool) {
+            if exists { XCTAssertTrue(target(true).waitForExistence(timeout: 5)) }
+            else { XCTAssertTrue(target(true).waitForNonExistence(timeout: 5)) }
+        }
+        func expectInk(_ expected: [Bool]) { expectBluePaper(expected, at: points, in: app) }
+        func history(_ before: [Data], _ after: [Data], beforeMask: Bool = true, afterMask: Bool = true) {
+            editorHistory("Undo", in: app); expectSamples(before); expectMask(beforeMask)
+            editorHistory("Redo", in: app); expectSamples(after); expectMask(afterMask)
+            editorHistory("Undo", in: app); expectSamples(before); expectMask(beforeMask)
+        }
+        func action(_ label: String, expected: [Bool], maskAfter: Bool = true) {
+            let before = samples()
+            layerContext(label, on: target(true), in: app)
+            expectInk(expected); expectMask(maskAfter)
+            history(before, samples(), afterMask: maskAfter)
+        }
+        func contentMaskAction(_ label: String) {
+            #if os(macOS)
+            target(false).rightClick()
+            #else
+            target(false).press(forDuration: 0.6)
+            #endif
+            workspaceActivate(app.buttons["menu-action-Mask"])
+            let action = app.buttons[label]
+            workspaceActivate(action)
+            XCTAssertTrue(action.waitForNonExistence(timeout: 5))
+        }
+
+        // Transform the full selection on a temporary painted layer. Removing
+        // that layer leaves a centered selection over the untouched blue art.
+        workspaceActivate(app.buttons["layer-New layer"])
+        expectLayerCount(initialCount + 1)
+        fill()
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+        let aspect = app.buttons["tool-action-transform_aspect"]
+        revealTransform(aspect, in: app)
+        if aspect.isSelected { workspaceActivate(aspect) }
+        editTransform("width", "50", in: app)
+        finishTransform(true, in: app)
+        workspaceActivate(app.buttons["layer-Delete selected layers"])
+        expectLayerCount(initialCount)
+        expectInk(full); expectMask(false)
+        let unmasked = samples()
+        for hide in [false, true] {
+            contentMaskAction(hide ? "Mask: hide selection" : "Mask: reveal selection")
+            expectInk(hide ? hole : center); expectMask(true)
+            attachEditor(in: app, name: hide ? "mask-hide-selection" : "mask-reveal-selection")
+            history(unmasked, samples(), beforeMask: false)
+        }
+        editorHistory("Redo", in: app); expectInk(hole); expectMask(true)
+
+        // Copy is not an artwork edit and must retain the pending Redo.
+        layerContext("Invert mask", on: target(true), in: app); expectInk(center)
+        editorHistory("Undo", in: app); expectInk(hole)
+        layerContext("Copy mask", on: target(true), in: app); expectInk(hole)
+        editorHistory("Redo", in: app); expectInk(center)
+        editorHistory("Undo", in: app); expectInk(hole)
+        for (label, expected) in [("Enable mask", full), ("Invert mask", center),
+            ("Reveal all", full), ("Hide all", blank), ("Delete mask", full)] {
+            action(label, expected: expected, maskAfter: label != "Delete mask")
+        }
+        action("Apply mask to layer", expected: hole, maskAfter: false)
+        attachEditor(in: app, name: "mask-actions-restored")
+
+        let beforeInspection = samples()
+        layerContext("Show mask area", on: target(true), in: app)
+        expectation(for: NSPredicate { _, _ in samples() != beforeInspection }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let inspection = samples()
+        for index in [0, 3] { XCTAssertEqual(inspection[index], beforeInspection[index]) }
+        for index in [1, 2] {
+            XCTAssertGreaterThan(inspection[index][2], inspection[index][0])
+            XCTAssertGreaterThan(inspection[index][0], inspection[index][1])
+        }
+        attachEditor(in: app, name: "mask-area-inspection")
+        history(beforeInspection, inspection)
+
+        // Replacement consumes the current selection in the same undo step.
+        selectAll()
+        for (label, expected) in [("Replace mask: reveal selection", full), ("Replace mask: hide selection", blank)] {
+            action(label, expected: expected)
+        }
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        layerContext("Reveal all", on: target(true), in: app); expectInk(full)
+        action("Replace with copied mask", expected: hole)
+        editorHistory("Undo", in: app); expectInk(hole)
+
+        // Paste the copied nontrivial mask onto a different filled layer.
+        workspaceActivate(app.buttons["layer-New layer"])
+        expectLayerCount(initialCount + 1)
+        rowID = artworkRows(in: app).element(boundBy: 0).identifier
+        XCTAssertNotEqual(rowID, originalID)
+        selectAll(); fill()
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectInk(full); expectMask(false)
+        let beforePaste = samples()
+        contentMaskAction("Paste mask")
+        expectInk(hole); expectMask(true)
+        attachEditor(in: app, name: "mask-pasted-layer")
+        history(beforePaste, samples(), beforeMask: false)
+        workspaceActivate(app.buttons["layer-Delete selected layers"])
+        expectLayerCount(initialCount)
+        rowID = originalID; expectInk(hole); expectMask(true)
+        XCTAssertEqual(workspaceViewport(in: app).frame, frame)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func checkLayerContentActionsAndHistory(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        func selectAll() { editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels") }
+        func fill() { editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection") }
+        selectAll(); fill()
+        expectation(for: NSPredicate { _, _ in
+            let p = self.editorPixels(in: app); return Int(p[2]) > Int(p[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let bounds = bluePaperBounds(in: app), frame = workspaceViewport(in: app).frame
+        let points = [0.1, 0.35, 0.65, 0.9].map { CGPoint(x: bounds.minX + bounds.width * $0, y: bounds.midY) }
+        let rows = artworkRows(in: app), initialCount = rows.count
+        let originalID = rows.element(boundBy: 0).identifier
+        var rowID = originalID
+        enum Ink { case paper, blue, red }
+        let blue: [Ink] = [.paper, .blue, .blue, .paper]
+        let red: [Ink] = [.paper, .red, .red, .paper]
+        let fullRed: [Ink] = [.red, .red, .red, .red]
+        let blank: [Ink] = [.paper, .paper, .paper, .paper]
+        func samples() -> [Data] { editorPixelSamples(in: app, at: points, size: 8) }
+        func expectSamples(_ expected: [Data]) {
+            expectation(for: NSPredicate { _, _ in samples() == expected }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+        }
+        func expectInk(_ expected: [Ink]) {
+            expectation(for: NSPredicate { _, _ in
+                for (pixel, ink) in zip(samples(), expected) {
+                    for i in stride(from: 0, to: pixel.count, by: 4) {
+                        let r = Int(pixel[i]), g = Int(pixel[i + 1]), b = Int(pixel[i + 2])
+                        switch ink {
+                        case .paper: if min(r, g, b) <= 250 { return false }
+                        case .blue: if b <= r + 50 { return false }
+                        case .red: if r <= b + 50 { return false }
+                        }
+                    }
+                }
+                return true
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+        }
+        func expectCount(_ count: Int) {
+            expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: rows)
+            waitForExpectations(timeout: 5)
+        }
+        func content() -> XCUIElement { rows[rowID].buttons["Edit layer content"] }
+        func action(_ label: String) { layerContext(label, on: content(), in: app) }
+        func flag(_ label: String, _ selected: Bool) {
+            expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: selected)),
+                evaluatedWith: app.buttons["layer-" + label])
+            waitForExpectations(timeout: 5)
+        }
+        func history(_ before: [Data], _ after: [Data]) {
+            for (command, pixels) in [("Undo", before), ("Redo", after), ("Undo", before)] {
+                editorHistory(command, in: app); expectSamples(pixels)
+            }
+        }
+
+        // A bounded paint layer exposes loss of alpha or accidental edits to
+        // the source when clearing, recoloring and removing its duplicate.
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Scale / rotate")
+        let aspect = app.buttons["tool-action-transform_aspect"]
+        revealTransform(aspect, in: app)
+        if aspect.isSelected { workspaceActivate(aspect) }
+        editTransform("width", "50", in: app); finishTransform(true, in: app)
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectInk(blue)
+        let original = samples()
+        action("Duplicate"); expectCount(initialCount + 1); expectSamples(original)
+        rowID = rows.element(boundBy: 0).identifier
+        XCTAssertNotEqual(rowID, originalID)
+        editorHistory("Undo", in: app); expectCount(initialCount); expectSamples(original)
+        editorHistory("Redo", in: app); expectCount(initialCount + 1); expectSamples(original)
+        workspaceActivate(rows[originalID].buttons["layer-Hide layer"]); expectSamples(original)
+        action("Clear layer"); expectInk(blank)
+        history(original, samples())
+        attachEditor(in: app, name: "layer-duplicate-clear-restored")
+
+        action("Alpha lock"); flag("Alpha lock", true)
+        editorHistory("Undo", in: app); flag("Alpha lock", false)
+        editorHistory("Redo", in: app); flag("Alpha lock", true)
+        workspaceActivate(app.buttons["color-swap"]); selectAll(); fill()
+        expectInk(red); attachEditor(in: app, name: "layer-alpha-locked-fill")
+        history(original, samples()); flag("Alpha lock", true)
+        action("Alpha lock"); flag("Alpha lock", false)
+        fill(); expectInk(fullRed)
+        history(original, samples())
+        editorHistory("Redo", in: app); expectInk(fullRed)
+        let opaqueRed = samples()
+
+        action("Lock editing"); flag("Lock editing", true)
+        XCTAssertFalse(app.buttons["layer-Alpha lock"].isEnabled)
+        XCTAssertFalse(app.buttons["number-value-layer-opacity"].isEnabled)
+        #if os(macOS)
+        content().rightClick()
+        #else
+        content().press(forDuration: 0.6)
+        #endif
+        XCTAssertTrue(app.buttons["menu-action-Clear layer"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["menu-action-Clear layer"].isEnabled)
+        workspaceActivate(app.buttons["menu-action-Lock editing"])
+        flag("Lock editing", false)
+        editorHistory("Undo", in: app); flag("Lock editing", true); expectSamples(opaqueRed)
+        editorHistory("Redo", in: app); flag("Lock editing", false); expectSamples(opaqueRed)
+
+        workspaceActivate(rows[originalID].buttons["layer-Show layer"]); expectSamples(opaqueRed)
+        action("Clip to layer below"); flag("Clip to layer below", true); expectInk(red)
+        attachEditor(in: app, name: "layer-clipped-duplicate")
+        history(opaqueRed, samples()); flag("Clip to layer below", false)
+        action("Delete layer"); expectCount(initialCount); expectSamples(original)
+        rowID = originalID
+
+        // New clipping layers and bulk duplication must preserve the base and
+        // clipping relationship together, with one history entry per command.
+        action("New clipping layer"); expectCount(initialCount + 1)
+        rowID = rows.element(boundBy: 0).identifier
+        let clippingID = rowID
+        flag("Clip to layer below", true); expectSamples(original)
+        editorHistory("Undo", in: app); expectCount(initialCount); expectSamples(original)
+        editorHistory("Redo", in: app); expectCount(initialCount + 1); flag("Clip to layer below", true)
+        selectAll(); fill(); expectInk(red)
+        let clipped = samples()
+        history(original, clipped)
+        editorHistory("Redo", in: app); expectSamples(clipped)
+        workspaceActivate(rows[originalID].buttons["layer-Select layer without changing drawing target"])
+        XCTAssertTrue(content().isSelected, "Checking the base must retain the clipping layer as drawing target")
+        action("Duplicate selected layers"); expectCount(initialCount + 3); expectSamples(clipped)
+        rowID = rows.element(boundBy: 0).identifier
+        XCTAssertNotEqual(rowID, clippingID)
+        editorHistory("Undo", in: app); expectCount(initialCount + 1); expectSamples(clipped)
+        editorHistory("Redo", in: app); expectCount(initialCount + 3); expectSamples(clipped)
+        attachEditor(in: app, name: "layer-clipping-stack-duplicated")
+        // History restores the artwork target; checked rows are UI selection.
+        let copiedBase = rows.element(boundBy: 1).buttons["layer-Select layer without changing drawing target"]
+        if !copiedBase.isSelected { workspaceActivate(copiedBase) }
+        action("Delete selected layers"); expectCount(initialCount + 1); expectSamples(clipped)
+        editorHistory("Undo", in: app); expectCount(initialCount + 3); expectSamples(clipped)
+        editorHistory("Redo", in: app); expectCount(initialCount + 1); expectSamples(clipped)
+        rowID = clippingID
+        action("Delete layer"); expectCount(initialCount); expectSamples(original)
+        attachEditor(in: app, name: "layer-original-preserved")
+        XCTAssertEqual(workspaceViewport(in: app).frame, frame)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
     @MainActor func checkMaskTransforms(in app: XCUIApplication) {

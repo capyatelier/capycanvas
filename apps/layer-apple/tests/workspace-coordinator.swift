@@ -37,8 +37,12 @@ import SQLite3
             let storage = EditorPersistence(root: root)
             let first = EditorStore(platform: platform, scene: scene, persistence: storage, managedWorkspaces: true)
             let manager = first.workspaceLibrary!
+            // Scene activation can arrive before asynchronous startup finishes.
+            manager.suspend()
+            try await manager.resume()
             try await wait("managed startup: \(manager.error ?? "")") { manager.ready || manager.error != nil }
             precondition(manager.ready, manager.error ?? "Startup failed")
+            precondition(!manager.readOnly, "Startup must honor the latest active scene state")
             let original = manager.status["active_id"].string
             precondition(!original.isEmpty && first.state["workspace"]["zen_mode"].bool)
             precondition(SnapshotProjection.equal(first.state["workspace"]["layout"].raw, legacy.state["workspace"]["layout"].raw))
@@ -81,6 +85,11 @@ import SQLite3
             precondition(manager.readOnly)
             try await manager.resume()
             precondition(!manager.readOnly && first.state["brush"]["diameter"].number == 91)
+            // Drain storage work queued by suspension, then verify the Rust
+            // editor is writable too; the Swift readOnly flag is not enough.
+            try await manager.flush()
+            do { try await edit(first, ["type": "set_brush_size", "value": 91]) }
+            catch { throw HostFailure(message: "A resumed workspace must remain editable: \(error.localizedDescription)") }
             try await libraryActions(manager, editor: first, root: root)
             try await ownershipAndStorage(manager, editor: first, root: root, scene: scene, platform: platform)
             let second = EditorStore(platform: platform, scene: otherScene, persistence: storage, managedWorkspaces: true)
@@ -142,25 +151,37 @@ import SQLite3
         }
         precondition(!queried.isNull && !completed && started.duration(to: .now) < .seconds(1),
             "Blocked SQLite storage must leave MainActor and the drawing owner responsive")
+        // Activation can queue behind a save, then become obsolete when the
+        // scene suspends again. Completing that save must not reopen editing.
+        let resuming = Task { @MainActor in try await manager.resume() }
+        try await wait("activation waiting for storage") { manager.readOnly }
+        manager.suspend()
         emergency.cancel()
         try database.execute("ROLLBACK")
         try await saving.value
+        try await resuming.value
         try await manager.flush()
+        precondition(manager.readOnly, "A newer suspension must supersede queued activation")
+        do {
+            try await edit(editor, ["type": "set_brush_size", "value": 94])
+            preconditionFailure("A suspended workspace must reject editor changes")
+        } catch { precondition(editor.state["brush"]["diameter"].number == 94) }
+        try await manager.resume()
+        try await edit(editor, ["type": "set_brush_size", "value": 94])
         let latest = try await manager.read(["type": "load", "id": original])["entity"]["working"]
         precondition(latest["tools"]["overrides"][String(latest["preset"].uint)]["size"].number == 94,
             "A save acknowledgement must not clear edits accepted while storage was blocked")
-        // Advance only the temporary database's lease state, then let another
-        // real native owner claim it. The old window must preserve its dirty
-        // in-memory tools and recover them as an independent workspace.
+        // Retire the native claim without saving the dirty edit, then let
+        // another owner claim it. A suspended owner keeps its kernel lock;
+        // changing a lease timestamp alone cannot simulate ownership loss.
         try await edit(editor, ["type": "set_brush_size", "value": 95])
-        manager.suspend()
-        try database.execute("UPDATE items SET lease_until='0' WHERE lease_until IS NOT NULL")
+        await manager.detach()
         let successor = EditorStore(platform: platform, scene: scene,
             persistence: EditorPersistence(root: root), managedWorkspaces: true)
         try await wait("successor ownership") { successor.workspaceLibrary!.ready || successor.workspaceLibrary!.error != nil }
         precondition(successor.workspaceLibrary!.ready, successor.workspaceLibrary!.error ?? "Successor failed")
         precondition(successor.workspaceLibrary!.status["active_id"].string == original)
-        do { try await manager.resume(); preconditionFailure("A stale owner must not resume editing") }
+        do { try await manager.reopenAfterCancelledClose(); preconditionFailure("A stale owner must not resume editing") }
         catch { precondition(manager.readOnly && editor.state["brush"]["diameter"].number == 95) }
         _ = try await manager.operation(["type": "save_as_new", "name": "Ownership Recovery"])
         let recovered = manager.status["active_id"].string

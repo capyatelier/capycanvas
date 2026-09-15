@@ -454,6 +454,7 @@ import SwiftUI
         renewal?.cancel(); renewal = nil
         Task { [self] in
             try? await finishLayoutPreview()
+            guard suspended else { return }
             _ = try? await session(["type": "read_only", "value": true])
         }
     }
@@ -474,13 +475,13 @@ import SwiftUI
         try await resume()
     }
     func resume() async throws {
-        readOnly = true
+        suspended = false; readOnly = true
         try await serialized { [self] in
-            guard ready && !closed else { return }
+            guard ready && !closed && !suspended else { return }
             try await setReadOnly(true)
             do {
                 _ = try await request(["type": "revalidate", "now": now])
-                suspended = false
+                guard !suspended else { return }
                 try await setReadOnly(false)
                 error = status["error"].isNull ? nil : status["error"]["message"].string
                 scheduleRenewal()

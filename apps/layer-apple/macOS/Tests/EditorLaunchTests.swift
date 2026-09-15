@@ -22,6 +22,10 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testMaskTransforms() { checkMaskTransforms(in: editorCaptureApplication()) }
 
+    @MainActor func testMaskActionsAndHistory() { checkMaskActionsAndHistory(in: editorCaptureApplication()) }
+
+    @MainActor func testLayerContentActionsAndHistory() { checkLayerContentActionsAndHistory(in: editorCaptureApplication()) }
+
     @MainActor func testGroupArtworkWorkflow() { checkGroupArtworkWorkflow(in: editorCaptureApplication()) }
 
     @MainActor func testMoveAndTransformCancellation() {

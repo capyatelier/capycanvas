@@ -12,11 +12,30 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 
 ## Current native feature milestone
 
-Prioritize visible Web/Android parity gaps and simple shared solutions. Use the
-iPad simulator for routine UI iteration; reserve physical iPad runs for major
-milestones and hardware-specific Pencil, provider, lifecycle and performance
-acceptance. Avoid repeating passing checks without a relevant change. Commit
-only major milestones. All eleven recovery stashes remain.
+Prioritize visible Web/Android parity gaps and simple shared solutions. Keep the
+routine implementation loop in focused shared, bridge and native component
+checks. Use the iPad simulator for targeted UI questions and grouped milestone
+acceptance; reserve physical iPad runs for major milestones and hardware-specific
+Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
+checks without a relevant change. Commit only major milestones. All eleven
+recovery stashes remain.
+
+The user's latest speed guidance keeps slow simulator workflows out of the
+critical implementation loop. Use focused shared Rust, Apple bridge and native
+component checks for routine changes; group related implementation work before
+running broader native acceptance. Reserve simulator runs for specific UIKit,
+layout and input questions or milestone validation. A fixture failure should
+first get a focused correction/check, rather than repeatedly replaying unrelated
+setup. Preserve the distinction between shared/component evidence and actual
+native acceptance; all required native and physical gates still apply.
+
+The current mask/layer/lifecycle milestone fixes activation ordering with the
+existing suspension state, qualifies mask and layer-content workflows on Mac
+and simulator, and removes the unused UIKit menu converter. Both coordinator
+configurations, affected shared checks and both Debug/Release builds pass.
+The detailed scope and retained failures are recorded below. This closes the
+queued layer-content batch; remaining native feature/visual, physical input,
+provider/lifecycle and sustained performance gates remain open.
 
 Earlier published Apple milestone `1952f31` fixed Color wheel height allocation, the
 collapsed-column footer grip rotation, and gray header backgrounds chosen by
@@ -62,6 +81,11 @@ The `5aeab5e` fast-forward adds Windows curve gesture/history and its package
 acceptance, plus Windows coverage in the existing shared effect-gesture test.
 Apple and shared production sources are unchanged. The local lasso regression
 merges without conflicts, and all eleven stashes remain intact.
+The `c1b290b` fast-forward adds Windows native transform/lasso acceptance,
+README workspace images and Windows coverage in the shared stationary-lasso
+regression. That regression passes after integration; Apple and shared production
+sources are unchanged. The five local mask-test/documentation paths and all
+eleven stashes are preserved.
 The duplicate local host fix is
 removed; all eleven stashes remain. Light header controls
 now use Web's half-opacity gray surface; Menu Labels share one rounded surface.
@@ -564,6 +588,92 @@ Final Mac version-9 and simulator version-7 builds pass after removing the unuse
 width option; this leaves the accepted geometry and behavior unchanged. All
 jobs are terminal. No physical device was accessed. Evidence and retained
 failures are recorded under `artifacts/apple-mask-group-transforms-v1/`.
+
+The subsequent mask-action workflow passes on simulator version 3 with no
+failures or skips. It covers reveal/hide selection, selection-based replacement,
+copy while preserving Redo, enable/invert, reveal/hide all, mask application and
+deletion, mask-area inspection and replacing/pasting a copied mask onto another
+layer. Four 8-by-8 canvas samples check blue/white coverage and exact Undo/Redo;
+mask presence checks distinguish applying a mask from leaving it editable. Four
+reviewed full captures show the expected regions and matching live Navigator,
+including the purple inspection tint only in the hidden area. Activity records
+verify the new selection and cross-layer paste steps.
+
+The first simulator fixture tried transforming an empty paint layer. Native
+accessibility and shared command policy correctly report that action disabled.
+The fixture now fills its temporary layer before transforming it, then removes
+that layer to leave the selection over the original artwork. The Mask submenu's
+back button shares its visible label, so navigation uses the actual submenu
+identifier. Versions 1–3 build on both hosts; version 2 is superseded before UI.
+No production code changes are needed by the passing simulator workflow.
+
+Mac version 3 remains unqualified. Xcode was externally replaced while its test
+controller started: the log records a missing service and mixed-version framework
+symbols, followed by a plug-in assertion. The controller is terminal and its
+owned editor is not running. The new Xcode 27.0 license temporarily blocked result
+tools. After the user accepted setup, the first-launch check passes and the result
+tool confirms the interrupted bundle is incomplete. Both version-4 Mac and
+simulator builds pass with Xcode 27.0. The existing iOS 26.5 simulator runtime
+remains available while Xcode downloads the new runtime; its passing version-3
+workflow needs no repetition for this unchanged test source.
+
+Mac version 4 then passes the complete mask-action workflow with no failures or
+skips, including the new selection and cross-layer paste activities. Four reviewed
+captures show reveal/hide coverage, mask inspection and the copied mask on the
+second layer, each with matching Navigator artwork. No production change is
+needed on either host. All jobs are terminal; physical input and the broader
+feature/lifecycle/performance gates remain separate and incomplete.
+These checks are grouped with the layer and lifecycle milestone below. Evidence
+and retained failures are ignored under `artifacts/apple-mask-actions-v1/`.
+
+The layer-content workflow covers duplicate/clear independence, alpha and
+editing locks, clipping layers and bulk clipping-stack duplication/deletion. Its
+first simulator run reaches duplication/history, then stops because the test's
+Clear layer label also matches a toolbar button. The shared test helper now uses
+the existing menu-action identifier. The next run stops at startup with workspace
+ownership recovery before these actions. After the lifecycle fix below, Mac
+version 3 passes startup and duplication/history but cannot activate Clear layer
+below the menu's visible scroll area. Its retained recording confirms ordinary
+menu scrolling is needed. The test now reuses the existing control-reveal helper;
+no product layout or input workaround is added.
+
+Mac and simulator version 4 each pass the complete workflow with no failures or
+skips. Five reviewed full editor captures per host show the restored blue copy,
+alpha-locked red fill, clipped red copy, two clipping stacks and preserved original
+blue layer. Navigator matches each result. Layer counts, editing-lock capabilities,
+exact four-point 8-by-8 samples and one-step Undo/Redo pass with unchanged window
+bounds and no Canvas error. These native workflows supplement the focused shared
+bulk-clipping and Apple layer-policy checks, which also pass. Evidence and earlier
+failures remain under `artifacts/apple-layer-content-v1/`.
+
+That startup capture prompted a focused coordinator regression: after immediate
+suspend/resume, Swift reports editing enabled but a delayed suspension write makes
+the Rust editor read-only again. The original coordinator fails an actual edit
+after resume. The fix checks the existing suspension state before delayed writes,
+records activation before waiting for startup/storage, and ignores a resume
+superseded by suspension. No new state or task abstraction is added. Both Apple
+configurations pass the complete coordinator check, including startup activation,
+editing after resume, storage responsiveness, ownership recovery and restart.
+The follow-up check also queues activation behind a blocked save, suspends again,
+and verifies that completing the save leaves both Swift and Rust read-only until
+a fresh activation. Both configurations pass without opening an app window.
+Both current Debug app builds and the Mac/simulator layer workflows pass after
+this fix. The full physical lifecycle and interruption matrix remains separate.
+The older takeover fixture also predates native kernel locks; it now uses actual
+detach/reopen instead of expiring a timestamp to steal a suspended owner's lock.
+The exact timing of the earlier simulator startup failure remains unproven.
+Failures and evidence remain private under `artifacts/apple-workspace-activation-v1/`.
+The fix and coordinator checks are grouped with the mask/layer milestone.
+
+The unused UIKit `AppleContextMenu.nativeMenu()` converter is removed together
+with its generated-project and isolated-row compile references. UIKit already
+uses the shared editor menu; the AppKit converter remains used by native context
+sources. The existing UIKit row fixture compiles without the removed converter,
+and the final simulator Debug and iPad Release builds pass. Mac Release also
+passes; its compiled sources are unchanged by this iPad-only removal. The passing UI workflows use the
+same active menu sources. Complete native feature/visual coverage, windowed iPad
+input, physical Pencil/keyboard/provider/lifecycle and sustained Mac 90 Hz/iPad
+120 Hz acceptance remain open. The overall goal is **incomplete**.
 
 ## Native Mac full-screen editor
 

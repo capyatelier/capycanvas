@@ -696,6 +696,21 @@ These checks exercise mouse/touch controls; they do not establish Pencil input
 or all-pixel filter parity. Both workflows use the native test runner above;
 the obsolete direct-event Mac probe is removed.
 
+Use `testMaskActionsAndHistory` for selection-based mask creation/replacement,
+copy/paste, enable/invert, reveal/hide all, mask-area inspection, apply/delete and
+one-step Undo/Redo. It creates bounded artwork through native Select/Fill and
+numeric transform controls, checks four exact 8-by-8 canvas samples across the
+mask boundary, and retains full editor captures. Copy must preserve pending
+Redo, and paste must also work on a second layer. This supplements
+`testMaskTransforms`; physical Pencil interaction remains separate.
+
+Use `testLayerContentActionsAndHistory` for independent duplicates, clearing,
+alpha-locked fills, editing-lock capabilities, clipping and new clipping layers.
+It also duplicates and deletes a selected clipping stack, checking layer counts,
+exact sampled artwork and one-step Undo/Redo. The original bounded paint layer
+must survive recoloring and deleting its copies. Both hosts use native menus,
+selection controls and numeric transforms, with full editor captures retained.
+
 Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state
 before going idle. Each window owns its own session. Reattaching a Metal layer
