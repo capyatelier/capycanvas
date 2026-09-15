@@ -1524,3 +1524,95 @@ and histogram latency still exceed their declared gates. Large transforms, dense
 edit/scalar residency, overlapping worker admission, codec limits and the remaining
 precision/display matrix still need qualification. Other platform host integration
 remains unapproved; no GTK acceptance or broader platform qualification is claimed.
+
+### Exact histogram classification without per-sample transfer evaluation
+
+Following `33ba4165`, an isolated histogram probe separated full-resolution band
+capture from CPU counting. At 24 MP, capture took 312–392 ms and counting took
+910–1098 ms; at 60 MP, capture took 911–1055 ms and counting took 2254–2744 ms.
+This identified CPU counting as the larger cost before changing it. The probe
+uses the same immutable adjusted/masked photograph and shared-device capture as
+the production fixture, with two timing reads per band. It does not substitute
+display mips or sampled pixels for the full-resolution inspection.
+
+The counter now caches the 255 decision boundaries of each distinct transfer
+curve. A small Float32 exponent/mantissa table supplies a candidate bin; the
+original unassociated Float64 value and exact boundaries decide the final bin.
+Boundaries are found using the forward transfer function so independent rounding
+of encode/decode cannot silently move an edge. sRGB/P3 share one table; Adobe RGB
+and ProPhoto each have one. All three tables together occupy under 54 KiB, with
+no image-sized retained cache. Opaque samples avoid division by one. Linear Y,
+zero/partial alpha, out-of-range and endpoint counts retain their previous meaning.
+
+The tests compare the new classifier with the original direct transfer evaluation
+at every U16 code, neighboring Float32/Float64 bin edges, every lookup-cell extent,
+and extended values. The cell-extent test establishes that one exact correction
+in either direction suffices for every supported transfer curve. A separate
+full-histogram oracle checks all channels and endpoints on 917,504 pixels across
+all four spaces, including partial and subnormal alpha. The existing native U8/U16,
+strip partition, transparency and luminance checks remain passing. Five focused
+core tests pass (0.10 s).
+
+The final algorithm's diagnostic comparison is:
+
+| Case | Original CPU counting, ms | New CPU counting, ms | Original full histogram, ms | New full histogram, ms |
+| --- | --- | --- | --- | --- |
+| 24 MP, three observations | 1098, 910, 990 | 290, 242, 198 | 1489, 1222, 1319 | 735, 608, 508 |
+| 60 MP, three observations | 2292, 2744, 2254 | 520, 711, 709 | 3227, 3826, 3189 | 1468, 1913, 1914 |
+
+These are individual observations, not a well-sampled p95/p99. CPU counting is
+roughly three to four times faster; capture variability and the remaining capture
+cost prevent claiming the complete histogram gate. Exact PNG and histogram
+checksums match the fixed-snapshot values in the preceding section, including
+all bins and endpoint counts. Peak RSS stays around 692 MiB / 1007 MiB and the
+conservative shared-device GPU reservation bound stays 640 MiB for both sizes.
+
+Diagnostic executables and source captures under `final-performance/`:
+
+- `photo-expanded-histogram-profile` (original counter):
+  `ae09cad84bc0a5a99fa2b1e13e71757a57b9d474d6390c63ced55dbf121938be`.
+- `photo-expanded-histogram-bins2-profile` (retained counter):
+  `5ab577d9887a1e65250a56121c2f483c5209c5de1745e8c8e85d2522b8c87fd2`.
+
+The intermediate loop-based correction remains in the artifact record as
+`histogram-bins-profile`; it was slower than the bounded correction above.
+All probe instrumentation is excluded from production. The build scripts retain
+source bytes/hashes and restore production files with fresh modification times;
+measurements use the same staged executable pathname and serialized runs.
+
+A subsequent source probe measures **220–221 ms of decompression at 24 MP** and
+**546–777 ms at 60 MP**, repeated for every histogram. Total CPU source-upload
+encoding including decompression is 240–241 / 594–828 ms. These counters establish
+repeated decompression as the next substantial capture cost. They do not prove a
+cache budget or cache performance; that change still needs its own ownership,
+peak/steady memory, cancellation and before/after evidence.
+
+A fresh production before/after pair, without diagnostic timers, confirms the
+end-to-end improvement:
+
+| Case | Original histogram, ms | New histogram, ms | RSS high-water before / after, MiB | GPU reservation bound before / after, MiB |
+| --- | --- | --- | --- | --- |
+| 24 MP | 1750, 1715, 1519 | 723, 700, 695 | 691.3 / 688.6 | 640 / 640 |
+| 60 MP | 3235, 3335, 3325 | 1638, 1946, 1755 | 1006.7 / 1005.4 | 640 / 640 |
+
+All fixed-snapshot PNG sample and histogram bin/endpoint CRCs agree exactly with
+the original counter. These observations still exceed the declared histogram
+budget; neither the gain nor the unchanged memory bound passes that gate.
+Baseline and candidate were built from the same `33ba4165` worktree with fresh
+source modification times, then run serially through `run-photo-expanded.py` at
+the same staged pathname. `build-histogram-final.py` records and captures the
+production builds, source bytes, hashes and tests. Exact executable SHA-256:
+
+- Original production fixture: `8b36d3243b12b296abaf76777ee6edba22c34c6d286c00070d35ece5a4c825ab`.
+- New production fixture: `7a8e02961f66cbe2ee9bd01df3e4c7318d5ba9555445fa892f0fff6e6e032187`.
+- Core tests: `d635c3af9ead49c308b2eb74d1ba34071d348d05741f5d7210fa10b04469cb15`.
+- GPU tests: `675557aaf8d2738462971231ade5e8d29135382d0090b5a85f795c9856a940ce`.
+- GTK tests: `287f4178b5cb6ddd7746b520618d108003d61bfe53929ac4c58047023a62e029`.
+
+All 73 core tests pass (0.24 s). The hardware GPU masked/native/effect histogram
+comparison, band budget fallback and cancellation test passes (1.16 s). The real
+GTK histogram refresh, channel/clipping interpretation, document preservation,
+pause/cancel and reopen journey passes on the private Mutter display. Build and
+run records are `histogram-bins-final-*`; hardware data and exact outputs are
+`photo-expanded-histogram-bins-{before,after}-*`. The remaining milestone gates
+listed above remain open; this change touches CPU histogram classification only.
