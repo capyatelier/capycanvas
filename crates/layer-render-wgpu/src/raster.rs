@@ -661,7 +661,7 @@ impl WgpuRasterizer {
                     before
                         .tiles
                         .retain(|key, _| !current.changed.contains(&key.coordinate));
-                    self.restore_raster(*id, &before, &data)?;
+                    self.restore_live_raster(*id, &before, &data)?;
                     current.revision = revision.clone();
                     current.data = data;
                     current.changed.clear();
@@ -682,6 +682,8 @@ impl WgpuRasterizer {
                     };
                     if runtime.targets.get(&id).is_some_and(|t| t.source != source) {
                         runtime.targets.remove(&id);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(native) = &mut self.native_edit { native.backing.remove(&id); }
                     }
                     let wanted = match revision.try_data() {
                         Some(Ok(data)) => Some(data),
@@ -709,7 +711,7 @@ impl WgpuRasterizer {
                             before
                                 .tiles
                                 .retain(|key, _| !current.changed.contains(&key.coordinate));
-                            self.restore_raster(id, &before, &data)?;
+                            self.restore_live_raster(id, &before, &data)?;
                             current.data = data;
                             current.changed.clear();
                             if revision.try_data().is_some() {
@@ -729,7 +731,7 @@ impl WgpuRasterizer {
                                 .into_iter()
                                 .map(|rect| (id, rect)),
                             );
-                            self.restore_raster(id, &RasterData::default(), &data)?;
+                            self.restore_live_raster(id, &RasterData::default(), &data)?;
                         }
                         runtime.targets.insert(
                             id,
@@ -1273,6 +1275,10 @@ impl WgpuRasterizer {
         self.preview_watercolor_wetness_pages.clear();
         self.preview_damage = PixelRect::EMPTY;
         self.preview_layer_id = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(native) = &mut self.native_edit {
+            native.backing.insert(target, Arc::new(data.clone()));
+        }
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
         }
@@ -1285,3 +1291,4 @@ mod native_tests;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod native_edit;
+mod residency;

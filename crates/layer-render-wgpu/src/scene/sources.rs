@@ -152,6 +152,11 @@ impl DecodedTiles {
     pub fn uploads_full(&self) -> bool {
         self.in_flight.count.load(Ordering::Acquire) >= SOURCE_SLOTS
     }
+    pub fn prepared_raster_view(&self, blob: &Arc<TileBlob>, space: RgbSpace) -> Option<&wgpu::TextureView> {
+        let key = Key::Raster(Arc::downgrade(blob), space, self.destination);
+        self.slots.iter().find(|s| s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire))
+            .map(|s| &s.view)
+    }
 
     pub fn charge_upload(&self, encoder: &crate::submission::CommandEncoder, bytes: u64) -> u64 {
         self.in_flight.count.fetch_add(1, Ordering::Relaxed);

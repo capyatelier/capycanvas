@@ -19,7 +19,7 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         assert!(N <= SOURCE_SLOTS);
-        if !self.tiled_sources.contains_key(&layer) {
+        if !self.tiled_sources.contains_key(&layer) && self.native_backing(layer).is_none() {
             return Ok(());
         }
         for [dx, dy] in offsets {
@@ -73,6 +73,15 @@ impl WgpuRasterizer {
                 return &page.active().view;
             }
             #[cfg(not(target_arch = "wasm32"))]
+            if let Ok(Some(blob)) = self.native_color_tile(layer.id, neighbor)
+                && let Some(view) = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.prepared_raster_view(&blob, self.document_color().space))
+            {
+                return view;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(source) = self.tiled_sources.get(&layer.id)
                 && let Some(view) = self
                     .scene
@@ -104,6 +113,12 @@ impl WgpuRasterizer {
                 view: page.active().view.clone(),
             }));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(blob) = self.native_color_tile(layer, coordinate)? {
+            return self
+                .backed_raster_tile(&blob, self.document_color().space, encoder)
+                .map(Some);
+        }
         let Some(source) = self.tiled_sources.get(&layer).cloned() else {
             return Ok(None);
         };
@@ -125,5 +140,18 @@ impl WgpuRasterizer {
         let result = scene.source_tile_for_query(self, source, coordinate, encoder);
         self.scene = Some(scene);
         result.map(Some)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn backed_raster_tile(
+        &mut self,
+        blob: &std::sync::Arc<layer_core::raster::TileBlob>,
+        space: layer_core::color::RgbSpace,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<RawTile, GpuRasterError> {
+        let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+        let result = scene.raster_tile_for_query(self, blob, space, encoder);
+        self.scene = Some(scene);
+        result
     }
 }

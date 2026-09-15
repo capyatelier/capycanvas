@@ -196,6 +196,9 @@ impl RawRegions {
                 .iter()
                 .find(|l| l.id == layer)
                 .is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
+                || r.native_backing(layer).is_some_and(|data| data.tiles.contains_key(&layer_core::raster::TileKey {
+                    plane: layer_core::raster::RasterPlane::Color, coordinate,
+                }))
                 || r.tiled_sources.get(&layer).is_some_and(|s| {
                     coordinate[0] * PAGE_SIZE < s.extent[0]
                         && coordinate[1] * PAGE_SIZE < s.extent[1]

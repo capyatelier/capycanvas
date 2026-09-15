@@ -19,6 +19,8 @@ struct ScalarSlot {
     canonical: wgpu::Texture,
 }
 pub(crate) struct NativeEdit {
+    pub(super) backing: BTreeMap<LayerId, Arc<RasterData>>,
+    pub(crate) color_cache_bytes: u64,
     /// Provisional ceiling for live physical-filter pixel allocations, separate
     /// from source, paint and composite residency. Qualify the host budget before
     /// enabling native photo documents in GTK.
@@ -75,6 +77,8 @@ impl NativeEdit {
             })
             .collect();
         Self {
+            backing: BTreeMap::new(),
+            color_cache_bytes: 256 * 1024 * 1024,
             image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,
             transfer,
             colors,
@@ -182,7 +186,9 @@ impl WgpuRasterizer {
                 };
                 let (textures, watercolor) = self.raster_textures(id);
                 let mut data = RasterData {
-                    tiles: BTreeMap::new(),
+                    // Cold, losslessly backed tiles remain part of every new
+                    // revision even when they own no working GPU surface.
+                    tiles: current.data.tiles.clone(),
                     watercolor,
                 };
                 for (key, texture) in textures {
@@ -324,6 +330,7 @@ impl WgpuRasterizer {
                 .revision
                 .wait_data()
                 .map_err(GpuRasterError::Effect)?;
+            self.native_edit.as_mut().unwrap().backing.insert(publication.id, current.data.clone());
             current.changed.clear();
         }
         Ok(())

@@ -258,6 +258,8 @@ impl ImageTransformState {
         self.has_selection = selection.is_some();
         self.cut = layer_core::Rect::EMPTY;
         let (background, pages) = source_pages(r, layer)?;
+        let backing = background.is_none().then(|| r.native_backing(layer).cloned()
+            .map(|data| (data, r.document_color().space))).flatten();
         let original = background
             .is_none()
             .then(|| r.tiled_sources.get(&layer).cloned())
@@ -270,6 +272,12 @@ impl ImageTransformState {
                 .fold(PixelRect::EMPTY, |b, (c, _)| b.union(page_rect(*c)))
                 .intersect(PixelRect::full(extent))
         });
+        if let Some((data, _)) = &backing {
+            for key in data.tiles.keys().filter(|key| key.plane == layer_core::raster::RasterPlane::Color) {
+                if !self.original_pages[0].contains(&key.coordinate) { self.original_pages[0].push(key.coordinate); }
+                self.source_bounds[0] = self.source_bounds[0].union(page_rect(key.coordinate).intersect(PixelRect::full(extent)));
+            }
+        }
         if let Some(original) = &original {
             self.source_bounds[0] = self.source_bounds[0]
                 .union(PixelRect::full(original.extent).intersect(PixelRect::full(extent)));
@@ -331,6 +339,7 @@ impl ImageTransformState {
                 self.sources[channel] = Some(TileSnapshot::new(
                     pages,
                     if channel == 0 { original.clone() } else { None },
+                    if channel == 0 { backing.clone() } else { None },
                     bounds,
                 ));
             }

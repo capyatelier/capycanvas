@@ -1450,6 +1450,7 @@ impl WgpuRasterizer {
             return Err(GpuRasterError::ExtentUnsupported);
         }
         let resized = extent != self.document_extent;
+        self.retain_native_backing(layers, resized);
         if resized {
             self.selection_clip.reset();
             self.document_extent = extent;
@@ -2087,6 +2088,7 @@ impl WgpuRasterizer {
 
     fn update_watercolor_layer_styles(&mut self, batches: &[DabBatch]) -> PixelRect {
         let mut dirty = PixelRect::EMPTY;
+        let mut cold_damage = Vec::new();
         for batch in batches.iter().filter(|batch| {
             batch.kind == DabBatchKind::Persistent
                 && batch.style.execution == BrushExecution::Watercolor
@@ -2109,7 +2111,13 @@ impl WgpuRasterizer {
                 dirty =
                     dirty.union(page_rect(page.coordinate).expand(radius, self.document_extent));
             }
+            cold_damage.push((layer.id, radius));
             layer.watercolor = Some(next);
+        }
+        for (id, radius) in cold_damage {
+            for coordinate in self.native_color_coordinates(id) {
+                dirty = dirty.union(page_rect(coordinate).expand(radius, self.document_extent));
+            }
         }
         dirty
     }
@@ -4064,6 +4072,7 @@ impl CanvasRenderer for WgpuRasterizer {
             // paint, allocating the composite, or submitting any part of a frame.
             scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?;
         }
+        self.trim_native_color_cache();
         #[cfg(not(target_arch = "wasm32"))]
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
@@ -4086,7 +4095,12 @@ impl CanvasRenderer for WgpuRasterizer {
             self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
         }
         let started = self.telemetry.enabled.then(web_time::Instant::now);
-        let scene_required = needs_scene(packet);
+        let scene_required = needs_scene(packet) || {
+            #[cfg(not(target_arch = "wasm32"))]
+            { self.native_edit.is_some() }
+            #[cfg(target_arch = "wasm32")]
+            { false }
+        };
         // Staged native initialization already prepared these general layouts
         // and pipelines. Keep them while displaying the initial paper frame.
         let keep_scene = self.startup.is_some();
@@ -4374,12 +4388,27 @@ impl CanvasRenderer for WgpuRasterizer {
                     layer_core::LayerOperationKind::Fill { .. }
                         | layer_core::LayerOperationKind::Gradient { .. }
                         | layer_core::LayerOperationKind::Figure(_)
-                ) {
+                ) || (op.kind == layer_core::LayerOperationKind::ApplyMask
+                    && (layer.source.is_some() || self.native_backing(layer.id).is_some()))
+                {
                     // Coverage may be translated or inverted: its source mask
                     // pages are not necessarily the destination paint pages.
                     let bounds =
                         pixel_rect(op.bounds(packet.document_extent), packet.document_extent);
                     for c in page_coordinates(bounds) {
+                        if op.kind == layer_core::LayerOperationKind::ApplyMask
+                            && !self.native_backing(layer.id).is_some_and(|data| {
+                                data.tiles.contains_key(&layer_core::raster::TileKey {
+                                    plane: layer_core::raster::RasterPlane::Color,
+                                    coordinate: c,
+                                })
+                            })
+                            && !layer.source.as_ref().is_some_and(|s| {
+                                c[0] * PAGE_SIZE < s.extent[0] && c[1] * PAGE_SIZE < s.extent[1]
+                            })
+                        {
+                            continue;
+                        }
                         if self.paint_layers[index]
                             .pages
                             .iter()
@@ -4469,7 +4498,7 @@ impl CanvasRenderer for WgpuRasterizer {
             scene.initialize_images(self, packet.layers, &mut encoder)?;
             self.scene = Some(scene);
         }
-        if packet.layers.iter().any(|l| l.source.is_some()) {
+        if packet.layers.iter().any(|l| l.source.is_some() || self.native_backing(l.id).is_some()) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             scene.initialize_source_paint(self, packet.layers, &mut encoder)?;
             self.scene = Some(scene);
@@ -4664,7 +4693,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 }
             }
             if new_preview_requires_base
-                && let Some(layer) = packet.layers.iter().find(|l| l.id == layer_id && l.source.is_some())
+                && let Some(layer) = packet.layers.iter().find(|l| l.id == layer_id && (l.source.is_some() || self.native_backing(l.id).is_some()))
             {
                 let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
                 scene.initialize_source_preview(self, layer, copied, &mut encoder)?;
@@ -6900,6 +6929,8 @@ mod tests {
     mod image_windows;
     #[cfg(not(target_arch = "wasm32"))]
     mod live_windows;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod cold_paint;
     mod curve_reference;
     mod filter_library;
     mod material;

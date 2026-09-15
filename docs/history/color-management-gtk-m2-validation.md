@@ -23,8 +23,10 @@ CPU brush dynamics now retain document RGB through previews, corrections and
 recovery; exact native GPU publication/save/reopen checks include color jitter.
 Native live physical filters now use bounded windows above a provisional image
 allocation ceiling, with complete halos and preflight rejection of oversized
-document-wide dependencies. Remaining tool/effect precision, bounded mutable and
-composite residency, source mips, global-job scheduling/cancellation, managed GTK
+document-wide dependencies. Completed native color can now leave its mutable GPU
+cache and feed viewing, queries and later edits through lossless backing. This
+does not yet bound active edits or scalar planes. Remaining tool/effect precision,
+bounded active-edit and composite residency, source mips, global-job scheduling/cancellation, managed GTK
 viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
 diagnostics and GPU recovery continue to receive regression checks; these do not
@@ -3476,3 +3478,135 @@ managed viewing and the remaining interchange journeys. The pre-existing latency
 failures remain open. No frame-creation benchmark or performance optimization was
 run in this stage; all elapsed times above are test durations. Other hosts remain
 unintegrated and require user approval after GTK qualification.
+
+## Losslessly backed native color residency (2026-09-14)
+
+Parent: `c325268f`. Current live reconciliation still restored every committed
+color tile into a mutable Float32 page, even though snapshots and retained photos
+already decoded through fixed slots. Native live paint now retains the complete
+immutable raster index independently of its mutable GPU cache. A provisional
+**256 MiB color-cache target** controls eager restoration and eviction. Eager
+restoration reserves room for both color surfaces; otherwise only already
+resident color pages and the existing scalar planes are restored.
+
+Only tiles with completed, successful lossless backing can be evicted. Dirty
+coordinates, pending captures and active transform previews remain resident.
+Eviction performs no readback, wait or new quantization. It drops cache ownership;
+it does not destroy textures that queued commands may still reference. Read-only
+composition, raw sampling/regions, thumbnails and transform snapshots obtain
+cold color through the existing 16-slot decoded source cache. Original photo
+pixels still show through wherever no paint override exists. A later brush dab
+or image operation initializes its affected mutable pages from that same backing.
+New revisions retain every cold tile and replace changed resident coordinates.
+Undo and device recreation consume the complete immutable revision.
+
+Native composition always uses the scene compositor, including plain paint
+layers. During validation, the watercolor layer disappeared after its last
+mutable page was evicted: the general layer-stack eligibility check considered
+only original photos and resident paint. Eligibility now includes backed color.
+The failure and its phase-by-phase reproduction remain in
+`cold-paint-reviewed-gpu.log` and `cold-paint-brush.log`. Smudge, wet, liquify and
+watercolor preview/terminal/eviction comparisons pass after this correction.
+Review also found that Apply Mask must initialize affected cold or original-photo
+pages before baking coverage; that route now does so. Transform captures keep
+the original immutable backing, independently of changing preview output.
+
+Thumbnail bounds and image draws consume decoded inputs in sets of at most 16.
+The per-page uniform records remain immutable across those sets. This preserves
+command order and avoids treating queued writes as immediately executed updates;
+the pinned [wgpu 30.0.1 write-buffer contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.write_buffer)
+and [completion callback contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.on_submitted_work_done)
+were checked against the shared source uploader. This is shared Rust behavior;
+no additional platform host was integrated or qualified.
+
+Correctness fixtures use a 4352×512 image with 33 backed color tiles and one hole,
+so queries exceed the 16-slot source cache. A zero-byte mutable color-cache target
+is compared with an unlimited target. The fixtures cover:
+
+- sRGB, P3, Adobe RGB and ProPhoto at both integer depths; complete composition,
+  cropped thumbnails, point/Average5 sampling and connected raw-region masks.
+- A localized native edit that materializes one tile, retains all unchanged tile
+  bytes, saves/reopens exactly, evicts completed color, and undoes/redoes exactly.
+- Repeated immutable transform previews and cancellation; terminal transform,
+  alpha-locked fill and mask application, followed by eviction, renderer
+  recreation and exact raster history comparison.
+- Retained Adobe RGB photo pixels underneath ProPhoto paint overrides, including
+  the hole, samples and thumbnail contributions.
+- Smudge, wet, liquify and watercolor prediction, continued paint and terminal
+  publication; material state survives color eviction.
+- Two live neighborhood filters under a forced 8 MiB image-pixel ceiling, reading
+  cold color through multiple dependency windows.
+
+Complete working images use an absolute Float32 comparison ceiling of 3e-6 per
+premultiplied channel; thumbnail bytes allow one output code. This compares two
+residency strategies with the same editing math. It does not impose exact
+historical filter parity. Stored tile data, untouched pixels and history remain
+exact comparisons.
+
+The six initial corrected tests pass in `cold-paint-fixed-gpu.log` (114.43 s).
+The added operation/commit/history test passes in `cold-paint-operations.log`
+(36.96 s). Build mappings are `cold-paint-fixed-build.{json,log}` and
+`cold-paint-complete-build.{json,log}`; saved executables use the corresponding
+prefix and `-gpu-tests`/`-gtk-tests` suffixes. Test duration is not frame latency.
+
+Affected GPU regressions also pass on the same Linux/Vulkan RTX PRO 6000 system
+and driver recorded in the preceding stage:
+
+| Filter | Passed | Duration | Log under `artifacts/color-m2/` |
+| --- | ---: | ---: | --- |
+| Native publication/history | 4 | 47.16 s | `cold-paint-native-edit.log` |
+| Native material/brush precision | 4 | 28.75 s | `cold-paint-material.log` |
+| Retained-source neighborhood brushes | 1 | 19.05 s | `cold-paint-source-brushes.log` |
+| Source thumbnails, cancellation and failed commands | 3 | 10.87 s | `cold-paint-thumbnails.log` |
+| Document/view color, sampling and previews | 4 | 22.97 s | `cold-paint-view-color.log` |
+| Snapshot and profiled interchange | 8 | 45.36 s | `cold-paint-snapshot.log` |
+| Transform, selection, mask and source history | 7 | 21.21 s | `cold-paint-transforms.log` |
+| Raster persistence and GPU recovery | 6 | 8.87 s | `cold-paint-raster.log` |
+
+These 37 checks use `cold-paint-complete-gpu-tests`. Latency tests are explicitly
+excluded and ignored performance workloads remain ignored. The final source
+build (`cold-paint-final-source-build.{json,log}`) includes only formatting changes
+after that build; its saved GPU/GTK executables use `cold-paint-final-source-`.
+The production GTK check also passes (`cold-paint-final-gtk-check.log`).
+
+Private-Mutter GTK checks with fatal GTK criticals pass: tool/color panels
+(4.58 s), intentional diagnostics/GPU-failure recovery (3.25 s), and native
+save/reopen plus profiled export (38.18 s), including custom CMYK. Logs use
+`cold-paint-gtk-{panels,recovery,files}`; the invalid-scissor GPU failure in the
+recovery test is deliberate. ImageMagick independently reproduces all 983,040
+integer16 RGB/gray/CMYK samples and embedded ICC bytes exactly
+(`cold-paint-handoff.log`). Output files from GTK process 1393016 are retained
+in `cold-paint-ui/`. Source, executable and evidence hashes are recorded in
+`cold-paint-provenance.json`.
+
+Reproduce using the local libjpeg pkg-config setup described earlier:
+
+```sh
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo test -p layer-render-wgpu -p layer-linux --offline --no-run --message-format=json
+ABSOLUTE_GPU_TEST_BINARY tests::cold_paint --test-threads=1 --nocapture
+ABSOLUTE_GPU_TEST_BINARY raster::native_edit::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY tests::native_material --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY tests::source_brushes --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY source_thumbnails::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY tests::view_color --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY snapshot::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY layer_tests::transforms --test-threads=1 --skip latency
+ABSOLUTE_GPU_TEST_BINARY layer_tests::raster --test-threads=1
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_tool_and_color_panels ABSOLUTE_REPORT_PREFIX
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_diagnostics_and_gpu_failure_recovery ABSOLUTE_REPORT_PREFIX
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_document_files ABSOLUTE_REPORT_PREFIX
+```
+
+The color target is **not a hard active-edit memory limit**. Large strokes,
+operations and transforms can pin more than the target; scalar/material pages
+remain eager. Composite storage, source display mips, job scheduling/cancellation
+and combined device/process budgets remain work before native GTK activation.
+The full GTK color/photo controls, managed viewing and interchange journeys also
+remain incomplete. No benchmarking or performance optimization was performed in
+this stage. Previously recorded latency failures remain open for the final
+qualification phase. Other hosts still require approval after GTK qualification.

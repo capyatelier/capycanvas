@@ -244,7 +244,7 @@ impl Scene {
     }
     pub fn initialize_source_paint(&mut self, r: &mut WgpuRasterizer, layers: &[Layer], encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
         self.jobs.clear();
-        for layer in layers.iter().filter(|l| l.source.is_some()) {
+        for layer in layers.iter().filter(|l| l.source.is_some() || r.native_backing(l.id).is_some()) {
             let pages: Vec<_> = r.paint_layers.iter().filter(|p| p.id == layer.id)
                 .flat_map(|p| p.pages.iter().filter(|p| p.primary_needs_clear)
                     .map(|p| (p.coordinate, p.primary.view.clone()))).collect();
@@ -365,6 +365,13 @@ impl Scene {
         self.used[id] = false;
     }
     fn source_tile(&mut self, r: &WgpuRasterizer, layer: &Layer, coordinate: [u32; 2]) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(blob) = r.native_color_tile(layer.id, coordinate)? {
+            let space = r.document_color().space;
+            let (tile, pending) = self.source_tiles.plan_raster(r, &blob, space, space)?;
+            if let Some(pending) = pending { self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending))); }
+            return Ok(Some(tile.view));
+        }
         let Some(source) = &layer.source else { return Ok(None); };
         if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
             return Ok(None);
@@ -454,6 +461,20 @@ impl Scene {
         coordinate: [u32; 2],
     ) -> Option<&wgpu::TextureView> {
         self.source_tiles.prepared_view(source, coordinate)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepared_raster_view(&self, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace) -> Option<&wgpu::TextureView> {
+        self.source_tiles.prepared_raster_view(blob, space)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
+        let (tile, pending) = self.source_tiles.plan_raster(r, blob, space, r.document_color().space)?;
+        if let Some(pending) = pending {
+            self.record_count = 0;
+            self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
+            self.encode_jobs(r, encoder)?;
+        }
+        Ok(tile)
     }
 
     fn watercolor_binding(
@@ -990,6 +1011,7 @@ impl Scene {
                 if layer.visible
                     && (matches!(layer.kind, LayerKind::Group | LayerKind::Effect)
                         || layer.source.is_some()
+                        || r.native_color_coordinates(layer.id).next().is_some()
                         || r.paint_layers
                             .iter()
                             .any(|l| l.id == layer.id && !l.pages.is_empty())

@@ -235,13 +235,14 @@ impl SourceThumbnails {
         encoder.copy_buffer_to_buffer(&overview.pixels, 0, &self.working, 0, OVERVIEW_BYTES);
         // Bindings live only through their ordered dispatch. Keeping paint
         // handles in this cache would retain retired document generations.
-        let coordinates: Vec<_> = r
+        let mut coordinates: std::collections::BTreeSet<_> = r
             .paint_layers
             .iter()
             .find(|l| l.id == layer)
             .into_iter()
             .flat_map(|l| l.pages.iter().map(|p| p.coordinate))
             .collect();
+        coordinates.extend(r.native_color_coordinates(layer));
         for coordinate in coordinates {
             if page_rect(coordinate)
                 .intersect(PixelRect::full(r.document_extent))

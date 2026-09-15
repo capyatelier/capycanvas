@@ -12,6 +12,10 @@ pub(super) struct SnapshotPage {
 pub(super) struct TileSnapshot {
     pub pages: BTreeMap<[u32; 2], SnapshotPage>,
     pub original: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
+    pub backing: Option<(
+        std::sync::Arc<layer_core::raster::RasterData>,
+        layer_core::color::RgbSpace,
+    )>,
     pub bounds: PixelRect,
 }
 pub(super) struct RegionJob {
@@ -23,16 +27,27 @@ impl TileSnapshot {
     pub fn new(
         pages: Vec<([u32; 2], SnapshotPage)>,
         original: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
+        backing: Option<(
+            std::sync::Arc<layer_core::raster::RasterData>,
+            layer_core::color::RgbSpace,
+        )>,
         bounds: PixelRect,
     ) -> Self {
         Self {
             pages: pages.into_iter().collect(),
             original,
+            backing,
             bounds,
         }
     }
     fn contains(&self, coordinate: [u32; 2]) -> bool {
         self.pages.contains_key(&coordinate)
+            || self.backing.as_ref().is_some_and(|(data, _)| {
+                data.tiles.contains_key(&layer_core::raster::TileKey {
+                    plane: layer_core::raster::RasterPlane::Color,
+                    coordinate,
+                })
+            })
             || self.original.as_ref().is_some_and(|s| {
                 coordinate[0] * PAGE_SIZE < s.extent[0] && coordinate[1] * PAGE_SIZE < s.extent[1]
             })
@@ -170,12 +185,24 @@ impl TileSnapshot {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<TransformSource, GpuRasterError> {
         let mut originals = Vec::new();
-        if let Some(original) = &self.original {
-            for c in &job.sources {
-                if !self.pages.contains_key(c) {
-                    if let Some(tile) = r.original_source_tile(original, *c, encoder)? {
-                        originals.push((*c, tile));
-                    }
+        for c in &job.sources {
+            if self.pages.contains_key(c) {
+                continue;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some((data, space)) = &self.backing
+                && let Some(tile) = data.tiles.get(&layer_core::raster::TileKey {
+                    plane: layer_core::raster::RasterPlane::Color,
+                    coordinate: *c,
+                })
+            {
+                let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
+                originals.push((*c, r.backed_raster_tile(&blob, *space, encoder)?));
+                continue;
+            }
+            if let Some(original) = &self.original {
+                if let Some(tile) = r.original_source_tile(original, *c, encoder)? {
+                    originals.push((*c, tile));
                 }
             }
         }
