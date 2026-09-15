@@ -406,3 +406,55 @@ retain the investigation. Application pairs use `run-native-parameters.py` and
 its repeat script; after SHA-256 is
 `93230fc26db585597622d82cfa396b30cc56535f358c1bd13dee5dc7e9cfed97`,
 with matching `native-parameters-build-sources.json` and source patch.
+
+## Separate pen-up GPU stages from completion waiting
+
+An isolated probe of `4069ef07321867d370178fc6da4e6581b60b9e90` records GPU
+queries before/after native validation, each bounded encode/promote/capture
+chunk, composition and command-buffer boundaries. The release palette-knife
+ProPhoto U16 run has three repetitions and 12 measured pen-ups. Each uses one
+command buffer, ruling out gaps between application command-buffer submissions
+for these observations. The probe requests `TIMESTAMP_QUERY_INSIDE_ENCODERS`
+only in its archived headless constructor; production code is unchanged.
+
+| Instrumented span | p50 ms | p95 ms |
+| --- | ---: | ---: |
+| Entire recorded GPU frame | 5.121 | 6.880 |
+| Native validation | 0.824 | 0.894 |
+| Native encoding, summed chunks | 1.255 | 1.575 |
+| Canonical promotion, summed chunks | 0.327 | 0.363 |
+| Capture copies, summed chunks | 2.074 | 2.254 |
+| Scene composition | 0.413 | 0.903 |
+| CPU command finishing | 2.784 | 3.947 |
+| CPU queue submission | 0.133 | 0.302 |
+| CPU frame creation, benchmark clock | 7.832 | 10.387 |
+| Completed frame, benchmark clock | 15.641 | 21.116 |
+| Final completion wait | 7.819 | 12.133 |
+
+Quantiles of component spans do not add to quantiles of complete frames.
+The per-frame wait minus recorded GPU span has p50 / p95 2.794 / 5.253 ms.
+That residual is **not established as CPU callback cost**: the marker span
+excludes queue-inserted work before its first query, and waiting can include
+polling, mapping, driver and worker activity. Capture copies are a material GPU
+cost, while CPU preparation/command finishing and the unclassified residual
+also remain relevant. Optimizing shaders alone is not a demonstrated solution.
+
+Timestamp stages are diagnostic observations, not isolated kernel timings or
+native presentation acceptance. The pinned wgpu 30.0.1 Vulkan implementation
+writes encoder timestamps at `BOTTOM_OF_PIPE`; wgpu documents that command
+reordering can affect their position relative to surrounding work. The probe
+checks nonzero/monotonic queries, includes query overhead in its span, and does
+not add blocking waits. See [wgpu's timestamp contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.write_timestamp).
+
+Reproduce using `build-penup-gpu-timeline.py`, then serially run
+`run-penup-gpu-timeline.py` on the GPU and
+`analyze-penup-gpu-timeline.py`, all under
+`artifacts/color-m2/final-performance/`. The builder retains its complete source
+archive and changed-file hashes. Exact executable SHA-256 is
+`830f6e8287c1827b8925c6610772decb153a3bff8352deead12c558cbf925549`.
+`penup-gpu-timeline-*` retains hardware/power information, run commands, raw
+logs, report, source manifest and per-frame summary. Analysis joins asynchronous
+query callbacks to measured submission IDs, including one callback delivered
+after its measured-window end; all 12 measured submissions have valid queries.
+No compilation or other GPU test overlaps this measurement. The 8.33 ms
+completed-work gate remains open.
