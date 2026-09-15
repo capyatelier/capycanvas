@@ -409,6 +409,99 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
 }
 
 #[test]
+fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges() {
+    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        let mut a = project(DocumentColor { space: RgbSpace::ProPhoto, depth });
+        let mut b = a.clone();
+        let id = a.document.layers[0].id;
+        let original = a.document.layers[0].raster.clone();
+        let mut resident = renderer(&a, u64::MAX);
+        let mut bounded = renderer(&b, u64::MAX);
+        let page_count = bounded.paint_layers[0].pages.len();
+        // Enough for the canonical pages and this frame's four blend targets,
+        // but not for scratch retained at the distant previous mark.
+        bounded.native_edit.as_mut().unwrap().color_cache_bytes =
+            (page_count as u64 + 4) * 256 * 256 * 16;
+        let mut style = test_style(BrushExecution::Wet);
+        style.wet_mix.wetness = 0.8;
+        style.rendering.accumulation = BrushAccumulation::Uniform;
+        style.rendering.edge_after_stroke = true;
+        style.rendering.wet_edge = 0.8;
+        style.rendering.burnt_edge = 0.4;
+        style.rendering.edge_width = 4.;
+        let mut batch = DabBatch {
+            material_update: 0,
+            stroke_id: StrokeId(1),
+            layer_id: id,
+            kind: DabBatchKind::Persistent,
+            stroke_start: true,
+            stroke_end: false,
+            first_dab: 0,
+            dab_count: 1,
+            style,
+            damage: Rect::default(),
+        };
+        // Consecutive and returning writes exercise both ping-pong roles. The
+        // final edge pass must recreate destinations at the distant earlier mark.
+        for (phase, x) in [257., 257., 1281., 257., 1281.].into_iter().enumerate() {
+            let mut dab = test_dab([x, 255.], [0.1, 0.2, 0.8, 0.7], 0.6);
+            dab.radii = [14., 10.];
+            dab.motion = [13.25, -24.5];
+            dab.material = [0., 0.8, 0.9, 0.7];
+            batch.material_update = phase as u32;
+            batch.stroke_start = phase == 0;
+            batch.damage = Rect {
+                min: Point { x: x - 32., y: 223. },
+                max: Point { x: x + 32., y: 287. },
+            };
+            for (r, p) in [(&mut resident, &a), (&mut bounded, &b)] {
+                r.submit(FramePacket {
+                    dabs: &[dab],
+                    dab_batches: std::slice::from_ref(&batch),
+                    ..packet(p, false)
+                }).unwrap();
+            }
+            close(&image(&bounded), &image(&resident));
+            assert_eq!(bounded.paint_layers[0].pages.len(), page_count,
+                "artwork should survive pressure from disposable blend scratch");
+            assert!(bounded.paint_layers[0].pages.iter()
+                .filter(|p| p.secondary.is_some()).count() <= 8);
+        }
+        // An idle redraw can retire every companion while the stroke is still
+        // active. Pen-up must recreate both distant sets of edge destinations.
+        bounded.native_edit.as_mut().unwrap().color_cache_bytes =
+            page_count as u64 * 256 * 256 * 16;
+        bounded.submit(packet(&b, false)).unwrap();
+        assert_eq!(bounded.paint_layers[0].pages.len(), page_count);
+        assert!(bounded.paint_layers[0].pages.iter().all(|p| p.secondary.is_none()));
+        close(&image(&bounded), &image(&resident));
+        batch.stroke_start = false;
+        batch.stroke_end = true;
+        batch.dab_count = 0;
+        batch.material_update += 1;
+        a.document.layers[0].raster = RasterRevision::pending();
+        b.document.layers[0].raster = RasterRevision::pending();
+        for (r, p) in [(&mut resident, &a), (&mut bounded, &b)] {
+            r.submit(FramePacket {
+                dab_batches: std::slice::from_ref(&batch),
+                ..packet(p, false)
+            }).unwrap();
+        }
+        close(&image(&bounded), &image(&resident));
+        assert_eq!(backing(&a.document.layers[0].raster), backing(&b.document.layers[0].raster));
+        bounded.submit(packet(&b, false)).unwrap();
+        assert_eq!(bounded.paint_layers[0].pages.len(), page_count);
+        assert!(bounded.paint_layers[0].pages.iter().all(|p| p.secondary.is_none()));
+        let edited = b.document.layers[0].raster.clone();
+        b.document.layers[0].raster = original;
+        bounded.submit(packet(&b, true)).unwrap();
+        b.document.layers[0].raster = edited;
+        bounded.submit(packet(&b, true)).unwrap();
+        close(&image(&bounded), &image(&resident));
+    }
+}
+
+#[test]
 fn cold_native_color_feeds_bounded_live_filter_windows() {
     let mut p = project(DocumentColor {
         space: RgbSpace::ProPhoto,

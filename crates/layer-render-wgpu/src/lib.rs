@@ -620,6 +620,25 @@ impl LayerPage {
     fn active(&self) -> &PageSurface {
         self.surface(self.active_secondary)
     }
+
+    /// Keep the current pixels and view identity, regardless of which ping-pong
+    /// surface owns them. The other surface contains no persistent state.
+    fn discard_inactive(&mut self) -> u64 {
+        let Some(secondary) = self.secondary.take() else {
+            return 0;
+        };
+        let bytes = if self.active_secondary {
+            let bytes = self.primary.storage_bytes();
+            self.primary = secondary;
+            self.primary_needs_clear = self.secondary_needs_clear;
+            bytes
+        } else {
+            secondary.storage_bytes()
+        };
+        self.active_secondary = false;
+        self.secondary_needs_clear = false;
+        bytes
+    }
 }
 
 struct MaskAsset {
@@ -1626,19 +1645,38 @@ impl WgpuRasterizer {
         )
     }
 
-    fn ensure_destination_companions(&mut self, batches: &[DabBatch]) {
-        let mut destination_pages = Vec::new();
+    fn destination_pages(
+        &self,
+        batches: &[DabBatch],
+        extent: [u32; 2],
+    ) -> std::collections::BTreeSet<(LayerId, [u32; 2])> {
+        let mut destination_pages = std::collections::BTreeSet::new();
         for batch in batches.iter().filter(|batch| {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_style(&batch.style).requires_destination()
         }) {
-            let damage = batch_pixel_rect(batch, self.document_extent);
+            let damage = batch_pixel_rect(batch, extent);
             if !damage.is_empty() {
                 destination_pages.extend(
                     page_coordinates(damage).map(|coordinate| (batch.layer_id, coordinate)),
                 );
             }
+            // Pen-up edges revisit the whole stroke, including companions
+            // retired since the pointer left those pages.
+            if batch.stroke_end && BrushPassPlan::for_style(&batch.style).stroke_edge {
+                destination_pages.extend(
+                    self.paint_layers.iter().filter(|l| l.id == batch.layer_id)
+                        .flat_map(|l| &l.coverage_pages)
+                        .filter(|p| p.owner == Some(batch.stroke_id))
+                        .map(|p| (batch.layer_id, p.coordinate)),
+                );
+            }
         }
+        destination_pages
+    }
+
+    fn ensure_destination_companions(&mut self, batches: &[DabBatch]) {
+        let destination_pages = self.destination_pages(batches, self.document_extent);
         for layer_index in 0..self.paint_layers.len() {
             let layer_id = self.paint_layers[layer_index].id;
             let missing = self.paint_layers[layer_index]
@@ -4066,7 +4104,7 @@ impl CanvasRenderer for WgpuRasterizer {
             // paint, allocating the composite, or submitting any part of a frame.
             scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?;
         }
-        self.trim_native_color_cache();
+        self.trim_native_color_cache(packet.dab_batches, packet.document_extent);
         #[cfg(not(target_arch = "wasm32"))]
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded

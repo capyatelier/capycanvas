@@ -123,10 +123,11 @@ impl WgpuRasterizer {
         self.restore_raster(target, previous, data)
     }
 
-    /// Evict only completed canonical color. This cache target is not a hard
-    /// active-stroke/transform allocation limit; those workloads need scheduling
-    /// before native GTK activation. No backing wait or readback happens here.
-    pub(crate) fn trim_native_color_cache(&mut self) {
+    /// Retire disposable blend scratch, then evict completed canonical color.
+    /// This cache target is not a hard active-stroke/transform allocation limit;
+    /// those workloads need separate scheduling. No backing wait or readback
+    /// happens here.
+    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch], extent: [u32; 2]) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &self.native_edit {
             if self.transform_preview.is_some()
@@ -140,6 +141,24 @@ impl WgpuRasterizer {
                 .flat_map(|l| &l.pages)
                 .map(color_page_bytes)
                 .sum();
+            if bytes <= native.color_cache_bytes {
+                return;
+            }
+            let destinations = self.destination_pages(batches, extent);
+            // An inactive blend surface is cheaper to recreate than a canonical
+            // page is to decompress. Retire scratch first, even on changed pages:
+            // their active surface stays pinned until capture completes. Keep
+            // this frame's destinations to avoid immediate drop/reallocation.
+            for layer in &mut self.paint_layers {
+                for page in &mut layer.pages {
+                    if bytes <= native.color_cache_bytes {
+                        return;
+                    }
+                    if !destinations.contains(&(layer.id, page.coordinate)) {
+                        bytes -= page.discard_inactive();
+                    }
+                }
+            }
             for layer in &mut self.paint_layers {
                 let Some(data) = native.backing.get(&layer.id) else {
                     continue;
@@ -169,6 +188,8 @@ impl WgpuRasterizer {
                 });
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (batches, extent);
     }
 }
 

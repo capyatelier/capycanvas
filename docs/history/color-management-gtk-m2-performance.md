@@ -200,3 +200,68 @@ layer-render-wgpu --example raster_workloads --offline`.
 These results fit the declared CPU and end-of-run GPU envelopes for these
 specific cases. They do not establish peak allocation through every transient
 or qualify the full multiple-job/photo-control memory and latency gate.
+
+## Material-brush cache investigation
+
+Instrumented ProPhoto U16 palette-knife runs locate the move stalls before
+native commit encoding. Basic frame preparation is sub-millisecond; repeated
+source initialization and material-neighborhood reads account for most of the
+slow frames. Increasing only decoded-source slots reduces misses but does not
+resolve the gate. Retaining more active working pages removes most move stalls,
+while pen-up remains slow:
+
+| Diagnostic working cache MiB / decoded slots | Move completed p99 ms | Pen-up completed p99 ms | Peak sampled GPU allocator reserved MiB |
+| --- | --- | --- | --- |
+| 256 / 16 | 25.593 | 28.629 | 1088 |
+| 256 / 128 | 20.569 | 25.055 | 1344 |
+| 512 / 16 | 6.766 | 26.291 | 1088 |
+
+These are instrumented diagnostics, not acceptance timings or proposed cache
+limits. Three repetitions contribute 426 move and 12 pen-up frames per policy.
+The probe archives, exact build manifests, logs and `residency-summary.json`
+under `final-performance/` distinguish measured frames from warm-up, undo and
+export. Earlier phase probes separate native encoding from command finishing /
+submission; they do not yet distinguish driver submission from encoder finish.
+
+The production change keeps the 256 MiB working-color target. It discards
+inactive blend surfaces outside this frame's destinations before evicting
+completed canonical color. If the secondary surface owns current pixels, that
+same texture/view becomes primary; no decoding, quantization or pixel copy is
+introduced. Active color, coverage and material state remain intact. Destination
+allocation also covers the whole stroke's final edge pass, so revisiting retired
+scratch is safe. Transform previews retain their existing residency protection.
+
+The uninstrumented paired run uses the same ProPhoto U16 palette-knife workload
+and three repetitions per arm (426 move / 12 pen-up frames). Both binaries run
+serially after CPU builds and GPU correctness checks have finished:
+
+| Arm | Move CPU p95 / p99 ms | Move completed p95 / p99 ms | Pen-up CPU / completed p99 ms | Move / pen-up frames over 8.33 ms |
+| --- | --- | --- | --- | --- |
+| Before | 18.637 / 23.733 | 20.103 / 26.053 | 14.394 / 26.130 | 132 / 12 |
+| Retire inactive companions first | 3.428 / 4.165 | 5.780 / 7.042 | 13.267 / 22.621 | 0 / 12 |
+
+Maximum move time falls from 27.989 to 7.917 ms. Reported paint pages rise from
+138 to 206 while reported canvas residency falls from 587 to 571 MiB: more
+artwork remains available with less retained scratch. Process high-water falls
+from 877,980 to 830,780 KiB; capture allocated/reserved peak is 173 / 177 MiB.
+These component figures do not replace full allocator peak/steady qualification.
+Pen-up still fails, and the other scenarios and native GTK presentation remain
+to be measured after the remaining optimizations.
+
+`run-companion.py`, `companion-runs.json`, the two generated reports, process
+time files and GPU telemetry preserve reproduction and run boundaries. Exact
+before/after executable hashes are
+`6d1eab2f03755b972faad3d6e1955406ed80bd585d905ab9153dce1435b5a20a` /
+`0ed1722629396254330c6be6bb911916eb77a6ea25d938dab8c2611e9eecc166`.
+`companion-final-build-sources.json` and its matching patch record production
+sources; later edits affect only the new test fixture and this report.
+
+All seven existing cold-color cases pass with the production change, covering
+composition, exact sampling, thumbnails, source-backed painting, filters,
+transforms, prediction, terminal backing and saved history. The new pressure
+case passes in both U8 and U16 with exact committed samples and undo/redo after
+recreating every stroke-edge destination (28.75 s). Its initial fixture assumed
+the cache target excluded current write scratch; retained failed runs document
+the corrected budget and idle-redraw setup. Final test executable SHA-256:
+`ae387997c82f9c4f9120bee2f213b0de5607ecf1aac45440dd02f3a8fe2ddcf5`;
+logs/manifests use `native-companion-pressure-*` under `artifacts/color-m2/`.
