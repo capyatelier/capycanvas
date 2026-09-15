@@ -11,6 +11,10 @@ final class EditorLaunchTests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkNumericTextHistory(in: editorCaptureApplication())
     }
+    @MainActor func testNumericSettingsDone() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkNumericSettingsDone(in: editorCaptureApplication())
+    }
 
     @MainActor func testBlendAndLiquify() {
         XCUIDevice.shared.orientation = .landscapeLeft

@@ -21,7 +21,7 @@ private struct WorkspaceDialog: View {
             if !snapshot["toolbar_prompt"].isNull { prompt(snapshot["toolbar_prompt"]) }
             else if !snapshot["picker"].isNull { picker(snapshot["picker"]) }
             else if !snapshot["toolbar_manager"].isNull { manager(snapshot["toolbar_manager"]) }
-            else { standalone }
+            else { colorPopup }
         }.padding(24).frame(minWidth: 320, idealWidth: 500, maxWidth: 560)
             .id(!snapshot["toolbar_prompt"].isNull ? snapshot["toolbar_prompt"]["title"].string : "workspace")
     }
@@ -118,15 +118,10 @@ private struct WorkspaceDialog: View {
             }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("toolbar-manager")
     }
-    private var standalone: some View {
+    private var colorPopup: some View {
         VStack(alignment: .leading, spacing: 14) {
-            let control = store.state["customization"]["control"].string
-            if control == "brush_color" { ColorPanel(store: store).frame(width: 320) }
-            else if control == "brush_opacity" {
-                NumberControl(store: store, label: "Brush opacity", value: store.state["brush"]["opacity"].number,
-                    control: store.catalog["opacity"], identifier: "popup-brush-opacity") { value, completion in
-                    store.edit(["type": "set_brush_opacity", "value": value], completion: completion)
-                }
+            if store.state["customization"]["control"].string == "brush_color" {
+                ColorPanel(store: store).frame(width: 320)
             }
             HStack { Spacer(); Button("Done", role: .cancel) { action("close_control") }.keyboardShortcut(.cancelAction) }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("toolbar-control-popup")

@@ -4,6 +4,44 @@ import AppKit
 #endif
 
 extension XCTestCase {
+    @MainActor func checkNumericSettingsDone(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"input"}}]"#
+        app.launch()
+        let value = app.buttons["number-value-Pressure response"]
+        let entry = app.textFields["number-entry-Pressure response"]
+        XCTAssertTrue(value.waitForExistence(timeout: 20)); workspaceActivate(value)
+        XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("1 + 0.25")
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertTrue(entry.waitForNonExistence(timeout: 5))
+        workspaceActivate(app.buttons["settings-button"])
+        let search = app.textFields["settings-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); workspaceActivate(search); search.typeText("Pressure response")
+        #if os(iOS)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        #endif
+        let result = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pressure response")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5)); workspaceActivate(result)
+        #if os(iOS)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Opening a search result must dismiss the keyboard")
+        #endif
+        XCTAssertTrue(value.waitForExistence(timeout: 5), "Opening a search result must reveal its setting")
+        expectation(for: NSPredicate(format: "value BEGINSWITH %@", "1.25"), evaluatedWith: value)
+        waitForExpectations(timeout: 5)
+        attachEditor(in: app, name: "settings-numeric-done")
+        workspaceActivate(search); search.typeText("theme")
+        #if os(iOS)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        #endif
+        let canvasPage = app.staticTexts["settings-page-canvas"]
+        XCTAssertTrue(canvasPage.waitForExistence(timeout: 5)); workspaceActivate(canvasPage)
+        XCTAssertTrue(app.buttons["number-value-Scroll pan speed"].waitForExistence(timeout: 5))
+        #if os(iOS)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Opening a sidebar page must dismiss the keyboard")
+        #endif
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkEditorKeyboardFocus(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch(); capturePaintEditor(in: app)

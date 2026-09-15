@@ -14586,53 +14586,63 @@ mod tests {
     }
 
     #[test]
-    fn windows_tiles_toggle_drawers_and_explicit_control_open_is_idempotent() {
-        let mut app = session();
-        app.set_platform(Platform::Windows);
-        let tile = |app: &UiSession<Recorder>, control| {
-            app.state
-                .workspace
-                .layout
-                .panel(Panel::Toolbar)
-                .unwrap()
-                .tiles()
-                .iter()
-                .find(|t| t.control == control)
-                .unwrap()
-                .id
-        };
-        let color = tile(&app, ToolbarControl::Color);
-        let opacity = tile(&app, ToolbarControl::Opacity);
-        for id in [color, opacity] {
-            for open in [true, false] {
-                app.dispatch(UiAction::ActivateTile {
-                    panel: Panel::Toolbar,
-                    tile: id,
+    fn tiles_toggle_drawers_and_explicit_color_open_is_idempotent_on_all_platforms() {
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            let mut app = session();
+            app.set_platform(platform);
+            let tile = |app: &UiSession<Recorder>, control| {
+                app.state
+                    .workspace
+                    .layout
+                    .panel(Panel::Toolbar)
+                    .unwrap()
+                    .tiles()
+                    .iter()
+                    .find(|t| t.control == control)
+                    .unwrap()
+                    .id
+            };
+            let color = tile(&app, ToolbarControl::Color);
+            let opacity = tile(&app, ToolbarControl::Opacity);
+            for id in [color, opacity] {
+                for open in [true, false] {
+                    app.dispatch(UiAction::ActivateTile {
+                        panel: Panel::Toolbar,
+                        tile: id,
+                    })
+                    .unwrap();
+                    assert_eq!(app.state.customization.drawer.is_some(), open);
+                    assert!(app.state.customization.control.is_none());
+                }
+            }
+            for _ in 0..2 {
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::OpenControl {
+                        control: PanelControl::BrushColor,
+                    },
                 })
                 .unwrap();
-                assert_eq!(app.state.customization.drawer.is_some(), open);
-                assert!(app.state.customization.control.is_none());
+                assert_eq!(
+                    app.state.customization.control,
+                    Some(PanelControl::BrushColor)
+                );
             }
-        }
-        for _ in 0..2 {
-            app.dispatch(UiAction::Customize {
-                action: CustomizationAction::OpenControl {
-                    control: PanelControl::BrushColor,
-                },
+            app.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: opacity,
             })
             .unwrap();
-            assert_eq!(
-                app.state.customization.control,
-                Some(PanelControl::BrushColor)
-            );
+            assert!(app.state.customization.control.is_none());
+            assert!(app.state.customization.drawer.is_some());
         }
-        app.dispatch(UiAction::ActivateTile {
-            panel: Panel::Toolbar,
-            tile: opacity,
-        })
-        .unwrap();
-        assert!(app.state.customization.control.is_none());
-        assert!(app.state.customization.drawer.is_some());
     }
 
     #[test]

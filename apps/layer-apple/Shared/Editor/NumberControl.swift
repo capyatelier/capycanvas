@@ -138,6 +138,7 @@ struct NumberControl: View {
             focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step)
+            .focusedValue(\.editorTextCommit, { _ = commit() })
             .frame(width: valueOnly || inline ? nil : slider ? 80 : 48)
             .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
             .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))

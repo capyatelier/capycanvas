@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: EditorStore
+    @FocusedValue(\.editorTextCommit) private var commitText
+    @FocusState private var searching: Bool
     private var model: JSON { store.snapshot["preferences"] }
     private var page: JSON { model["pages"].array.first { $0["id"].string == model["page"].string } ?? JSON() }
     var body: some View {
@@ -10,18 +12,30 @@ struct SettingsView: View {
                 EditorTextField("Search settings", value: model["query"].string) {
                     action(["type": "search", "query": $0])
                 }
-                    .textFieldStyle(.roundedBorder).padding(.horizontal).accessibilityIdentifier("settings-search")
-                List(selection: Binding<String?>(get: { model["page"].string }, set: { if let next = $0 { action(["type": "page", "page": next]) } })) {
+                    .textFieldStyle(.roundedBorder).padding(.horizontal).focused($searching)
+                    .accessibilityIdentifier("settings-search")
+                List(selection: Binding<String?>(get: { model["page"].string }, set: { if let next = $0 {
+                    searching = false
+                    action(["type": "page", "page": next])
+                } })) {
                     ForEach(model["pages"].array.indices, id: \.self) { index in
                         let p = model["pages"][index]
-                        HStack { SharedIcon(name: p["icon"].string); Text(p["title"].string) }.tag(p["id"].string)
+                        HStack {
+                            SharedIcon(name: p["icon"].string).accessibilityHidden(true)
+                            Text(p["title"].string)
+                        }.tag(p["id"].string)
+                            .accessibilityIdentifier("settings-page-" + p["id"].string)
                     }
                 }
             }.navigationTitle("Settings")
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220)
         } detail: {
             detail.navigationTitle(page["title"].string)
                 .toolbar { ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { store.dispatch(["type": "close_settings"]) }.accessibilityIdentifier("settings-done")
+                    Button("Done") {
+                        commitText?()
+                        store.dispatch(["type": "close_settings"])
+                    }.accessibilityIdentifier("settings-done")
                 } }
         }.frame(minHeight: 420)
             #if os(macOS)
@@ -33,7 +47,7 @@ struct SettingsView: View {
             List {
                 ForEach(model["search_results"].array.indices, id: \.self) { index in
                     let result = model["search_results"][index]
-                    Button { action(result["action"].object) } label: {
+                    Button { searching = false; action(result["action"].object) } label: {
                         VStack(alignment: .leading) {
                             Text(result["title"].string)
                             Text(result["description"].string).font(.caption).foregroundStyle(.secondary)
@@ -119,6 +133,7 @@ private struct PreferenceText: View {
     }
     private var field: some View {
         TextField(label, text: $text).focused($editing).onSubmit { commit(text) }
+            .focusedValue(\.editorTextCommit, { commit(text) })
             .onAppear { text = value }.onChange(of: value) { _, next in if !editing { text = next } }
             .onChange(of: editing) { old, next in if old && !next { commit(text) } }
     }

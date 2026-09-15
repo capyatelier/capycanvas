@@ -186,6 +186,20 @@ adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
 Native focus changes are deferred until after SwiftUI updates to avoid entering
 the hosting responder graph recursively when accepting an expression.
 
+Settings' Done action submits the focused text or numeric field through SwiftUI
+before closing, preserving valid drafts even when native focus-loss callbacks
+arrive afterward. Result and sidebar navigation release search focus, and the native sidebar
+width keeps page labels readable. Shared
+text fields ignore unchanged native callbacks so ending editing cannot resubmit
+the old query after navigation clears it. Run `tests/settings-text-input.swift` with
+`scripts/test-project-files.sh` for both theme-color fields on the shared Apple
+presets. The grouped `testNumericSettingsDone` editor workflow checks expression
+entry, Done, reopen, search-result/sidebar navigation and iPad keyboard dismissal
+through the actual native Settings window.
+Toolbar Color/Opacity controls use their existing drawers; the explicit
+configuration popup contains only Color. The obsolete modal opacity path is
+removed from the shared action and Apple dialog.
+
 For focused canvas checks without simulator startup:
 
 ```bash

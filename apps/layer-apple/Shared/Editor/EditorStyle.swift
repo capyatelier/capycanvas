@@ -220,9 +220,22 @@ struct EditorTextField: View {
         _text = State(initialValue: value)
     }
     var body: some View {
-        TextField(label, text: Binding(get: { text }, set: { text = $0; pending = $0; edit($0) }))
+        TextField(label, text: Binding(get: { text }, set: { next in
+            // Native fields can resend their value when editing ends.
+            guard next != text else { return }
+            text = next; pending = next; edit(next)
+        }))
             .onChange(of: value) { _, next in
                 if pending == nil || pending == next { text = next; pending = nil }
             }
+    }
+}
+
+/// Submit the focused field before a containing dialog closes.
+private struct EditorTextCommit: FocusedValueKey { typealias Value = () -> Void }
+extension FocusedValues {
+    var editorTextCommit: (() -> Void)? {
+        get { self[EditorTextCommit.self] }
+        set { self[EditorTextCommit.self] = newValue }
     }
 }

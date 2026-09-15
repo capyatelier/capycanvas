@@ -20,6 +20,52 @@ Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
 checks without a relevant change. Commit only major milestones. All eleven
 recovery stashes remain.
 
+The preceding milestone `494e8b3` publishes the filter/control and slider-history
+batch below. The Settings/dialog milestone now adds:
+
+- Done submits valid focused text and numeric drafts before Settings closes,
+  using one standard SwiftUI focused-value action. Typed theme colors and the
+  pressure expression `1 + 0.25` survive close/reopen.
+- Result and sidebar navigation release search focus. Shared text fields ignore
+  unchanged native callbacks, preventing focus loss from restoring a cleared
+  query. Decorative sidebar icons no longer duplicate the row's accessibility
+  identifier, and standard native column sizing keeps page names readable.
+- The unused modal opacity route is removed from the shared control action and
+  Apple dialog. Color/Opacity toolbar and header controls already open retained
+  drawers; explicit color configuration still opens its color popup. The existing
+  visibility guard during dialog dismissal is preserved.
+
+All 400 shared UI tests pass, including drawer/color-popup behavior across all
+seven platform configurations. Four native AppKit theme-text cases pass across
+both Apple policies. Focused Mac and simulator Settings workflows pass with no
+failures or skips, covering numeric draft preservation and result/sidebar
+navigation; simulator also verifies both keyboard dismissals. The subsequent
+width adjustment is reviewed in four native Mac captures at 560/660 points in
+both themes. Both final Release builds and the physical-iPad Debug test build
+pass. Unchanged input workflows are not repeated for the width/dead-route cleanup.
+
+The known authorized iPad is connected. Its focused Settings attempt stops before
+executing the workflow because XCTest times out enabling UI automation; the
+result reports a runner-initialization failure. No old runner was live before the
+attempt, so restarting it is not an evidence-based remedy. The review app and
+runner are updated to this milestone, the review namespace is restored, and the
+artist app descriptor is unchanged. Physical Settings acceptance remains open;
+no hardware-input or performance claim is made by these component/simulator
+checks. The next native feature batch should address remaining visible parity
+and workflow gaps, keeping hardware setup troubleshooting out of routine edits.
+
+Evidence is under `artifacts/apple-settings-text-v1/`,
+`artifacts/apple-settings-search-v1/`, `artifacts/apple-control-dialogs-v1/` and
+`artifacts/apple-settings-milestone-v1/`. Use `testNumericSettingsDone` for the
+numeric Settings route: the old component readout probe could not deliver its
+click in the split view and is not maintained. For Settings captures, use the
+fixture's owned-window capture; hosting-view bitmap caching omits the native
+sidebar. The initial opacity-sheet probe also does not establish a draft bug;
+tracing actual UI entry points instead exposed the obsolete route removed here.
+The command reference audit passes against
+`artifacts/apple-mac-files-v1/inventory.json` (retained inventory, not fresh GPU
+enumeration). Main fetch finds no newer commits and all eleven stashes remain.
+
 This control milestone follows published `c6f9926`, the input/navigation batch
 described below, including integration of the shared capy mark update.
 

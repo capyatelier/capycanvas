@@ -319,8 +319,8 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 }
 
 impl ToolbarControl {
-    /// Immediate action, if any. Dedicated panel tiles are opened through
-    /// ActivateTile, whose identity also anchors their drawer.
+    /// Immediate action, if any. Drawer-only controls are opened through
+    /// ActivateTile or ActivateHeaderItem, whose identity anchors their drawer.
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
             Self::Command { command } => UiAction::Invoke { command },
@@ -328,16 +328,7 @@ impl ToolbarControl {
             Self::Size { pixels } => UiAction::SetBrushSize {
                 value: pixels as f32,
             },
-            Self::Color | Self::Opacity => UiAction::Customize {
-                action: CustomizationAction::OpenControl {
-                    control: if self == Self::Color {
-                        PanelControl::BrushColor
-                    } else {
-                        PanelControl::BrushOpacity
-                    },
-                },
-            },
-            Self::Panel { .. } | Self::Divider => return None,
+            Self::Color | Self::Opacity | Self::Panel { .. } | Self::Divider => return None,
         })
     }
     pub fn validate(self) -> Result<(), String> {
@@ -1909,10 +1900,7 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             OpenControl { control } => {
-                if !matches!(
-                    control,
-                    PanelControl::BrushColor | PanelControl::BrushOpacity
-                ) {
+                if control != PanelControl::BrushColor {
                     return Err("Unsupported tool popup".into());
                 }
                 self.control = Some(control);
