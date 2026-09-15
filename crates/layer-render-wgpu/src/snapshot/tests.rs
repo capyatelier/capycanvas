@@ -369,9 +369,12 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
     for color in [DocumentColor::default(), DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 }] {
         let project = rich_project(color, 1);
         let (mut live, expected) = frame(&project);
+        let cached_before = live.source_sample_cache_stats();
         let expected = Arc::new(expected);
         let [width, height] = [project.document.width, project.document.height];
         let mut capture = live.snapshot_gpu().capture(project.clone(), [0.; 4], 0., Default::default(), Default::default()).unwrap();
+        assert!(Arc::ptr_eq(&live.device.source_samples, &capture.renderer.device.source_samples),
+            "file workers must share the live canvas's sample budget");
         let check = |actual: &[[f32; 4]], expected: &[[f32; 4]]| {
             assert_eq!(actual.len(), expected.len());
             for (a, b) in actual.iter().flatten().zip(expected.iter().flatten()) {
@@ -402,6 +405,9 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
             live.wait_idle().unwrap();
         }
         let mut capture = worker.join().unwrap();
+        let cached_after = live.source_sample_cache_stats();
+        assert!(cached_after.hits > cached_before.hits, "private GPU captures reuse exact source samples");
+        assert!(cached_after.peak_bytes <= cached_after.limit_bytes);
         drop(live);
         // Closing a canvas releases its resources, not the device still owned
         // by an immutable file worker. The snapshot remains exactly its own.

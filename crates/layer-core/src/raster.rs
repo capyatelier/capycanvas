@@ -3,6 +3,8 @@
 use crate::color::PixelDescriptor;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+mod decoded_cache;
+pub use decoded_cache::{DecodedTileCache, DecodedTileCacheStats};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 use std::{

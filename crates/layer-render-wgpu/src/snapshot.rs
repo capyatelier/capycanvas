@@ -87,6 +87,11 @@ pub struct SnapshotGpu {
     queue: wgpu::Queue,
 }
 impl WgpuRasterizer {
+    /// CPU exact source samples shared with this canvas's snapshot workers.
+    /// These allocations are separate from GPU allocator reports.
+    pub fn source_sample_cache_stats(&self) -> layer_core::raster::DecodedTileCacheStats {
+        self.device.source_samples.stats()
+    }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
             adapter: self.adapter.clone(),

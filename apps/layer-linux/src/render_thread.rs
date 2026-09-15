@@ -93,7 +93,7 @@ enum Command {
     FailNextFrame,
 }
 enum Reply {
-    ColorAdopted(u64, HashMap<AssetId, TipOutline>),
+    ColorAdopted(u64, HashMap<AssetId, TipOutline>, layer_render_wgpu::snapshot::SnapshotGpu),
     Initialized(crate::display_color::ViewColor, layer_render_wgpu::snapshot::SnapshotGpu),
     Startup(
         u64,
@@ -308,11 +308,12 @@ impl RenderWorker {
         while let Ok(reply) = self.replies.try_recv() {
             if let Some(id) = self.awaiting_color_adoption {
                 match reply {
-                    Reply::ColorAdopted(current, outlines) if current == id => {
-                        // Color candidates retain this device. Snapshot jobs
-                        // select primaries from their own immutable project.
+                    Reply::ColorAdopted(current, outlines, gpu) if current == id => {
+                        // Keep the new renderer's pipeline/cache context. Exact
+                        // source samples remain shared with existing file jobs.
                         self.awaiting_color_adoption = None;
                         self.outlines = outlines;
+                        self.snapshot_gpu = Some(gpu);
                     }
                     Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                     _ => (),
@@ -810,7 +811,7 @@ impl Worker {
                     startup_input = None;
                     startup_progress = color::complete();
                     document_drawn = true;
-                    reply.send(Reply::ColorAdopted(id, self.renderer.cursor_outlines())).map_err(error)?;
+                    reply.send(Reply::ColorAdopted(id, self.renderer.cursor_outlines(), self.renderer.snapshot_gpu())).map_err(error)?;
                 }
                 Command::DiscardColor(id, reply) => {
                     self.discard_color(id);

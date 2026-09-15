@@ -4,6 +4,35 @@ Status: **in progress; no acceptance claimed**. This final phase follows the
 correctness checkpoint `125108bf`. See the [implementation evidence](color-management-gtk-m2-validation.md)
 and [common gates](color-management-milestones.md#gates-that-apply-to-every-milestone).
 
+## Current scope after user clarification
+
+Finish GTK SDR color correctness and workflows first. The remaining interactive
+performance requirement is **120 Hz pan, zoom and rotation of unchanged large
+photographs**, including transitions that miss the current display detail cache.
+Keep frame creation, completed work and native GTK presentation measurements
+distinct. Existing warm navigation results alone do not qualify this requirement.
+
+The user explicitly deferred optimization of dirty-pixel/image regeneration and
+the proposed resolution-aware preview pipeline. Adjustment/filter rebuilds,
+full-resolution histogram regeneration and stroke regeneration timing remain
+recorded below, but their previously declared latency breaches no longer block
+this phase. This is a scope change, not a claim that those gates passed. Preserve
+correctness, precision, bounded memory, saving, diagnostics, GPU recovery and
+responsive/cancellable long operations. Other host integration still requires
+approval after GTK validation.
+
+Navigation should reuse completed composition. Current `live_display::Cache`
+selects a view-dependent detail level, but a missing detail slot requests native
+document tiles and runs `Scene::compose_pixels` again before reducing the result.
+That dependency explains slow navigation without any content edit. Address that
+reuse path without changing shader semantics or introducing reduced-resolution
+effect evaluation. Broad final resource/correctness checks remain necessary;
+repeated optimization of deferred regeneration workloads is not the next step.
+
+The budgets below are the original declaration and historical comparison basis.
+Their regeneration latency thresholds remain future targets; the current
+navigation requirement above supersedes the former 100/200 ms cold-view allowance.
+
 ## Declared reference envelope
 
 Qualification targets the local Linux workstation: NVIDIA RTX PRO 6000
@@ -1616,3 +1645,91 @@ pause/cancel and reopen journey passes on the private Mutter display. Build and
 run records are `histogram-bins-final-*`; hardware data and exact outputs are
 `photo-expanded-histogram-bins-{before,after}-*`. The remaining milestone gates
 listed above remain open; this change touches CPU histogram classification only.
+
+### Bounded exact source samples shared by canvas and workers
+
+Following `23cc9f2a`, native source uploads reuse decoded integer samples in a
+512 MiB CPU cache. The immutable compressed tile remains authoritative. Entries
+use weak allocation identities, preserve exact bytes and integrity checks, and
+evict expired sources before least-recently-used live entries. Decompression runs
+outside the cache mutex. Concurrent misses can decode a tile twice rather than
+blocking canvas work on a worker's decompression.
+
+The canvas, snapshot workers and color-conversion candidate share one sample
+cache. They retain private mutable render buffers and ICC transforms. Adoption
+updates GTK's snapshot context; device loss and closure retain the existing
+ownership rules. The limit charges retained sample allocation capacity, not map
+metadata, decode scratch or temporarily retained evicted samples. Whole-process
+measurements therefore remain necessary. No display approximation was introduced.
+
+Fresh production builds from the same `23cc9f2a` worktree, with fresh source
+modification times, ran serially at the same staged executable pathname. The
+full photo fixture includes five adjustments, a native mask, slider changes,
+navigation, paint during save/export, exact native history, histograms and blur.
+These are offscreen frame/work durations, not native GTK presentation latency.
+
+| Full photo fixture | Before | Cached samples |
+| --- | --- | --- |
+| 24 MP slider p95 / p99, ms (64 frames) | 369.95 / 370.77 | 67.21 / 68.52 |
+| 60 MP slider p95 / p99, ms (64 frames) | 925.23 / 938.55 | 160.24 / 164.52 |
+| 24 MP matched first 128 paint frames p99 / max, ms | 3.43 / 4.01 | 1.72 / 2.01 |
+| 60 MP matched first 128 paint frames p99 / max, ms | 4.27 / 4.36 | 2.08 / 3.35 |
+| 24 MP cold-navigation p95 / p99, ms | 220.51 / 308.05 | 52.31 / 60.64 |
+| 60 MP cold-navigation p95 / p99, ms | 756.30 / 924.85 | 132.40 / 149.85 |
+| 24 MP RSS high-water, MiB | 816.74 | 1004.54 |
+| 60 MP RSS high-water, MiB | 1170.09 | 1689.16 |
+| 24 MP conservative GPU reservation bound, MiB | 640 | 640 |
+| 60 MP conservative GPU reservation bound, MiB | 640 | 896 |
+
+Both matched paint prefixes have zero 8.33 ms misses. The full fixture continues
+painting/navigation until export ends, so later workloads differ: 24 MP paint
+counts are 128/192 and 60 MP counts are 192/320. Cold-navigation populations and
+post-edit histogram pixels are consequently not identical across arms. The
+fixed slider phase and matched paint prefix support their direct comparisons;
+other whole-run observations describe the executed workloads. Warm navigation
+p99 is 0.28–0.37 ms across these runs, but cold views still fail the current
+8.33 ms navigation target. Rotation remains to be added to photo qualification.
+
+A separate fixed-snapshot pair removes the variable paint tail. The 24/60 MP PNG
+sample CRCs remain `059569d1` / `1dbe9195`; every histogram repetition remains
+`217b99ae` / `9cd46a99` in both arms. Archive source/profile/sample checks and exact
+undo/redo roots also pass in the full fixtures.
+
+| Fixed snapshot | Before | Cached samples |
+| --- | --- | --- |
+| 24 MP histogram, three observations, ms | 530, 513, 511 | 407, 386, 374 |
+| 60 MP histogram, three observations, ms | 1602, 1933, 1646 | 904, 886, 990 |
+| 24 MP RSS high-water, MiB | 691.75 | 899.25 |
+| 60 MP RSS high-water, MiB | 1014.34 | 1490.85 |
+| 24/60 MP GPU reservation bound, MiB | 640 / 640 | 640 / 640 |
+
+The fixed workloads show no GPU reservation increase from the CPU sample cache.
+At the end of the full fixture, retained cache samples occupy 265.5 MiB at 24 MP
+and the complete 512 MiB limit at 60 MP, with 233 evictions at 60 MP. These single
+pairs establish useful improvement and bounded retention, not full 45 MP,
+multiple-document, dense-edit or constrained-device qualification. Regeneration
+latency optimization is now deferred under the user scope above.
+
+Three cache unit tests pass, covering exact U16 samples, corrupt tiles,
+concurrent readers, eviction and source lifetime. Hardware GPU source tests pass
+(three tests; the separate source benchmark remains ignored), and all 13 snapshot
+tests pass, including shared cache ownership with private pixels during live
+edits, cancellation and capture after canvas closure. Four native GTK tests pass,
+one per private compositor process: histogram refresh (7.33 s), document color
+assignment/conversion/depth history (16.84 s), resized export and cancellation
+(7.09 s), and GPU failure/restart with surviving samples and history (3.44 s).
+Test durations are correctness evidence, not performance measurements.
+
+Reproduction artifacts are `build-source-sample-cache.py`,
+`source-sample-cache-builds.json`, the captured source trees/patches and
+`photo-expanded-source-cache-{before,after}*` under `final-performance/`.
+`run-photo-expanded.py` records environment, raw frames/jobs, RSS and GPU data;
+`analyze-photo-expanded.py` summarizes them. The `-capture` aliases use
+`LAYER_PHOTO_CAPTURE_ONLY=1`; `-large` aliases preserve the independent 60 MP
+full-workflow run. `source-sample-cache-matched-paint.json` records the first
+128 paint frames. Exact executable SHA-256:
+
+- Baseline: `56e20d988e33254cd01022fa2fb4c1e3c0d3ef96394d8e42860fb65efe0aac57`.
+- Cached samples: `e3eb14a42cfe3b3f761348ebf5315d2e9d16472952ebfec1a49905edf6337e0e`.
+- GPU tests: `ec06f6d65b7da77dff55f9b97d6f2e6269cba9de636b35624c19d7a92b0f6e92`.
+- GTK tests: `1505a97bae71b713753d4294cbd307d5a49bea9bf85ce07315471dca4722107e`.

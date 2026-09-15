@@ -130,7 +130,29 @@ impl WgpuRasterizer {
         directory: &std::path::Path,
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
-        let device = PipelineDevice::cached(device, &adapter, directory)
+        let device = PipelineDevice::cached(device, &adapter, directory);
+        Self::native_staged_on_device(adapter, device, queue, color)
+    }
+
+    /// A private candidate shares immutable source samples with the current
+    /// canvas and its workers, so preview/adoption cannot double that cache.
+    pub fn color_candidate_staged_cached(
+        &self,
+        directory: &std::path::Path,
+        color: DocumentColor,
+    ) -> Result<Self, GpuRasterError> {
+        let mut device = PipelineDevice::cached(self.device().clone(), &self.adapter, directory);
+        device.source_samples = self.device.source_samples.clone();
+        Self::native_staged_on_device(self.adapter.clone(), device, self.queue.clone(), color)
+    }
+
+    fn native_staged_on_device(
+        adapter: wgpu::Adapter,
+        device: PipelineDevice,
+        queue: wgpu::Queue,
+        color: DocumentColor,
+    ) -> Result<Self, GpuRasterError> {
+        let device = device
             .with_working_format(wgpu::TextureFormat::Rgba32Float)?
             .with_working_space(color.space);
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;

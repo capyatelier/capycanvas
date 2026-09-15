@@ -223,6 +223,36 @@ impl WorkingDecoder {
         coordinate: [u32; 2],
         output: &mut [[f32; 4]],
     ) -> Result<(), String> {
+        self.decode_tile_with(source, coordinate, output, |tile, output| {
+            self.decode_pixels(&tile.decode()?, output)
+        })
+    }
+
+    /// Reuse exact encoded samples while retaining this worker's own profile
+    /// transform and the same descriptor, extent and padding validation.
+    pub fn decode_tile_cached(
+        &self,
+        source: &SourceImage,
+        coordinate: [u32; 2],
+        output: &mut [[f32; 4]],
+        cache: &layer_core::raster::DecodedTileCache,
+    ) -> Result<(), String> {
+        self.decode_tile_with(source, coordinate, output, |tile, output| {
+            let samples = cache.decode(tile)?;
+            self.decode_pixels(&samples, output)
+        })
+    }
+
+    fn decode_tile_with(
+        &self,
+        source: &SourceImage,
+        coordinate: [u32; 2],
+        output: &mut [[f32; 4]],
+        decode: impl FnOnce(
+            &std::sync::Arc<layer_core::raster::TileBlob>,
+            &mut [[f32; 4]],
+        ) -> Result<(), String>,
+    ) -> Result<(), String> {
         if source.interpretation != self.source || output.len() != (TILE_SIZE * TILE_SIZE) as usize
         {
             return Err("Source interpretation changed during working conversion".into());
@@ -231,7 +261,7 @@ impl WorkingDecoder {
         if tile.descriptor != self.source.descriptor() {
             return Err("Source tile has the wrong sample representation".into());
         }
-        self.decode_pixels(&tile.decode()?, output)?;
+        decode(tile, output)?;
         let origin =
             coordinate.map(|v| v.checked_mul(TILE_SIZE).ok_or("Invalid source coordinate"));
         let [x, y] = [origin[0].clone()?, origin[1].clone()?];

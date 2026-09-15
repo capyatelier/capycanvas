@@ -172,10 +172,7 @@ impl Worker {
         let cache = gtk::glib::user_cache_dir()
             .join("capycanvas")
             .join("shaders");
-        let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
-            self.renderer.adapter().clone(),
-            self.renderer.device().clone(),
-            self.renderer.queue().clone(),
+        let mut renderer = self.renderer.color_candidate_staged_cached(
             &cache,
             request.project.document.color,
         )

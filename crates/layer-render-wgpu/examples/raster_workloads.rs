@@ -301,6 +301,7 @@ impl Canvas {
             );
         }
         let metrics = self.engine.backend().metrics();
+        println!("CPU exact source sample cache {:?}", self.engine.backend().source_sample_cache_stats());
         println!(
             "source upload staging/scratch peak {:.2} MiB; bounded upload submissions {}",
             metrics.source_upload_peak_bytes as f64 / 1048576.,

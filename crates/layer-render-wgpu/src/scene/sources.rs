@@ -51,7 +51,7 @@ pub(super) struct PendingTile {
     write: crate::submission::CacheWrite,
 }
 struct NativeSamples<'a> {
-    tile: &'a TileBlob,
+    tile: &'a Arc<TileBlob>,
     descriptor: PixelDescriptor,
     channels: SourceChannels,
     depth: IntegerDepth,
@@ -364,7 +364,7 @@ impl DecodedTiles {
                     "Source tile has the wrong sample representation".into(),
                 ));
             }
-            let decoded = samples.tile.decode().map_err(GpuRasterError::Color)?;
+            let decoded = r.device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
             let step = samples.depth.bytes();
             let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * 4 * step;
             let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
@@ -469,7 +469,7 @@ impl DecodedTiles {
             .resize((PAGE_SIZE * PAGE_SIZE) as usize, [0.; 4]);
         decoder
             .1
-            .decode_tile(source, coordinate, &mut self.pixels)
+            .decode_tile_cached(source, coordinate, &mut self.pixels, &r.device.source_samples)
             .map_err(GpuRasterError::Color)?;
         self.decoders.push_back(decoder);
         let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
