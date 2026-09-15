@@ -84,7 +84,7 @@ independent history. Save Layout, Load Layout and their separate manager page
 have been removed from the product scope. Shared Rust owns
 availability, forms, history and storage policy; the Apple coordinator keeps
 database work off the drawing owner. See [Apple persistence](PERSISTENCE.md#workspace-library)
-for migration, window ownership and direct workflow checks.
+for startup, window ownership and direct workflow checks.
 
 The header follows saved workspace pins and list order. Manage Workspaces offers
 Show in top bar, Move Up/Down and narrow row grips; new workspaces are pinned by

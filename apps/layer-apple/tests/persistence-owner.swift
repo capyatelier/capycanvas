@@ -39,29 +39,24 @@ private final class State: @unchecked Sendable {
         for platform: UInt32 in [0,1] {
             let root = directory.appendingPathComponent("platform-\(platform)")
             let persistence = EditorPersistence(root: root)
-            let sceneA = UUID().uuidString, sceneB = UUID().uuidString
             let stateA = State(), stateB = State()
-            let a = try NativeOwner(platform: platform, scene: sceneA, persistence: persistence, receive: { stateA.receive($0, $1) })
+            let a = try NativeOwner(platform: platform, persistence: persistence, receive: { stateA.receive($0, $1) })
             // Queue edits immediately: restoration must remain ahead of them.
             send(a, ["type":"set_theme", "theme":"dark"])
             send(a, ["type":"customize", "action":["type":"set_panel_visible", "panel":"color", "visible":true]])
             precondition(flush(a))
-            let savedWorkspace = stateA.read().0["state"]["workspace"]
-            let b = try NativeOwner(platform: platform, scene: sceneB, persistence: persistence, receive: { stateB.receive($0, $1) })
+            let b = try NativeOwner(platform: platform, persistence: persistence, receive: { stateB.receive($0, $1) })
             precondition(flush(b))
             precondition(stateB.read().0["state"]["theme"].string == "dark")
-            precondition(NSDictionary(dictionary: stateB.read().0["state"]["workspace"].object).isEqual(savedWorkspace.raw))
-            // A new scene's own file must exist even before its first edit.
-            let fileB = root.appendingPathComponent("workspaces/\(sceneB).json")
-            precondition(FileManager.default.fileExists(atPath: fileB.path))
-
             send(a, ["type":"customize", "action":["type":"set_panel_visible", "panel":"color", "visible":false]])
             precondition(flush(a) && flush(b))
             let restoredState = State()
-            let restored = try NativeOwner(platform: platform, scene: sceneB, persistence: persistence, receive: { restoredState.receive($0, $1) })
+            let restored = try NativeOwner(platform: platform, persistence: persistence, receive: { restoredState.receive($0, $1) })
             precondition(flush(restored))
-            precondition(NSDictionary(dictionary: restoredState.read().0["state"]["workspace"].object).isEqual(savedWorkspace.raw),
-                "Restoring B must retain its workspace after A changes the default")
+            precondition(restoredState.read().0["state"]["theme"].string == "dark")
+            precondition(!FileManager.default.fileExists(atPath: root.appendingPathComponent("workspace.json").path)
+                && !FileManager.default.fileExists(atPath: root.appendingPathComponent("workspaces").path),
+                "The drawing owner must not write a second workspace store")
 
             // Rapid cross-window edits must converge to the final committed
             // settings, including after delayed notifications and write acks.
@@ -94,7 +89,7 @@ private final class State: @unchecked Sendable {
             let unsupported = Data(#"{"version":999}"#.utf8)
             try AtomicJSONFile.write(unsupported, to: settingsFile)
             let invalidState = State()
-            let invalid = try NativeOwner(platform: platform, scene: UUID().uuidString, persistence: persistence,
+            let invalid = try NativeOwner(platform: platform, persistence: persistence,
                 receive: { invalidState.receive($0, $1) })
             precondition(!flush(invalid))
             precondition(invalidState.read().2 == nil && !invalidState.read().1["error"].isNull,
@@ -102,6 +97,6 @@ private final class State: @unchecked Sendable {
             let preserved = try Data(contentsOf: settingsFile)
             precondition(preserved == unsupported, "Defaults must not overwrite an unsupported saved version")
         }
-        print("Native owner persistence passed on both platform configurations: restore ordering, scene isolation, concurrent settings, durable acknowledgments and failed-save retry")
+        print("Native owner persistence passed on both platform configurations: restore ordering, settings-only storage, concurrent settings, durable acknowledgments and failed-save retry")
     }
 }

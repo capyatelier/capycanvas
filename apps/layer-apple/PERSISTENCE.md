@@ -1,7 +1,7 @@
 # Apple persistence
 
-Settings and workspace persistence use the existing versioned Rust models and
-restore actions. Both native apps share storage and owner coordination.
+Settings use the versioned Rust model and atomic JSON storage; workspaces use
+the shared SQLite library. Both native apps share storage and owner coordination.
 Both apps expose New, Open, Save and Save As using the shared editable
 [`Project` format](../../docs/reference/project-format.md), plus PNG export. Both protect
 window close with the shared unsaved-change decision; macOS also protects app
@@ -24,8 +24,8 @@ summaries without loading every item's retained layout history.
 
 Initialization seeds the shared Sketch, Paint and Photo workspaces idempotently.
 Stable IDs drive the header switcher. Included workspaces keep their names and
-cannot be deleted; their layouts and tool settings remain editable. Existing user
-data and the last active workspace survive upgrades. Reset All Brushes locks the editor at an idle boundary,
+cannot be deleted; their layouts and tool settings remain editable. Existing SQLite workspace
+data and the last active workspace retain their saved scene bindings. Reset All Brushes locks the editor at an idle boundary,
 calls Rust's reset operation, then captures and flushes the current working values.
 It creates no layout-history event and leaves other workspaces unchanged.
 
@@ -58,12 +58,12 @@ while allowing existing contacts and property corrections to finish. It retains 
 until storage and adoption acknowledge the transition. Failed ownership retains
 in-memory changes for Save as New Workspace.
 
-Migration reads unacknowledged `workspaces/<scene>.json` and `workspace.json`
-sources on the storage queue. It preserves distinct scenes, aliases an identical
-fallback, commits mappings with the imported records, and retains the original
-files. Acknowledged files are no longer read or written. Unknown/corrupt inputs
-fail before creating default workspaces. Concurrent imports reconcile both
-identical and partially overlapping source sets through the shared manager.
+Workspace startup uses the SQLite scene binding and shared default catalog.
+The Apple legacy JSON writer, migration scan and migration bridge requests are
+removed. Old `workspaces/<scene>.json` and `workspace.json` files are ignored and
+left untouched; malformed obsolete files cannot block current-library startup.
+Current SQLite errors still surface without replacing the stored data. Shared
+migration code used by other hosts is unchanged.
 
 The direct checks use temporary storage and both Apple platform configurations:
 
@@ -74,8 +74,8 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/works
 cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --features layer-workspace/native
 ```
 
-They exercise latest-edit switching, failed-transition unlock, migration and
-restart beside another owner, toolbar metadata/versions, toolbars, layout
+They exercise latest-edit switching, failed-transition unlock, startup and
+restart beside another owner, obsolete-file isolation, toolbar metadata/versions, toolbars, layout
 history, import/export packages, trash, consistent SQLite backup and recovery as
 a new workspace after a competing owner claims an expired lease. A deliberately
 locked temporary database verifies that the drawing owner still serves edits
@@ -219,9 +219,10 @@ Neither the UI thread nor the active render owner performs file reads/writes.
 Files live under the app's own Application Support directory. `settings.json`
 contains shared app settings. `workspaces.sqlite3` holds named workspaces,
 layout/history, latest tool/color/Zen values, reusable templates/toolbars,
-metadata history and scene bindings. Legacy scene/default JSON files are retained
-as migration inputs and are no longer written by normal app launches. Tests can
-explicitly disable the library to exercise the legacy adapter.
+metadata history and scene bindings. The drawing owner persists settings only;
+workspace capture/adoption and storage use the library coordinator. Tests can
+disable the library to isolate document or settings behavior without enabling
+a second workspace store.
 
 Settings commits propagate to the process's other owners. Pending local writes
 defer incoming notifications; owners converge to the newest successful commit.
@@ -236,10 +237,10 @@ allocations. Committed layout history and latest working tool values have
 independent generations. Motion/camera publications do not schedule storage.
 Autosave coalesces full editor publications, queries unchanged layouts without
 copying their history, and performs database work off the input owner. Startup
-does not overwrite invalid or unsupported saved data with defaults; the storage
+does not overwrite invalid settings or SQLite data with defaults; the library
 service retains current-state and consistent database exports for recovery.
 
-JSON preferences and legacy migration inputs are limited to 1 MiB per file.
+JSON preferences and recovery indexes are limited to 1 MiB per file.
 Preference writes sync a private temporary file, atomically rename it, then sync
 the directory before acknowledgement. Settings requests remain pending in Rust
 until the write completes. Packages use coordinated, bounded file I/O outside

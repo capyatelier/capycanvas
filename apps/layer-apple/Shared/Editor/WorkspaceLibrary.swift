@@ -13,7 +13,6 @@ import SwiftUI
     @Published var error: String?
     private weak var store: EditorStore?
     private let owner: NativeWorkspaceLibrary
-    private let scene: String
     private let preferencesRoot: String
     private static let preferencesChanged = Notification.Name("art.capycanvas.workspace-preferences-changed")
     private var preferencesObserver: NSObjectProtocol?
@@ -30,7 +29,7 @@ import SwiftUI
     var hasUnsavedChanges: Bool { !ready || busy || pendingEdits || status["dirty"].bool || status["saving"].bool }
 
     init(store: EditorStore, platform: UInt32, root: URL, scene: String) throws {
-        self.store = store; self.scene = UUID(uuidString: scene)?.uuidString ?? "default"
+        self.store = store
         preferencesRoot = root.standardizedFileURL.path
         owner = try NativeWorkspaceLibrary(platform: platform, root: root, scene: scene)
         preferencesObserver = NotificationCenter.default.addObserver(forName: Self.preferencesChanged, object: nil, queue: .main) { [weak self] event in
@@ -97,12 +96,6 @@ import SwiftUI
             guard !ready && !closed else { return }
             busy = true
             defer { busy = false }
-            let migrated: JSON = await withCheckedContinuation { continuation in
-                owner.migrateLegacy { continuation.resume(returning: $0) }
-            }
-            let mappings = try checked(migrated)["mappings"]
-            let sceneID = mappings["workspaces/\(scene).json"]
-            let preferred = sceneID.isNull ? mappings["workspace.json"] : sceneID
             let deadline = Date().addingTimeInterval(30)
             // Startup shader preparation can temporarily defer document-idle.
             // No interaction is canceled to make initialization succeed.
@@ -114,7 +107,7 @@ import SwiftUI
                 }
             }
             do {
-                let incoming = try await request(["type": "initialize", "now": now, "preferred": preferred.raw])
+                let incoming = try await request(["type": "initialize", "now": now])
                 try await adopt(incoming)
                 _ = try await session(["type": "end"])
                 ready = true; error = status["error"].isNull ? nil : status["error"]["message"].string

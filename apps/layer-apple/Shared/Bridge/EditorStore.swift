@@ -51,7 +51,7 @@ import SwiftUI
                 FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
             let usesWorkspaceLibrary = managedWorkspaces && storage.root != nil
-            native = try NativeOwner(platform: platform, scene: scene, persistence: storage,
+            native = try NativeOwner(platform: platform, persistence: storage,
                 traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata,
                 managedWorkspaces: usesWorkspaceLibrary) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }

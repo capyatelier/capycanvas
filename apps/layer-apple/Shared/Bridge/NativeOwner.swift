@@ -47,23 +47,16 @@ final class NativeOwner: @unchecked Sendable {
     private var gpuSamples = [CapyGpuFrameSample](repeating: CapyGpuFrameSample(), count: 8)
     private var lastTraceState: UInt64?
     private let persistence: EditorPersistence
-    private let scene: String
     private let managedWorkspaces: Bool
     private let observerID = UUID()
     private var settingsRequests = Set<UInt64>()
     private var settingsWrites = 0
-    private var workspaceWrites = 0
     private var lastSettingsData: Data?
-    private var lastWorkspaceData: Data?
-    private var lastWorkspaceUpdatesDefault = true
     private var failedSettingsWrite = false
-    private var failedWorkspaceWrite = false
-    private var firstWorkspace = true
-    private var initialWorkspaceNeedsSave = false
     private var currentSettings = JSON()
     private var latestSettings: EditorPersistence.SettingsChange?
     private var appliedSettingsRevision: UInt64 = 0
-    private var storageErrors: [String: String] = [:]
+    private var storageError: String?
     private var lastStorageStatus: Data?
     #if DEBUG
     private var initialActions: [JSON] = []
@@ -73,7 +66,7 @@ final class NativeOwner: @unchecked Sendable {
     let receive: @Sendable (JSON?, String?) -> Void
     var persistenceRoot: URL? { persistence.root }
 
-    init(platform: UInt32, scene: String, persistence: EditorPersistence = .shared,
+    init(platform: UInt32, persistence: EditorPersistence = .shared,
         traceDuration: TimeInterval? = nil, workload: [String: Any]? = nil, managedWorkspaces: Bool = false,
         receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
         #if DEBUG
@@ -87,7 +80,7 @@ final class NativeOwner: @unchecked Sendable {
             throw HostFailure(message: "Could not create the native canvas session")
         }
         self.queue = queue; self.handle = handle; self.receive = receive
-        self.persistence = persistence; self.scene = scene; self.managedWorkspaces = managedWorkspaces
+        self.persistence = persistence; self.managedWorkspaces = managedWorkspaces
         #if DEBUG
         initialActions = fixtureActions
         workspaceInitialized = !managedWorkspaces
@@ -99,7 +92,7 @@ final class NativeOwner: @unchecked Sendable {
         let loaded = PersistenceLoad()
         queue.suspend()
         queue.async { [self] in restore(loaded.value()) }
-        persistence.load(scene: scene, observer: observerID, managedWorkspaces: managedWorkspaces, changed: { [weak self] change in
+        persistence.load(observer: observerID, changed: { [weak self] change in
             self?.perform { [weak self] in
                 guard let self else { return }
                 if change.revision > appliedSettingsRevision { latestSettings = change }
@@ -168,16 +161,13 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     private func restore(_ loaded: EditorPersistence.Loaded) {
-        for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
-            ("workspace", loaded.workspace, "restore_workspace")] {
-            guard let data else { continue }
+        storageError = loaded.error
+        if let data = loaded.settings {
             do {
                 let value = try JSONSerialization.jsonObject(with: data)
-                _ = try request(0, JSON(["type": action, key: value]))
-            } catch { storageErrors[key] = "Could not restore \(key): \(error.localizedDescription)" }
+                _ = try request(0, JSON(["type": "restore_settings", "settings": value]))
+            } catch { storageError = "Could not restore settings: \(error.localizedDescription)" }
         }
-        storageErrors.merge(loaded.errors) { _, new in new }
-        initialWorkspaceNeedsSave = loaded.workspaceNeedsSnapshot && storageErrors["workspace"] == nil
         do {
             if managedWorkspaces { _ = try request(6, JSON(["type": "read_only", "value": true])) }
             try publish()
@@ -187,13 +177,6 @@ final class NativeOwner: @unchecked Sendable {
     private func persist(_ snapshot: JSON) throws {
         guard !snapshot["state"].isNull else { return }
         currentSettings = snapshot["state"]["settings"]
-        if !managedWorkspaces && !snapshot["workspace_persistence"].isNull {
-            if !firstWorkspace || initialWorkspaceNeedsSave {
-                let data = try JSONSerialization.data(withJSONObject: snapshot["workspace_persistence"].raw, options: [.sortedKeys])
-                saveWorkspace(data, updateDefault: !firstWorkspace)
-            }
-            firstWorkspace = false
-        }
         for request in snapshot["state"]["requests"].array where request["kind"]["type"].string == "save_settings" {
             let id = request["id"].uint
             guard !settingsRequests.contains(id) else { continue }
@@ -203,14 +186,6 @@ final class NativeOwner: @unchecked Sendable {
         }
         reportStorage()
     }
-    private func saveWorkspace(_ data: Data, updateDefault: Bool = true) {
-        lastWorkspaceData = data; lastWorkspaceUpdatesDefault = updateDefault; workspaceWrites += 1
-        persistence.saveWorkspace(data, scene: scene, updateDefault: updateDefault) { [self] error in
-            perform { [self] in
-                workspaceWrites -= 1; storageErrors["workspace"] = error; failedWorkspaceWrite = error != nil; reportStorage()
-            }
-        }
-    }
     private func saveSettings(_ data: Data, request id: UInt64?) {
         lastSettingsData = data; settingsWrites += 1
         persistence.saveSettings(data) { [self] error in
@@ -219,7 +194,7 @@ final class NativeOwner: @unchecked Sendable {
                     _ = try self.request(0, JSON(["type": "complete_request", "id": id, "error": error as Any? ?? NSNull()]))
                     settingsRequests.remove(id)
                 }
-                settingsWrites -= 1; storageErrors["settings"] = error; failedSettingsWrite = error != nil
+                settingsWrites -= 1; storageError = error; failedSettingsWrite = error != nil
                 try applySharedSettings(); try publish(); reportStorage()
             }
         }
@@ -227,9 +202,6 @@ final class NativeOwner: @unchecked Sendable {
     func retryPersistence() {
         perform { [self] in
             if failedSettingsWrite, settingsWrites == 0, let data = lastSettingsData { saveSettings(data, request: nil) }
-            if failedWorkspaceWrite, workspaceWrites == 0, let data = lastWorkspaceData {
-                saveWorkspace(data, updateDefault: lastWorkspaceUpdatesDefault)
-            }
             reportStorage()
         }
     }
@@ -318,14 +290,13 @@ final class NativeOwner: @unchecked Sendable {
         guard settingsWrites == 0, !failedSettingsWrite, let change = latestSettings else { return }
         latestSettings = nil; appliedSettingsRevision = change.revision
         let settings = try JSONSerialization.jsonObject(with: change.data)
-        storageErrors["settings"] = nil
+        storageError = nil
         guard !NSDictionary(dictionary: currentSettings.object).isEqual(settings) else { return }
         _ = try request(0, JSON(["type": "restore_settings", "settings": settings]))
     }
     private func reportStorage() {
-        let error = storageErrors.values.sorted().joined(separator: "\n")
-        let status = JSON(["pending": settingsWrites + workspaceWrites, "error": error.isEmpty ? NSNull() : error as Any,
-            "can_retry": failedSettingsWrite || failedWorkspaceWrite])
+        let status = JSON(["pending": settingsWrites, "error": storageError as Any? ?? NSNull(),
+            "can_retry": failedSettingsWrite])
         guard let data = try? JSONSerialization.data(withJSONObject: status.raw, options: [.sortedKeys]), data != lastStorageStatus else { return }
         lastStorageStatus = data
         receive(JSON(["persistence": status.raw]), nil)
@@ -344,7 +315,7 @@ final class NativeOwner: @unchecked Sendable {
             if result == 1 && DispatchTime.now() < deadline {
                 queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll); return
             }
-            persistence.flush { [self] in queue.async { [self] in completion(result == 0 && storageErrors.isEmpty) } }
+            persistence.flush { [self] in queue.async { [self] in completion(result == 0 && storageError == nil) } }
         }
         queue.async(execute: poll)
     }

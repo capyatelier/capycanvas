@@ -24,12 +24,9 @@ import SQLite3
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-coordinator-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             let scene = UUID().uuidString, otherScene = UUID().uuidString
-            // Take a real, customized legacy snapshot from the old editor.
-            let legacy = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
-            try await wait("legacy editor") { !legacy.state.isNull }
-            try await edit(legacy, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
-            try await edit(legacy, ["type": "invoke", "command": "zen_mode"])
-            let legacyData = try JSONSerialization.data(withJSONObject: legacy.state["workspace"].raw, options: [.sortedKeys])
+            // Obsolete JSON files must not gate current SQLite startup or be
+            // rewritten by workspace saves. They are deliberately invalid.
+            let legacyData = Data("obsolete workspace input".utf8)
             let sceneFile = root.appendingPathComponent("workspaces/\(scene).json")
             let otherFile = root.appendingPathComponent("workspaces/\(otherScene).json")
             let fallback = root.appendingPathComponent("workspace.json")
@@ -44,11 +41,13 @@ import SQLite3
             precondition(manager.ready, manager.error ?? "Startup failed")
             precondition(!manager.readOnly, "Startup must honor the latest active scene state")
             let original = manager.status["active_id"].string
-            precondition(!original.isEmpty && first.state["workspace"]["zen_mode"].bool)
-            precondition(SnapshotProjection.equal(first.state["workspace"]["layout"].raw, legacy.state["workspace"]["layout"].raw))
+            precondition(!original.isEmpty)
+            try await edit(first, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
+            try await edit(first, ["type": "invoke", "command": "zen_mode"])
+            precondition(first.state["workspace"]["zen_mode"].bool)
             let initial = try await manager.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(initial["rows"].array.count == 5, "Three defaults plus distinct migrated scenes; fallback must alias a scene")
-            // The scene files are immutable migration inputs, even after edits.
+            precondition(initial["rows"].array.count == 3, "Initialize only the shared default workspaces")
+            // Current workspace edits persist only through the shared library.
             try await edit(first, ["type": "set_brush_size", "value": 73])
             try await edit(first, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
             try await manager.flush()
@@ -97,7 +96,7 @@ import SQLite3
             precondition(second.workspaceLibrary!.ready, second.workspaceLibrary!.error ?? "Second scene failed")
             precondition(second.workspaceLibrary!.status["active_id"].string != original)
             try await manager.close()
-            // Acknowledged old files no longer gate startup, even if corrupted.
+            // Reopening restores the SQLite scene binding and ignores old files.
             try Data("obsolete legacy input".utf8).write(to: sceneFile)
             try Data("obsolete fallback".utf8).write(to: fallback)
             let reopened = EditorStore(platform: platform, scene: scene, persistence: storage, managedWorkspaces: true)
@@ -106,25 +105,23 @@ import SQLite3
             precondition(restored.ready, restored.error ?? "Reopen failed")
             precondition(restored.status["active_id"].string == original && reopened.state["brush"]["diameter"].number == 91)
             let rows = try await restored.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(rows["rows"].array.count == 6, "Scene restoration must not create an unused workspace beside another live window")
+            precondition(rows["rows"].array.count == 4, "Scene restoration must not create an unused workspace beside another live window")
             try await restored.close(); try await second.workspaceLibrary!.close()
-            // Unknown legacy data must remain intact and must not create a
-            // replacement default workspace or acknowledge a partial import.
-            let badRoot = root.appendingPathComponent("unknown")
-            let badFile = badRoot.appendingPathComponent("workspace.json")
-            let badData = try JSONSerialization.data(withJSONObject: legacy.state["workspace"].replacing("version", with: JSON(999)).raw)
-            try AtomicJSONFile.write(badData, to: badFile)
-            let blocked = EditorStore(platform: platform, persistence: EditorPersistence(root: badRoot), managedWorkspaces: true)
-            try await wait("unknown migration failure") { blocked.workspaceLibrary!.error != nil }
-            precondition(!blocked.workspaceLibrary!.ready)
+            // Corruption of the current database must still surface an error
+            // without replacing the artist's file with a fresh library.
+            let badRoot = root.appendingPathComponent("corrupt-library")
+            try FileManager.default.createDirectory(at: badRoot, withIntermediateDirectories: false)
+            let badFile = badRoot.appendingPathComponent("workspaces.sqlite3")
+            let badData = Data("invalid SQLite data".utf8)
+            try badData.write(to: badFile)
+            let blocked = EditorStore(platform: platform, persistence: EditorPersistence(root: badRoot))
+            try await wait("corrupt database error") {
+                blocked.failure != nil || blocked.workspaceLibrary?.error != nil
+            }
+            precondition(blocked.workspaceLibrary?.ready != true)
             let preserved = try Data(contentsOf: badFile)
             precondition(preserved == badData)
-            let blockedRows = try await blocked.workspaceLibrary!.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(blockedRows["rows"].array.isEmpty)
-            let recovery = try await blocked.workspaceLibrary!.read(["type": "export"])
-            precondition(recovery["extension"].string == "capyworkspace" && !recovery["text"].string.isEmpty)
-            try await blocked.workspaceLibrary!.backup(to: badRoot.appendingPathComponent("original.sqlite3"))
-            print("PASS: platform \(platform), coordinator migration, scene ownership, latest-edit switching, failure unlock, legacy isolation, resume and restart")
+            print("PASS: platform \(platform), SQLite startup, scene ownership, latest-edit switching, failure unlock, legacy isolation, resume and restart")
         }
     }
     @MainActor static func ownershipAndStorage(_ manager: WorkspaceLibrary, editor: EditorStore,

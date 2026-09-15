@@ -10,6 +10,36 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current workspace-storage simplification milestone
+
+Both shipping apps use the shared SQLite workspace library. The unused Apple
+JSON workspace writer/retry state, obsolete-file migration scan, migration-only
+scene/root fields and native migration requests are removed. Settings retain
+atomic JSON storage, synchronization and retry, with one error value replacing
+the old two-store error map. Current SQLite scene bindings, working values and
+layout history remain authoritative. Obsolete JSON files are left untouched;
+shared migration code used by other hosts is unchanged.
+
+A temporary corrupt legacy file blocks startup before the cleanup. The new
+coordinator fixture checks that those files are ignored and unchanged, while
+current database corruption still reports an error and preserves its bytes.
+The three native library checks and complete settings, coordinator, document
+and recovery suites pass on both Apple policies. Evidence is under
+`artifacts/apple-workspace-persistence-cleanup-v1/`; the initial post-cleanup
+fixture assumed synchronous SQLite failure and is retained separately.
+Both native Workspace Switcher and Layout History workflows pass on Mac and the
+existing iPad simulator: four workflows, no failures or skips. Both final Release
+builds pass without compiler warnings; current metadata is under this evidence
+root's `release/`. All owned test apps are verified stopped. Main was fetched
+and current. No artist storage or physical iPad app is changed.
+Mac captures show restored layout and retained workspace pins. UIKit captures
+show the expected workspace state but have a black upper area and right-edge
+clipping; they do not establish full-editor visual fit. This capture/viewport
+issue needs a bounded follow-up before broader visual acceptance, without
+assuming it is caused by the storage cleanup. The preceding published runtime
+is `60204ed`; full feature/visual, physical input/provider/lifecycle and sustained
+performance acceptance remain open. The overall goal remains incomplete.
+
 ## Current canvas-input milestone
 
 Mac did not register the existing shared input-interruption callback. A lifecycle
