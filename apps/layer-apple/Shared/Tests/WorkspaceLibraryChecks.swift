@@ -18,6 +18,8 @@ extension XCTestCase {
         let restore = app.buttons["workspace-history-restore"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: restore)
         waitForExpectations(timeout: 10)
+        XCTAssertTrue(start.isSelected, "The previewed history version must expose its selection")
+        attachEditor(in: app, name: "workspace-history-selected")
         #if os(macOS)
         restore.click()
         #else

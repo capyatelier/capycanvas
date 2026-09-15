@@ -30,6 +30,62 @@ Do not build new automation infrastructure for each control. Simulator startup
 and XCTest fixture repair have consumed too much of the critical path. Keep
 unresolved native delivery cases explicit and continue independent parity fixes.
 
+The editing/dialog milestone groups the property fixes below with simpler Layout
+History selection and footer actions. History reuses the existing selected-row
+style and exposes the selected version to accessibility; its extra check glyph
+is removed. Cancel/Restore reuse the workspace manager's solid footer style,
+with two-line labels preventing narrow-window truncation. New Drawing's Width
+and Height fields now use their catalog labels for accessibility.
+
+Both Mac and UIKit pass property Reset and Layout History selection/restoration:
+four workflows, no failures or skips. Mac runs the final source; UIKit's only
+subsequent presentation change permits footer text wrapping, covered by final
+AppKit captures and UIKit compilation. Both final Release builds pass without
+compiler warnings. Native History/opacity captures and the narrow wrapped footer
+are reviewed. Mac XCTest retains responsiveness/QoS warnings; UIKit reports none.
+Current results and Release metadata are under
+`artifacts/apple-editing-dialog-milestone-v1/` (`mac-v2`, `simulator-v1`,
+`simulator-v2` build-only, `manager-captures`, `release`). The exact test apps and
+runner are verified stopped. No physical iPad workflow is repeated.
+
+The broader manager component fixture remains unfinished. Its first assertion
+used obsolete workspace names; the fixture now expects Sketch/Paint/Photo and
+uses a distinct rename target. Later attempts produce eight AppKit browser/history
+captures but do not complete. A short sample shows idle queues without locating
+the pending continuation. Close-confirmation hypotheses did not resolve the wait
+and their edits are removed. All attempts are stopped and retained; do not claim
+a full manager component pass or repeat the investigation without new evidence.
+Full feature/visual, device/provider/lifecycle and sustained-performance gates
+remain open.
+
+The property Reset fix closes an actual native-menu failure: Reset
+restores opacity to 100% but leaves the focused draft visible. Property editors
+now retire their drafts and reject late edit callbacks when Reset runs, following
+the existing Settings approach. The gradient's footer and context-menu Reset
+share this action; its duplicate reset dispatch and layer/epoch/key plumbing are
+removed. Ordinary value updates preserve drafts and gesture cancellation remains.
+The existing Mac opacity workflow passes idle, valid and invalid-draft Reset,
+error removal and one-step Undo/Redo. Its unchanged failing run is retained.
+
+The same batch closes a gradient-structure failure: inserting a
+quarter stop reuses the selected middle stop's index, allowing its unfinished
+field to edit the new stop. One field-group revision retires drafts when the stop
+count changes, while ordinary value/position updates retain their identity. It
+replaces three separate field IDs with one group ID and keeps the existing
+selection/cancellation guards. Both Reset routes use the parent revision above.
+
+All eighteen component cases and twenty additional callback/history assertion
+groups pass across both Apple policies after the Reset routing change. They cover
+opacity/color insertion at a reused index, visible draft removal, Undo/Redo and
+late callbacks; opacity also covers the native Remove button and repeated Reset
+with the same stop count. Initial focused evidence is under
+`artifacts/apple-property-reset-state-v1/` (`component`, `mac-v1` failure,
+`mac-v2` pass, `simulator-v1` build-only); the earlier gradient reproduction remains
+under `artifacts/apple-gradient-structure-state-v1/`. The grouped native acceptance
+and current Release products are recorded above. Do not expand the completed
+Reset checks into more menu/input setup; continue the broader parity and
+acceptance inventory.
+
 The property-state milestone prevents a retired native field from editing its
 former layer. The existing component fixture reproduces a delayed commit changing
 that layer's opacity from 80% to 37% after Add layer switches the target. All
@@ -56,7 +112,7 @@ Mac and UIKit artwork/history and toolbar workflows pass: four workflows,
 no failures or skips. Final gradient and toolbar captures are reviewed on both
 hosts. Both Release builds pass without compiler warnings. Mac XCTest retains
 responsiveness/QoS warnings; these passes do not establish performance acceptance.
-Evidence and the current Release metadata are under
+Evidence and that milestone's Release metadata are under
 `artifacts/apple-property-state-milestone-v1/` (`mac-v1`, `simulator-v1`,
 `simulator-v2`, `release`). The exact test apps and runner are verified stopped.
 No physical iPad workflow is repeated. All eleven recovery stashes remain.
@@ -68,9 +124,9 @@ sheets both failed to fix it; both experiments are removed. The earlier UIKit
 Its evidence remains under `artifacts/apple-workspace-dialog-presentation-v1/`.
 The successful milestone artwork run establishes working UIKit test delivery
 before reusing that build for the final toolbar check; no setup workaround is
-added. Do not repeat the sizing investigation without new evidence. Property
-Reset with an unfinished draft and gradient insertion/removal during field edits
-remain state-audit candidates, not verified fixes. Full feature/visual, physical
+added. Do not repeat the sizing investigation without new evidence. The later
+component checks and Mac Reset workflow above cover further property states.
+Full feature/visual, physical
 input/provider/lifecycle and sustained Mac 90 Hz/iPad 120 Hz gates remain open.
 
 The Settings text milestone consumes the shared placeholder and seven-character

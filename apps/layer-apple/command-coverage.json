@@ -127,10 +127,11 @@
     "handler": "Shared/Editor/WorkspaceManager.swift",
     "checks": [
       "tests/workspace-manager.swift",
-      "tests/workspace-menu-actions.swift"
+      "tests/workspace-menu-actions.swift",
+      "Shared/Tests/WorkspaceLibraryChecks.swift"
     ],
-    "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete native UI validation remains",
-    "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete native UI validation remains"
+    "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; native Layout History selection/accessibility and restoration pass; the broader manager component run is unfinished after captures, and complete native UI validation remains",
+    "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; native Layout History selection/accessibility and restoration pass; the broader manager component run is unfinished after captures, and complete native UI validation remains"
   },
   "panel_controls": {
     "brush_size": "Shared/Editor/PanelControls.swift",
@@ -157,9 +158,9 @@
     "gradient": "Shared/Editor/PropertyControls.swift"
   },
   "property_workflows": {
-    "checks": ["tests/property-actions.swift", "tests/property-slider-input.swift", "tests/filter-controls.swift", "tests/editor-menu-keyboard.swift", "scripts/test-property-audit.py", "native/src/tests.rs"],
-    "ios": "partial: all shipped filter/paint/paper/group schemas and edit/history/reset routes through the shared Apple owner; AppKit-hosted Filters/menu and property slider history/cancellation checks pass in both presets; UIKit category/search/filter properties, inline opacity history and curve/gradient insertion-selection, dragging, removal/reset and sampled artwork history pass in grouped simulator workflows; AppKit component checks cover retired layer/gradient-stop fields, document-epoch mismatch rejection and unchanged history in both presets; remaining native, document and physical workflows stay open",
-    "mac": "partial: all shipped filter/paint/paper/group schemas and edit/history/reset routes through the shared Apple owner; native Filters/menu and property slider history/cancellation checks pass in both presets; grouped editor filter, inline opacity, curve/gradient insertion-selection, dragging, removal/reset and sampled artwork history workflows pass; exact Metal property/history pixels pass in both configurations; AppKit component checks cover retired layer/gradient-stop fields, document-epoch mismatch rejection and unchanged history in both presets; remaining native, document and physical workflows stay open"
+    "checks": ["tests/property-actions.swift", "tests/property-slider-input.swift", "tests/filter-controls.swift", "tests/editor-menu-keyboard.swift", "scripts/test-property-audit.py", "native/src/tests.rs", "Shared/Tests/NumericControlChecks.swift"],
+    "ios": "partial: all shipped filter/paint/paper/group schemas and edit/history/reset routes through the shared Apple owner; AppKit-hosted Filters/menu and property slider history/cancellation checks pass in both presets; UIKit category/search/filter properties, inline opacity history and curve/gradient insertion-selection, dragging, removal/reset and sampled artwork history pass in grouped simulator workflows; AppKit component checks cover retired layer/gradient-stop fields, document-epoch mismatch rejection, insertion at a reused stop index, Remove/repeated Reset and unchanged history in both presets; actual property opacity touch-menu Reset with idle/valid/invalid drafts, error removal and one-step Undo/Redo passes in grouped UIKit acceptance; remaining native, document and physical workflows stay open",
+    "mac": "partial: all shipped filter/paint/paper/group schemas and edit/history/reset routes through the shared Apple owner; native Filters/menu and property slider history/cancellation checks pass in both presets; grouped editor filter, inline opacity, curve/gradient insertion-selection, dragging, removal/reset and sampled artwork history workflows pass; exact Metal property/history pixels pass in both configurations; AppKit component checks cover retired layer/gradient-stop fields, document-epoch mismatch rejection, insertion at a reused stop index, Remove/repeated Reset and unchanged history in both presets; actual property opacity context-menu Reset with idle/valid/invalid drafts, error removal and one-step Undo/Redo passes; remaining native, document and physical workflows stay open"
   },
   "preference_kinds": {
     "switch": "Shared/Settings/SettingsView.swift",

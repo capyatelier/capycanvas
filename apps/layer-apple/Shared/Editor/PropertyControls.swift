@@ -40,6 +40,7 @@ struct LayerPropertiesPanel: View {
 
 private struct PropertyField: View {
     @ObservedObject var store: EditorStore
+    @State private var revision: UInt64 = 0
     let layer: UInt64
     let epoch: UInt64
     let control: JSON
@@ -47,36 +48,51 @@ private struct PropertyField: View {
     private var kind: String { control["kind"]["kind"].string }
     private var label: String { control["label"].string }
     private var value: JSON { control["value"]["value"] }
-    private func change(_ value: Any, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
-        store.effect(layer, epoch: epoch, key: key, action: ["op": "set", "value": ["kind": kind, "value": value]],
-            phase: phase, completion: completion)
+    private func effect(_ action: [String: Any], revision: UInt64, phase: String? = nil,
+        completion: (@MainActor (String?) -> Void)? = nil) {
+        // Reset replaces this editor. Late callbacks must not restore its
+        // discarded draft; cancellation still retires the original preview.
+        guard phase == "cancel" || revision == self.revision else { completion?(nil); return }
+        store.effect(layer, epoch: epoch, key: key, action: action, phase: phase, completion: completion)
     }
-    private func change(_ value: Any) { change(value) { if let error = $0 { store.failure = error } } }
+    private func change(_ value: Any, revision: UInt64, phase: String? = nil,
+        completion: (@MainActor (String?) -> Void)? = nil) {
+        effect(["op": "set", "value": ["kind": kind, "value": value]], revision: revision,
+            phase: phase, completion: completion ?? { if let error = $0 { store.failure = error } })
+    }
+    private func reset() {
+        revision &+= 1
+        store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"])
+    }
     var body: some View {
-        field.contextMenu {
-            Button("Reset") { store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) }
-        }
+        field(revision: revision).id(revision).contextMenu { Button("Reset", action: reset) }
     }
-    @ViewBuilder private var field: some View {
+    @ViewBuilder private func field(revision: UInt64) -> some View {
         switch kind {
         case "number":
             NumberControl(store: store, label: label, value: value.number, control: control["kind"]["numeric"],
                 identifier: "property-" + key,
-                gestureChange: { change($1, phase: $0, completion: $2) }) { change($0, completion: $1) }
-                .id(control["kind"].stableKey + label)
+                gestureChange: { change($1, revision: revision, phase: $0, completion: $2) }) {
+                change($0, revision: revision, completion: $1)
+            }.id(control["kind"].stableKey + label)
         case "toggle":
-            Toggle(label, isOn: Binding(get: { value.bool }, set: { change($0) }))
+            Toggle(label, isOn: Binding(get: { value.bool }, set: { change($0, revision: revision) }))
                 .toggleStyle(.switch).controlSize(.small).accessibilityIdentifier("property-" + key)
         case "choice":
             PropertyChoiceRow {
                 Text(label).lineLimit(1)
                 EditorChoice(label: label, options: control["kind"]["options"].array.map(\.string),
                     selected: Int(value.uint), identifier: "property-" + key,
-                    background: EditorPalette(source: store.state["palette"])["input"]) { change($0) }
+                    background: EditorPalette(source: store.state["palette"])["input"]) { change($0, revision: revision) }
             }
         case "color":
-            PropertyColor(store: store, label: label, identifier: "property-" + key, value: value) { change($0, phase: $1, completion: $2) }
-        case "gradient": GradientProperty(store: store, layer: layer, epoch: epoch, control: control)
+            PropertyColor(store: store, label: label, identifier: "property-" + key, value: value) {
+                change($0, revision: revision, phase: $1, completion: $2)
+            }
+        case "gradient":
+            GradientProperty(store: store, control: control, effect: {
+                effect($0, revision: revision, phase: $1, completion: $2)
+            }, reset: reset)
         default: EmptyView()
         }
     }
@@ -218,32 +234,38 @@ private struct CurveProperty: View {
 
 private struct GradientProperty: View {
     @ObservedObject var store: EditorStore
-    let layer: UInt64
-    let epoch: UInt64
     let control: JSON
+    let effect: ([String: Any], String?, (@MainActor (String?) -> Void)?) -> Void
+    let reset: () -> Void
     @Environment(\.isEnabled) private var enabled
     @GestureState private var contact = false
     @State private var selected = 0
+    @State private var fieldRevision: UInt64 = 0
     @State private var dragging = false
     @State private var dragStop: (index: Int, position: Double)?
-    private var key: String { control["key"].string }
     private var stops: [JSON] { control["value"]["value"].array }
     private var index: Int { max(0, min(selected, stops.count - 1)) }
     private var removable: Bool { index > 0 && index < stops.count - 1 }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private func change(_ position: Double, index: Int?, color: Any = NSNull(), remove: Bool = false, phase: String? = nil,
+    private func change(_ position: Double, index: Int?, color: Any = NSNull(), remove: Bool = false,
+        revision: UInt64? = nil, phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {
         // A retired field keeps its original stop. Do not retarget a delayed
-        // edit after selection changes; cancellation still retires its preview.
-        guard index == nil || index == self.index || phase == "cancel" else { completion?(nil); return }
-        store.effect(layer, epoch: epoch, key: key, action: ["op": "gradient_stop", "index": index as Any? ?? NSNull(),
-            "position": position, "color": color, "remove": remove], phase: phase, completion: completion)
+        // edit when selection or the stop list changes, even if an index is
+        // reused. Cancellation still retires the original preview.
+        if phase != "cancel" {
+            guard index == nil || index == self.index,
+                revision == nil || revision == fieldRevision else { completion?(nil); return }
+        }
+        effect(["op": "gradient_stop", "index": index as Any? ?? NSNull(),
+            "position": position, "color": color, "remove": remove], phase, completion)
     }
-    private func opacity(_ value: Double, index: Int, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
+    private func opacity(_ value: Double, index: Int, revision: UInt64, phase: String? = nil,
+        completion: @escaping @MainActor (String?) -> Void) {
         var color = stops[index]["color"].array.map(\.number)
         guard color.count == 4 else { completion("Invalid color"); return }
         color[3] = value
-        change(stops[index]["position"].number, index: index, color: color, phase: phase, completion: completion)
+        change(stops[index]["position"].number, index: index, color: color, revision: revision, phase: phase, completion: completion)
     }
     private func cancelDrag() {
         if let stop = dragStop { change(0, index: stop.index, phase: "cancel") }
@@ -251,6 +273,7 @@ private struct GradientProperty: View {
     }
     var body: some View {
         let index = self.index
+        let revision = fieldRevision
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geometry in
                 Canvas { context, size in
@@ -300,25 +323,31 @@ private struct GradientProperty: View {
                     .accessibilityLabel("\(control["label"].string), \(stops.count) stops")
             }.frame(height: 52)
             if !stops.isEmpty {
-                NumberControl(store: store, label: "Position", value: stops[index]["position"].number,
-                    control: store.catalog["opacity"], identifier: "gradient-position",
-                    gestureChange: { change($1, index: index, phase: $0, completion: $2) }) { change($0, index: index, completion: $1) }
-                    .disabled(!removable).id(index)
-                PropertyColor(store: store, label: "Color", identifier: "gradient-stop", value: stops[index]["color"]) {
-                    change(stops[index]["position"].number, index: index, color: $0, phase: $1, completion: $2)
-                }.id(index)
-                NumberControl(store: store, label: "Opacity", value: stops[index]["color"][3].number,
-                    control: store.catalog["opacity"], identifier: "gradient-opacity",
-                    gestureChange: { opacity($1, index: index, phase: $0, completion: $2) }) { opacity($0, index: index, completion: $1) }.id(index)
+                Group {
+                    NumberControl(store: store, label: "Position", value: stops[index]["position"].number,
+                        control: store.catalog["opacity"], identifier: "gradient-position",
+                        gestureChange: { change($1, index: index, revision: revision, phase: $0, completion: $2) }) {
+                        change($0, index: index, revision: revision, completion: $1)
+                    }.disabled(!removable)
+                    PropertyColor(store: store, label: "Color", identifier: "gradient-stop", value: stops[index]["color"]) {
+                        change(stops[index]["position"].number, index: index, color: $0, revision: revision, phase: $1, completion: $2)
+                    }
+                    NumberControl(store: store, label: "Opacity", value: stops[index]["color"][3].number,
+                        control: store.catalog["opacity"], identifier: "gradient-opacity",
+                        gestureChange: { opacity($1, index: index, revision: revision, phase: $0, completion: $2) }) {
+                        opacity($0, index: index, revision: revision, completion: $1)
+                    }
+                }.id("\(index):\(revision)")
             }
             HStack {
                 Button("Remove stop") { change(0, index: index, remove: true); selected = max(0, index - 1) }
                     .disabled(!removable).accessibilityIdentifier("gradient-remove")
                 Spacer(minLength: 0)
-                Button("Reset") { selected = 0; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) }
+                Button("Reset", action: reset)
                     .accessibilityIdentifier("gradient-reset")
             }.buttonStyle(.plain)
         }.onChange(of: stops.map { $0["position"].number }) { previous, current in
+            if current.count != previous.count { fieldRevision &+= 1 }
             // Select the stop Rust actually inserted, including history restoration.
             guard current.count == previous.count + 1,
                 let inserted = current.firstIndex(where: { !previous.contains($0) }) else { return }

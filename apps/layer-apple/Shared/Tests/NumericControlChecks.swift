@@ -67,6 +67,34 @@ extension XCTestCase {
         command("Undo"); expect("100")
         command("Redo"); expect(dragged)
         workspaceActivate(original); expect("42")
+        let propertyEntry = app.textFields["number-entry-property-opacity"]
+        let properties = app.descendants(matching: .any)["layer-properties"].firstMatch
+        for draft in ["", "37", "2 + (\n"] {
+            if !draft.isEmpty {
+                workspaceActivate(property)
+                XCTAssertTrue(propertyEntry.waitForExistence(timeout: 5))
+                propertyEntry.typeText(draft)
+                XCTAssertEqual(propertyEntry.value as? String, draft.trimmingCharacters(in: .newlines))
+            }
+            let label = properties.staticTexts["Opacity"].firstMatch
+            #if os(macOS)
+            label.rightClick()
+            let reset = app.menuItems["Reset"]
+            #else
+            label.press(forDuration: 0.7)
+            let reset = app.buttons["Reset"]
+            #endif
+            XCTAssertTrue(reset.waitForExistence(timeout: 5)); XCTAssertTrue(reset.isEnabled)
+            workspaceActivate(reset)
+            expect("100")
+            XCTAssertTrue(propertyEntry.waitForNonExistence(timeout: 5), "Reset must discard the property draft")
+            XCTAssertFalse(app.staticTexts["number-error-property-opacity"].exists)
+            XCTAssertEqual(property.value as? String, "100.0 %")
+            command("Undo"); expect("42")
+            command("Redo"); expect("100")
+            workspaceActivate(value); entry.typeText("42\n"); expect("42")
+        }
+        attachEditor(in: app, name: "property-opacity-reset")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 

@@ -38,6 +38,7 @@ import SwiftUI
                     try await action(["type": "effect", "action": ["op": "insert", "effect": effect]])
                 }
                 let layer = store.state["layer_properties"]["layer"].uint
+                let defaultControls = store.state["layer_properties"]["controls"].stableKey
                 let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient" : effect == "split_tone" ? "shadows"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
                 let identifier = mode == "layer-opacity" ? mode : effect == "gradient_map"
@@ -90,6 +91,11 @@ import SwiftUI
                     try await drain()
                     try require(field.stringValue == text, "The property draft must remain unfinished")
                     return (field, delegate)
+                }
+                func commit(_ field: NSTextField, _ delegate: any NSTextFieldDelegate) async throws {
+                    try require(delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
+                        "The retained native field must handle its commit callback")
+                    try await drain()
                 }
                 if effect == "curves" {
                     func points() -> JSON {
@@ -175,8 +181,7 @@ import SwiftUI
                     // Retain the old native delegate to deliver a delayed commit
                     // after SwiftUI has retired its field. This is a callback
                     // lifetime check, not a hardware-key delivery assertion.
-                    _ = delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
-                    try await drain()
+                    try await commit(field, delegate)
                     try require(store.state["layer_properties"]["controls"].stableKey == replacementValues,
                         "A retired property field must not edit the replacement layer")
                     try await action(["type": "select_layer", "id": layer])
@@ -205,11 +210,65 @@ import SwiftUI
                     let (field, delegate) = try await draft(identifier, "37 %")
                     try await click(CGPoint(x: 12, y: markerY))
                     let accepted = store.state["layer_properties"]["controls"].stableKey
-                    _ = delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
-                    try await drain()
+                    try await commit(field, delegate)
                     try require(store.state["layer_properties"]["controls"].stableKey == accepted,
                         "A retired gradient field must not change either stop after selection switches")
                     note("PASS: platform \(platform), gradient stop selection rejects a retired \(mode) field")
+
+                    try await click(CGPoint(x: 150, y: markerY))
+                    if mode == "red" {
+                        try await click(CGPoint(x: 300 - 6 - 24, y: geometry.frames["gradient-position:root"]!.maxY + 6 + 14))
+                    }
+                    let (insertionField, insertionDelegate) = try await draft(identifier, "37 %")
+                    // The inserted quarter stop takes index 1 from the selected
+                    // middle stop. Index equality must not preserve its draft.
+                    try await click(CGPoint(x: 81, y: markerY))
+                    let inserted = store.state["layer_properties"]["controls"].stableKey
+                    let stops = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"].array
+                    try require(stops.count == 4 && abs(stops[1]["position"].number - 0.25) < 0.0001,
+                        "The native plot must insert a new stop at the old selected index")
+                    try require(geometry.frames[identifier + ":entry"] == nil,
+                        "Insertion must discard the old field's visible draft")
+                    try await commit(insertionField, insertionDelegate)
+                    try require(store.state["layer_properties"]["controls"].stableKey == inserted,
+                        "A previous stop's unfinished field must not edit a new stop reusing its index")
+                    note("PASS: platform \(platform), gradient insertion retires the \(mode) field even when its index is reused")
+
+                    if mode == "red" {
+                        try await click(CGPoint(x: 300 - 6 - 24, y: geometry.frames["gradient-position:root"]!.maxY + 6 + 14))
+                    }
+                    let (historyField, historyDelegate) = try await draft(identifier, "37 %")
+                    try await action(["type": "invoke", "command": "undo"])
+                    try require(store.state["layer_properties"]["controls"].stableKey == accepted,
+                        "One Undo must remove the inserted stop and restore the original gradient")
+                    try await commit(historyField, historyDelegate)
+                    try require(store.state["layer_properties"]["controls"].stableKey == accepted,
+                        "A field from the undone stop must not edit its replacement")
+                    try await action(["type": "invoke", "command": "redo"])
+                    try require(store.state["layer_properties"]["controls"].stableKey == inserted,
+                        "An ignored callback must preserve insertion Redo")
+                    note("PASS: platform \(platform), gradient Undo/Redo retires the \(mode) draft and retains history")
+
+                    if mode == "opacity" {
+                        let (removedField, removedDelegate) = try await draft(identifier, "37 %")
+                        let footerY = geometry.frames["gradient-opacity:root"]!.maxY + 6 + 10
+                        try await click(CGPoint(x: 45, y: footerY))
+                        try require(store.state["layer_properties"]["controls"].stableKey == accepted,
+                            "Remove stop must remove the selected insertion")
+                        try await commit(removedField, removedDelegate)
+                        try require(store.state["layer_properties"]["controls"].stableKey == accepted,
+                            "A removed stop's field must not change the remaining gradient")
+                        for iteration in 0..<2 {
+                            let (resetField, resetDelegate) = try await draft(identifier, "37 %")
+                            try await click(CGPoint(x: 260, y: footerY))
+                            try require(store.state["layer_properties"]["controls"].stableKey == defaultControls,
+                                "The native Reset button must restore the shared gradient defaults")
+                            try await commit(resetField, resetDelegate)
+                            try require(store.state["layer_properties"]["controls"].stableKey == defaultControls,
+                                "Reset must discard a draft even when the stop count is unchanged (\(iteration))")
+                        }
+                        note("PASS: platform \(platform), gradient Remove and repeated Reset discard unfinished opacity drafts")
+                    }
                 }
                 try require(store.failure == nil, store.failure ?? "")
                 note("PASS: platform \(platform), \(effect.isEmpty ? "paint" : effect)/\(mode), native slider, one-step history and cancellation")

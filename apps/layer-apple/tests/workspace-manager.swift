@@ -44,7 +44,7 @@ import SwiftUI
             precondition(library.ready, library.error ?? "Startup failed")
             let original = library.status["active_id"].string
             let defaults = library.status["default_workspaces"].array
-            precondition(defaults.map { $0["name"].string } == ["Painter", "Illustrator", "Photographer"])
+            precondition(defaults.map { $0["name"].string } == ["Sketch", "Paint", "Photo"])
             precondition(original == defaults[1]["id"].string)
             // Exercise the actual host request, rather than assuming the menu's
             // visible label means the editor/service action is connected.
@@ -120,8 +120,8 @@ import SwiftUI
             precondition(storedReset["entity"]["working"]["tools"]["overrides"].object.isEmpty)
             let untouched = try await library.read(["type": "load", "id": inking])["entity"]["working"]
             precondition(untouched["tools"]["overrides"][String(untouched["preset"].uint)]["size"].number == 31)
-            try await form(manager, ["type": "rename", "value": defaults[0]["id"].raw], name: "Paint")
-            precondition(library.status["default_workspaces"][0]["name"].string == "Paint")
+            try await form(manager, ["type": "rename", "value": defaults[0]["id"].raw], name: "My Sketch")
+            precondition(library.status["default_workspaces"][0]["name"].string == "My Sketch")
             // A live source window's most recent edit must be copied before
             // its debounce timer writes. The source remains independently open.
             let other = EditorStore(platform: platform, persistence: storage, managedWorkspaces: true)
