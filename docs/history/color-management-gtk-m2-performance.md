@@ -698,3 +698,75 @@ source manifest reproduce this control. Exact release SHA-256:
 `2eb19745d4add952226e6b4c2571725767dee5d40657651c1092a172a029879f`.
 The same staged executable pathname is used for every arm, with immutable
 source binaries retained separately. No build/test overlaps measurement.
+
+## Batch validation and canonical promotion by texture
+
+Validation now binds up to sixteen read-only working textures per dispatch,
+selected within the device's sampled-texture limit. Color and scalar rules use
+separate groups; every group contributes to the publication-wide status before
+any promotion. The last group repeats only read-only padding views, and never
+dispatches those padding slots. CPU ownership/layout preflight remains global.
+
+Canonical promotion groups up to four adjacent requests with the same format
+and region, bounded by the device's sampled/storage-texture limits. Separate
+exact-size layouts cover the final group without writable aliases or dummy
+pixel allocations. All requests are preflighted before commands are recorded;
+empty and differing regions retain their independent behavior. The shader still
+copies Float32 samples exactly and suppresses all writes on invalid status.
+Both changes reuse existing scratch and parameter storage.
+
+Six native-owner tests pass (56.36 s) for validation alone, including a new
+bad-last-pixel scan across all seventeen color and seventeen scalar texture
+slots. With both changes, five promotion tests pass (9.12 s; one separate
+benchmark ignored) and six native-owner tests pass (53.38 s). New promotion
+coverage checks two/three/four-tile dispatches plus a trailing tile, both working
+formats, full/partial rectangles and invalid-status preservation. Existing
+save/reopen/undo/device replacement and late failure/abandonment checks pass.
+Exact test executables:
+
+- Validation: `ce121e64bc6ebedebcfe97e761c94699392175133c093d6c16de4e31821b4fc5`.
+- Combined: `c174d80e3ffb168e38c186ef5810cc02bb16c3ed7398854d12ddee9ff7c23519`.
+
+The benchmark now retains each already collected frame measurement in a sibling
+`*.frames.csv`, written after measurement. Records include mode, repetition,
+stroke, frame, pen-up flag, both time boundaries and capture reservation. The
+initial validation-only nine-repeat comparison had mixed p99 results; the
+individual records below expose medians and matching-stroke behavior as well.
+
+Fresh baseline/validation/combined executables use the same CSV instrumentation
+and source directory. Six serial nine-repeat arms run baseline → validation →
+combined → baseline → combined → validation at one staged executable pathname.
+Each arm contributes 1,278 moves and 36 pen-ups. No build or GPU test overlaps.
+
+| Arm | Pen-up CPU p50 / p95 / p99 ms | Completed pen-up p50 / p95 / p99 ms | Completed move p99 ms | Move misses |
+| --- | --- | --- | ---: | ---: |
+| Baseline | 5.630 / 8.515 / 8.873 | 12.327 / 16.630 / 16.854 | 6.957 | 5 |
+| Validation | 5.218 / 7.200 / 10.173 | 10.873 / 14.725 / 18.178 | 7.175 | 2 |
+| Combined | 4.622 / 6.632 / 7.800 | 10.478 / 14.089 / 15.908 | 7.193 | 4 |
+| Baseline repeat | 5.941 / 8.057 / 10.117 | 12.528 / 16.759 / 18.661 | 6.870 | 3 |
+| Combined repeat | 4.689 / 7.297 / 8.444 | 10.498 / 14.762 / 16.201 | 7.154 | 4 |
+| Validation repeat | 5.386 / 7.091 / 8.189 | 11.065 / 14.950 / 15.793 | 7.343 | 2 |
+
+Combined completed pen-up medians improve for all four individual strokes in
+both rounds. The largest third stroke changes 16.062 → 13.980 ms and
+16.245 → 14.350 ms. Combined move p99 increases 0.236 / 0.284 ms, below the
+declared `max(5%, 0.2 ms)` investigation threshold for these completed-frame
+baselines; CPU move p99 does not increase consistently. Canvas residency stays
+571 MiB and capture allocated/reserved peak stays 177 MiB. Every pen-up still
+misses 8.33 ms. This is a retained batching improvement, not full qualification.
+
+`build-native-dispatch-controls.py`, `run-native-dispatch-controls.py` and
+`analyze-native-dispatch-controls.py` under `final-performance/` retain/reproduce
+the parent archive, exact changed-file contents, individual samples, per-stroke
+summaries, commands and hardware/power records. Exact release SHA-256:
+
+- Baseline: `3ca5c356483bb64b572959baf5b1f4376d95b65b7a64130c8db793b5a1cc529f`.
+- Validation: `fd87ffeb9436f49dca6467a1d38c0d9e539543bbe36803e2f55e5c6a228f189c`.
+- Combined: `d7e73cf7fb6e46288bf4929ebd3e458c58e96a84ab9b374d3ad20e8c35c8f51b`.
+
+A first control-build attempt preserved old source mtimes with `copy2`, causing
+Cargo to reuse one executable for all variants. Hash verification caught this;
+that run was stopped and retained under `native-dispatch-invalid-stale-build/`
+with an explicit invalid marker. None of its timings supports the comparison
+above. The corrected builder updates source mtimes, records actual compilation,
+and both builder and runner require distinct executable hashes.

@@ -202,6 +202,7 @@ struct FrameMeasurement {
 }
 
 struct BenchResult {
+    samples: Vec<FrameMeasurement>,
     backing_reserved_bytes: u64,
     name: &'static str,
     repeats: usize,
@@ -526,6 +527,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         results.push(result);
     }
     write_report(&options.report_path, &results)?;
+    write_frame_samples(&options.report_path.with_extension("frames.csv"), &results)?;
     write_gallery(&options.output_dir, &results)?;
 
     Ok(())
@@ -1836,6 +1838,7 @@ fn summarize(
         move_times.get(index).copied().unwrap_or(0)
     };
     BenchResult {
+        samples: measurements.to_vec(),
         backing_reserved_bytes: measurements
             .iter()
             .map(|m| m.backing_reserved_bytes)
@@ -1962,6 +1965,29 @@ fn write_feedback_report(
         if all_pass { "PASS" } else { "FAIL" }
     ));
     fs::write(path, report)?;
+    Ok(())
+}
+
+// Serialize the measurements already collected by the timing loop, after all
+// scenarios finish. Retaining individual samples permits matched-stroke and
+// tail analysis without adding logging or file I/O to frame creation.
+fn write_frame_samples(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Error>> {
+    use std::io::Write;
+    let mut output = BufWriter::new(File::create(path)?);
+    writeln!(output, "scenario,space,depth,repetition,stroke,frame,commit,submit_us,completed_us,backing_reserved_bytes")?;
+    let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
+    for result in results {
+        let per_repeat = result.samples.len() / result.repeats;
+        let mut stroke = 1;
+        for (i, sample) in result.samples.iter().enumerate() {
+            if i % per_repeat == 0 { stroke = 1; }
+            writeln!(output, "{},{},{},{},{},{},{},{},{},{}",
+                result.name, space, depth, i / per_repeat + 1, stroke, i % per_repeat + 1,
+                sample.commit, sample.submit_micros, sample.completed_micros, sample.backing_reserved_bytes)?;
+            if sample.commit { stroke += 1; }
+        }
+    }
+    output.flush()?;
     Ok(())
 }
 

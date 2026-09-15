@@ -438,3 +438,44 @@ fn canonical_promotion_workloads() {
         }
     }
 }
+
+#[test]
+fn promotion_dispatches_keep_every_tile_and_partial_tail_independent() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let promoter = NativePromoter::new(&r.device);
+    let status = NativeEncodeStatus::new(&r.device);
+    for format in [wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::R32Float] {
+        let pixel_bytes = format.block_copy_size(None).unwrap() as usize;
+        let canonical: Vec<_> = (0..5).map(|_| texture(&r, format)).collect();
+        let working: Vec<_> = (0..5).map(|_| texture(&r, format)).collect();
+        let originals: Vec<_> = (0..5).map(|i| floats((0..65536 * pixel_bytes / 4).map(|p| -0.5 + i as f32 / 10. + (p % 65536) as f32 / 65535.))).collect();
+        let replacements: Vec<_> = (0..5).map(|i| floats((0..65536 * pixel_bytes / 4).map(|p| 0.12345 + i as f32 / 10. + (p % 65536) as f32 / 65535.))).collect();
+        for i in 0..5 { upload(&r, &canonical[i], &replacements[i]); }
+        for count in 2..=5 {
+            for region in [FULL_REGION, [3, 7, 251, 243]] {
+                for invalid in [false, true] {
+                    for i in 0..5 { upload(&r, &working[i], &originals[i]); }
+                    r.queue.write_buffer(status.buffer(), 0, &[u32::from(invalid).to_le_bytes(), 0u32.to_le_bytes()].concat());
+                    let requests: Vec<_> = (0..count).map(|i| NativePromotion {
+                        canonical: &canonical[i], working: &working[i], region,
+                    }).collect();
+                    let batch = promoter.prepare(&r.device, &requests, &status).unwrap();
+                    let mut encoder = r.device.create_command_encoder(&Default::default());
+                    promoter.encode(&mut encoder, &batch);
+                    r.queue.submit([encoder.finish()]);
+                    for i in 0..5 {
+                        let mut expected = originals[i].clone();
+                        if i < count && !invalid {
+                            for y in region[1]..region[1] + region[3] {
+                                let begin = (y * 256 + region[0]) as usize * pixel_bytes;
+                                let end = begin + region[2] as usize * pixel_bytes;
+                                expected[begin..end].copy_from_slice(&replacements[i][begin..end]);
+                            }
+                        }
+                        assert!(page_bytes(&r, &working[i]) == expected, "{format:?} count={count} tile={i} region={region:?} invalid={invalid}");
+                    }
+                }
+            }
+        }
+    }
+}

@@ -5,30 +5,45 @@ use super::*;
 pub(super) struct Validator {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::ComputePipeline; 2],
+    tiles_per_dispatch: usize,
 }
 impl Validator {
     pub fn new(device: &PipelineDevice) -> Self {
+        let tiles_per_dispatch =
+            MAX_BATCH_TILES.min(device.limits().max_sampled_textures_per_shader_stage as usize);
+        assert!(tiles_per_dispatch > 0);
+        let mut entries: Vec<_> = (0..tiles_per_dispatch)
+            .map(|binding| wgpu::BindGroupLayoutEntry {
+                binding: binding as u32,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            })
+            .collect();
+        entries.push(crate::native_tiles::buffer_entry(
+            tiles_per_dispatch as u32,
+            wgpu::BufferBindingType::Storage { read_only: false },
+            false,
+            STATUS_BYTES,
+        ));
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("native publication validation"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                crate::native_tiles::buffer_entry(
-                    1,
-                    wgpu::BufferBindingType::Storage { read_only: false },
-                    false,
-                    STATUS_BYTES,
-                ),
-            ],
+            entries: &entries,
         });
+        let textures: String = (0..tiles_per_dispatch)
+            .map(|i| format!("@group(0) @binding({i}) var working{i}:texture_2d<f32>;\n"))
+            .collect();
+        let loads: String = (0..tiles_per_dispatch)
+            .map(|i| {
+                format!(
+                    "case {i}u: {{ value=textureLoad(working{i},vec2<i32>(invocation.xy),0); }}\n"
+                )
+            })
+            .collect();
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("native publication validation"),
             bind_group_layouts: &[Some(&layout)],
@@ -38,7 +53,11 @@ impl Validator {
             let source = format!(
                 "{}\n{}",
                 include_str!("../../native_tiles/validity.wgsl"),
-                include_str!("validate.wgsl").replace("VALIDATE", expression)
+                include_str!("validate.wgsl")
+                    .replace("TEXTURES", &textures)
+                    .replace("LOADS", &loads)
+                    .replace("STATUS_BINDING", &tiles_per_dispatch.to_string())
+                    .replace("VALIDATE", expression)
             );
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("native publication validation"),
@@ -53,7 +72,11 @@ impl Validator {
                 cache: None,
             })
         });
-        Self { layout, pipelines }
+        Self {
+            layout,
+            pipelines,
+            tiles_per_dispatch,
+        }
     }
     pub fn encode(
         &self,
@@ -89,36 +112,44 @@ impl Validator {
                 ));
             }
         }
-        for chunk in inputs.chunks(MAX_BATCH_TILES) {
-            let jobs: Vec<_> = chunk
+        // Group read-only inputs by their validity rule. Each z workgroup sees
+        // one complete tile. Repeated padding views are never dispatched and
+        // add no writable aliases; the same status accumulates across all groups.
+        for (format, texture_format) in [
+            wgpu::TextureFormat::Rgba32Float,
+            wgpu::TextureFormat::R32Float,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let selected: Vec<_> = inputs
                 .iter()
-                .map(|(texture, _)| {
-                    let view = views.get(texture);
-                    let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("native publication validation"),
-                        layout: &self.layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: status.buffer().as_entire_binding(),
-                            },
-                        ],
-                    });
-                    (
-                        binding,
-                        usize::from(texture.format() == wgpu::TextureFormat::R32Float),
-                    )
-                })
+                .filter(|(texture, _)| texture.format() == texture_format)
+                .map(|(texture, _)| *texture)
                 .collect();
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            for (binding, format) in &jobs {
-                pass.set_pipeline(&self.pipelines[*format]);
-                pass.set_bind_group(0, binding, &[]);
-                pass.dispatch_workgroups(32, 32, 1);
+            for chunk in selected.chunks(self.tiles_per_dispatch) {
+                let tile_views: Vec<_> = chunk.iter().map(|texture| views.get(texture)).collect();
+                let mut entries: Vec<_> = (0..self.tiles_per_dispatch)
+                    .map(|index| wgpu::BindGroupEntry {
+                        binding: index as u32,
+                        resource: wgpu::BindingResource::TextureView(
+                            tile_views.get(index).unwrap_or(&tile_views[0]),
+                        ),
+                    })
+                    .collect();
+                entries.push(wgpu::BindGroupEntry {
+                    binding: self.tiles_per_dispatch as u32,
+                    resource: status.buffer().as_entire_binding(),
+                });
+                let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("native publication validation"),
+                    layout: &self.layout,
+                    entries: &entries,
+                });
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.pipelines[format]);
+                pass.set_bind_group(0, &binding, &[]);
+                pass.dispatch_workgroups(32, 32, chunk.len() as u32);
             }
         }
         Ok(())

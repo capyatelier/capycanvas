@@ -509,3 +509,65 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
         assert_eq!(backing(&layers[0].raster)[&key], bytes);
     }
 }
+
+#[test]
+fn batched_validation_scans_every_texture_slot_and_partial_tail() {
+    let r = WgpuRasterizer::new_native_headless(DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: IntegerDepth::U16,
+    }).unwrap();
+    let native = r.native_edit.as_ref().unwrap();
+    let textures: Vec<_> = [wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::R32Float]
+        .into_iter().flat_map(|format| (0..17).map(move |_| format))
+        .map(|format| r.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("validation slot fixture"),
+            size: wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })).collect();
+    let inputs: Vec<_> = textures.iter().map(|texture| {
+        let plane = if texture.format() == wgpu::TextureFormat::Rgba32Float {
+            RasterPlane::Color
+        } else { RasterPlane::Mask };
+        (texture, RasterTile::pending(plane.descriptor(r.document_color())))
+    }).collect();
+    let readback = r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("validation status fixture"), size: STATUS_BYTES,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let scan = || {
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        native.status.reset(&mut encoder);
+        native.validator.encode(&r, &mut encoder, &inputs, &native.status, &mut Default::default()).unwrap();
+        encoder.copy_buffer_to_buffer(native.status.buffer(), 0, &readback, 0, STATUS_BYTES);
+        let submission = encoder.submit(&r.queue);
+        let (tx, rx) = mpsc::channel();
+        readback.map_async(wgpu::MapMode::Read, .., move |result| { tx.send(result).unwrap(); });
+        r.device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(READBACK_TIMEOUT) }).unwrap();
+        rx.recv_timeout(READBACK_TIMEOUT).unwrap().unwrap();
+        let result = NativeEncodeStatus::decode(&readback.get_mapped_range(..).unwrap());
+        readback.unmap();
+        result
+    };
+    assert!(scan().is_ok());
+    for (slot, texture) in textures.iter().enumerate() {
+        let color = texture.format() == wgpu::TextureFormat::Rgba32Float;
+        // The last invocation of each independently bound image must contribute
+        // to global failure, including both groups' one-tile trailing batches.
+        let write = |value: f32| r.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: 255, y: 255, z: 0 }, ..texture.as_image_copy() },
+            &[value, 0., 0., 1.][..if color { 4 } else { 1 }].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        write(f32::NAN);
+        assert!(scan().is_err(), "invalid slot {slot} was not visited");
+        write(0.);
+    }
+    assert!(scan().is_ok());
+}

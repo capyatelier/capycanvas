@@ -38,6 +38,14 @@ separate from the older canvas-residency counter and excludes source/history and
 driver allocations. A returned buffer can remain charged in its pending capture
 reservation until that job finishes, so the capture counter is conservative.
 
+Normal scenario reports also write a sibling `*.frames.csv` containing every
+measured frame: scenario, color-space code (0 sRGB, 1 P3, 2 Adobe RGB, 3 ProPhoto),
+integer depth, one-based repetition/stroke/frame indices, pen-up flag, CPU and
+completed-work microseconds, and capture reserved bytes. Serialization runs after
+all measurements, using the samples already collected by the timing loop. Use
+these records to compare matching strokes and inspect tail distributions; the
+Markdown summary alone can hide which workload produced an outlier.
+
 Initialization, shader/pipeline creation, target allocation, brush selection,
 layer creation, and PNG export stay outside the measurement. Each repetition
 creates a fresh canvas, runs one real stroke and undo to prime the exact
