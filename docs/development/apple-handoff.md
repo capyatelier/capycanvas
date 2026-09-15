@@ -10,6 +10,41 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current workspace-manager cleanup milestone
+
+The current native catalog exposes workspaces, this workspace's toolbars and the
+toolbar library. Swift still routed removed storage, metadata/version, trash and
+package-picker/export pages, and retained four published values with no view
+consumers. Those branches and the unused Back action are removed. Layout History
+uses its existing single preview/Cancel/Restore path. External workspace/toolbar
+imports keep their coordinated file-queue reader and Rust validation; the unused
+native package pickers/exporters and `.capytemplate` app registrations are removed.
+The lower-level storage backup/serialization APIs remain covered independently.
+
+The existing manager fixture now exercises supported external URL imports and
+permanent deletion instead of metadata restoration, trash recovery and obsolete
+picker/export actions. Its current run is recorded under
+`artifacts/apple-workspace-manager-cleanup-v1/`. The complete local fixture now
+passes on both Apple configurations (`component-v3.log`), including forms and
+inline validation, preview/history, copying from another live window, toolbar
+actions, permanent deletion, package import and scene teardown. These are
+owner/service checks with temporary storage, not physical input/provider proof.
+Both existing Mac and UIKit Workspace Switcher and Layout History workflows
+pass: four native workflows, no failures or skips. Both Release builds pass
+without compiler warnings. Current on-disk Release metadata is under
+`artifacts/apple-workspace-manager-cleanup-v1/release/`; the preceding document
+milestone's build metadata is historical. All owned app/runner processes are
+verified stopped. The renderer is unchanged and no physical/performance run is
+repeated. Full feature/visual, keyboard, OS file-launch/provider/lifecycle,
+physical-input and sustained Mac 90 Hz/iPad 120 Hz acceptance remain open.
+The old fixture hang is now identified: it tried to rename an included workspace,
+then waited indefinitely after Rust reopened the validation form. Its existing
+form helper now has bounded completion and reports that error; the obsolete
+rename expectation is replaced by a check of the included workspace's protected
+actions. The stopped first run and explicit second-run failure are retained.
+The keyboard source review found no new delivery evidence for the retained UIKit
+Command-A/Command-Z failures; no workaround or simulator rerun was added.
+
 ## Current document Open milestone
 
 File launch now retains its URL through editor startup. The local reproduction
@@ -42,7 +77,7 @@ full recovery suite in `artifacts/apple-startup-open-v1/recovery.log`. These are
 native file/owner checks with temporary storage and offscreen Metal surfaces,
 not provider UI or physical lifecycle acceptance.
 
-Both Release builds pass without compiler warnings. Current on-disk Release
+Both Release builds pass without compiler warnings. Milestone Release
 metadata is under `artifacts/apple-document-open-milestone-v1/release/`;
 the renderer is unchanged and no physical drawing run is repeated. Both existing
 Mac document workflows pass: native Save As/Save, process restart/Open and exact
@@ -177,13 +212,12 @@ Current results and Release metadata are under
 `simulator-v2` build-only, `manager-captures`, `release`). The exact test apps and
 runner are verified stopped. No physical iPad workflow is repeated.
 
-The broader manager component fixture remains unfinished. Its first assertion
-used obsolete workspace names; the fixture now expects Sketch/Paint/Photo and
-uses a distinct rename target. Later attempts produce eight AppKit browser/history
-captures but do not complete. A short sample shows idle queues without locating
-the pending continuation. Close-confirmation hypotheses did not resolve the wait
-and their edits are removed. All attempts are stopped and retained; do not claim
-a full manager component pass or repeat the investigation without new evidence.
+The broader manager component fixture was unfinished at that milestone: its
+later attempts produced eight AppKit browser/history captures but did not
+complete. Close-confirmation hypotheses did not resolve the wait and their edits
+were removed. Those attempts remain retained. The workspace-manager cleanup
+above identifies the obsolete included-workspace rename expectation and now
+passes the complete supported manager fixture on both Apple configurations.
 Full feature/visual, device/provider/lifecycle and sustained-performance gates
 remain open.
 

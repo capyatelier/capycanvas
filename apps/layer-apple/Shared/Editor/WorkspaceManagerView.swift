@@ -25,7 +25,6 @@ struct WorkspaceManagerPresentation: ViewModifier {
             }
             .sheet(isPresented: $manager.presented, onDismiss: { manager.dismissed() }) {
                 WorkspaceManagerView(manager: manager, library: library)
-                    .modifier(WorkspacePackagePicker(files: manager.files))
                     .modifier(EditorPopupPresentation())
             }
     }

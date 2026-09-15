@@ -22,10 +22,10 @@ shared current-workspace and saved-toolbar actions. Rust owns the rows, action
 availability, forms, validation and history policy. Row actions use metadata
 summaries without loading every item's retained layout history.
 
-Initialization seeds the shared Painter, Illustrator and Photographer workspaces
-idempotently. Stable IDs drive the header switcher, including current edited names.
-The defaults are editable and undeletable; existing user data and the last active
-workspace survive upgrades. Reset All Brushes locks the editor at an idle boundary,
+Initialization seeds the shared Sketch, Paint and Photo workspaces idempotently.
+Stable IDs drive the header switcher. Included workspaces keep their names and
+cannot be deleted; their layouts and tool settings remain editable. Existing user
+data and the last active workspace survive upgrades. Reset All Brushes locks the editor at an idle boundary,
 calls Rust's reset operation, then captures and flushes the current working values.
 It creates no layout-history event and leaves other workspaces unchanged.
 
@@ -39,12 +39,14 @@ selection and preview. Late or rapid selection replies cannot revive a dismissed
 preview. Separate Save/Load Layout UI and Apple bridge operations have been
 removed. Existing shared template records remain preserved for core migration.
 
-The native package transport supports coordinated `.capyworkspace` and
-`.capytoolbar` delivery and consistent database backup. Opening a legacy
-`.capytemplate` reports that loading saved layouts is no longer available.
-These storage capabilities are covered by direct integration checks; the compact
-workspace screens follow the revised shared design without storage-administration,
-import/export, trash or metadata/version-management controls.
+Externally opened `.capyworkspace` and `.capytoolbar` files use coordinated reads
+on the file queue and shared Rust import validation. Apple no longer registers
+the removed `.capytemplate` format. The compact workspace screens follow the
+shared design without storage administration, package pickers/exporters, trash
+or metadata/version-management controls; their obsolete routing and presentation
+state are removed. Layout History keeps the existing preview/Cancel/Restore flow.
+The lower-level storage service retains consistent SQLite backup and package
+serialization, with direct integration coverage.
 
 `NativeWorkspaceLibrary` has a separate serial Dispatch queue; SQLite runs on
 the shared Rust storage worker. The drawing owner only captures or adopts
@@ -54,7 +56,7 @@ writes in the editor persistence barrier. Startup blocks new editor input until
 restoration completes. Ownership recovery blocks new pen contacts and shortcuts
 while allowing existing contacts and property corrections to finish. It retains the outgoing workspace
 until storage and adoption acknowledge the transition. Failed ownership retains
-in-memory changes for Save as New Workspace or a current-state export.
+in-memory changes for Save as New Workspace.
 
 Migration reads unacknowledged `workspaces/<scene>.json` and `workspace.json`
 sources on the storage queue. It preserves distinct scenes, aliases an identical
