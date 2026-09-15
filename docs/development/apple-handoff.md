@@ -20,6 +20,41 @@ Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
 checks without a relevant change. Commit only major milestones. All eleven
 recovery stashes remain.
 
+The menu milestone follows `7bc66f4`. Shared editor menus retain the parent row
+index with each submenu page; returning restores the row that opened the page
+instead of jumping to the first enabled item. Their frames also shrink to the
+available window bounds. The previous fixed 560-point scroller extended above
+and below a valid 700×500 Mac window. Standard flexible frame constraints fix
+this without changing the popup presenter or input adapters.
+
+The existing native keyboard fixture reproduces both failures before their
+fixes. It now passes nested navigation, selected choices, disabled rows,
+shortcuts and Escape, plus constrained scrolling and last-row activation at
+700×500, 360×500 and 700×760. All three owned-window captures are reviewed.
+Both Release builds pass. Two grouped Mac editor workflows pass with no failures
+or skips: choice menus and toolbar style/actions with full Zen/Tab restoration.
+The simulator choice workflow passes, including menu bounds and Undo/Redo.
+Representative Mac and simulator menu captures are reviewed. No physical-device
+run accompanies this menu milestone.
+
+The grouped checks exposed an invalid Mac capture-label lookup after a modal
+menu hid its source from accessibility, and an obsolete partial-Zen expectation
+in the toolbar fixture. The fixture now caches that label before opening and
+expects full Zen, restoring through Tab as in the existing dedicated Zen check.
+The simulator toolbar workflow passes menu bounds and the style action, but its
+focused rerun still reports a failure at the Zen portion. The built and installed
+test bundles match and contain the updated assertion; no old runner remains
+live. Its cause is unresolved. Keep UIKit Zen/toolbar-restoration acceptance open
+and do not repeat the run or restart the simulator without a new hypothesis.
+The production source stays unchanged through these editor runs; only the
+affected workflows are repeated after fixture corrections.
+
+Evidence is under `artifacts/apple-menu-navigation-v1/`,
+`artifacts/apple-menu-fit-v1/` and `artifacts/apple-menu-milestone-v1/`.
+Both owned test apps are stopped. The repository fetch finds no newer commits
+on main; all eleven recovery stashes remain. Full feature/visual, physical input,
+provider/lifecycle and sustained Mac 90 Hz / iPad 120 Hz acceptance remain open.
+
 The preceding milestone `494e8b3` publishes the filter/control and slider-history
 batch below. The Settings/dialog milestone now adds:
 

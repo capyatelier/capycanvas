@@ -457,7 +457,15 @@ Both hosts also pass `testWorkspaceSwitcher`, `testToolbarStylesAndActions` and
 `testToolbarCustomization`. Toolbar grips include their names in accessibility
 labels; Mac's Select All command respects the focused native text editor.
 The direct menu keyboard check uses native events in its own Mac window for
-arrows, Return, Escape, disabled rows and shifted shortcuts. Menus reuse
+arrows, Return, Escape, disabled rows and shifted shortcuts. Submenu pages retain
+their parent row, so returning from a later submenu restores keyboard navigation
+to that row instead of the first enabled item. Menus shrink to the available
+window bounds while retaining their native scroller. The fixture verifies
+700×500, 360×500 and 700×760 windows, including scrolling to and activating the
+last row; set `CAPY_MENU_CAPTURES` to save captures of its owned windows.
+The grouped `testBlendChoices` and `testToolbarStylesAndActions` workflows check
+actual choice and toolbar menu bounds, selection, actions and history on both
+hosts. Menus reuse
 `ShortcutKeyCapture`; UIKit restores the preceding responder when a menu closes.
 The iPad workflow verifies arrows and command shortcuts. XCTest Escape produced
 no UIKit press or key-command callback in a traced first-responder probe; Return

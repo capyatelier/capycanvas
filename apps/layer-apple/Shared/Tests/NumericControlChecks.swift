@@ -84,12 +84,20 @@ extension XCTestCase {
             XCTAssertTrue(button.isEnabled)
             workspaceActivate(button)
         }
+        func open(_ control: XCUIElement) {
+            let identifier = control.identifier
+            workspaceActivate(control)
+            let menu = app.descendants(matching: .any)["editor-action-menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            XCTAssertTrue(workspaceViewport(in: app).frame.contains(menu.frame), "The choice menu must fit inside its editor window")
+            attachEditor(in: app, name: identifier + "-menu")
+        }
         expect("Normal")
-        workspaceActivate(property)
+        open(property)
         let multiply = app.buttons["property-blend-option-1"]
         XCTAssertTrue(multiply.waitForExistence(timeout: 5)); workspaceActivate(multiply)
         expect("Multiply"); command("Undo"); expect("Normal")
-        workspaceActivate(compact)
+        open(compact)
         let screen = app.buttons["layer-blend-option-2"]
         XCTAssertTrue(screen.waitForExistence(timeout: 5)); workspaceActivate(screen)
         expect("Screen"); command("Undo"); expect("Normal"); command("Redo"); expect("Screen")
