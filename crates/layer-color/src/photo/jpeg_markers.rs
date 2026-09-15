@@ -123,9 +123,9 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
                 .iter()
                 .any(|signature| segment.windows(signature.len()).any(|w| w == *signature))
         {
-            return Err("This JPEG contains an HDR gain map; its SDR rendition needs an explicit import choice".into());
+            return Err("This JPEG contains an HDR gain map. HDR import is not supported yet; export an SDR image from another editor.".into());
         } else if marker == 0xe2 && segment.starts_with(b"MPF\0") {
-            return Err("Multiple-picture JPEG needs an explicit image or rendition choice".into());
+            return Err("Multiple-picture JPEG is not supported. Export the intended image as a separate SDR PNG, JPEG or TIFF.".into());
         }
     }
     if let Some(count) = total {

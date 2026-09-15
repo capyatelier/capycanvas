@@ -6150,3 +6150,89 @@ and alternate-renderer qualification, and the previously recorded workspace and
 toolbar test gaps. Fresh baseline/frame-creation comparisons, memory and latency
 measurements and necessary optimization remain last. Other platform host work
 requires approval after GTK completion and qualification.
+
+## 2026-09-15 — Explicit SDR input and TIFF variant policy
+
+Implementation starts from `4ee46c30`. The agreed SDR journey permits a specific
+interpretation choice **or error** for unidentified HDR; HDR editing/rendition
+import is journey 8 and milestone 4. Therefore this checkpoint closes the current
+SDR policy with actionable rejection, rather than adding a gain-map rendition
+selector. Recognized HDR gain-map JPEGs and MPF containers no longer refer users
+to a choice the application does not provide. Open/Place/Paste keep the current
+project unchanged and advise creating a separate SDR image in another editor.
+These checks do not qualify every possible HDR container or reconstruct gain maps.
+
+TIFF's declared initial subset is one image, interleaved unsigned 8/16-bit
+RGB/gray (optional explicitly unassociated alpha) or profiled CMYK without alpha.
+The reader accepts supported strips/tiles, byte orders and classic/BigTIFF
+containers. Planar, associated-alpha, floating-point and multi-page TIFF remain
+explicitly unsupported. The installed tiff 0.10.3 chunk-reader documentation
+still describes incomplete planar reads; the application rejects that layout
+before requesting chunks. Multi-page and planar errors now give a concrete
+separate-page/interleaved export route. These are supported-subset limits, not
+pending promises of a page selector or native CMYK/HDR editing.
+
+Output remains uncompressed, interleaved, single-image classic TIFF with one-row
+strips. Before writing metadata or requesting pixels it conservatively accounts
+for payload, strip tables/alignment, ICC and fixed tags, rejecting output beyond
+the 32-bit file-offset limit. [LibTIFF's BigTIFF design](https://libtiff.gitlab.io/libtiff/specification/bigtiff.html)
+confirms the classic/64-bit distinction. PNG or smaller dimensions remain
+available. This avoids spending time creating a partial multi-gigabyte output;
+it does not add BigTIFF delivery. Existing row cancellation/atomic publication
+remains in use.
+
+All artifacts below are under `artifacts/color-m2/`; no performance qualification
+or optimization was performed.
+
+- `tiff-policy-checked-tests.log`: 2 tests passed (0.21 s). Eight RGB16 cases cover
+  classic/BigTIFF × uncompressed/LZW/Deflate/PackBits strips, exact samples and
+  ICC. Independent valid planar and multi-page/associated-alpha/float fixtures
+  exercise explicit rejection. A 32768² RGBA16 output is rejected before the
+  provider runs or any output bytes are written.
+- `tiff-policy-external.log`: ImageMagick independently recovers all 1,683 U16
+  samples exactly from each of the eight files. It also generated big-endian LZW
+  and tiled ZIP fixtures; current `photo_sources roundtrip` reads and exports
+  those to PNG with exact source/profile assertions, then ImageMagick verifies
+  every output sample. Fixtures and hashes are retained in `tiff-policy-fixtures/`.
+  The existing runner was used solely for interchange correctness; its incidental
+  timings/RSS are not benchmark evidence.
+- `input-policy-jpeg-tests.log`: both strict marker tests passed, including
+  recognized ISO/Adobe/Google gain-map declarations, MPF, late scans and ICC
+  sequence errors.
+- `input-policy-native.log`: 1 passed (3.63 s). Actual GTK Open, Import Image as
+  Layer and Paste Image as Layer reject declared HDR/MPF JPEG inputs, report the
+  specific error and preserve exact serialized document state. Fixtures are
+  ordinary valid JPEGs with injected recognized declarations, not a full HDR
+  conformance corpus.
+- `input-policy-production-check.log`: GTK and shared FFI passed (1.62 s).
+  Other platform hosts were not integrated or built.
+
+Native executable `input-policy-gtk-tests` SHA-256:
+`031cd2509189046f48535abb79c43a4d5094bf0c81561d4d99481c81db4553f3`.
+It runs on the same isolated Mutter/GTK/GSK Vulkan reference setup recorded in
+the preceding checkpoint. Its source manifest records the exact implementation.
+`input-policy-provenance.json` records build/run and fixture hashes.
+
+The first TIFF fixtures were invalid: the pinned encoder enables compression
+inside `write_data`, so direct `write_strip` produced raw bytes with an LZW tag;
+and simply retagging interleaved offsets as planar did not produce valid plane
+counts. The corrected fixtures use the documented compressed writer and an
+independently constructed three-plane TIFF. Failed and diagnostic logs remain;
+there was no production decompression change or acceptance-tolerance relaxation.
+
+Reproduce with local JPEG headers in `PKG_CONFIG_PATH`: run `cargo test -p
+layer-color --offline photo::tiff_policy_tests:: -- --test-threads=1 --nocapture`
+and `cargo test -p layer-color --offline photo::jpeg_markers::`. Build GTK tests,
+then run the exact executable through `tools/performance/gtk-raster.sh` with
+`workspace::tests::place_source::native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document`.
+External fixture commands and the current example's identity results are retained
+in the corresponding session/log records.
+
+Remaining GTK qualification concerns cross-workflow job cancellation and resource
+accounting, the complete tool/filter/precision and recovery matrix, the existing
+workspace/toolbar test gaps, and managed-display/alternate-renderer coverage.
+Fresh frame-creation baselines and large-document/multiple-document memory and
+latency measurements remain last. Coarse-first source/display work and further
+zoom-performance optimization belong to that final measured phase where needed;
+missing measurements cannot be counted as passing budgets. Other platform work
+still requires approval after GTK completion and qualification.

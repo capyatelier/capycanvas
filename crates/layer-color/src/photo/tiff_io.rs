@@ -18,7 +18,7 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
     let extent = [w, h];
     limits.extent(extent)?;
     if decoder.more_images() {
-        return Err("Multi-page TIFF needs a page-selection import".into());
+        return Err("Multi-page TIFF is not supported. Export the intended page as a separate SDR TIFF or PNG.".into());
     }
     if decoder
         .find_tag_unsigned::<u16>(Tag::PlanarConfiguration)
@@ -26,7 +26,7 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
         .unwrap_or(1)
         != 1
     {
-        return Err("Planar TIFF is not supported by the pinned chunk decoder".into());
+        return Err("Planar TIFF is not supported. Export an interleaved (chunky) TIFF or PNG.".into());
     }
     let orientation = decoder
         .find_tag_unsigned::<u16>(Tag::Orientation)
@@ -216,6 +216,12 @@ pub fn write_tiff_rows(
     let density = resolution
         .map(layer_core::ImageResolution::tiff_density)
         .transpose()?;
+    // Classic TIFF uses 32-bit offsets. Bound uncompressed payload, per-row
+    // strip tables/alignment, ICC and fixed tags before requesting any pixels.
+    let bound = u64::from(extent[1]) * (row_bytes as u64 + 16) + icc.len() as u64 + 4096;
+    if bound > u64::from(u32::MAX) {
+        return Err("This image exceeds classic TIFF's 4 GiB file limit. Choose PNG or smaller output dimensions; BigTIFF export is not supported.".into());
+    }
     let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(err)?;
     let mut codes = Vec::<u16>::new();
     macro_rules! write {

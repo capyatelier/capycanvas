@@ -158,6 +158,18 @@ cover response/cancellation, abandoned waits and repeated export-sheet disposal.
 
 File → Import Image as Layer and Edit → Paste Image as Layer retain original
 PNG/JPEG/TIFF source data while keeping the destination document's working mode.
+Recognized HDR gain-map and multiple-picture JPEG inputs are rejected with an
+actionable error; SDR import does not discard their richer content silently.
+HDR rendition import belongs to the HDR milestone.
+
+TIFF import supports a single interleaved 8/16-bit unsigned RGB/gray image, with
+explicitly unassociated alpha where present, or profiled CMYK without alpha.
+Supported strips/tiles, classic/BigTIFF containers and both byte orders are read
+under the codec limits. Planar, associated-alpha, floating-point and multi-page
+layouts are rejected. TIFF delivery is single-image uncompressed classic TIFF;
+an output exceeding its 32-bit offset limit fails before requesting pixels.
+See the [variant and input-policy validation](../history/color-management-gtk-m2-validation.md#2026-09-15--explicit-sdr-input-and-tiff-variant-policy).
+
 Paste prefers TIFF, then PNG, then JPEG; transfer and worker decoding can be
 cancelled. Clear removes retained content, and Undo restores it exactly. The native
 `workspace::tests::place_source::native_profiled_place_paste_and_source_history`

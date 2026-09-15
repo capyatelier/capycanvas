@@ -241,3 +241,89 @@ fn native_profiled_place_paste_and_source_history() {
     w.window.destroy();
     pump(100);
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
+    glib::set_prgname(Some("capy-canvas-test"));
+    let app = native_test_app("art.capycanvas.SdrInputPolicy");
+    let w = Workspace::with_project(&app, Some((new_drawing(96, 64).unwrap(), None)));
+    w.window.present();
+    ready(&w);
+    let before = snapshot(&w);
+    let mut builder = SourceBuilder::new(
+        [3, 2],
+        SourceInterpretation {
+            channels: SourceChannels::Rgb,
+            depth: IntegerDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        1024 * 1024,
+    )
+    .unwrap();
+    for _ in 0..2 {
+        builder.push_row(&[100; 9]).unwrap();
+    }
+    let mut jpeg = Vec::new();
+    layer_color::photo::write_jpeg(&mut jpeg, &builder.finish().unwrap(), 95).unwrap();
+    let directory = std::env::temp_dir().join(format!("capy-input-policy-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for (command, marker, reason) in [
+        (
+            CommandId::OpenDocument,
+            b"urn:iso:std:iso:ts:21496:-1\0".as_slice(),
+            "HDR import is not supported",
+        ),
+        (
+            CommandId::ImportImage,
+            b"MPF\0".as_slice(),
+            "Multiple-picture JPEG is not supported",
+        ),
+        (
+            CommandId::PasteImage,
+            b"urn:iso:std:iso:ts:21496:-1\0".as_slice(),
+            "HDR import is not supported",
+        ),
+    ] {
+        // A valid ordinary JPEG with a recognized richer-container declaration.
+        // This tests rejection, not gain-map reconstruction or MPF conformance.
+        let mut bytes = jpeg[..2].to_vec();
+        bytes.extend_from_slice(&[0xff, 0xe2]);
+        bytes.extend_from_slice(&((marker.len() + 2) as u16).to_be_bytes());
+        bytes.extend_from_slice(marker);
+        bytes.extend_from_slice(&jpeg[2..]);
+        if command == CommandId::PasteImage {
+            let provider =
+                gtk::gdk::ContentProvider::for_bytes("image/jpeg", &glib::Bytes::from_owned(bytes));
+            w.window.clipboard().set_content(Some(&provider)).unwrap();
+            invoke(&w, command);
+        } else {
+            let path = directory.join("unsupported.jpg");
+            std::fs::write(&path, &bytes).unwrap();
+            invoke(&w, command);
+            let file = chooser();
+            file.set_file(&gtk::gio::File::for_path(path)).unwrap();
+            pump(200);
+            file.response(gtk::ResponseType::Accept);
+        }
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while state(&w).document_file.busy || !state(&w).requests.is_empty() {
+            pump(20);
+            assert!(Instant::now() < deadline, "input rejection");
+        }
+        assert!(
+            state(&w)
+                .host_error
+                .as_deref()
+                .is_some_and(|e| e.contains(reason)),
+            "{:?}",
+            state(&w).host_error
+        );
+        assert_eq!(snapshot(&w), before);
+    }
+    w.window.destroy();
+    pump(100);
+    std::fs::remove_dir_all(directory).unwrap();
+}
