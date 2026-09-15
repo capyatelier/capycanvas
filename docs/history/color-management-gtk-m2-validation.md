@@ -26,6 +26,14 @@ required where those measured gates fail, rather than as an independent feature
 checklist. The toolbar/workspace fixture failures are resolved in the final
 display checkpoint. Other platform hosts still require approval after GTK qualification.
 
+The [final performance qualification](color-management-gtk-m2-performance.md)
+now records declared budgets and fresh fixed/parent/native measurements. The
+native benchmark factory replacement exposed a 4K display-cache overhead error
+and material move/pen-up latency failures. The cache-sizing failure is corrected;
+the latency failures remain open. Native 24/45/60 MP and three-document drawing
+with saving now have initial measurements; the complete GTK adjustment/export/
+worker-pressure and presentation matrix still needs qualification.
+
 **Current work order (user instruction, 2026-09-14):** finish functional milestone 2
 implementation and correctness/recovery validation first. Further benchmarking,
 regression investigation and optimization are deferred to the final qualification

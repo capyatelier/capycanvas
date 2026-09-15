@@ -2,6 +2,7 @@
 //! Run in release on a physical GPU. Synthetic images are reproducible workloads,
 //! not claims of photographic color accuracy. Export/undo timings are cold paths.
 use layer_core::*;
+use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
     input_queue,
@@ -20,7 +21,6 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 struct Canvas {
     engine: Engine,
     input: InputProducer<PenEvent>,
-    assets: BTreeMap<AssetId, ProjectAsset>,
     sequence: u64,
     source_frames: [Vec<(f64, f64, f64)>; 2],
 }
@@ -51,65 +51,52 @@ fn quantiles(values: &mut [f64]) -> [f64; 3] {
     [0.5, 0.95, 0.99].map(|q| values[((values.len() - 1) as f64 * q).ceil() as usize])
 }
 impl Canvas {
-    fn new(extent: [u32; 2], name: &str, tiled: bool) -> Result<Self> {
+    fn new(extent: [u32; 2], name: &str, color: DocumentColor) -> Result<Self> {
         let start = Instant::now();
         let mut document = Document::new(name, extent[0], extent[1]);
-        let id = AssetId::from("qualification:synthetic-source");
+        document.color = color;
+        let mut builder = SourceBuilder::new(
+            extent,
+            SourceInterpretation {
+                channels: SourceChannels::Rgba,
+                depth: color.depth,
+                profile: ColorProfile::Builtin(color.space),
+                profile_assumed: false,
+            },
+            512 * 1024 * 1024,
+        )?;
+        // Generate one row at a time, with real low-order U16 values. A full
+        // temporary photograph would inflate the workload's source ownership.
         let mut random = 0x1357abcdu32;
-        let bytes = (0..u64::from(extent[0]) * u64::from(extent[1]))
-            .flat_map(|i| {
+        let mut row = Vec::with_capacity(extent[0] as usize * color.depth.bytes() * 4);
+        for y in 0..extent[1] {
+            row.clear();
+            for x in 0..extent[0] {
                 random ^= random << 13;
                 random ^= random >> 17;
                 random ^= random << 5;
-                let x = i % u64::from(extent[0]);
-                let y = i / u64::from(extent[0]);
-                let noise = (random % 9) as u8;
-                [
-                    ((x * 211 / u64::from(extent[0])) as u8).saturating_add(noise),
-                    ((y * 211 / u64::from(extent[1])) as u8).saturating_add(noise),
-                    (x.wrapping_add(y) / 32 % 240) as u8,
-                    255,
-                ]
-            })
-            .collect::<Vec<_>>();
-        let assets = if tiled {
-            use layer_core::color::{IntegerDepth, source::*};
-            let mut builder = SourceBuilder::new(
-                extent,
-                SourceInterpretation {
-                    channels: SourceChannels::Rgba,
-                    depth: IntegerDepth::U8,
-                    profile: Default::default(),
-                    profile_assumed: false,
-                },
-                512 * 1024 * 1024,
-            )?;
-            for row in bytes.chunks_exact(extent[0] as usize * 4) {
-                builder.push_row(row)?;
+                let noise = (random % 1024) as u16;
+                for code in [
+                    (u64::from(x) * 55000 / u64::from(extent[0])) as u16 + noise,
+                    (u64::from(y) * 55000 / u64::from(extent[1])) as u16 + noise,
+                    ((u64::from(x) + u64::from(y)) * 13 % 60000) as u16 + noise,
+                    65535,
+                ] {
+                    match color.depth {
+                        IntegerDepth::U8 => row.push((code >> 8) as u8),
+                        IntegerDepth::U16 => row.extend_from_slice(&code.to_le_bytes()),
+                    }
+                }
             }
-            document.layers[0].source = Some(std::sync::Arc::new(builder.finish()?));
-            drop(bytes);
-            BTreeMap::new()
-        } else {
-            document.layers[0].asset = Some(id.clone());
-            BTreeMap::from([(
-                id,
-                ProjectAsset {
-                    extent,
-                    format: ProjectAssetFormat::Rgba8Srgb,
-                    bytes: bytes.into(),
-                },
-            )])
-        };
+            builder.push_row(&row)?;
+        }
+        document.layers[0].source = Some(std::sync::Arc::new(builder.finish()?));
         for _ in 0..31 {
             let id = document.allocate_layer_id();
             document.layers.insert(1, Layer::paint(id, "empty"));
         }
-        let mut gpu = WgpuRasterizer::new_headless()?;
+        let mut gpu = WgpuRasterizer::new_native_headless(color)?;
         gpu.set_telemetry_enabled(true);
-        for (id, image) in &assets {
-            gpu.prepare_owned_asset(id, image)?;
-        }
         let (input, consumer) = input_queue(64);
         let scale = (1024. / extent[0] as f32).min(768. / extent[1] as f32);
         let mut engine = CanvasEngine::new(
@@ -133,7 +120,6 @@ impl Canvas {
         let mut canvas = Self {
             engine,
             input,
-            assets,
             sequence: 0,
             source_frames: Default::default(),
         };
@@ -162,7 +148,7 @@ impl Canvas {
         Ok(())
     }
     fn snapshot(&self) -> Result<Project> {
-        Ok(Project::snapshot(self.engine.document(), &self.assets)?)
+        Ok(Project::snapshot(self.engine.document(), &BTreeMap::new())?)
     }
     fn stroke(&mut self, ordinal: u64) -> Result<(Vec<f64>, Vec<f64>)> {
         let mut brush = default_brush(DefaultBrushPreset::GPen);
@@ -329,15 +315,9 @@ impl Canvas {
             "renderer allocated/reserved {:.2} MiB; current compressed tiles {:.2} MiB; source {:.2} MiB",
             self.engine.backend().telemetry().resident_bytes as f64 / 1048576.,
             backed as f64 / 1048576.,
-            (self.assets.values().map(|a| a.bytes.len()).sum::<usize>()
-                + self
-                    .engine
-                    .document()
-                    .layers
-                    .iter()
-                    .filter_map(|l| l.source.as_ref())
-                    .map(|s| s.resident_bytes())
-                    .sum::<usize>()) as f64
+            self.engine.document().layers.iter()
+                .filter_map(|l| l.source.as_ref())
+                .map(|s| s.resident_bytes()).sum::<usize>() as f64
                 / 1048576.
         );
         for line in std::fs::read_to_string("/proc/self/status")?
@@ -401,24 +381,29 @@ fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let tiled = args.iter().any(|a| a == "--tiled-sources");
-    let selected = args
-        .iter()
-        .find(|a| !a.starts_with("--"))
-        .map_or("all", String::as_str);
-    println!(
-        "Source ownership: {}; sRGB8 working document",
-        if tiled {
-            "tiled copy-on-write"
-        } else {
-            "packed source with materialized paint"
+    let mut selected = "all";
+    let mut color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
+            "--space" => color.space = match arguments.next().map(String::as_str) {
+                Some("srgb") => RgbSpace::Srgb,
+                Some("p3") => RgbSpace::DisplayP3,
+                Some("adobe-rgb") => RgbSpace::AdobeRgb,
+                Some("prophoto") => RgbSpace::ProPhoto,
+                _ => return Err("--space needs srgb, p3, adobe-rgb or prophoto".into()),
+            },
+            "--depth" => color.depth = match arguments.next().map(String::as_str) {
+                Some("8") => IntegerDepth::U8,
+                Some("16") => IntegerDepth::U16,
+                _ => return Err("--depth needs 8 or 16".into()),
+            },
+            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
         }
-    );
-    let output = PathBuf::from(if tiled {
-        "artifacts/color-m2/tiled-dense"
-    } else {
-        "artifacts/color-m1/dense"
-    });
+    }
+    println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");
+    let output = PathBuf::from("artifacts/color-m2/final-performance/dense");
     std::fs::create_dir_all(&output)?;
     for (name, extent) in [
         ("24mp", [6000, 4000]),
@@ -428,7 +413,7 @@ fn main() -> Result<()> {
         if selected != "all" && selected != name {
             continue;
         }
-        let mut canvas = Canvas::new(extent, name, tiled)?;
+        let mut canvas = Canvas::new(extent, name, color)?;
         canvas.stroke(0)?;
         canvas.source_frames = Default::default();
         canvas.settle()?;
@@ -458,28 +443,31 @@ fn main() -> Result<()> {
         std::fs::remove_file(path)?;
     }
     if selected == "all" || selected == "multiple" {
-        let mut first = Canvas::new([6000, 4000], "multiple-a", tiled)?;
-        let mut second = Canvas::new([6000, 4000], "multiple-b", tiled)?;
+        let mut first = Canvas::new([6000, 4000], "multiple-a", color)?;
+        let mut second = Canvas::new([8192, 5504], "multiple-b", color)?;
+        let mut third = Canvas::new([8192, 7324], "multiple-c", color)?;
         let path = output.join("multiple.capy");
         let worker = save(first.snapshot()?, path.clone());
         let (mut cpu, mut completed) = (Vec::new(), Vec::new());
         for ordinal in 0..4 {
-            for canvas in [&mut first, &mut second] {
+            for canvas in [&mut first, &mut second, &mut third] {
                 let (a, b) = canvas.stroke(ordinal)?;
                 cpu.extend(a);
                 completed.extend(b);
             }
         }
         println!(
-            "two 24mp documents, 512 alternating drawing frames: CPU {:?} ms; completed {:?} ms; concurrent save {:?}",
+            "24 + 45 + 60 MP documents, 768 alternating drawing frames: CPU {:?} ms; completed {:?} ms; concurrent save {:?}",
             quantiles(&mut cpu),
             quantiles(&mut completed),
             worker.join().unwrap()?
         );
         first.settle()?;
         second.settle()?;
+        third.settle()?;
         first.memory()?;
         second.memory()?;
+        third.memory()?;
         std::fs::remove_file(path)?;
     }
     Ok(())

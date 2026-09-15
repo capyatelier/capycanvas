@@ -98,3 +98,105 @@ three reference builds and exact source commits are in
 are retained there. Correctness tests overlapped CPU builds; their durations
 are not used as performance evidence. The timed comparison begins only after
 both builds and GPU correctness tests finish.
+
+## First complete native comparison — failures remain
+
+The initial native 4K run failed before its first frame. The bounded display
+cache planned 274,022,656 bytes (261.33 MiB) for 4096² Float32 detail plus its
+coarse image, reduction scratch and records, exceeding the 256 MiB component
+cap. The cap now reserves 272 MiB for that complete allocation. This preserves
+the existing 4096² workload's resolution and precision and stays inside the
+previously declared 1/2 GiB aggregate GPU envelope. It is not a claim that total
+GPU memory is qualified. Diagnostic ABI errors now retain the renderer's reason
+on stderr instead of reporting only `RenderError`.
+
+With that correction, all 25 scenarios execute in sRGB8, P3 U8 and ProPhoto U16.
+Each arm has three repetitions; the original failed run remains retained.
+The full runs expose substantial latency failures, especially palette-knife
+frame creation and pen-up capture/publication. These results require fixes;
+they are not accepted as the cost of higher precision.
+
+| Arm | Worst move completed p99 ms | Worst pen-up completed p99 ms | Worst CPU move p95 / p99 ms | Scenarios exceeding 8.33 ms |
+| --- | --- | --- | --- | --- |
+| Fixed `ebafa44` | 3.971 | 3.386 | 2.072 / not reported by original harness | 0 |
+| M2 start `e46f271` | 4.420 | 3.856 | 2.130 / 2.982 | 0 |
+| Parent `125108bf` diagnostic path | 4.342 | 4.308 | 2.197 / 3.037 | 0 |
+| Native sRGB8 | 16.337 | 26.579 | 10.612 / 14.318 | 13 |
+| Native P3 U8 | 16.567 | 25.655 | 10.539 / 14.437 | 12 |
+| Native ProPhoto U16 | 26.404 | 36.715 | 18.540 / 24.150 | 15 |
+
+The final column counts a scenario if either move or pen-up CPU/completed p99
+exceeds the absolute gate. Maxima in different columns can come from different
+scenarios. Exact per-scenario rows, frame/deadline counts and capture charges are
+in the corresponding generated reports and `comparison-data.json`. Fixed/M1/
+parent runs took 65.36/69.62/70.85 seconds; corrected native sRGB8/P3 U8/ProPhoto
+U16 runs took 93.30/92.95/96.25 seconds, including untimed setup and export.
+Those whole-run durations are not interaction latency.
+
+The selected GPU was NVIDIA index 3 in the telemetry inventory; other GPUs
+remained idle. Power policy remained `amd-pstate-epp`, `powersave`,
+`balance_performance`, with the GPU's 250 W limit unchanged. Record files
+`environment.json`, `native-4k-environment.json` and per-arm `*-gpu.csv` retain
+the full inventory, activity, clocks and temperature observations. Existing
+driver allocations on that GPU are not charged as this benchmark's memory.
+Per-process high-water comes from `/usr/bin/time`; renderer counters and global
+driver usage remain distinct and do not by themselves pass aggregate memory.
+
+Exact binaries and source hashes are in `builds.json` and
+`native-4k-build-sources.json`; the corrected native executable is
+`6d1eab2f03755b972faad3d6e1955406ed80bd585d905ab9153dce1435b5a20a`.
+Commands and run boundaries are in `runs.json` and `native-4k-runs.json`.
+`build-baselines.py`, `run-comparison.py` and `run-native-4k.py` reproduce these
+arms. GPU measurement runs were serialized and did not overlap CPU builds or
+other GPU validation runs. Follow-up phase probes are explicitly instrumented
+diagnostics and will not be substituted for final uninstrumented measurements.
+
+## Native photo and concurrent-save measurements
+
+`raster_workloads` now constructs the native renderer and streams synthetic
+source rows with real low-order U16 values. The old packed-source comparison
+branch is removed; historical executables retain their original workloads.
+Select `24mp`, `45mp`, `60mp`, `multiple` or `all`, with optional `--space` and
+`--depth`; defaults are ProPhoto U16. The multiple case keeps 24 + 45 + 60 MP
+documents simultaneously instead of two copies of the smallest photo.
+
+These measurements use a 1024×768 offscreen view and 32+ layers. Each single
+photo contributes 256 measured drawing frames during native saving, followed by
+exact source/profile and committed-tile comparisons on reopening, undo/redo and
+an explicit sRGB diagnostic export checksum. Native source/master data retain
+U16 precision; the sRGB8 checksum is not the U16 identity test. The multiple
+case alternates 768 drawing frames across three live devices/documents while
+saving one snapshot. It does not yet include simultaneous profiled export,
+sliders, histograms or GTK presentation.
+
+| Case | Drawing CPU p95 / p99 ms | Completed p95 / p99 ms | Process high-water MiB | End-of-run GPU allocator reserved MiB |
+| --- | --- | --- | --- | --- |
+| 24 MP | 2.242 / 2.883 | 2.569 / 3.326 | 792.05 | 640 |
+| 45 MP | 3.028 / 3.493 | 3.548 / 4.526 | 1078.71 | 640 |
+| 60 MP | 4.183 / 4.898 | 4.599 / 5.423 | 1185.74 | 640 |
+| 24 + 45 + 60 MP | 3.186 / 4.177 | 3.647 / 4.578 | 1669.68 | 1920 total |
+
+Warm versus cold source frames are reported separately in the logs. All observed
+drawing frames in these cases remained under 8.33 ms; the cold subset's worst
+p99 was 7.24 ms on the 60 MP document in the multiple case. Single-photo
+undo/redo completed in 30.81–57.43 ms; these are operation durations, not GTK
+input blocking measurements. Source generation, device creation and the initial
+submission are combined and excluded from drawing percentiles. Synthetic row
+generation is not photo file-opening latency. Single-photo native save durations
+were 74.39/131.34/162.68 ms; separate full export/checksum durations were
+303.17/603.50/877.08 ms. Save can finish before all drawing frames do; the entire
+drawing interval is not claimed to overlap disk work.
+
+The 24 MP run used `native-photo-workloads` from
+`native-4k-build-sources.json`. The final example only removes its always-empty
+legacy asset map/preparation loop; `native-photo-final-workloads` runs 45 MP,
+60 MP and multiple, with its hash and matching source recorded in
+`native-photo-final-sources.json`. Exact checksums, allocator live/reserved
+figures, RSS/high-water and commands are retained in `native-photo-*.log`,
+`*-time.txt` and build records. Reproduce with `/usr/bin/time --verbose
+target/release/examples/raster_workloads 60mp` after `cargo build --release -p
+layer-render-wgpu --example raster_workloads --offline`.
+
+These results fit the declared CPU and end-of-run GPU envelopes for these
+specific cases. They do not establish peak allocation through every transient
+or qualify the full multiple-job/photo-control memory and latency gate.

@@ -295,7 +295,7 @@ pub unsafe extern "C" fn layer_canvas_create(
             background_rgba_linear: config.background_rgba_linear,
         };
         let engine = CanvasEngine::with_capacity(
-            WgpuRasterizer::new_native_headless(color).map_err(|_| LayerStatus::RenderError)?,
+            WgpuRasterizer::new_native_headless(color).map_err(render_error)?,
             document,
             consumer,
             view,
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn layer_canvas_create(
                 batches_per_frame: config.batch_capacity as usize,
             },
         )
-        .map_err(|_| LayerStatus::RenderError)?;
+        .map_err(render_error)?;
         *output = Box::into_raw(Box::new(LayerCanvas { producer, engine }));
         Ok(())
     })
@@ -369,7 +369,7 @@ pub unsafe extern "C" fn layer_canvas_draw_frame(canvas: *mut LayerCanvas) -> La
         canvas
             .engine
             .render_frame()
-            .map_err(|_| LayerStatus::RenderError)
+            .map_err(render_error)
     })
 }
 
@@ -388,7 +388,7 @@ pub unsafe extern "C" fn layer_canvas_draw_frame_at(
         canvas
             .engine
             .render_frame_at(timestamp_ns)
-            .map_err(|_| LayerStatus::RenderError)
+            .map_err(render_error)
     })
 }
 
@@ -411,7 +411,7 @@ pub unsafe extern "C" fn layer_canvas_draw_frame_for(
         canvas
             .engine
             .render_frame_for(timestamp_ns, presentation_timestamp_ns)
-            .map_err(|_| LayerStatus::RenderError)
+            .map_err(render_error)
     })
 }
 
@@ -462,7 +462,7 @@ pub unsafe extern "C" fn layer_canvas_set_view(
         canvas
             .engine
             .resize_surface(view.surface_width, view.surface_height)
-            .map_err(|_| LayerStatus::RenderError)?;
+            .map_err(render_error)?;
         canvas.engine.set_view(
             ViewState {
                 width_px: view.surface_width,
@@ -730,9 +730,9 @@ pub unsafe extern "C" fn layer_canvas_copy_rgba8_srgb(
             if std::time::Instant::now() >= deadline {
                 return Err(LayerStatus::RenderError);
             }
-            canvas.engine.render_frame().map_err(|_| LayerStatus::RenderError)?;
+            canvas.engine.render_frame().map_err(render_error)?;
             if canvas.engine.has_pending_input() || canvas.engine.has_pending_document_edits() {
-                canvas.engine.backend_mut().wait_idle().map_err(|_| LayerStatus::RenderError)?;
+                canvas.engine.backend_mut().wait_idle().map_err(render_error)?;
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
@@ -741,7 +741,7 @@ pub unsafe extern "C" fn layer_canvas_copy_rgba8_srgb(
             .engine
             .backend_mut()
             .copy_rgba8_srgb(destination, stride)
-            .map_err(|_| LayerStatus::RenderError)
+            .map_err(render_error)
     })
 }
 
@@ -758,7 +758,7 @@ pub unsafe extern "C" fn layer_canvas_wait_idle(canvas: *mut LayerCanvas) -> Lay
             .engine
             .backend_mut()
             .wait_idle()
-            .map_err(|_| LayerStatus::RenderError)
+            .map_err(render_error)
     })
 }
 
@@ -864,6 +864,13 @@ fn decode_feedback(
         .validate()
         .map_err(|_| LayerStatus::InvalidArgument)?;
     Ok(config)
+}
+
+// This ABI is the diagnostic/headless boundary. Preserve the underlying
+// reason on stderr while returning the stable status code to its caller.
+fn render_error(error: impl std::fmt::Display) -> LayerStatus {
+    eprintln!("Headless canvas: {error}");
+    LayerStatus::RenderError
 }
 
 fn decode_document_color(config: LayerCanvasConfig) -> Result<layer_core::color::DocumentColor, LayerStatus> {

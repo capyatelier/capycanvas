@@ -3,10 +3,14 @@
 use super::*;
 use layer_render::ViewState;
 
-// Provisional implementation ceilings; qualify combined host budgets before
-// activating native photo documents. Dense small composites remain economical.
+// Component ceilings; combined host budgets are qualified separately.
+// Dense small composites remain economical.
 pub(super) const DENSE_BYTES: u64 = 64 * 1024 * 1024;
-pub(super) const CACHE_BYTES: u64 = 256 * 1024 * 1024;
+// A full-resolution 4096² view needs 256 MiB of Float32 detail plus the coarse
+// image, reduction scratch and records (261.33 MiB measured/planned together).
+// Keep those overheads inside the bound instead of rejecting the existing 4K
+// drawing workload or reducing its display resolution to fit 256 MiB.
+pub(super) const CACHE_BYTES: u64 = 272 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 struct Window {
