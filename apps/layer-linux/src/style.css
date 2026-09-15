@@ -19,7 +19,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: 6px; }
 .window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
 .window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
-.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: alpha(var(--window-fg-color), .10); }
+.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: 8px; box-shadow: 0 3px 12px alpha(black, .18); }
@@ -54,13 +54,13 @@ window, label, text { font-size: var(--ui-text-size); }
 /* Keep the labels' existing button padding, with one fill behind the whole row. */
 .light-theme .window-bar .header-menu-labels menubutton.chrome-control > button { background-color: transparent; }
 .light-theme .window-bar .header-tool:hover,
-.light-theme .window-bar .header-tool.drawer-open:not(.selected-tool),
 .light-theme .window-bar menubutton.chrome-control > button:hover { background-image: linear-gradient(alpha(var(--window-fg-color), .10), alpha(var(--window-fg-color), .10)); }
-.light-theme .window-bar .header-tool.drawer-open:not(.selected-tool) { background-color: var(--header-control-bg); }
 .light-theme .window-bar .header-tool.selected-tool { background-image: linear-gradient(alpha(var(--accent-bg-color), .22), alpha(var(--accent-bg-color), .22)); }
 .light-theme .window-bar .header-tool:active,
 .light-theme .window-bar menubutton.chrome-control > button:active,
 .light-theme .window-bar menubutton.chrome-control > button:checked { background-image: linear-gradient(alpha(var(--window-fg-color), .16), alpha(var(--window-fg-color), .16)); }
+/* Open neutral tiles, their connectors and drawers share one opaque surface. */
+.light-theme .window-bar .header-tool.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .workspace-switcher { background: var(--tabbar-bg); border: 0; border-radius: 18px; padding: 4px; }
 .workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: 15px; background: transparent; box-shadow: none; font-weight: 500; }
 .workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }

@@ -70,7 +70,8 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
         await click(brush); await blue(brush);
         await pointer('down',await center(brush)); await blue(brush); await pointer('up');
         assert.equal(await evaluate('visualViewport.scale'),pageScale,'Repeated tool taps do not trigger browser double-tap zoom');
-        await click(color); await grey(color,26); await blue(brush);
+        await click(color); await blue(brush);
+        assert.equal((await paint(color)).css,await evaluate("getComputedStyle(document.querySelector('.content-drawer[data-drawer=\"tool\"]')).backgroundColor"),'Open neutral tile matches its drawer');
         assert.equal((await paint(color)).drawer,'bottom');
         await click(erase); await blue(erase); assert.equal((await paint(brush)).selected,'false');
         await pointer('down',{x:10,y:2}); await pointer('up');
@@ -100,6 +101,6 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
     }
     assert.ok(await evaluate('layerApp.state().camera.zoom') > zoom);
     await send({type:'invoke',command:'undo_workspace'});
-    console.log('PASS: minimal Sketch, constant centered pill at every size, 22% selected-tool blue through mouse/touch/pen press and hover, 10% neutral drawer/hover, 16% neutral action press, both themes');
+    console.log('PASS: minimal Sketch, constant centered pill at every size, 22% selected-tool blue through mouse/touch/pen press and hover, matching neutral tile/drawer backgrounds, 10% neutral hover, 16% neutral action press, both themes');
   } finally { if (pressed) await pointer('up'); }
 }

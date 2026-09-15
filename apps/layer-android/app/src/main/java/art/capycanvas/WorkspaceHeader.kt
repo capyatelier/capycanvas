@@ -298,8 +298,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
         .background(if (surface) colors.headerSurface else Color.Transparent).background(when {
         selected -> colors.active
+        open -> colors.panel
         enabled && pressed -> colors.text.copy(alpha = .16f)
-        open || (enabled && hovered) -> colors.text.copy(alpha = .10f)
+        enabled && hovered -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
     }).hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(), enabled = enabled,
         role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) { content() }

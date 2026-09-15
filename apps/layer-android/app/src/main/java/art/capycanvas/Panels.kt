@@ -52,7 +52,11 @@ import kotlin.math.roundToInt
                 val shape = drawerButtonShape(if (opensDrawer) dock.drawerSources["tool"]?.direction else null)
                 HoverTip(tile.getString("tooltip"), modifier) {
                 Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
-                    .background(if (tile.optBoolean("selected")) colors.active else Color.Transparent)
+                    .background(when {
+                        tile.optBoolean("selected") -> colors.active
+                        opensDrawer -> colors.panel
+                        else -> Color.Transparent
+                    })
                     .combinedClickable(enabled = tile.getBoolean("enabled"),
                         onLongClick = { dock.holdContext(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
                         onClick = { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }),
