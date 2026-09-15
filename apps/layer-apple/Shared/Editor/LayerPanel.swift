@@ -22,13 +22,14 @@ struct LayerPanel: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(layers, id: \.id) { layer in
+                                let thumbnailToken = "\(popupID):\(layer["id"].uint)"
                                 LayerRow(store: store, layer: layer, previews: store.layerThumbnails, interaction: interaction)
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
                                     .overlay { dropMark(layer) }
                                     .editorPopover(isPresented: menuPresented(at: .row(layer["id"].uint)), placement: .inward) { menuContent }
-                                    .onAppear { store.layerThumbnails.show(layer["id"].uint) }
+                                    .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: layer["id"].uint) }
                                     .onDisappear {
-                                        store.layerThumbnails.hide(layer["id"].uint)
+                                        store.layerThumbnails.hide(thumbnailToken)
                                         if interaction.menuSource == .row(layer["id"].uint) { closeMenu() }
                                     }
                             }
@@ -311,6 +312,7 @@ private struct LayerName: View {
 
 struct LayerOpacityField: View {
     @ObservedObject var store: EditorStore
+    var inline = true
     private func change(_ value: Double, layer: UInt64, epoch: UInt64, phase: String? = nil,
         completion: @escaping @MainActor (String?) -> Void) {
         // A late focus callback must not edit a replacement layer or document.
@@ -325,7 +327,7 @@ struct LayerOpacityField: View {
         let layer = store.state["layer_tools"]["editing_layer"]
         let epoch = store.state["document_file"]["epoch"].uint
         NumberControl(store: store, label: "Layer opacity", value: layer["opacity"].number,
-            control: store.catalog["layer_opacity"], identifier: "layer-opacity", inline: true,
+            control: store.catalog[inline ? "layer_opacity" : "opacity"], identifier: "layer-opacity", inline: inline,
             gestureChange: { change($1, layer: layer["id"].uint, epoch: epoch, phase: $0, completion: $2) }) { value, completion in
             change(value, layer: layer["id"].uint, epoch: epoch, completion: completion)
         }.id("\(epoch):\(layer["id"].uint)")

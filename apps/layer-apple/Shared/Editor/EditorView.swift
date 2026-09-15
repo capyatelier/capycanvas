@@ -25,7 +25,6 @@ struct EditorView<Canvas: View>: View {
             // Controls need both the live values and their shared specifications.
             if !store.state.isNull && !store.catalog.isNull {
                 if !store.snapshot["chrome_hidden"].bool { EditorHeader(store: store) }
-                WorkspacePanels(store: store, workspace: store.workspace)
                 if !store.snapshot["chrome_hidden"].bool && store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
                     HStack {
                         Spacer()
@@ -33,6 +32,7 @@ struct EditorView<Canvas: View>: View {
                             .background(palette["bg"], in: Capsule())
                     }.placed(store.snapshot["layout"]["status"])
                 }
+                WorkspacePanels(store: store, workspace: store.workspace)
             }
             if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
                 VStack(alignment: .leading, spacing: 12) {

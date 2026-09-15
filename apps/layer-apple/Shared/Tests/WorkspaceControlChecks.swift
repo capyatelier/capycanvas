@@ -114,6 +114,87 @@ extension XCTestCase {
         #endif
         attachWorkspaceScreen(app, name: "toolbar-customization")
     }
+    @MainActor func checkLayerConfiguration(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
+        app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"customize","action":{"type":"show_all_controls","panel":"layers"}}]"#
+        app.launch()
+        let configuration = app.scrollViews.containing(.button, identifier: "configuration-layer").firstMatch
+        XCTAssertTrue(configuration.waitForExistence(timeout: 20))
+        let rows = app.scrollViews["layer-rows"]
+        XCTAssertTrue(rows.waitForExistence(timeout: 10))
+        waitForLayerPreviews(in: app)
+        func order() -> String { rows.value as? String ?? "" }
+        func expectOrder(_ value: String) {
+            expectation(for: NSPredicate { _, _ in order() == value }, evaluatedWith: rows)
+            waitForExpectations(timeout: 5)
+        }
+        func close() { workspaceActivate(app.buttons["close-panel-configuration"]) }
+        func reopen() {
+            let tab = app.buttons["panel-tab-layers"]
+            #if os(macOS)
+            tab.rightClick()
+            #else
+            tab.press(forDuration: 0.7)
+            #endif
+            workspaceActivate(app.buttons["menu-action-Configure Layers panel…"])
+            XCTAssertTrue(configuration.waitForExistence(timeout: 5))
+        }
+        func command(_ id: String) { workspaceActivate(configuration.buttons["configuration-command-" + id]) }
+        let original = order()
+        XCTAssertEqual(original.split(separator: ",").count, 3)
+        command("add_layer")
+        expectation(for: NSPredicate { _, _ in order().split(separator: ",").count == 4 }, evaluatedWith: rows)
+        waitForExpectations(timeout: 5)
+        let added = order()
+        XCTAssertFalse(configuration.buttons["configuration-command-raise_layer"].isEnabled)
+        command("lower_layer")
+        expectation(for: NSPredicate { _, _ in order() != added }, evaluatedWith: rows)
+        waitForExpectations(timeout: 5)
+        let lowered = order()
+        close()
+        editorHistory("Undo", in: app); expectOrder(added)
+        editorHistory("Redo", in: app); expectOrder(lowered)
+        reopen()
+        command("raise_layer"); expectOrder(added)
+        command("delete_layer"); expectOrder(original)
+        workspaceActivate(configuration.buttons["configuration-layer"])
+        workspaceActivate(app.buttons["configuration-layer-option-1"])
+        let value = configuration.buttons["number-value-layer-opacity"]
+        XCTAssertEqual(value.value as? String, "100.0 %")
+        workspaceActivate(configuration.buttons["number-decrease-layer-opacity"])
+        expectation(for: NSPredicate(format: "value != %@", "100.0 %"), evaluatedWith: value)
+        waitForExpectations(timeout: 5)
+        let decreased = value.value as? String ?? ""
+        XCTAssertEqual(decreased, "99.0 %")
+        close()
+        let liveValue = app.buttons["number-value-layer-opacity"]
+        editorHistory("Undo", in: app)
+        expectation(for: NSPredicate(format: "value == %@", "100"), evaluatedWith: liveValue)
+        waitForExpectations(timeout: 5)
+        editorHistory("Redo", in: app)
+        expectation(for: NSPredicate(format: "value == %@", "99"), evaluatedWith: liveValue)
+        waitForExpectations(timeout: 5)
+        reopen()
+        XCTAssertEqual(value.value as? String, decreased)
+        waitForLayerPreviews(in: app)
+        attachWorkspaceScreen(app, name: "layer-configuration")
+        let capture = XCTAttachment(screenshot: configuration.screenshot())
+        capture.name = "layer-configuration-controls"; capture.lifetime = .keepAlways; add(capture)
+        workspaceActivate(app.buttons["layer-Lock editing"])
+        XCTAssertFalse(value.isEnabled, "Locked opacity must retain the shared disabled state")
+        workspaceActivate(app.buttons["layer-Lock editing"])
+        XCTAssertTrue(value.isEnabled)
+        workspaceActivate(configuration.buttons["configuration-layer"])
+        workspaceActivate(app.buttons["configuration-layer-option-2"])
+        XCTAssertTrue(value.isEnabled, "Shared Paper opacity remains editable")
+        XCTAssertFalse(configuration.buttons["configuration-command-delete_layer"].isEnabled)
+        close()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: configuration)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkPanelConfigurationAndLiveDrag(in app: XCUIApplication) {
         let toggle = app.buttons["configure-visible-brush_size"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 20))

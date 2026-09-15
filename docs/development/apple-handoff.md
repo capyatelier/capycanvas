@@ -26,6 +26,66 @@ require new evidence and a specific hypothesis before another run or input
 workaround. Keep unresolved acceptance explicit while continuing independent
 parity fixes. Commit only major milestones. All eleven recovery stashes remain.
 
+Use a bounded implementation loop: inspect the shared/reference behavior, make
+the smallest fix, and run the existing focused check that exercises it. Batch
+related visible gaps before native workflow acceptance. Simulator startup and
+XCTest fixture repair have consumed too much of the critical path; an
+inconclusive run needs new evidence before another attempt. Keep a short list of
+actual remaining gaps and use existing screenshots for presentation review;
+do not build new automation infrastructure for each control. Hardware-only
+acceptance and unresolved native delivery cases remain separate explicit gates.
+
+The Layers milestone replaces three partial
+`LayerPanel` instances with the compact selection menu, percentage opacity field
+and four labeled catalog actions used by Web/Android. This restores direct Raise
+and Lower actions and removes extra thumbnail/drag owners from configuration.
+It reuses `EditorChoice`, `LayerOpacityField`, `ConfigurationFlow` and Rust edits;
+ordinary layer-header opacity keeps its compact formatting and existing guards.
+A real editor capture also finds the camera badge covering the configuration
+slider's trailing button. Moving workspace panels after the badge in the same
+SwiftUI stack fixes the overlap without a new layout or input adapter.
+
+Opening configuration also exposes a thumbnail request ownership bug: a new
+panel appears before the old one disappears, whose cleanup removes the new
+panel's layer request. The real mounted editor reproduces pending thumbnails
+with no registered visible layers. `LayerThumbnails` now registers each row
+using the existing panel token and layer ID, following the filter-preview
+ownership pattern. A focused mounted-editor check passes on both Apple policies
+after the fix; the existing renderer supplies the checkerboard pixels unchanged.
+
+The final Mac and UIKit `testLayerConfiguration` pass: selection, Add/Delete/Raise/Lower,
+exact order Undo/Redo, opacity edit/history, close/reopen, lock/unlock and Paper's
+editable opacity/protected deletion. Both now require visible thumbnail readiness
+before and after configuration changes. The grouped hand/eyedropper workflow also
+passes on both hosts, covering navigation after the stack-order change: four
+workflows total, no failures or skips. Final configuration and panned-editor
+captures are reviewed on both hosts; the controls are readable, layer previews
+are present, and the badge no longer covers the slider. Both Release builds pass
+without compiler warnings. Mac XCTest records runtime responsiveness/QoS warnings;
+these workflow passes do not establish performance acceptance.
+
+Final evidence, source hashes and cleanup are under
+`artifacts/apple-layers-milestone-v1/` (`mac-v1`, `simulator-v1`, `release`).
+The exact test apps and runner are stopped; all eleven stashes remain. No
+physical workflow is repeated for this milestone. The fresh Web reference under
+`artifacts/apple-layer-configuration-v1/` shows the matching configuration
+structure. Its earlier full-editor diagnostic diff retains header/camera/then-blank
+thumbnail differences and does not establish full-editor parity. Earlier
+configuration and thumbnail failures remain under that directory and
+`artifacts/apple-thumbnail-cache-v1/`; the final milestone supersedes their
+validation status, without erasing those failures.
+
+The component fixture's native accessibility traversal omits scroll-view children;
+its failed checks do not establish actions and must not be repeated without new
+evidence. The Mac v1 test uses an overridden container identifier; v2 overlooks
+configuration's existing outside-click dismissal before toolbar Undo; v3 wrongly
+expects Paper opacity to be disabled, contrary to `LayerControls::for_layer`.
+Those failures are retained. The final test locates the actual scroll container
+and explicitly closes/reopens configuration around toolbar history. No product
+focus, accessibility or gesture workaround is added. The fresh Web build uses
+Homebrew LLVM's `clang` and `llvm-ar` through the target-specific compiler env;
+Apple clang cannot build its Wasm C dependency.
+
 The Settings presentation milestone replaces Zen's text-only icon picker with
 four shared image tiles, matching Web/Android's 48-point previews and 64-point
 controls. It reuses the existing icon-tile control, shared choice metadata and

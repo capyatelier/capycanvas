@@ -104,6 +104,16 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
+    @MainActor func waitForLayerPreviews(in app: XCUIApplication) {
+        let thumbnails = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-"))
+        let visible = thumbnails.allElementsBoundByIndex.filter(\.isHittable)
+        XCTAssertFalse(visible.isEmpty)
+        for thumbnail in visible {
+            expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: thumbnail)
+        }
+        waitForExpectations(timeout: 30)
+    }
+
     @MainActor func capturePaintEditor(in app: XCUIApplication, scenario: String = "paint-expanded", theme: String = "light") {
         let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
         XCTAssertTrue(paint.waitForExistence(timeout: 30))
@@ -140,12 +150,7 @@ extension XCTestCase {
         // GPU submission and Navigator readiness precede thumbnail readback.
         // Wait for the real visible images, not the empty input-colored boxes.
         if app.launchEnvironment["CAPY_CAPTURE_PROBE"] == "1" {
-            let thumbnails = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-"))
-            XCTAssertGreaterThan(thumbnails.count, 0)
-            for thumbnail in thumbnails.allElementsBoundByIndex where thumbnail.isHittable {
-                expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: thumbnail)
-            }
-            waitForExpectations(timeout: 30)
+            waitForLayerPreviews(in: app)
         }
         if scenario == "paint-expanded" {
             #if os(macOS)

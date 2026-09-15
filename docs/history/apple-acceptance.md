@@ -108,6 +108,26 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Layers configuration and preview ownership — 2026-09-15
+
+Apple Layers configuration now uses the shared compact layer choice, percentage
+opacity and four catalog actions, restoring direct Raise/Lower and removing
+three partial panel instances. Workspace panels draw above the camera badge so
+it cannot cover configuration controls. Thumbnail requests use the existing
+panel token and layer ID; replacing a panel no longer lets its predecessor cancel
+the replacement's preview request. No new rendering or input adapter is added.
+
+A mounted-editor reproduction establishes the preview failure before its fix
+and passes on both Apple policies afterward. Final grouped Mac and UIKit tests
+pass configuration actions/history/disabled states, preview readiness and
+hand/eyedropper navigation: four workflows, no failures or skips. Both Release
+builds pass without compiler warnings. Representative final captures are reviewed
+on both hosts. Mac XCTest retains runtime responsiveness/QoS warnings. The
+[handoff](../development/apple-handoff.md) records evidence and earlier failures.
+No physical run or new full-editor pixel comparison is claimed. Full feature and
+visual-state coverage, physical input/provider/lifecycle checks and sustained
+Mac 90 Hz / iPad 120 Hz acceptance remain open. The overall goal is **incomplete**.
+
 ## Settings choices and shortcut dialog fit — 2026-09-15
 
 Apple Settings now shows the shared Zen icon previews and retains icons in

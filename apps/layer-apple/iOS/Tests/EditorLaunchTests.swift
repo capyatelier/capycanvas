@@ -380,6 +380,11 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarCustomization(in: app)
     }
 
+    @MainActor func testLayerConfiguration() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkLayerConfiguration(in: editorTestApplication())
+    }
+
     @MainActor func testPanelConfigurationAndLiveDrag() throws {
         let app = editorTestApplication()
         #if os(iOS)

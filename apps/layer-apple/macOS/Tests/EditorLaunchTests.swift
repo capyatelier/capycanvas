@@ -161,6 +161,10 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarCustomization(in: app)
     }
 
+    @MainActor func testLayerConfiguration() throws {
+        checkLayerConfiguration(in: editorTestApplication())
+    }
+
     @MainActor func testPanelConfigurationAndLiveDrag() throws {
         let app = editorTestApplication()
         #if os(iOS)
