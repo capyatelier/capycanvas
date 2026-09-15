@@ -14,6 +14,13 @@ It drains pen input, applies the appropriate camera transform and pressure respo
 and passes stroke samples through `DabGenerator`. A *dab* is one resolved brush
 contact with a position, shape, color and material parameters.
 
+The engine configures each generator with the document's RGB space. Primary and
+secondary colors mix in straight linear document RGB; hue/saturation/lightness
+dynamics use that space's transfer-encoded coordinates. Integer depth does not
+change their arithmetic. Cursor previews, transient stroke correction and renderer
+replacement retain the same interpretation. See the
+[brush color contract](../../docs/reference/gpu-brush-engine.md#brush-color-coordinates).
+
 The generator places contacts by distance traveled and evaluates brush dynamics
 on the CPU. Seeded variation makes stroke replay deterministic. Each frame collects
 new contacts and document changes into a borrowed `FramePacket` for the renderer.

@@ -156,6 +156,7 @@ impl Canvas {
             layer.raster.wait_data()?.validate(
                 [self.engine.document().width, self.engine.document().height],
                 false,
+                self.engine.document().color,
             )?;
         }
         Ok(())

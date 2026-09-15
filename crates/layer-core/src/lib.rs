@@ -593,6 +593,8 @@ pub struct DualBrush {
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushColorDynamics {
+    /// Straight linear document RGB and independent coverage alpha. Preset
+    /// owners convert profiled colors into document coordinates before use.
     pub secondary_color_rgba_linear: [f32; 4],
     pub stamp_hue_jitter: f32,
     pub stamp_saturation_jitter: f32,
@@ -756,6 +758,7 @@ impl Default for BrushBounds {
 pub struct BrushSnapshot {
     pub schema_version: u16,
     pub tip: BrushTip,
+    /// Straight linear document RGB; coverage alpha is bounded independently.
     pub color_rgba_linear: [f32; 4],
     pub diameter: f32,
     /// Constant alpha multiplier applied to every dab.
@@ -836,6 +839,7 @@ impl BrushSnapshot {
         ];
         if self.schema_version != 4
             || base.iter().any(|value| !value.is_finite())
+            || !(0.0..=1.0).contains(&self.color_rgba_linear[3])
             || !(0.01..=MAX_BRUSH_DIAMETER).contains(&self.diameter)
             || !(0.0..=1.0).contains(&self.opacity)
             || !(0.0..=1.0).contains(&self.hardness)
@@ -969,7 +973,8 @@ impl BrushSnapshot {
                 .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
             || colors
                 .iter()
-                .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+                .any(|value| !value.is_finite())
+            || !(0.0..=1.0).contains(&colors[3])
             || bounds.iter().any(|value| !value.is_finite())
             || self.path.jitter_along > MAX_BRUSH_SCATTER_DIAMETERS
             || self.path.jitter_across > MAX_BRUSH_SCATTER_DIAMETERS
@@ -2028,6 +2033,34 @@ pub trait InferenceBackend: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brush_colors_preserve_finite_extended_rgb_and_validate_coverage_separately() {
+        let mut brush = BrushSnapshot::default();
+        brush.color_rgba_linear = [-0.3, 1.4, 0.7, 0.37];
+        brush.color_dynamics.secondary_color_rgba_linear = [1.2, -0.1, 0.8, 1. / 65535.];
+        brush.validate().unwrap();
+        for secondary in [false, true] {
+            for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut bad = brush.clone();
+                if secondary {
+                    bad.color_dynamics.secondary_color_rgba_linear[0] = invalid;
+                } else {
+                    bad.color_rgba_linear[0] = invalid;
+                }
+                assert!(bad.validate().is_err());
+            }
+            for invalid in [-0.01, 1.01, f32::NAN] {
+                let mut bad = brush.clone();
+                if secondary {
+                    bad.color_dynamics.secondary_color_rgba_linear[3] = invalid;
+                } else {
+                    bad.color_rgba_linear[3] = invalid;
+                }
+                assert!(bad.validate().is_err());
+            }
+        }
+    }
 
     fn point(pressure: f32) -> StrokePoint {
         StrokePoint {

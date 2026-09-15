@@ -166,6 +166,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .map_err(EngineError::Backend)?;
         let mut transforms = VecDeque::with_capacity(TRANSFORM_HISTORY);
         transforms.push_back(input_transform);
+        let dab_generator = DabGenerator::new(document.color.space);
         Ok(Self {
             backend,
             editor: Editor::new(document),
@@ -178,7 +179,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             instant_feedback: InstantFeedbackConfig::default(),
             ruler_snapping: Some(12.),
             builder: StrokeBuilder::with_capacity(capacity.stroke_points.min(MAX_CONTACT_POINTS)),
-            dab_generator: DabGenerator::default(),
+            dab_generator,
             finalized_real_points: 0,
             active_stroke: None,
             completed_stroke: None,
@@ -321,6 +322,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         } else {
             // Hovering pens report zero pressure; show the nominal footprint.
             point.pressure = 1.0;
+            hover.set_space(self.document().color.space);
             hover.cursor_seed(self.document().next_stroke_id(), self.brush());
             hover.cursor_contacts(point, self.brush())
         };
@@ -1639,7 +1641,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let mut style = style_for(&stroke.brush, stroke.tool);
             style.alpha_locked = stroke.alpha_locked;
             style.selection = stroke.selection.clone();
-            let mut generator = DabGenerator::default();
+            let mut generator = DabGenerator::new(self.document().color.space);
             generator.reset_for_replay(stroke);
             let mut started = false;
             for (point_index, point) in stroke.points.iter().copied().enumerate() {
@@ -1680,7 +1682,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
         }
         if let Some(active) = self.active_stroke.as_ref() {
-            let mut generator = DabGenerator::default();
+            let mut generator = DabGenerator::new(self.document().color.space);
             generator.reset_for_stroke(active.id, &active.brush);
             let point_count = if active.feedback.enabled {
                 self.finalized_real_points
@@ -2824,6 +2826,136 @@ mod tests {
     }
 
     #[test]
+    fn native_color_dynamics_match_cursor_corrections_recovery_and_next_contact() {
+        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use layer_core::{BrushCombine, BrushCurve, BrushMapping, BrushSensor, BrushTarget};
+        for space in RgbSpace::ALL {
+            let mut depths = Vec::new();
+            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+                let color = DocumentColor { space, depth };
+                let mut variants = Vec::new();
+                for recover in [false, true] {
+                    for correct_after_up in [false, true] {
+                        let mut document = Document::new("color dynamics", 128, 128);
+                        document.color = color;
+                        let (mut input, consumer) = input_queue(32);
+                        let mut engine = CanvasEngine::new(
+                            RecordingRenderer {
+                                color,
+                                ..Default::default()
+                            },
+                            document,
+                            consumer,
+                            view(128, 128),
+                            ViewTransform {
+                                revision: 1,
+                                ..ViewTransform::IDENTITY
+                            },
+                        )
+                        .unwrap();
+                        let mut brush = BrushSnapshot {
+                            color_rgba_linear: [0.8, 0.15, 0.31, 0.37],
+                            mappings: [BrushMapping {
+                                sensor: BrushSensor::Pressure,
+                                target: BrushTarget::Hue,
+                                combine: BrushCombine::Replace,
+                                input_min: 0.,
+                                input_max: 1.,
+                                output_scale: 0.2,
+                                output_bias: 0.1,
+                                curve: BrushCurve::LINEAR,
+                            }]
+                            .into(),
+                            ..Default::default()
+                        };
+                        brush.color_dynamics.stamp_hue_jitter = 0.15;
+                        brush.color_dynamics.stroke_saturation_jitter = 0.12;
+                        brush.color_dynamics.stamp_secondary_jitter = 0.3;
+                        brush.shape.count = 3;
+                        engine.set_brush(brush.clone()).unwrap();
+                        engine.render_frame().unwrap();
+                        let down = event(1, PenPhase::Down, 8.);
+                        // The host may reuse the same hover state across documents.
+                        let mut hover = DabGenerator::default();
+                        let actual = engine.cursor_contacts(down, &mut hover, down.timestamp_ns);
+                        let mut expected_hover = DabGenerator::new(space);
+                        expected_hover.cursor_seed(engine.document().next_stroke_id(), &brush);
+                        let expected = expected_hover.cursor_contacts(
+                            layer_core::StrokePoint {
+                                position: down.surface_position,
+                                pressure: 1.,
+                                tilt: [0.; 2],
+                                twist: 0.,
+                                elapsed_micros: 0,
+                            },
+                            &brush,
+                        );
+                        assert_eq!(actual, expected);
+                        let mut estimated = down;
+                        estimated.pressure = 0.3;
+                        estimated.flags = SampleFlags::ESTIMATED;
+                        input.push(estimated).unwrap();
+                        input.push(event(2, PenPhase::Move, 32.)).unwrap();
+                        engine.render_frame_at(2_000_000).unwrap();
+                        if recover {
+                            engine
+                                .replace_backend(RecordingRenderer {
+                                    color,
+                                    ..Default::default()
+                                })
+                                .unwrap();
+                            engine.render_frame_at(2_000_000).unwrap();
+                        }
+                        let mut correction = down;
+                        correction.flags = SampleFlags::CORRECTION;
+                        let up = event(3, PenPhase::Up, 64.);
+                        for e in if correct_after_up {
+                            [up, correction]
+                        } else {
+                            [correction, up]
+                        } {
+                            input.push(e).unwrap();
+                            engine.render_frame_at(3_000_000).unwrap();
+                        }
+                        let stroke = engine.completed_stroke.as_ref().unwrap();
+                        let mut expected = Vec::new();
+                        DabGenerator::generate(stroke, space, &mut expected);
+                        assert_eq!(
+                            engine.backend().persistent,
+                            expected,
+                            "{color:?}, recover {recover}, late {correct_after_up}"
+                        );
+                        variants.push(expected);
+                        assert_eq!(engine.metrics().committed_strokes, 1);
+                        assert!(engine.undo().unwrap());
+                        engine.render_frame().unwrap();
+                        assert!(!engine.can_undo());
+                        // Undo/reset does not reset document color for the next contact.
+                        // The recorder logs submitted dabs, not raster restoration.
+                        engine.backend_mut().persistent.clear();
+                        input.push(event(5, PenPhase::Down, 16.)).unwrap();
+                        input.push(event(6, PenPhase::Up, 48.)).unwrap();
+                        engine.render_frame().unwrap();
+                        let mut expected = Vec::new();
+                        DabGenerator::generate(
+                            engine.completed_stroke.as_ref().unwrap(),
+                            space,
+                            &mut expected,
+                        );
+                        assert_eq!(engine.backend().persistent, expected);
+                    }
+                }
+                assert!(variants.windows(2).all(|pair| pair[0] == pair[1]));
+                depths.push(variants.remove(0));
+            }
+            assert_eq!(
+                depths[0], depths[1],
+                "depth never changes dab color arithmetic"
+            );
+        }
+    }
+
+    #[test]
     fn native_document_adoption_and_recovery_require_matching_renderer_interpretation() {
         use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
         for space in RgbSpace::ALL {
@@ -3643,7 +3775,7 @@ mod tests {
         assert_eq!(stroke.points.len(), 3);
         assert_eq!(stroke.points.last().unwrap().position.x, 28.0);
         let mut replay = Vec::new();
-        DabGenerator::generate(stroke, &mut replay);
+        DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
         assert_eq!(engine.backend().persistent, replay);
         assert!(engine.backend().preview.is_empty());
     }
@@ -3712,7 +3844,7 @@ mod tests {
                 assert_eq!(point.pressure, input.pressure.powf(gamma));
             }
             let mut replay = Vec::new();
-            DabGenerator::generate(stroke, &mut replay);
+            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
             assert_eq!(engine.backend().persistent, replay);
             assert!(engine.backend().preview.is_empty());
             for phase in [PenPhase::Up, PenPhase::Cancel] {
@@ -3855,7 +3987,7 @@ mod tests {
             }
             let stroke = engine.completed_stroke.as_ref().unwrap();
             let mut replay = Vec::new();
-            DabGenerator::generate(stroke, &mut replay);
+            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
             assert_eq!(engine.backend().persistent, replay);
             assert!(engine.backend().preview.is_empty());
             (
@@ -3922,7 +4054,7 @@ mod tests {
         engine.render_frame().unwrap();
         let stroke = engine.completed_stroke.as_ref().unwrap();
         let mut replay = Vec::new();
-        DabGenerator::generate(stroke, &mut replay);
+        DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
         assert_eq!(engine.backend().persistent, replay);
         assert!(engine.backend().preview.is_empty());
     }

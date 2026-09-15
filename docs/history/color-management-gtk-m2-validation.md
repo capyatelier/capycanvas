@@ -15,6 +15,8 @@ connected correctness coverage, including spatial support and cancellation.
 Standalone native snapshots now restore window dependencies and stream profiled
 PNG/TIFF rows, with exact untouched-source delivery; GTK file jobs are not yet
 connected to that API.
+CPU brush dynamics now retain document RGB through previews, corrections and
+recovery; exact native GPU publication/save/reopen checks include color jitter.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
 mips, managed GTK viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
@@ -2817,3 +2819,92 @@ REPORT_PREFIX`. The final `cargo check --offline -p layer-linux` and
 `git diff --check` pass. `snapshot-provenance.json` records the parent revision,
 source/binary/result hashes and successful Cargo build mappings under
 `artifacts/color-m2/`.
+
+## Document-aware CPU brush color dynamics (2026-09-14)
+
+The shared engine now configures live and transient reconstruction generators
+with the document RGB space. Cursor state reused by a host across documents is
+reset on an interpretation change. Generator reset, cloning, early/late sensor
+corrections and renderer replacement retain the space; integer depth never changes
+resolved dab colors. Standalone generation takes an explicit `RgbSpace`.
+
+Primary/secondary interpolation stays in straight linear document coordinates,
+with exact endpoints and independent coverage alpha. Both RGB colors accept
+finite extended values; alpha validation remains [0,1]. Hue/saturation/lightness
+uses the selected space's transfer-encoded coordinates and returns linear
+document RGB. The superseded local sRGB-only transfer helpers are deleted.
+Disabled dynamics bypass the nonlinear round trip and preserve the input bits.
+Color-coordinate evaluation uses Float64 intermediates and emits Float32 dabs.
+
+The [CSS Color 4 HSL algorithms](https://www.w3.org/TR/2026/CRD-css-color-4-20260913/#hsl-to-rgb)
+and [standard transfer definitions](https://www.w3.org/TR/2026/CRD-css-color-4-20260913/#color-conversion-code)
+were checked against current code. CSS HSL is defined in sRGB; using cylindrical
+coordinates in each encoded document space is an explicit application policy,
+not a claim that CSS defines wide-gamut HSL. Extended RGB uses the smallest common
+channel interval containing the input and [0,1], evaluates HSL in that interval,
+then restores its range. Hue rotation preserves negative/above-one components;
+saturation/lightness adjustments remain bounded within that interval. This
+avoids an implicit sRGB conversion or a hidden clamp to document [0,1].
+
+Numerical acceptance includes five independently evaluated Python `colorsys`
+vectors over all four spaces, both stamp and cursor emission, within absolute
+2e-6 linear RGB and one integer16 code. Every integer16 code over all four spaces
+passes bit-exact disabled dynamics, with zero/tiny alpha and hidden negative RGB.
+Half-turn hue rotation preserves extended and very dark chroma within relative
+2e-6 (with a 1e-20 floor on reference magnitude). The first dark test exposed
+cancellation in `1 - abs(2*L - 1)`; the equivalent `2 * min(L, 1-L)` removes it.
+The initial failure remains in `brush-space-core-engine.log`.
+
+Connected engine fixtures cover four spaces × two depths × renderer replacement
+on/off × active/completed correction, plus reused cursor state and the next
+contact after undo. Corrected dabs match explicit generation exactly; both depths
+emit identical dabs. The first fixture revision mistakenly compared the mock
+renderer’s accumulated submission log across an undo with one new stroke; its
+log is retained in `brush-space-corrected-core-engine.log`. Resetting only the
+test recorder before the new contact corrects that oracle, without changing
+production undo. The native GPU paint/undo/save/reopen/replacement fixture now
+uses primary/secondary mixing and per-stamp/per-stroke color jitter.
+
+This completes the document-aware CPU emitter prerequisite. Profiled preset and
+swatch ownership in the GTK controls, remaining nonlinear effect precision,
+live residency/mips/global scheduling, managed viewing, source/photo journeys
+and full interchange remain open. This work does not activate native GTK modes
+or qualify performance; benchmarking and optimization remain last.
+
+Final correctness checks pass: **57 core tests and 55 engine tests**
+(`brush-space-clean-core-engine.log`); **185 GPU library tests, 26 benchmarks
+ignored**, 182.47 s (`brush-space-full-gpu.log`); and **four project integration
+tests**, 8.47 s (`brush-space-project-hardware.log`). The initial project attempt
+ran inside the device sandbox and failed adapter creation; its separate
+`brush-space-project.log` is retained. The accepted run uses the physical GPU.
+The GTK development check also passes (`brush-space-gtk-check.log`).
+
+Rebuild with `cargo test --offline --release -p layer-render-wgpu -p layer-linux
+--no-run --message-format=json`; the successful Cargo artifact record is
+`brush-space-verified-build.{json,log}`. Retained executables are
+`brush-space-gpu-tests`, `brush-space-project-tests`, and `brush-space-gtk-tests`.
+Run the first two serially with `--test-threads=1` and physical GPU access.
+The broader build found one stale `RasterData::validate` call in the
+`raster_workloads` example; it now passes the actual document interpretation.
+No example workload or benchmark was executed.
+
+Actual GTK `native_runtime_filter_packages` (6.91 s), `native_document_files`
+(9.93 s), and `native_diagnostics_and_gpu_failure_recovery` (1.97 s) pass
+serially with fatal criticals under the private 1600×1000@120 Hz Mutter harness.
+Reproduce using `bash tools/performance/gtk-raster.sh ABSOLUTE_TEST_BINARY
+TEST_FILTER REPORT_PREFIX`; log/session prefixes are `brush-space-filters`,
+`brush-space-files`, and `brush-space-recovery`. These elapsed test durations
+are correctness records, not latency qualification.
+
+`native_color_panel_input` also passes (30.02 s) with its required native input
+driver. It exercises the existing compact panel at five sizes, three shapes and
+both themes on the private display; this does not qualify a wide-gamut picker.
+Reproduce with `CARGO_NET_OFFLINE=true LAYER_TEST_ARTIFACTS=ABSOLUTE_OUTPUT_DIR
+bash tools/performance/workspace-motion.sh gtk --color-panel`. The accepted
+session is `brush-space-color-input-session.log`, with generated artifacts in
+`brush-space-color-input/`. The initial `brush-space-color-panel.log` records a
+missing input-protocol environment variable because the generic raster harness
+was used; it did not enter the test workflow. The proper driver’s Cargo executable
+matches the retained GTK test executable. `brush-space-provenance.json` records
+source, binary and log hashes, the parent/committed revisions and successful
+build mapping. Final `git diff --check` passes.

@@ -81,6 +81,13 @@ fn engine(
         CanvasEngine::new(r, document, consumer, view(), ViewTransform::IDENTITY).unwrap();
     let brush = layer_core::BrushSnapshot {
         color_rgba_linear: [0.012345, 0.234567, 0.678901, 0.12345],
+        color_dynamics: layer_core::BrushColorDynamics {
+            secondary_color_rgba_linear: [0.4, 0.18, 0.76, 0.23],
+            stamp_hue_jitter: 0.17,
+            stroke_saturation_jitter: 0.12,
+            stamp_secondary_jitter: 0.37,
+            ..Default::default()
+        },
         ..Default::default()
     };
     engine.set_brush(brush).unwrap();

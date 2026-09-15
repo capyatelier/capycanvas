@@ -67,6 +67,35 @@ functions for tip, grain, and dual-tip coverage.
 
 ## Current frame path
 
+### Brush color coordinates
+
+`BrushSnapshot` primary/secondary RGB values are straight linear document
+coordinates, with separate coverage alpha in [0,1]. Profiled preset/swatches must
+be converted by their owner before configuring the brush. `CanvasEngine` creates
+`DabGenerator` with the document RGB space; standalone callers use
+`DabGenerator::new(space)`. The default standalone generator is sRGB. Resetting,
+cloning, cursor evaluation, active-contact reconstruction and late sensor
+correction retain the space. Integer8/integer16 use identical dab arithmetic.
+
+Secondary-color interpolation is linear in document RGB and preserves exact
+endpoints. Hue/saturation/lightness dynamics operate in transfer-encoded document
+RGB, then decode back to linear RGB. This is a document-coordinate editing
+policy; CSS HSL itself is defined for sRGB. There is no intermediate conversion
+or gamut mapping to sRGB. For extended input, evaluate HSL in the smallest shared
+channel interval containing both [0,1] and the input, then restore that interval.
+This preserves negative/above-one channels during hue rotation; ordinary bounded
+RGB uses the usual HSL cube. Saturation/lightness controls remain bounded within
+the chosen interval. Disabled dynamics bypass transfer and HSL round trips.
+
+The CPU evaluates these color coordinates with Float64 intermediates and emits
+Float32 dabs; there is no integer or FP16 narrowing. The algebraic HSL chroma
+factor `2 * min(L, 1-L)` avoids subtractive cancellation at very dark colors.
+GPU coverage, material blending and native tile publication remain shared with
+the rest of the renderer. The expanded GTK color/preset UI and its profile
+ownership remain part of the unfinished milestone 2 integration.
+
+### Submission
+
 ```text
 native coalesced samples
         │

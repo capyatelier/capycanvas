@@ -4,6 +4,7 @@
 //! sensors, curve evaluation, distance-based resampling, and deterministic
 //! variation. Render backends receive only resolved, fixed-size dab geometry.
 
+use layer_core::color::RgbSpace;
 use layer_core::{
     BrushCombine, BrushMapping, BrushSensor, BrushSnapshot, BrushTarget, MAX_BRUSH_DIAMETER,
     MAX_BRUSH_MAPPINGS, MAX_BRUSH_SCATTER_DIAMETERS, Point, Rect, Stroke, StrokeId, StrokePoint,
@@ -52,9 +53,11 @@ struct EvaluatedDab {
 }
 
 /// Stateful emitter for one stroke. Reset it with the committed stroke ID so
-/// live rendering and later replay produce the same variation.
+/// live rendering and transient stroke correction produce the same variation.
+/// Colors are straight linear document RGB; HSL dynamics use its encoded RGB.
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
+    space: RgbSpace,
     last: Option<DynamicPoint>,
     stabilized_input: Option<StrokePoint>,
     distance_until_next: f32,
@@ -70,6 +73,7 @@ pub struct DabGenerator {
 impl Default for DabGenerator {
     fn default() -> Self {
         Self {
+            space: RgbSpace::Srgb,
             last: None,
             stabilized_input: None,
             distance_until_next: 0.0,
@@ -85,6 +89,18 @@ impl Default for DabGenerator {
 }
 
 impl DabGenerator {
+    pub fn new(space: RgbSpace) -> Self {
+        Self {
+            space,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn set_space(&mut self, space: RgbSpace) {
+        if self.space != space {
+            *self = Self::new(space);
+        }
+    }
     pub(crate) fn cursor_seed(&mut self, id: StrokeId, brush: &BrushSnapshot) {
         self.rng = mix_seed(brush.seed, id.0);
         self.stroke_seed = self.rng;
@@ -102,7 +118,7 @@ impl DabGenerator {
         output
     }
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self::new(self.space);
     }
 
     pub fn reset_for_stroke(&mut self, stroke_id: StrokeId, brush: &BrushSnapshot) {
@@ -187,8 +203,8 @@ impl DabGenerator {
         damage
     }
 
-    pub fn generate(stroke: &Stroke, output: &mut Vec<Dab>) -> Rect {
-        let mut generator = Self::default();
+    pub fn generate(stroke: &Stroke, space: RgbSpace, output: &mut Vec<Dab>) -> Rect {
+        let mut generator = Self::new(space);
         generator.reset_for_replay(stroke);
         let mut damage = Rect::EMPTY;
         for point in stroke.points.iter().copied() {
@@ -366,6 +382,7 @@ impl DabGenerator {
                 rotation: [rotation_cos, rotation_sin],
                 motion,
                 color_rgba_linear: resolve_color(
+                    self.space,
                     brush.color_rgba_linear,
                     values,
                     brush,
@@ -442,6 +459,7 @@ impl DabGenerator {
                 },
             ];
             dab.color_rgba_linear = resolve_color(
+                self.space,
                 brush.color_rgba_linear,
                 evaluated.values,
                 brush,
@@ -654,6 +672,7 @@ fn taper_factors(
 }
 
 fn resolve_color(
+    space: RgbSpace,
     primary: [f32; 4],
     values: Registers,
     brush: &BrushSnapshot,
@@ -679,9 +698,9 @@ fn resolve_color(
         .clamp(0.0, 1.0);
     let secondary = dynamics.secondary_color_rgba_linear;
     let mut linear = [
-        mix(primary[0], secondary[0], secondary_mix),
-        mix(primary[1], secondary[1], secondary_mix),
-        mix(primary[2], secondary[2], secondary_mix),
+        mix_color(primary[0], secondary[0], secondary_mix),
+        mix_color(primary[1], secondary[1], secondary_mix),
+        mix_color(primary[2], secondary[2], secondary_mix),
     ];
     let hue =
         values.hue + stamp[0] * dynamics.stamp_hue_jitter + stroke[0] * dynamics.stroke_hue_jitter;
@@ -692,30 +711,38 @@ fn resolve_color(
         + stamp[2] * dynamics.stamp_lightness_jitter
         + stroke[2] * dynamics.stroke_lightness_jitter;
     if hue != 0.0 || saturation != 0.0 || lightness != 0.0 {
-        let srgb = linear.map(linear_to_srgb);
-        let (mut h, mut s, mut l) = rgb_to_hsl(srgb);
-        h = (h + hue).rem_euclid(1.0);
-        s = (s + saturation).clamp(0.0, 1.0);
-        l = (l + lightness).clamp(0.0, 1.0);
-        linear = hsl_to_rgb(h, s, l).map(srgb_to_linear);
+        // HSL is a coordinate operation in encoded document RGB. Extending
+        // its cube to contain the input preserves negative/above-one channels
+        // instead of mapping wide-gamut selections into bounded sRGB. In-gamut
+        // colors use the ordinary [0,1] cube. Double intermediates avoid
+        // overflow in that range calculation; emitted dabs remain Float32.
+        let encoded = linear.map(|v| space.encode(f64::from(v)));
+        let low = encoded.into_iter().fold(0.0_f64, f64::min);
+        let high = encoded.into_iter().fold(1.0_f64, f64::max);
+        let span = high - low;
+        let (mut h, mut s, mut l) = rgb_to_hsl(encoded.map(|v| (v - low) / span));
+        h = (h + f64::from(hue)).rem_euclid(1.0);
+        s = (s + f64::from(saturation)).clamp(0.0, 1.0);
+        l = (l + f64::from(lightness)).clamp(0.0, 1.0);
+        linear = hsl_to_rgb(h, s, l).map(|v| space.decode(v * span + low) as f32);
     }
     [
         linear[0],
         linear[1],
         linear[2],
-        mix(primary[3], secondary[3], secondary_mix) * values.opacity.clamp(0.0, 1.0),
+        mix_color(primary[3], secondary[3], secondary_mix) * values.opacity.clamp(0.0, 1.0),
     ]
 }
 
-fn rgb_to_hsl(rgb: [f32; 3]) -> (f32, f32, f32) {
+fn rgb_to_hsl(rgb: [f64; 3]) -> (f64, f64, f64) {
     let maximum = rgb[0].max(rgb[1]).max(rgb[2]);
     let minimum = rgb[0].min(rgb[1]).min(rgb[2]);
     let lightness = (maximum + minimum) * 0.5;
     let delta = maximum - minimum;
-    if delta <= f32::EPSILON {
+    if delta == 0.0 {
         return (0.0, 0.0, lightness);
     }
-    let saturation = delta / (1.0 - (2.0 * lightness - 1.0).abs()).max(f32::EPSILON);
+    let saturation = delta / (2.0 * lightness.min(1.0 - lightness));
     let hue_sector = if maximum == rgb[0] {
         ((rgb[1] - rgb[2]) / delta).rem_euclid(6.0)
     } else if maximum == rgb[1] {
@@ -726,8 +753,8 @@ fn rgb_to_hsl(rgb: [f32; 3]) -> (f32, f32, f32) {
     (hue_sector / 6.0, saturation, lightness)
 }
 
-fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
-    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+fn hsl_to_rgb(hue: f64, saturation: f64, lightness: f64) -> [f64; 3] {
+    let chroma = 2.0 * lightness.min(1.0 - lightness) * saturation;
     let sector = hue.rem_euclid(1.0) * 6.0;
     let second = chroma * (1.0 - (sector.rem_euclid(2.0) - 1.0).abs());
     let rgb = match sector.floor() as u32 {
@@ -742,24 +769,14 @@ fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
     rgb.map(|value| value + match_value)
 }
 
-fn linear_to_srgb(linear: f32) -> f32 {
-    if linear <= 0.003_130_8 {
-        linear * 12.92
-    } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
+fn mix_color(a: f32, b: f32, amount: f32) -> f32 {
+    if amount == 0.0 {
+        return a;
     }
-}
-
-fn srgb_to_linear(srgb: f32) -> f32 {
-    if srgb <= 0.040_45 {
-        srgb / 12.92
-    } else {
-        ((srgb + 0.055) / 1.055).powf(2.4)
+    if amount == 1.0 {
+        return b;
     }
-}
-
-fn mix(a: f32, b: f32, amount: f32) -> f32 {
-    a + (b - a) * amount
+    (f64::from(a) + (f64::from(b) - f64::from(a)) * f64::from(amount)) as f32
 }
 
 fn signed_unit(value: u32) -> f32 {
@@ -790,6 +807,10 @@ fn hash_to_unit(mut value: u32) -> f32 {
     value ^= value >> 15;
     (value as f64 / u32::MAX as f64) as f32
 }
+
+#[cfg(test)]
+#[path = "brush/color_tests.rs"]
+mod color_tests;
 
 #[cfg(test)]
 mod tests {
