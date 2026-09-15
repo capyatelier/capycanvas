@@ -2,7 +2,7 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
 
-fn ready(w: &Rc<Workspace>) {
+pub(super) fn ready(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         pump(20);
@@ -25,7 +25,7 @@ fn ready(w: &Rc<Workspace>) {
         assert!(Instant::now() < deadline, "ready: {}", w.status.text());
     }
 }
-fn finish(w: &Rc<Workspace>) {
+pub(super) fn finish(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while state(w).document_file.busy || !state(w).requests.is_empty() {
         pump(20);
@@ -38,7 +38,7 @@ fn finish(w: &Rc<Workspace>) {
     assert!(state(w).host_error.is_none(), "{:?}", state(w).host_error);
 }
 #[allow(deprecated)]
-fn chooser() -> gtk::FileChooserDialog {
+pub(super) fn chooser() -> gtk::FileChooserDialog {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         pump(20);
@@ -53,13 +53,13 @@ fn chooser() -> gtk::FileChooserDialog {
         assert!(Instant::now() < deadline, "native chooser");
     }
 }
-fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
+pub(super) fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
     find_named(w.window.visible_dialog().unwrap().upcast_ref(), name)
         .unwrap()
         .downcast()
         .unwrap()
 }
-fn response(w: &Rc<Workspace>, id: &str) {
+pub(super) fn response(w: &Rc<Workspace>, id: &str) {
     let dialog = w
         .window
         .visible_dialog()
@@ -74,11 +74,11 @@ fn response(w: &Rc<Workspace>, id: &str) {
         assert!(Instant::now() < deadline, "dialog dismissal");
     }
 }
-fn invoke(w: &Rc<Workspace>, command: CommandId) {
+pub(super) fn invoke(w: &Rc<Workspace>, command: CommandId) {
     w.dispatch(UiAction::Invoke { command });
     pump(150);
 }
-fn capture_ui(w: &Rc<Workspace>, directory: &std::path::Path, name: &str) {
+pub(super) fn capture_ui(w: &Rc<Workspace>, directory: &std::path::Path, name: &str) {
     capture_reference(w, directory.join(name).to_str().unwrap(), 1.);
 }
 

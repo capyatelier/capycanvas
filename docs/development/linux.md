@@ -67,6 +67,13 @@ sRGB; unfamiliar supported ICC gamuts use ProPhoto working RGB while preserving
 the original source interpretation. Familiar matrix gamuts select the corresponding
 built-in working space from colorimetry, never a profile name.
 
+File → Import Image as Layer and Edit → Paste Image as Layer retain original
+PNG/JPEG/TIFF source data while keeping the destination document's working mode.
+Paste prefers TIFF, then PNG, then JPEG; transfer and worker decoding can be
+cancelled. Clear removes retained content, and Undo restores it exactly. The native
+`workspace::tests::place_source::native_profiled_place_paste_and_source_history`
+check covers import, clipboard format preference, history, reopen and cancellation.
+
 File → Document Properties shows working color/depth and each retained source's
 profile or assumption. New/Open preserve the current drawing in its own window
 while the incoming document is validated. An opened photo has no native Save

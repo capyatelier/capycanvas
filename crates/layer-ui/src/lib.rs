@@ -182,6 +182,7 @@ pub const EDIT_MENU: MenuSpec = MenuSpec {
     label: "Edit",
     sections: &[
         &[CommandId::Undo, CommandId::Redo],
+        &[CommandId::PasteImage],
         &[CommandId::ClearLayer, CommandId::FillSelection],
         &[CommandId::ScaleRotate],
         &[CommandId::Settings],
@@ -214,6 +215,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
         &[
             CommandId::NewDocument,
             CommandId::OpenDocument,
+            CommandId::ImportImage,
             CommandId::NewWindow,
         ],
         &[
@@ -431,6 +433,8 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    ImportImage,
+    PasteImage,
     DocumentProperties,
     NewDocument,
     OpenDocument,
@@ -501,7 +505,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::DocumentProperties => platform == Platform::Gtk,
+            Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
                 Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac
@@ -564,6 +568,7 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::ImportImage | Self::PasteImage => "image",
             Self::DocumentProperties => "info",
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
@@ -626,7 +631,9 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 64] = [
+    pub const ALL: [Self; 66] = [
+        Self::ImportImage,
+        Self::PasteImage,
         Self::DocumentProperties,
         Self::NewDocument,
         Self::OpenDocument,
@@ -720,6 +727,8 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::ImportImage => "Import Image as Layer…",
+            Self::PasteImage => "Paste Image as Layer",
             Self::DocumentProperties => "Document Properties…",
             Self::NewDocument => "New…",
             Self::OpenDocument => "Open…",

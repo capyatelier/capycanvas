@@ -4456,3 +4456,82 @@ and combined source/composite/history/staging budgets. Final fresh baselines,
 frame-creation regressions/optimization and the hardware memory/latency matrix
 remain last. This local functional milestone does not claim those gates pass.
 Other platform hosts remain approval-gated after GTK completion.
+
+## GTK retained Place/Paste and source history (2026-09-15)
+
+GTK's layer import button, File → Import Image as Layer (`Ctrl+Shift+O`) and
+Edit → Paste Image as Layer (`Ctrl+V`) now use the shared retained-source route.
+The superseded GTK texture download through untagged RGBA8 was deleted. PNG,
+JPEG and TIFF keep original samples, profile interpretation, depth and alpha;
+placing into an sRGB8 document does not first quantize a P3 U16 source to sRGB8.
+Source conversion remains in the document-native working tile decoder. The shared
+command policy reserves the file operation, validates the layer name/target and
+renderer capability before publication, and creates one undoable layer edit.
+
+Clipboard reading requests TIFF, PNG, then JPEG. This follows GDK's documented
+[ordered MIME preference](https://docs.gtk.org/gdk4/method.Clipboard.read_async.html),
+checked against the native clipboard test below. Transfer uses 64 KiB asynchronous
+buffers and a private temporary file capped at 512 MiB. The file is removed on
+success, error or cancellation. Decode runs on a worker, checks cancellation at
+reader/seek boundaries and keeps the request reserved until the worker exits.
+This is a transfer limit, not a combined process/decode memory qualification.
+Decoder-internal cancellation granularity and cross-window scheduling remain open.
+Publication rejects a changed document epoch, revision or editing target.
+
+Retained sources exposed two missing existing layer behaviors: Clear now removes
+the source as well as raster/asset content, and transform eligibility/bounds now
+include retained image content. Undo restores the exact original source. This
+stage validates transform begin/cancel; applied resampling and large off-canvas
+sources still belong to the complete tool qualification matrix.
+
+Artifacts use `artifacts/color-m2/place-source-*` on the Linux/NVIDIA/private-Mutter
+hardware setup recorded above:
+
+- `shared-initial.log`: the source policy test passes, covering unsupported-renderer
+  and invalid-name atomicity, P3 U16 hidden/low-alpha sample retention into sRGB8,
+  transform cancellation, Clear/Undo/Redo, single-step import history and exact
+  archive restoration.
+- `shared-suite.log`: all 386 shared UI checks pass (30.65 s), including shortcut
+  editing guards and command publication. `final-check.log` checks production GTK
+  and shared FFI without warnings; no other platform host was integrated.
+- `reviewed-journey.log`: the real native
+  `workspace::tests::place_source::native_profiled_place_paste_and_source_history`
+  passes in 5.57 s. It imports a P3 U16 PNG into sRGB8, checks exact retained source
+  data, cancels a transform, clears/restores the displayed content and source,
+  undoes/redoes import, and pastes a clipboard offering a black RGBA8 PNG before
+  the richer TIFF. TIFF wins and retains exact U16/profile data. Saving to native
+  archive and reopening in a second window preserves both sources and exact
+  displayed pixels. Cancelling a pending 32 MiB transfer and rejecting ordinary
+  text leave canonical document bytes unchanged.
+
+The first native journey caught a real cancellation lifecycle bug: Cancel already
+closed the Adwaita dialog, and completion closed it again, triggering a fatal
+critical. Completion now returns directly after the cancellation response. The
+failing `native-journey.log` is retained; the corrected full journey passes with
+fatal GTK criticals enabled. Nonfatal private-session GVFS warnings are retained.
+The initial production check also caught an unavailable optional GIO async-temp
+API; private temp creation now establishes its unlink guard synchronously before
+asynchronous payload I/O begins.
+
+The passing captured binary is `reviewed-gtk-tests`, SHA-256
+`27834baac13e0107709f0e11ccd79de0a7a917bfe1c49ce254d62be1d7c7420c`.
+`reviewed-build.{json,log}`, `reviewed-sources.json` and `provenance.json` identify
+the code and outputs. Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-ui --offline -- --test-threads=1
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/place-source-reviewed-gtk-exact" \
+  workspace::tests::place_source::native_profiled_place_paste_and_source_history \
+  "$PWD/artifacts/color-m2/place-source-reviewed-journey"
+```
+
+The exact wrapper runs the captured test binary with `--exact`; each native test
+uses a separate process. Durations here are correctness runs, not performance
+acceptance. Source repair/rasterization, document assignment/conversion/depth,
+inspection, Color preferences, remaining output controls, managed wide viewing
+and combined memory/job bounds remain open. Fresh performance baselines,
+regression investigation and optimization remain last. Other host integration
+still requires approval after GTK completion.

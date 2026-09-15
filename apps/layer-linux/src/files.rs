@@ -9,6 +9,7 @@ use std::rc::Rc;
 pub(crate) mod export;
 pub(crate) mod open;
 mod properties;
+mod place;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
@@ -168,6 +169,9 @@ async fn document_request(
     id: u32,
     request: &DocumentRequest,
 ) -> Result<bool, String> {
+    if matches!(request, DocumentRequest::Place | DocumentRequest::Paste) {
+        return place::run(w, matches!(request, DocumentRequest::Paste)).await;
+    }
     if matches!(request, DocumentRequest::Properties) {
         return properties::show(w).await;
     }

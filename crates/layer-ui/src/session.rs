@@ -1747,7 +1747,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .as_ref()
                         .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
             }
-            CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
+            CommandId::ImportImage | CommandId::PasteImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
@@ -3385,6 +3385,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::ImportImage | CommandId::PasteImage => {
+                self.request_document(if command == CommandId::ImportImage { DocumentRequest::Place } else { DocumentRequest::Paste })?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::DocumentProperties => {
                 self.request_document(DocumentRequest::Properties)?;
                 Ok((DOCUMENT | HOST, false))
@@ -4162,6 +4166,7 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         color: layer_core::color::DocumentColor,
+        tiled_sources: bool,
         telemetry_enabled: bool,
         pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
         last_style: Option<layer_render::DabStyle>,
@@ -4181,6 +4186,7 @@ mod tests {
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
         fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
+        fn supports_tiled_sources(&self) -> bool { self.tiled_sources }
         fn set_telemetry_enabled(&mut self, enabled: bool) {
             self.telemetry_enabled = enabled;
         }
@@ -4312,6 +4318,7 @@ mod tests {
     }
 
     include!("session_color_tests.rs");
+    include!("session_source_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

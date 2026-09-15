@@ -148,7 +148,10 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
             .and_then(|m| m.initial.as_ref())
             .map_or(Rect::EMPTY, |s| s.bounds())
     } else {
-        Rect::EMPTY
+        layer.source.as_ref().map_or(Rect::EMPTY, |source| Rect {
+            min: Point::default(),
+            max: Point { x: source.extent[0] as f32, y: source.extent[1] as f32 },
+        })
     };
     if let Some(Ok(data)) = doc.target_raster(target).and_then(|r| r.try_data()) {
         for key in data.tiles.keys() {
@@ -195,6 +198,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     l.kind == LayerKind::Paint
                         && (l.asset.is_some()
+                            || l.source.is_some()
                             || !l.raster.is_empty()
                             || !l.pending_operations.is_empty())
                 }

@@ -931,6 +931,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             command.label().into(),
             match command {
                 CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
+                CommandId::ImportImage => "Place a photo while retaining its original profile and depth",
+                CommandId::PasteImage => "Paste a retained image layer from the clipboard",
                 CommandId::Pen => "Draw ink lines with a pen",
                 CommandId::Pencil => "Sketch with pencils and pastels",
                 CommandId::Brush => "Paint with the current brush",

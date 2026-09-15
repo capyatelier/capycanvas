@@ -7,6 +7,8 @@ mod color_panel;
 mod color_management;
 #[path = "new_photo_tests.rs"]
 mod new_photo;
+#[path = "place_source_tests.rs"]
+mod place_source;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_stack_tests.rs"]

@@ -50,6 +50,8 @@ impl DocumentFileState {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentRequest {
+    Place,
+    Paste,
     Properties,
     New,
     Open,
@@ -67,6 +69,8 @@ pub enum DocumentRequest {
 impl DocumentRequest {
     pub fn title(&self) -> &str {
         match self {
+            Self::Place => "Import image as layer",
+            Self::Paste => "Paste image as layer",
             Self::Properties => "Document Properties",
             Self::New => "New drawing",
             Self::Open => "Open drawing or photo",
@@ -77,6 +81,8 @@ impl DocumentRequest {
     }
     pub fn accept_label(&self) -> &'static str {
         match self {
+            Self::Place => "Import",
+            Self::Paste => "Paste",
             Self::Properties => "Done",
             Self::New => "Create",
             Self::Open => "Open",

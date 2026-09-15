@@ -249,6 +249,8 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.NewDocument" => key("n", true, false),
         "command.NewWindow" => key("n", true, true),
         "command.OpenDocument" => key("o", true, false),
+        "command.ImportImage" => key("o", true, true),
+        "command.PasteImage" => key("v", true, false),
         "command.SaveDocument" => key("s", true, false),
         "command.SaveDocumentAs" => key("s", true, true),
         "command.ExportDocument" => key("e", true, true),

@@ -960,59 +960,11 @@ impl LayerPanel {
         ));
         self.footer.append(mask);
         let import = button("layer-image-symbolic", "Import image as layer");
-        import.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            move |_| {
-                let dialog = gtk::FileDialog::builder()
-                    .title("Import image as layer")
-                    .build();
-                dialog.open(
-                    Some(&w.window),
-                    None::<&gio::Cancellable>,
-                    glib::clone!(
-                        #[weak]
-                        w,
-                        move |result| {
-                            let Ok(file) = result else {
-                                return;
-                            };
-                            let result = (|| -> Result<(), String> {
-                                let texture =
-                                    gdk::Texture::from_file(&file).map_err(|e| e.to_string())?;
-                                let mut download = gdk::TextureDownloader::new(&texture);
-                                download.set_format(gdk::MemoryFormat::R8g8b8a8);
-                                let (bytes, stride) = download.download_bytes();
-                                let name = file
-                                    .basename()
-                                    .map(|p| p.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| "Image".into());
-                                w.gpu
-                                    .borrow_mut()
-                                    .as_mut()
-                                    .ok_or("Canvas unavailable")?
-                                    .session
-                                    .import_layer_image(
-                                        &name,
-                                        layer_render::HostImage {
-                                            width: texture.width() as u32,
-                                            height: texture.height() as u32,
-                                            stride: stride as u32,
-                                            format: layer_render::PixelFormat::Rgba8Srgb,
-                                            bytes: &bytes,
-                                        },
-                                    )
-                            })();
-                            w.changed(result.map(|_| layer_ui::UiChange {
-                                revision: w.gpu.borrow().as_ref().unwrap().session.state().revision,
-                                regions: layer_ui::regions::DOCUMENT,
-                                canvas_wake: true,
-                            }));
-                        }
-                    ),
-                );
-            }
-        ));
+        import.set_widget_name("import-image-layer");
+        w.bind_action_tooltip(&import, UiAction::Invoke { command: layer_ui::CommandId::ImportImage });
+        import.connect_clicked(glib::clone!(#[weak] w, move |_| {
+            w.dispatch(UiAction::Invoke { command: layer_ui::CommandId::ImportImage });
+        }));
         self.footer.append(&import);
         self.delete.set_widget_name("delete-selected-layers");
         w.bind_action_tooltip(

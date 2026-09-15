@@ -477,6 +477,43 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.changed = true;
         Ok(())
     }
+    /// The host decodes/validates source color off-thread. Retain those original
+    /// samples at their own depth/profile; rendering converts into this document
+    /// only when a working tile is needed. Import itself never rasterizes pixels.
+    pub fn import_layer_source(
+        &mut self,
+        name: &str,
+        source: layer_core::color::source::SourceImage,
+    ) -> Result<(), String> {
+        self.require_document_idle()?;
+        if !self.engine.backend().supports_tiled_sources() {
+            return Err("This renderer does not support tiled photo layers".into());
+        }
+        source.validate()?;
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+            return Err("Use an image name with 1 to 128 characters".into());
+        }
+        let doc = self.engine.document();
+        let current = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
+        let parent = current.properties.parent;
+        if parent.is_some_and(|id| doc.is_locked(id)) {
+            return Err("This group is locked".into());
+        }
+        let index = doc.layers.iter().position(|l| l.id == current.id).unwrap();
+        let id = self.engine.allocate_layer_id();
+        let mut layer = Layer::paint(id, name);
+        layer.properties.parent = parent;
+        layer.source = Some(std::sync::Arc::new(source));
+        self.layer_edit(Edit::Batch(vec![
+            Edit::InsertLayer { index, layer },
+            Edit::SetActiveLayer { id },
+        ]))?;
+        self.refresh_document();
+        self.refresh_commands();
+        self.layer_interaction.changed = true;
+        Ok(())
+    }
     pub(super) fn layer_edit(&mut self, edit: Edit) -> Result<(), String> {
         self.engine.apply_edit(edit).map_err(error)
     }
@@ -951,6 +988,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.raster = Default::default();
                         layer.pending_operations.clear();
                         layer.asset = None;
+                        layer.source = None;
                     }
                     LayerAction::AlphaLock { value, .. } => {
                         if layer.kind != LayerKind::Paint {
