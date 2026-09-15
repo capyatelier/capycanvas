@@ -226,6 +226,14 @@ impl WgpuRasterizer {
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
             #[cfg(not(target_arch = "wasm32"))]
+            if self.native_edit.as_ref().is_some_and(|native| {
+                u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
+            }) {
+                let mip = self.display_pipelines
+                    .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+                required.render.push(mip.reduce.clone());
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             if document.layers.iter().any(|l| l.source.is_some()) {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
             }
@@ -332,7 +340,7 @@ impl WgpuRasterizer {
         if !startup.others_queued {
             startup.masks.remaining(&startup.compiler);
             if self.device.working_format() == wgpu::TextureFormat::Rgba32Float {
-                let mip = self.canvas_preview.mip_pipelines
+                let mip = self.display_pipelines
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
                 startup.compiler.pipeline(&mip.reduce, OTHER);
             }

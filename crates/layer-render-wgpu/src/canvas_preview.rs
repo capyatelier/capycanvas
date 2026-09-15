@@ -7,7 +7,6 @@ use thumbnails::UiImageTarget;
 pub(super) struct CanvasOverview {
     target: Option<UiImageTarget>,
     mips: Option<display_mips::Image>,
-    pub(super) mip_pipelines: Option<display_mips::Pipelines>,
     pipeline: Option<wgpu::RenderPipeline>,
     tx: mpsc::Sender<Result<CanvasPreview, GpuRasterError>>,
     rx: mpsc::Receiver<Result<CanvasPreview, GpuRasterError>>,
@@ -26,7 +25,6 @@ impl CanvasOverview {
         Self {
             target: None,
             mips: None,
-            mip_pipelines: None,
             pipeline: None,
             tx,
             rx,
@@ -56,7 +54,12 @@ impl WgpuRasterizer {
             return Ok(false);
         }
         let revision = self.composite_revision;
-        let Some(mut source) = self.composite_bind_group.clone() else {
+        let Some(mut source) = self
+            .live_display
+            .as_ref()
+            .map(|cache| cache.coarse.binding.clone())
+            .or_else(|| self.composite_bind_group.clone())
+        else {
             return Ok(false);
         };
         if known_revision == Some(revision) {
@@ -67,10 +70,12 @@ impl WgpuRasterizer {
         } else {
             let [width, height] = self.document_extent;
             let native = self.device.working_format() == wgpu::TextureFormat::Rgba32Float;
+            if self.live_display.is_some() {
+                self.canvas_preview.mips = None;
+            }
             if native {
                 let pipelines = self
-                    .canvas_preview
-                    .mip_pipelines
+                    .display_pipelines
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
                 if let Some(startup) = &self.startup {
                     startup.compiler.check()?;
@@ -121,12 +126,7 @@ impl WgpuRasterizer {
                             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                                 label: Some("Navigator pipeline layout"),
                                 bind_group_layouts: &[Some(if native {
-                                    &self
-                                        .canvas_preview
-                                        .mip_pipelines
-                                        .as_ref()
-                                        .unwrap()
-                                        .image_layout
+                                    &self.display_pipelines.as_ref().unwrap().image_layout
                                 } else {
                                     &self.texture_layout
                                 })],
@@ -149,7 +149,7 @@ impl WgpuRasterizer {
                     label: Some("Navigator preview"),
                 },
             );
-            if native {
+            if native && self.live_display.is_none() {
                 let plan = display_mips::Plan::new(self.document_extent)?;
                 let mut image = self
                     .canvas_preview
@@ -159,7 +159,7 @@ impl WgpuRasterizer {
                     .unwrap_or_else(|| {
                         display_mips::Image::new(
                             self,
-                            self.canvas_preview.mip_pipelines.as_ref().unwrap(),
+                            self.display_pipelines.as_ref().unwrap(),
                             plan,
                         )
                     });
@@ -167,7 +167,7 @@ impl WgpuRasterizer {
                     for coordinate in page_coordinates(PixelRect::full(self.document_extent)) {
                         image.write_tile(
                             &self.device,
-                            self.canvas_preview.mip_pipelines.as_ref().unwrap(),
+                            self.display_pipelines.as_ref().unwrap(),
                             &mut encoder,
                             self.composite_texture.as_ref().unwrap(),
                             coordinate.map(|v| v * PAGE_SIZE),

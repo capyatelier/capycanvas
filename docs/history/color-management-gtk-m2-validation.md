@@ -3852,3 +3852,141 @@ Existing frame, total residency and latency gates remain open; correctness-suite
 durations above are not performance evidence. The full GTK color/photo controls,
 managed viewing and other platform gaps recorded earlier remain outstanding.
 Other platform host integration still requires approval after GTK qualification.
+
+
+## Live bounded composition and exact readback (2026-09-14)
+
+Parent: `954b6504`. Native Float32 documents whose full composite would exceed
+64 MiB now compose directly into a bounded display cache. It retains the complete
+coarse image from the preceding stage and a toroidal texture of visible detail
+tiles. There is no full-resolution Float32 composite for these documents. Small
+native documents keep their existing dense composite. The provisional 256 MiB
+display ceiling includes coarse pixels, mip scratch, detail pixels and immutable
+geometry records; it is not a qualified combined GPU/process budget.
+
+The inverse camera bounds determine required detail. Power-of-two reduction uses
+the largest affine scale so a chosen mip texel is no larger than a surface pixel.
+Cached world-tile identities survive pans; a resident one-pixel pan performs no
+composition and does not advance the artwork revision. A change of mip or newly
+visible tile regenerates its required source pages. Fine sampling wraps across
+the atlas without seams; original document dimensions determine partial-edge
+sample positions. The viewport and in-surface Navigator consume the cache, and
+the readback preview reuses its coarse image. Neither display consumer supplies
+pixels to edits, picking or delivery.
+
+The cache preflights required storage before painting. When a tall view follows
+a wide view, it can replace the old allocation with the required shape instead
+of retaining an over-budget bounding rectangle. Queued users retire before the
+old detail texture is destroyed; presenters rebind when texture/buffer identities
+change. A rejected view leaves the preceding presentation intact. Discarded tile
+writes invalidate their slots; only successful frame completion publishes them.
+Large-document startup now includes mip reduction in canvas readiness, before
+any display pixels are allocated.
+
+Explicit RGBA8 readback now composes exact 256-pixel artwork crops with physical
+filter halos and converts/copies them into the requested result. Its API still
+owns a complete RGBA8 result texture and staging buffer, with a device-buffer
+size check. It no longer requires or temporarily rebuilds a full-resolution
+working composite. Interactive GTK file output continues to use the streaming
+snapshot worker. The obsolete inspection export/recompose/restore path and its
+separate retained layer snapshot are deleted. Removing source topology or changing
+document dimensions invalidates obsolete exact-query metadata and releases its
+retained originals.
+
+Correctness checks exposed and fixed these issues before adoption:
+
+- Reconstructing surface pixels from interpolated UVs differed near sharp color
+  transitions. The viewport now uses fragment `position.xy`, whose pixel-center
+  semantics are specified by [WGSL](https://www.w3.org/TR/WGSL/#position-builtin-value).
+  Both original comparisons pass at their unchanged 5e-6 Float32 ceiling. The
+  initial failures are retained in `live-display-gpu.log`.
+- Tiled export initially lacked `COPY_DST` on its RGBA8 destination. GPU
+  validation caught it; the destination now declares its actual copy uses.
+- Exact readback exposed the direct brush-preview path, which owns no paint
+  page. Exact captures replay the retained GPU drawing commands into the crop.
+  Watercolor captures also require tile coordinates and raw layer opacity;
+  separate scene records prevent applying opacity twice or losing an edge on a
+  nonzero tile. Existing drawing tolerances were not relaxed.
+- Native redo initially recycled staging memory for display geometry through a
+  separate raster-restoration submission. Diagnostic readbacks showed finite,
+  correct paint/coarse/detail pixels but invalid presentation. Display geometry
+  is now staged after independent restoration, alongside the frame's style
+  records. The same native stroke/undo/redo/device-replacement test then passes.
+  The pinned wgpu 30.0.1 implementation of
+  [StagingBelt](https://docs.rs/wgpu/30.0.1/wgpu/util/struct.StagingBelt.html)
+  attaches recall of all closed chunks to the supplied submission; it does not
+  infer that another unsubmitted encoder still needs their contents.
+  `live-display-{stroke-backtrace,redo,order}.log` retain the diagnosis and fix.
+- The new property-edit fixture first omitted `FramePacket::composite_all`,
+  although real layer-property actions request recomposition. The fixture now
+  follows that contract. Camera-only tests continue to require cache reuse.
+  The prior zero-alpha output test now exercises the conversion boundary
+  directly: deliberately changing display pixels must not change exact export.
+
+Eight new checks cover visible detail across pans, toroidal wrapping, rotation,
+reflection, enlargement and minification; independent Float64 area averaging;
+budget failure and discarded writes; allocation shape changes with a retained
+presenter; masked physical filters, translated source, inspection and restoration;
+in-surface Navigator/readback agreement and clipping; deferred startup; and
+native U16 ProPhoto painting across a tile boundary, exact undo/redo and device
+replacement. Dense/cache Float32 presentation uses an absolute 5e-6 comparison;
+the Navigator comparison allows one output code. Source and committed backing
+identity/restoration checks remain exact.
+
+The first complete renderer run found four failures (213 pass, 4 fail, one
+explicitly ignored 4K replay, 780.12 s). Direct preview and both watercolor
+failures are fixed by the capture changes above. The fourth found a retained
+source after document topology removal and is fixed by query-metadata retirement.
+All original failure logs remain under `artifacts/color-m2/`; they are evidence
+of issues found, not successful qualification. The reviewed full renderer suite
+passes **221 tests, zero failures**, with one explicitly ignored 4K replay and
+25 performance workloads filtered out, in 899.29 s (`live-display-reviewed.log`).
+This includes all eight new cases and every previously failing case. The exact
+executables are `live-display-reviewed-{gpu,gtk}-tests`, mapped by
+`live-display-reviewed-build.{json,log}`. Code and artifact hashes, including
+the retained intermediate binaries and logs, are in `live-display-provenance.json`.
+
+Private-Mutter GTK checks pass on the exact reviewed source using
+`live-display-reviewed-gtk-tests`: connected tools 5.60 s, diagnostics/GPU recovery
+3.24 s and native files/profiled delivery 38.72 s
+(`live-display-reviewed-gtk-{tools,recovery,files}.log`). Independent ImageMagick
+decoding matches all 983,040 U16 RGB/gray/CMYK samples and embedded ICC bytes
+exactly (`live-display-reviewed-handoff.log`, process 1582742). Output artifacts
+are copied into `live-display-ui/`. An earlier build also passed all three GTK
+checks and the same external handoff; its logs and process 1563743's outputs are
+retained separately. Production GTK checks successfully on the reviewed source
+(`live-display-reviewed-gtk-check.log`). Correctness-test durations here do not
+establish interaction, frame-creation or end-to-end latency budgets.
+
+Reproduce with the same local JPEG dependency setup and physical reference GPU:
+
+```sh
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo test -p layer-render-wgpu -p layer-linux --offline --no-run --message-format=json
+ABSOLUTE_GPU_TEST_BINARY --test-threads=1 --skip latency --skip workloads
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_connected_tools ABSOLUTE_REPORT_PREFIX
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_diagnostics_and_gpu_failure_recovery ABSOLUTE_REPORT_PREFIX
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_document_files ABSOLUTE_REPORT_PREFIX
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo check -p layer-linux --offline
+```
+
+This is correctness qualification of the shared renderer on the existing
+Linux/Vulkan RTX PRO 6000 reference system, not completion of the native GTK
+photo workflow. GTK's production factory still selects the existing SDR8 mode.
+The private 1600×1000@120 compositor uses software test input and establishes
+neither calibrated monitor agreement nor physical tablet delivery.
+
+Remaining work includes full GTK color/photo controls and managed display
+activation; source/display scheduling and cancellation; active-edit, scalar-plane
+and combined source/filter/display/history/staging budgets; complete zoom and
+anisotropic-minification quality qualification; and the remaining profiled
+interchange/inspection workflows. The full RGBA8 readback allocation belongs to
+its explicitly requested API, not the interactive display ceiling. No performance
+workload or benchmark comparison ran in this stage. Fresh frame baselines,
+regression investigation, optimization and final memory/latency qualification
+remain last, as requested. Other platform host integration remains unapproved.

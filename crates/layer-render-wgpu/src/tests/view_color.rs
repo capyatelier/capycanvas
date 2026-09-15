@@ -325,6 +325,7 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
             WgpuRasterizer::new_headless().unwrap()
         };
         frame(&mut r, &source(RgbSpace::Srgb, [65535; 4]));
+        let artwork = r.readback_srgb_rgba8().unwrap();
         // Unassociated export is undefined at zero coverage. Even if a custom
         // effect leaves hidden RGB, the output boundary must emit canonical zero.
         let pixel = if native {
@@ -347,7 +348,15 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
             },
             texture.size(),
         );
-        assert!(r.readback_srgb_rgba8().unwrap().iter().all(|v| *v == 0));
+        // Exercise the unassociated output boundary with deliberately hidden
+        // RGB. Exact artwork readback must ignore the corrupted display cache.
+        let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let binding = r.composite_bind_group.as_ref().unwrap().clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        r.submit_ui_readback(encoder, &binding, [1; 2], 42, move |image| { tx.send(image).unwrap(); });
+        complete(&r);
+        assert!(rx.recv().unwrap().unwrap().bytes.iter().all(|v| *v == 0));
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
         assert!(r.request_canvas_preview(None).unwrap());
         complete(&r);
         let preview = r.take_canvas_preview().unwrap().unwrap().image.unwrap();

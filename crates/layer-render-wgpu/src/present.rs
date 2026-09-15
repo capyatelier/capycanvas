@@ -48,6 +48,10 @@ pub struct ViewportPresenter {
     uniform: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     selection_buffer: Option<wgpu::Buffer>,
+    composite_view: Option<wgpu::TextureView>,
+    coarse_view: Option<wgpu::TextureView>,
+    display_geometry: Option<wgpu::Buffer>,
+    plain_display: wgpu::Buffer,
     document_extent: [u32; 2],
     encode_srgb: bool,
     corner_radius: f32,
@@ -137,6 +141,26 @@ impl ViewportPresenter {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(48),
                     },
                     count: None,
                 },
@@ -232,6 +256,15 @@ impl ViewportPresenter {
             uniform,
             bind_group: None,
             selection_buffer: None,
+            composite_view: None,
+            coarse_view: None,
+            display_geometry: None,
+            plain_display: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("dense display geometry"),
+                size: 48,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            }),
             document_extent: [0; 2],
             encode_srgb: color
                 .shader_encoding(format)
@@ -432,15 +465,31 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        let Some(composite) = renderer.composite_view.as_ref() else {
+        let Some(composite) = renderer
+            .live_display
+            .as_ref()
+            .map(|cache| cache.detail_view())
+            .or(renderer.composite_view.as_ref())
+        else {
             return Ok(());
         };
+        let coarse = renderer
+            .live_display
+            .as_ref()
+            .map_or(composite, |cache| &cache.coarse.view);
+        let geometry = renderer
+            .live_display
+            .as_ref()
+            .map_or(&self.plain_display, |cache| &cache.geometry);
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
         if self.bind_group.is_none()
             || self.document_extent != renderer.document_extent
             || self.selection_buffer.as_ref() != Some(coverage)
+            || self.composite_view.as_ref() != Some(composite)
+            || self.coarse_view.as_ref() != Some(coarse)
+            || self.display_geometry.as_ref() != Some(geometry)
         {
             self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("viewport composite"),
@@ -462,10 +511,21 @@ impl ViewportPresenter {
                         binding: 3,
                         resource: coverage.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(coarse),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: geometry.as_entire_binding(),
+                    },
                 ],
             }));
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());
+            self.composite_view = Some(composite.clone());
+            self.coarse_view = Some(coarse.clone());
+            self.display_geometry = Some(geometry.clone());
         }
         let [a, b, c, d, tx, ty] = view.document_to_surface;
         let det = a * d - b * c;

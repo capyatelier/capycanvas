@@ -21,6 +21,8 @@ struct ScalarSlot {
 pub(crate) struct NativeEdit {
     pub(super) backing: BTreeMap<LayerId, Arc<RasterData>>,
     pub(crate) color_cache_bytes: u64,
+    pub(crate) display_dense_bytes: u64,
+    pub(crate) display_cache_bytes: u64,
     /// Provisional ceiling for live physical-filter pixel allocations, separate
     /// from source, paint and composite residency. Qualify the host budget before
     /// enabling native photo documents in GTK.
@@ -79,6 +81,8 @@ impl NativeEdit {
         Self {
             backing: BTreeMap::new(),
             color_cache_bytes: 256 * 1024 * 1024,
+            display_dense_bytes: crate::live_display::DENSE_BYTES,
+            display_cache_bytes: crate::live_display::CACHE_BYTES,
             image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,
             transfer,
             colors,

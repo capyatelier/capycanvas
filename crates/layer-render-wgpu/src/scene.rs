@@ -1349,7 +1349,7 @@ impl Scene {
         self.used.fill(false);
         // Completed image boundaries include their surrounding composition.
         // Copy only the changed region; clipping uses the same final path.
-        if self.cached_composition()
+        if r.live_display.is_none() && self.cached_composition()
             && let Some(top) = packet.layers.iter().find(|l| {
                 l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background
             })
@@ -1432,6 +1432,16 @@ impl Scene {
                 }
             }
             let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
+            if r.live_display.is_some() {
+                self.encode_jobs(r, encoder)?;
+                let mut cache = r.live_display.take().unwrap();
+                let result = cache.write_tile(r, r.display_pipelines.as_ref().unwrap(), encoder,
+                    &self.pool[output].texture, [0; 2], tile);
+                r.live_display = Some(cache);
+                self.free(output);
+                result?;
+                continue;
+            }
             // The last effect already writes every pixel. Write directly into
             // the composite region instead of copying its scratch result.
             if let Some(Job::Effect { target, data, .. }) = self.jobs.last_mut()

@@ -61,6 +61,7 @@ mod layer_tests;
 mod present;
 mod artwork;
 mod display_mips;
+mod live_display;
 mod region_requests;
 mod region_sources;
 mod scene;
@@ -721,6 +722,8 @@ pub struct WgpuRasterizer {
     transform_damage: Vec<(LayerId, PixelRect)>,
     thumbnails: thumbnails::Thumbnails,
     canvas_preview: canvas_preview::CanvasOverview,
+    display_pipelines: Option<display_mips::Pipelines>,
+    live_display: Option<live_display::Cache>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     filter_previews: Option<scene::FilterPreviews>,
@@ -776,7 +779,6 @@ pub struct WgpuRasterizer {
     scene_pipelines: scene::Pipelines,
     last_submission: Option<wgpu::SubmissionIndex>,
     pending_readback: Option<ReadbackImage>,
-    inspection: Option<(layer_render::ViewState, Vec<Layer>, f32)>,
     metrics: GpuRasterMetrics,
     telemetry: telemetry::Telemetry,
 }
@@ -1074,6 +1076,8 @@ impl WgpuRasterizer {
             last_time_seconds: 0.,
             filter_source_epoch: 0,
             canvas_preview: canvas_preview::CanvasOverview::new(),
+            display_pipelines: None,
+            live_display: None,
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
@@ -1129,7 +1133,6 @@ impl WgpuRasterizer {
             scene_pipelines,
             last_submission: None,
             pending_readback: None,
-            inspection: None,
             metrics: GpuRasterMetrics::default(),
         };
         if !staged {
@@ -1426,6 +1429,17 @@ impl WgpuRasterizer {
         layers: &[Layer],
     ) -> Result<bool, GpuRasterError> {
         let resized = self.ensure_document_metadata(extent, layers)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(native) = &self.native_edit
+            && u64::from(extent[0]) * u64::from(extent[1]) * 16 > native.display_dense_bytes
+        {
+            let limit = native.display_cache_bytes;
+            if self.live_display.is_none() {
+                self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+                self.live_display = Some(live_display::Cache::new(self, self.display_pipelines.as_ref().unwrap(), limit)?);
+            }
+            return Ok(resized);
+        }
         if resized || self.composite_texture.is_none() {
             let (texture, view) = create_color_target(&self.device, extent, "layer composite");
             self.composite_bind_group = Some(create_texture_bind_group(
@@ -1454,6 +1468,19 @@ impl WgpuRasterizer {
             return Err(GpuRasterError::ExtentUnsupported);
         }
         let resized = extent != self.document_extent;
+        if resized || self.artwork_frame.as_ref().is_some_and(|frame| frame.layers.iter().any(|old| {
+            layers.iter().find(|new| new.id == old.id).is_none_or(|new| {
+                new.kind != old.kind || match (&old.source, &new.source) {
+                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                    (None, None) => false,
+                    _ => true,
+                }
+            })
+        })) {
+            // Queries cannot capture a frame whose paint/source topology was
+            // removed. Release its originals with the live source maps.
+            self.artwork_frame = None;
+        }
         self.retain_native_backing(layers, resized);
         if resized {
             self.selection_clip.reset();
@@ -1466,6 +1493,7 @@ impl WgpuRasterizer {
             self.composite_texture = None;
             self.composite_view = None;
             self.composite_bind_group = None;
+            self.live_display = None;
             self.preview_damage = PixelRect::EMPTY;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
@@ -1996,7 +2024,8 @@ impl WgpuRasterizer {
             .saturating_add(self.color_sampler.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
-            self.composite_texture.as_ref().map_or(0, texture_bytes);
+            self.composite_texture.as_ref().map_or(0, texture_bytes)
+                + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes);
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -2033,7 +2062,11 @@ impl WgpuRasterizer {
         scene_required: bool,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<usize, GpuRasterError> {
-        let background_index = packet.dab_batches.len() + packet.layers.len();
+        // The direct compositor uses final layer opacity and surface position.
+        // Exact scene captures need raw watercolor in tile coordinates even
+        // when the displayed frame used that direct path.
+        let scene_base = packet.dab_batches.len() + if scene_required { 0 } else { packet.layers.len() };
+        let background_index = scene_base + packet.layers.len();
         self.ensure_upload_capacity(packet.dabs.len(), background_index + 1)?;
         if !packet.dabs.is_empty() {
             self.uploads.write(
@@ -2054,7 +2087,7 @@ impl WgpuRasterizer {
         }
         self.layer_style_records.clear();
         for (index, layer) in packet.layers.iter().enumerate() {
-            self.layer_style_records.insert(layer.id, (packet.dab_batches.len() + index) as u32);
+            self.layer_style_records.insert(layer.id, (scene_base + index) as u32);
             let watercolor = packet
                 .dab_batches
                 .iter()
@@ -2079,6 +2112,13 @@ impl WgpuRasterizer {
             let offset = (packet.dab_batches.len() + index) * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
+            if !scene_required {
+                record.canvas_opacity[2] = 1.;
+                record.color[0] = 1.;
+                let offset = (scene_base + index) * self.style_stride as usize;
+                self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
+                    .copy_from_slice(style_bytes(&record));
+            }
         }
         let background = StyleGpu::plain(
             packet.document_extent,
@@ -2276,6 +2316,20 @@ impl WgpuRasterizer {
         scissor: PixelRect,
         target_offset: u32,
     ) -> Result<(), GpuRasterError> {
+        self.encode_batch_to_target(encoder, batch_index, batch, target, scissor,
+            self.paint_target_binding(&batch.style), target_offset)
+    }
+
+    fn encode_batch_to_target(
+        &self,
+        encoder: &mut crate::submission::CommandEncoder,
+        batch_index: usize,
+        batch: &DabBatch,
+        target: &wgpu::TextureView,
+        scissor: PixelRect,
+        binding: &wgpu::BindGroup,
+        target_offset: u32,
+    ) -> Result<(), GpuRasterError> {
         let start = batch.first_dab as u64 * mem::size_of::<Dab>() as u64;
         let end = start
             .checked_add(batch.dab_count as u64 * mem::size_of::<Dab>() as u64)
@@ -2335,7 +2389,7 @@ impl WgpuRasterizer {
             &self.style_bind_group,
             &[batch_index as u32 * self.style_stride as u32],
         );
-        pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[target_offset]);
+        pass.set_bind_group(1, binding, &[target_offset]);
         if let Some(mask) = mask {
             pass.set_bind_group(2, &mask.bind_group, &[]);
         } else if let Some(set) = texture_set {
@@ -3690,6 +3744,7 @@ impl WgpuRasterizer {
         let row_bytes = width.checked_mul(4).ok_or(GpuRasterError::SizeOverflow)?;
         let padded_row_bytes = align_up(row_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let size = padded_row_bytes as u64 * height as u64;
+        if size > self.device.limits().max_buffer_size { return Err(GpuRasterError::SizeOverflow); }
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("layer explicit readback"),
             size,
@@ -3707,71 +3762,16 @@ impl WgpuRasterizer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: EXPORT_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let export_view = export_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
                 label: Some("layer explicit readback encoder"),
             },
         );
-        // Inspection is a display aid, never exported. Recompose only on this
-        // explicit export path, then restore the visible scene in GPU order.
-        let inspection = self.inspection.take();
-        if let Some(scene) = &mut self.scene {
-            scene.begin_frame();
-        }
-        if let Some((view, layers, time)) = &inspection {
-            let mut scene = self.scene.take().expect("inspection scene");
-            scene.compose(
-                self,
-                FramePacket {
-                    view: *view,
-                    document_extent: [width, height],
-                    layers,
-                    dabs: &[],
-                    dab_batches: &[],
-                    restore_rasters: &[],
-                    reset_layers: false,
-                    time_seconds: *time,
-                    composite_all: true,
-                },
-                PixelRect::full([width, height]),
-                &mut encoder,
-                false,
-                None,
-            )?;
-            self.scene = Some(scene);
-        }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer GPU sRGB export conversion"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &export_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipelines.export);
-            pass.set_bind_group(
-                0,
-                self.composite_bind_group
-                    .as_ref()
-                    .expect("document target exists"),
-                &[],
-            );
-            pass.draw(0..3, 0..1);
-        }
+        self.encode_artwork_readback(&export_texture, &mut encoder)?;
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &export_texture,
@@ -3793,29 +3793,6 @@ impl WgpuRasterizer {
                 depth_or_array_layers: 1,
             },
         );
-        if let Some((view, layers, time)) = &inspection {
-            let mut scene = self.scene.take().expect("inspection scene");
-            scene.compose(
-                self,
-                FramePacket {
-                    view: *view,
-                    document_extent: [width, height],
-                    layers,
-                    dabs: &[],
-                    dab_batches: &[],
-                    restore_rasters: &[],
-                    reset_layers: false,
-                    time_seconds: *time,
-                    composite_all: true,
-                },
-                PixelRect::full([width, height]),
-                &mut encoder,
-                true,
-                None,
-            )?;
-            self.scene = Some(scene);
-        }
-        self.inspection = inspection;
         self.uploads.finish(&encoder);
         let submission = encoder.submit(&self.queue);
         let (sender, receiver) = mpsc::channel();
@@ -4139,11 +4116,6 @@ impl CanvasRenderer for WgpuRasterizer {
             };
         }
         let packet = FramePacket { view, ..packet };
-        self.inspection = packet
-            .layers
-            .iter()
-            .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area))
-            .then(|| (packet.view, packet.layers.to_vec(), packet.time_seconds));
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
         }
@@ -4201,6 +4173,11 @@ impl CanvasRenderer for WgpuRasterizer {
             },
         );
         self.telemetry.begin(&self.device, &mut encoder);
+        let display_missing = if let Some(mut cache) = self.live_display.take() {
+            let result = cache.prepare(self, packet.view, &mut encoder);
+            self.live_display = Some(cache);
+            result?
+        } else { std::collections::BTreeSet::new() };
         let committed_preview = if self.transform_preview.is_none() {
             self.transforms.as_mut().unwrap().consume_commit(packet)
         } else {
@@ -4352,6 +4329,9 @@ impl CanvasRenderer for WgpuRasterizer {
         }
 
         // Style records serve brush batches, then composition layers.
+        if let Some(cache) = &self.live_display {
+            self.uploads.write(&mut encoder, &self.queue, &cache.geometry, &cache.geometry_bytes())?;
+        }
         let background_offset = self.prepare_uploads(packet, scene_required, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
@@ -4905,6 +4885,13 @@ impl CanvasRenderer for WgpuRasterizer {
         if !dirty.is_empty() || animated {
             self.composite_revision = self.composite_revision.wrapping_add(1);
         }
+        if !display_missing.is_empty() {
+            if dirty.is_empty() && !animated { composite_tiles = Some(display_missing.clone()); }
+            else if let Some(tiles) = &mut composite_tiles { tiles.extend(&display_missing); }
+            for coordinate in &display_missing {
+                dirty = dirty.union(page_rect(*coordinate).intersect(PixelRect::full(packet.document_extent)));
+            }
+        }
         if (!dirty.is_empty() || animated) && scene_required {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             // A moved target's damage is stored in image coordinates. Round to
@@ -5204,6 +5191,7 @@ impl CanvasRenderer for WgpuRasterizer {
             self.finish_native_rasters(commit, submission)?;
         }
         self.commit_rasters(packet.layers)?;
+        if let Some(cache) = &mut self.live_display { cache.finish_frame(); }
         self.artwork_frame = Some(Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)));
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();

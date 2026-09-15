@@ -11,6 +11,79 @@ struct Camera {
 @group(0) @binding(2) var canvas_sampler: sampler;
 struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
+@group(0) @binding(4) var coarse: texture_2d<f32>;
+struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32> }
+@group(0) @binding(5) var<uniform> cache: DisplayCache;
+
+// Coordinates of mip-cell centers. The final cell can represent less than a
+// full footprint; preserve its actual position instead of stretching the image.
+fn mip_coordinate(p: f32, extent: f32, scale: f32) -> f32 {
+    let last = ceil(extent / scale) - 1.;
+    if last <= 0. { return 0.; }
+    let previous = (last - .5) * scale;
+    if p > previous {
+        let distance = .5 * (scale + extent - last * scale);
+        return last - 1. + clamp((p - previous) / distance, 0., 1.);
+    }
+    return clamp(p / scale - .5, 0., last);
+}
+fn coarse_point(p: vec2<f32>) -> vec4<f32> {
+    let extent = camera.offset_document.zw;
+    let scale = f32(cache.info.y);
+    let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
+    let low = vec2<u32>(floor(q));
+    let high = min(low+1u, textureDimensions(coarse)-1u);
+    let t = fract(q);
+    return mix(mix(textureLoad(coarse, vec2<i32>(low), 0), textureLoad(coarse, vec2<i32>(i32(high.x), i32(low.y)), 0), t.x),
+        mix(textureLoad(coarse, vec2<i32>(i32(low.x), i32(high.y)), 0), textureLoad(coarse, vec2<i32>(high), 0), t.x), t.y);
+}
+fn detail_point(p: vec2<f32>) -> vec4<f32> {
+    if cache.info.z == 0u { return coarse_point(p); }
+    let extent = camera.offset_document.zw;
+    let scale = f32(cache.info.z);
+    let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
+    let low = vec2<u32>(floor(q));
+    let high = min(low+1u, vec2<u32>(ceil(extent / scale))-1u);
+    if any(low < cache.window.xy) || any(high >= cache.window.zw) { return coarse_point(p); }
+    let a = low % cache.grid.xy;
+    let b = high % cache.grid.xy;
+    let t = fract(q);
+    return mix(mix(textureLoad(canvas, vec2<i32>(a), 0), textureLoad(canvas, vec2<i32>(i32(b.x), i32(a.y)), 0), t.x),
+        mix(textureLoad(canvas, vec2<i32>(i32(a.x), i32(b.y)), 0), textureLoad(canvas, vec2<i32>(b), 0), t.x), t.y);
+}
+fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    if cache.info.x == 0u { return textureSampleLevel(canvas, canvas_sampler, p / camera.offset_document.zw, 0.); }
+    let scale = f32(select(cache.info.z, cache.info.y, cache.info.z == 0u));
+    if max(length(dx), length(dy)) <= scale { return detail_point(p); }
+    var color = vec4(0.);
+    for (var y = 0u; y < 4u; y++) {
+        for (var x = 0u; x < 4u; x++) {
+            let offset = (vec2(f32(x), f32(y))+.5)/4.-.5;
+            color += detail_point(p + dx * offset.x + dy * offset.y);
+        }
+    }
+    return color / 16.;
+}
+fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
+    if cache.info.x == 0u { return sample_overview(canvas, canvas_sampler, uv, footprint); }
+    let extent = camera.offset_document.zw / f32(cache.info.y);
+    let low = clamp((uv-footprint*.5)*extent, vec2(0.), extent);
+    let high = clamp((uv+footprint*.5)*extent, low, extent);
+    let start = vec2<u32>(floor(low));
+    let end = min(vec2<u32>(ceil(high)), textureDimensions(coarse));
+    var color = vec4(0.);
+    var weight = 0.;
+    for (var y = start.y; y < end.y; y++) {
+        for (var x = start.x; x < end.x; x++) {
+            let p = vec2(f32(x), f32(y));
+            let overlap = max(vec2(0.), min(high, p+1.) - max(low, p));
+            let area = overlap.x * overlap.y;
+            color += textureLoad(coarse, vec2<i32>(i32(x), i32(y)), 0) * area;
+            weight += area;
+        }
+    }
+    return color / max(weight, .0000001);
+}
 
 fn selected(p: vec2<f32>) -> bool {
     if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return false; }
@@ -56,11 +129,11 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     return select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
 }
 @fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {
-    let surface = vertex.uv * camera.viewport.xy;
+    let surface = vertex.position.xy;
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
-    let paint = textureSampleLevel(canvas, canvas_sampler, p / extent, 0.0);
+    let paint = artwork_at(p, camera.inverse.xy, camera.inverse.zw);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a);
     if any(p < vec2<f32>(0.0)) || any(p >= extent) {rgb = view_ui_rgb(camera.surround.rgb);}
@@ -146,7 +219,7 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let footprint = fwidth(v.uv);
     let p = v.position.xy;
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
-    let paint = sample_overview(canvas, canvas_sampler, v.uv, footprint);
+    let paint = coarse_area(v.uv, footprint);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
     let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
                    min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));

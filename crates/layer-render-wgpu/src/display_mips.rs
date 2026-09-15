@@ -132,6 +132,7 @@ struct Record {
 pub(super) struct Image {
     pub plan: Plan,
     pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
     pub binding: wgpu::BindGroup,
     geometry: wgpu::Buffer,
     scratch: wgpu::Texture,
@@ -203,6 +204,7 @@ impl Image {
         Self {
             plan,
             texture,
+            view,
             binding,
             geometry,
             scratch,
@@ -219,6 +221,40 @@ impl Image {
                 .flatten()
                 .map(|r| r.uniform.size())
                 .sum::<u64>()
+    }
+    pub fn copy_mip(
+        &self,
+        encoder: &mut crate::submission::CommandEncoder,
+        level: u32,
+        coordinate: [u32; 2],
+        destination: &wgpu::Texture,
+        origin: [u32; 2],
+    ) {
+        assert!(level <= self.plan.level);
+        let valid: [u32; 2] = std::array::from_fn(|i| {
+            (self.plan.extent[i] - coordinate[i] * PAGE_SIZE)
+                .min(PAGE_SIZE)
+                .div_ceil(1 << level)
+        });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                mip_level: level,
+                ..self.scratch.as_image_copy()
+            },
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d {
+                    x: origin[0],
+                    y: origin[1],
+                    z: 0,
+                },
+                ..destination.as_image_copy()
+            },
+            wgpu::Extent3d {
+                width: valid[0],
+                height: valid[1],
+                depth_or_array_layers: 1,
+            },
+        );
     }
     /// Consume one completed full-resolution composition tile. `source_origin`
     /// supports both a temporary tile and the current full composite during its
