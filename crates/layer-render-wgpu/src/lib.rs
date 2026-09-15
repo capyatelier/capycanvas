@@ -741,6 +741,10 @@ pub struct WgpuRasterizer {
     composite_view: Option<wgpu::TextureView>,
     composite_bind_group: Option<wgpu::BindGroup>,
     preview_pages: Vec<LayerPage>,
+    // Direct destination prediction writes only its damage. Exact artwork
+    // queries complete the unchanged portions before using whole preview tiles.
+    preview_full_pages: bool,
+    preview_completion: Option<Arc<std::sync::atomic::AtomicBool>>,
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     preview_damage: PixelRect,
@@ -1097,6 +1101,8 @@ impl WgpuRasterizer {
             composite_view: None,
             composite_bind_group: None,
             preview_pages: Vec::with_capacity(16),
+            preview_full_pages: true,
+            preview_completion: None,
             preview_coverage_pages: Vec::with_capacity(8),
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
             preview_damage: PixelRect::EMPTY,
@@ -4601,6 +4607,8 @@ impl CanvasRenderer for WgpuRasterizer {
         let native_commit = self.encode_native_rasters(packet.layers, &mut encoder)?;
 
         self.preview_damage = new_preview_damage;
+        self.preview_full_pages = !new_preview_from_persistent;
+        self.preview_completion = None;
         if let Some(layer_id) = new_preview_layer
             && !new_preview_direct_to_composite
         {

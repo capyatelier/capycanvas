@@ -6263,3 +6263,64 @@ source/paint/display/filter limits. Active edits pin pages beyond the paint-cach
 target, and independent windows/workers add allocations. Combined pressure,
 scalar-plane residency and workload admission still require final measurement;
 component limits alone do not pass the common memory gate.
+
+## 2026-09-15 — Complete diagnostic readback and preserve partial previews
+
+The closing matrix at `5018090c` passes 70 core, 53 color, 395 UI, 58 engine,
+3 renderer-contract, 226 renderer-library and 4 GPU project integration tests.
+Four color and 26 renderer performance tests stay ignored. Exact executables,
+commit and hashes are in `sdr-qualification-*-executables.json` and
+`sdr-qualification-project-executable.json`; corresponding logs retain results.
+These are functional checks, not performance qualification.
+
+Following `cfa2d2f2`, the ABI failure exposed two actual readback boundaries:
+
+- A draw call can defer restoration until immutable backing is ready. Explicit
+  diagnostic capture now completes queued input and prepared document frames
+  before copying, without advancing stationary-brush time. The live frame API
+  and last-submitted-GPU wait retain their asynchronous/submission semantics.
+- The optimized single-batch destination preview writes only its changed area.
+  The live compositor clips it correctly, but exact artwork queries used the
+  entire tile and could hide unchanged pixels. On query, unchanged regions are
+  copied from persistent paint into that disposable preview. Ordinary prediction
+  frames keep their existing optimization. The existing `CacheWrite` guard
+  invalidates completion if query commands are abandoned; native complete-page
+  previews take no additional copy or allocation.
+
+No pixel tolerance was loosened. The ABI fixture now queues cancellation directly
+before explicit capture, making the required completion independent of worker
+speed. All 11 ABI tests pass (18.68 s). Nine focused renderer tests pass: exact
+artwork queries, SDR view/export/sampling coordinates, cold native neighborhood
+prediction and specialized material/prediction equivalence. The full preceding
+renderer matrix remains relevant to unchanged paths; this checkpoint does not
+claim a second full-suite rerun.
+
+The final GTK test passes U16 painting and point/3×3/5×5 sampling in all four
+working spaces, retaining the less-than-two-U16-code assertion and unchanged
+pixel checks (19.40 s). Its original fixture failed because later windows restored
+the previously selected eyedropper, so the intended painting never happened.
+Waiting longer alone did not fix it. The fixture now waits for owner readiness,
+selects Paint explicitly and awaits the asynchronous sample. The intermediate
+failures are retained. GTK/shared-FFI production compilation passes (2.79 s).
+
+Exact final binaries: ABI
+`ed0f847f8c3e4c4deee6266a1f3c87a6aa570ddf84a1eda66b9ff1dc2d505720`,
+renderer `9ca9b053685e90420d1b945b54842d888644182c66747331dd0537ee3732e3ec`,
+GTK `8538f95798b7ebeea1bd6ad66361f58c885db676feeb7a6cde07ee6b132e2761`.
+`artifacts/color-m2/readback-qualified-provenance.json` records source/header,
+executable, build and run hashes. Reproduce the ABI tests with `cargo test -p
+layer-ffi --offline -- --test-threads=1`; renderer filters and native full test
+names are retained in the logs. Native checks use the private Mutter harness
+and exact wrappers. Some independent correctness suites overlapped; their wall
+times are not used as benchmark evidence.
+
+Closing work is now supported GTK display/rendering qualification and the final
+measured resource/performance phase, with the recorded toolbar/workspace native
+harness gaps still outstanding. In particular, the current diagnostic benchmark
+factory uses the older sRGB8 working renderer; a native Float32/integer-backed
+arm must be connected before its results can qualify the current GTK path.
+Fresh fixed/parent/current comparisons, active edit/scalar/history/staging/worker
+pressure, 24/45/60 MP and simultaneous-document jobs remain required. Further
+scheduling/coarse-first work follows demonstrated gate failures. Physical-display
+and unavailable-device limits must remain explicit. No other host integration
+is authorized until the user approves it after GTK qualification.

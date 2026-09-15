@@ -470,8 +470,13 @@ fn native_sdr_portable_paint_and_sampling() {
         };
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.present();
-        sdr_ready(&w);
+        super::new_photo::ready(&w);
         assert_eq!(state(&w).colors.rgb_space(), space);
+        // The next window can restore the previous window's eyedropper tool.
+        // Select painting explicitly before creating the pixels to sample.
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool { tool: LayerCanvasTool::Paint },
+        });
         w.dispatch(UiAction::Color {
             action: layer_ui::ColorAction::Definition { color: definition },
         });
@@ -516,6 +521,11 @@ fn native_sdr_portable_paint_and_sampling() {
                 },
             });
             native_pen_path(&w, &[[128., 128.], [128., 128.]]);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while state(&w).colors.definition() == RgbColor::WHITE {
+                pump(10);
+                assert!(Instant::now() < deadline, "{space:?} {width}: exact sample did not complete");
+            }
             let picked = state(&w).colors.definition();
             assert_eq!(picked.space, space);
             let expected = definition.encoded_in(space).unwrap();

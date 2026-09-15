@@ -42,13 +42,16 @@ than a host-memory presentation view.
 There is no borrowed pixel-view function. Brush, erase, preview, composition,
 camera sampling, and presentation remain GPU-only.
 
-`layer_canvas_copy_rgba8_srgb` is an explicit export/test operation. A GPU pass
-performs linear-to-sRGB conversion, then the function waits, maps the staging
-buffer, and copies the finished bytes to caller storage. It must never be called
-from input or display callbacks.
+`layer_canvas_copy_rgba8_srgb` is an explicit blocking export/test operation. It
+first completes queued input and deferred document frames, including cancelled
+stroke restoration, without advancing stationary-brush time. A GPU pass performs
+linear-to-sRGB conversion, then the function waits, maps the staging buffer, and
+copies the finished bytes to caller storage. It must never be called from input
+or display callbacks.
 
-`layer_canvas_wait_idle` is exposed only for completed-work benchmarks and
-tests. Production clients do not call it.
+`layer_canvas_wait_idle` waits for the most recently submitted GPU frame; it does
+not drain queued input or submit deferred document frames. It is exposed only
+for completed-work benchmarks and tests. Production clients do not call it.
 
 ## Safety
 

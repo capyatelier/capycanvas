@@ -236,6 +236,9 @@ LayerStatus layer_canvas_undo(LayerCanvas *canvas, uint8_t *changed);
 LayerStatus layer_canvas_redo(LayerCanvas *canvas, uint8_t *changed);
 
 /* Caller-owned straight sRGB RGBA8 export buffer. */
+/* Blocking diagnostic capture: completes queued input and deferred document
+ * frames before reading. Does not advance stationary-brush time. Never call
+ * from an interactive display callback. */
 LayerStatus layer_canvas_copy_rgba8_srgb(LayerCanvas *canvas,
                                          uint8_t *destination,
                                          size_t destination_length,

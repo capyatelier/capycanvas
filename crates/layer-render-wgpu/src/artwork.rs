@@ -111,6 +111,7 @@ impl Capture {
                 "bounded artwork query",
             ));
         }
+        r.complete_preview_pages(encoder);
         let scene = self.scene.get_or_insert_with(|| scene::Scene::new(r));
         let (texture, view) = self.target.as_ref().unwrap();
         scene.capture_region(r, packet, texture, region, None, encoder)?;
@@ -172,6 +173,47 @@ impl Capture {
             texture: texture.clone(),
             view: view.clone(),
         })
+    }
+}
+
+impl WgpuRasterizer {
+    /// The fast single-batch destination preview writes its damage directly
+    /// from persistent paint. The live compositor already clips that fork, but
+    /// exact queries compose whole tiles. Complete their unchanged pixels once
+    /// when queried, without adding a copy to ordinary prediction frames.
+    fn complete_preview_pages(&mut self, encoder: &mut crate::submission::CommandEncoder) {
+        if self.preview_full_pages || !self.preview_requires_base
+            || self.preview_completion.as_ref().is_some_and(|v| v.load(std::sync::atomic::Ordering::Acquire)) {
+            return;
+        }
+        if let Some(layer) = self.paint_layers.iter().find(|l| Some(l.id) == self.preview_layer_id) {
+            for preview in &self.preview_pages {
+                let Some(source) = layer.pages.iter().find(|p| p.coordinate == preview.coordinate) else {
+                    // Direct prediction clears absent persistent pixels to zero.
+                    continue;
+                };
+                let page = page_rect(preview.coordinate);
+                for region in page.subtract(page.intersect(self.preview_damage)) {
+                    if region.is_empty() { continue; }
+                    let local = region.page_local(preview.coordinate);
+                    let copy = |texture| wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: local.min_x(), y: local.min_y(), z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    };
+                    encoder.copy_texture_to_texture(
+                        copy(&source.active().texture), copy(&preview.active().texture),
+                        wgpu::Extent3d { width: local.width(), height: local.height(), depth_or_array_layers: 1 },
+                    );
+                }
+            }
+        }
+        // Failed/abandoned queries must not certify unsubmitted copies. Reuse
+        // the same queue-order validity guard as the other renderer caches.
+        let write = crate::submission::CacheWrite::new();
+        self.preview_completion = Some(write.validity());
+        write.track(encoder);
     }
 }
 

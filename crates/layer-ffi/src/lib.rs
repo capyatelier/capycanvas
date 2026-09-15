@@ -685,6 +685,11 @@ pub unsafe extern "C" fn layer_canvas_redo(
     unsafe { history_call(canvas, changed, |engine| engine.redo()) }
 }
 
+/// Blocking diagnostic readback. Completes queued input and deferred document
+/// frames before copying pixels; it never returns a cancelled preview as the
+/// current document. Does not advance the clock of a stationary live brush.
+/// Interactive display callbacks must not use this function.
+///
 /// # Safety
 /// `canvas` must be live and unique; `destination` must be writable for
 /// `destination_length` bytes without overlapping the canvas allocation.
@@ -706,6 +711,20 @@ pub unsafe extern "C" fn layer_canvas_copy_rgba8_srgb(
         }
         if required != 0 && destination.is_null() {
             return Err(LayerStatus::NullPointer);
+        }
+        // A successful draw call can defer a contact boundary or restoration
+        // until immutable raster backing is ready. Waiting for the last GPU
+        // submission alone cannot submit that prepared frame.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while canvas.engine.has_pending_input() || canvas.engine.has_pending_document_edits() {
+            if std::time::Instant::now() >= deadline {
+                return Err(LayerStatus::RenderError);
+            }
+            canvas.engine.render_frame().map_err(|_| LayerStatus::RenderError)?;
+            if canvas.engine.has_pending_input() || canvas.engine.has_pending_document_edits() {
+                canvas.engine.backend_mut().wait_idle().map_err(|_| LayerStatus::RenderError)?;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
         }
         let destination = unsafe { slice::from_raw_parts_mut(destination, destination_length) };
         canvas
@@ -1510,10 +1529,8 @@ mod tests {
                 unsafe { layer_canvas_submit_pen_events(canvas.0, &cancel, 1, &mut accepted) },
                 LayerStatus::Ok
             );
-            assert_eq!(
-                unsafe { layer_canvas_draw_frame(canvas.0) },
-                LayerStatus::Ok
-            );
+            // Explicit readback must complete a queued cancellation as well as
+            // any deferred restoration, independently of capture-worker timing.
             let mut restored = vec![0_u8; baseline.len()];
             assert_eq!(
                 unsafe {
