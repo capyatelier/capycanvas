@@ -264,11 +264,14 @@ impl WgpuRasterizer {
                 "Raster frame exceeds the 256 MiB staging budget".into(),
             ));
         }
+        // Inputs have passed the capture ceiling. At most one view per input
+        // plus the fixed scratch textures lives until this recording completes.
+        let mut views = crate::native_tiles::PublicationViews::default();
         let native = self.native_edit.as_ref().unwrap();
         native.status.reset(encoder);
         native
             .validator
-            .encode(self, encoder, &inputs, &native.status)?;
+            .encode(self, encoder, &inputs, &native.status, &mut views)?;
         // All validation passes precede every promotion, including mixed planes
         // and targets. Scratch can then be reused without retaining dirty-photo
         // sized canonical/encoded copies. A capture copy precedes each reuse.
@@ -315,13 +318,24 @@ impl WgpuRasterizer {
                     region: [0, 0, 256, 256],
                 });
             }
-            let color = native.color.prepare(&self.device, &color, &native.status)?;
-            let scalar = native
-                .scalar
-                .prepare(&self.device, &scalar, &native.status)?;
-            let promotions = native
-                .promoter
-                .prepare(&self.device, &promotions, &native.status)?;
+            let color = native.color.prepare_with_views(
+                &self.device,
+                &color,
+                &native.status,
+                &mut views,
+            )?;
+            let scalar = native.scalar.prepare_with_views(
+                &self.device,
+                &scalar,
+                &native.status,
+                &mut views,
+            )?;
+            let promotions = native.promoter.prepare_with_views(
+                &self.device,
+                &promotions,
+                &native.status,
+                &mut views,
+            )?;
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 native.color.encode(&mut pass, &color);
@@ -361,7 +375,11 @@ impl WgpuRasterizer {
                 .revision
                 .wait_data()
                 .map_err(GpuRasterError::Effect)?;
-            self.native_edit.as_mut().unwrap().backing.insert(publication.id, current.data.clone());
+            self.native_edit
+                .as_mut()
+                .unwrap()
+                .backing
+                .insert(publication.id, current.data.clone());
             current.changed.clear();
         }
         Ok(())

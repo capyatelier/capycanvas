@@ -61,6 +61,7 @@ impl Validator {
         encoder: &mut submission::CommandEncoder,
         inputs: &[(&wgpu::Texture, RasterTile)],
         status: &NativeEncodeStatus,
+        views: &mut crate::native_tiles::PublicationViews,
     ) -> Result<(), GpuRasterError> {
         // Reject unexpected/aliased live storage before recording any promotion.
         let mut identities = std::collections::HashSet::new();
@@ -92,7 +93,7 @@ impl Validator {
             let jobs: Vec<_> = chunk
                 .iter()
                 .map(|(texture, _)| {
-                    let view = texture.create_view(&Default::default());
+                    let view = views.get(texture);
                     let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("native publication validation"),
                         layout: &self.layout,

@@ -11,6 +11,21 @@ pub use transfer::NativeTransfer;
 pub const MAX_BATCH_TILES: usize = 16;
 pub const STATUS_BYTES: u64 = 8;
 
+/// Full default views shared only while recording one bounded publication.
+/// This owns no pixel allocation and is dropped before returning to input; it
+/// cannot keep cold working pages resident between frames. Always construct
+/// views here so caller-provided subresource/format views cannot bypass preflight.
+#[derive(Default)]
+pub(crate) struct PublicationViews(std::collections::HashMap<wgpu::Texture, wgpu::TextureView>);
+impl PublicationViews {
+    pub(crate) fn get(&mut self, texture: &wgpu::Texture) -> wgpu::TextureView {
+        self.0
+            .entry(texture.clone())
+            .or_insert_with(|| texture.create_view(&Default::default()))
+            .clone()
+    }
+}
+
 /// Restore a committed integer tile into a private 256×256 RGBA32Float candidate.
 /// Original images and native paint share the renderer's bounded decode cache.
 /// The profile identities are explicit, independent of the integer descriptor.
@@ -310,6 +325,15 @@ impl NativeTileEncoder {
         requests: &[NativeTileRequest<'_>],
         status: &NativeEncodeStatus,
     ) -> Result<NativeTileBatch, GpuRasterError> {
+        self.prepare_with_views(device, requests, status, &mut Default::default())
+    }
+    pub(crate) fn prepare_with_views(
+        &self,
+        device: &wgpu::Device,
+        requests: &[NativeTileRequest<'_>],
+        status: &NativeEncodeStatus,
+        views: &mut crate::native_tiles::PublicationViews,
+    ) -> Result<NativeTileBatch, GpuRasterError> {
         if requests.len() > MAX_BATCH_TILES {
             return Err(GpuRasterError::Color(
                 "Too many native tiles in one batch".into(),
@@ -379,9 +403,9 @@ impl NativeTileEncoder {
             .enumerate()
             .map(|(i, r)| {
                 let format = usize::from(r.depth == IntegerDepth::U16);
-                let source = r.working.create_view(&Default::default());
-                let target = r.encoded.create_view(&Default::default());
-                let canonical = r.canonical.create_view(&Default::default());
+                let source = views.get(r.working);
+                let target = views.get(r.encoded);
+                let canonical = views.get(r.canonical);
                 let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("native SDR tile writeback"),
                     layout: &self.layouts[format],

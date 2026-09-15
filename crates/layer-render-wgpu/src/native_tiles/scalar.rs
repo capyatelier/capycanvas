@@ -245,6 +245,15 @@ impl NativeScalarEncoder {
         requests: &[NativeScalarRequest<'_>],
         status: &NativeEncodeStatus,
     ) -> Result<NativeScalarBatch, GpuRasterError> {
+        self.prepare_with_views(device, requests, status, &mut Default::default())
+    }
+    pub(crate) fn prepare_with_views(
+        &self,
+        device: &wgpu::Device,
+        requests: &[NativeScalarRequest<'_>],
+        status: &NativeEncodeStatus,
+        views: &mut crate::native_tiles::PublicationViews,
+    ) -> Result<NativeScalarBatch, GpuRasterError> {
         if requests.len() > MAX_BATCH_TILES {
             return Err(GpuRasterError::Color(
                 "Too many native scalar tiles in one batch".into(),
@@ -308,8 +317,8 @@ impl NativeScalarEncoder {
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                let source = r.working.create_view(&Default::default());
-                let canonical = r.canonical.create_view(&Default::default());
+                let source = views.get(r.working);
+                let canonical = views.get(r.canonical);
                 let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("native scalar writeback"),
                     layout: &self.layout,

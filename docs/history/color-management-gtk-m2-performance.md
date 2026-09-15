@@ -458,3 +458,67 @@ query callbacks to measured submission IDs, including one callback delivered
 after its measured-window end; all 12 measured submissions have valid queries.
 No compilation or other GPU test overlaps this measurement. The 8.33 ms
 completed-work gate remains open.
+
+## Reject packed color capture; reuse publication texture views
+
+A packed native RGBA buffer prototype replaced integer output textures with
+one/two little-endian storage words per U8/U16 pixel. It passed 13 native
+color/scalar/promotion tests (33.60 s), including 160 cases / 10,485,760 pixels
+with zero code error; nine native runtime/capture tests (61.86 s), including
+save/reopen/undo/device replacement and late failure/cancellation; and the
+Float32 scene-to-native low-alpha identity test (1.53 s). Exact test SHA-256:
+`38c07f17c5d04e6350c0a9c349f5f23e79f8082bf7c8aa89b680c17cd2a63569`.
+
+Two fixed-launch-path release palette-knife ProPhoto U16 comparisons did not
+show a repeatable gain. Completed pen-up p99 changed 20.000 → 22.810 ms in the
+first pair and 19.685 → 19.549 ms in the repeat; CPU pen-up p99 changed
+10.003 → 12.499 ms and 9.942 → 9.595 ms. All 12 pen-ups per arm failed the
+8.33 ms budget. Diagnostic PNGs were byte-identical, separately from the exact
+native tests. The entire packed-buffer candidate was **removed**, including its
+fixture/API changes. `native-packed-source.patch`, exact binary
+`f518d79d3d3ae58862b21eec1f3ef78901c4b1fa8e6ff3b500ad705c9a35fdfb`,
+matching manifest, tests, reports, `run-native-packed.py` and run/environment
+records retain this negative result. It does not establish that texture copies
+are intrinsically faster; this replacement failed to improve the target workload.
+
+The retained change shares full default texture views while recording one native
+publication. Validation, color/scalar encoding and canonical promotion use the
+same views for each working or fixed scratch texture. All primitive preflight
+checks remain in their common preparation implementation. Standalone primitive
+calls own a temporary view set; the native owner shares one across every bounded
+chunk. Only default views constructed from validated textures enter this set.
+It is dropped when publication recording returns, before the next input frame,
+and cannot retain cold artwork between frames. It allocates no additional pixel
+storage; the maximum view count is the admitted input count plus the fixed
+scratch textures.
+
+Thirteen native primitive tests pass (36.12 s), again with all 160 exact numeric
+cases, and all five native runtime tests pass (50.16 s), including multichunk
+scratch reuse, abandoned/failed publications, exact save/undo/reopen and device
+replacement. Exact test SHA-256:
+`ce94663a12500396d8560ce50a5b82e2c03f45843496ad683d0807b368e5b824`.
+Logs and manifests use `native-views-*` under `artifacts/color-m2/`.
+
+Each before/after release arm below has three repetitions, 426 move frames and
+12 pen-up frames. Runs alternate before/after/before/after at the same launch
+pathname, retaining the immutable source executables separately.
+
+| Pair | Before / after pen-up CPU p99 ms | Before / after completed pen-up p99 ms | Before / after completed move p99 ms |
+| --- | --- | --- | --- |
+| Initial | 9.703 / 8.673 | 21.124 / 16.794 | 7.586 / 6.877 |
+| Repeat | 10.046 / 8.056 | 19.634 / 16.516 | 6.938 / 7.156 |
+
+All pen-ups still fail 8.33 ms. Move misses are 0 → 1 and 1 → 0; the after
+initial maximum is 8.662 ms, and the after repeat maximum is 8.221 ms. Canvas
+storage remains 571 MiB and peak capture allocated/reserved remains 177 MiB
+in these reports. The small move differences do not establish a movement-path
+improvement. The repeatable pen-up reduction supports retaining view reuse;
+it does not qualify the complete latency/resource matrix.
+
+`run-native-views.py`, `native-views-runs.json`, reports, images and hardware/power
+records under `final-performance/` reproduce this comparison. No build or GPU
+test overlaps measurement. Before is the saved parameter-reuse executable;
+after SHA-256 is
+`926711fd357375cbefe227d21430bec459f964daad287a8778582256b7322527`,
+with `native-views-build-sources.json` and `native-views-source.patch` recording
+its exact parent and source changes.

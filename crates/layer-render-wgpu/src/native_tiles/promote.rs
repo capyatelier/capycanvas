@@ -141,6 +141,15 @@ impl NativePromoter {
         requests: &[NativePromotion<'_>],
         status: &NativeEncodeStatus,
     ) -> Result<NativePromotionBatch, GpuRasterError> {
+        self.prepare_with_views(device, requests, status, &mut Default::default())
+    }
+    pub(crate) fn prepare_with_views(
+        &self,
+        device: &wgpu::Device,
+        requests: &[NativePromotion<'_>],
+        status: &NativeEncodeStatus,
+        views: &mut crate::native_tiles::PublicationViews,
+    ) -> Result<NativePromotionBatch, GpuRasterError> {
         if requests.len() > MAX_BATCH_TILES {
             return Err(GpuRasterError::Color("Too many native promotions".into()));
         }
@@ -225,8 +234,8 @@ impl NativePromoter {
             .filter(|(_, r)| r.region[2] != 0 && r.region[3] != 0)
             .map(|(i, r)| {
                 let format = usize::from(r.working.format() == wgpu::TextureFormat::R32Float);
-                let view = r.canonical.create_view(&Default::default());
-                let target = r.working.create_view(&Default::default());
+                let view = views.get(r.canonical);
+                let target = views.get(r.working);
                 let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("native canonical promotion"),
                     layout: &self.layouts[format],
