@@ -388,6 +388,33 @@ impl Drop for PreparedCapture {
     }
 }
 
+// A blocking Device::poll holds wgpu's snatchable-resource read lock across
+// the GPU wait. Concurrent submission/resource retirement can need its write
+// lock. Sleep on the mapping notification outside wgpu instead; headless owners
+// still make progress, with no busy spin and the same failure deadline.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_mapping(
+    device: &wgpu::Device,
+    ready: &mpsc::Receiver<Result<(), String>>,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        match ready.try_recv() {
+            Ok(result) => return result,
+            Err(mpsc::TryRecvError::Disconnected) => return Err("Raster mapping was abandoned".into()),
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        device.poll(wgpu::PollType::Poll).map_err(|e| e.to_string())?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() { return Err("Raster mapping timed out".into()); }
+        match ready.recv_timeout(remaining.min(std::time::Duration::from_millis(1))) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err("Raster mapping was abandoned".into()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
 pub struct RasterCapture {
     #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
@@ -402,24 +429,12 @@ impl RasterCapture {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<(), String> {
         let result: Result<(), String> = (|| {
-            self.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(self.submission.clone()),
-                    timeout: Some(READBACK_TIMEOUT),
-                })
-                .map_err(|e| e.to_string())?;
             if let Some(validation) = &self.validation {
-                validation
-                    .ready
-                    .recv_timeout(READBACK_TIMEOUT)
-                    .map_err(|e| e.to_string())??;
+                wait_mapping(&self.device, &validation.ready)?;
                 self.accept_validation()?;
             }
-            fn finish_chunk(chunk: &Chunk, pool: &BufferPool, lanes: usize) -> Result<(), String> {
-                chunk
-                    .ready
-                    .recv_timeout(READBACK_TIMEOUT)
-                    .map_err(|e| e.to_string())??;
+            fn finish_chunk(device: &wgpu::Device, chunk: &Chunk, pool: &BufferPool, lanes: usize) -> Result<(), String> {
+                wait_mapping(device, &chunk.ready)?;
                 let mapped = chunk
                     .buffer
                     .slice(..)
@@ -476,7 +491,7 @@ impl RasterCapture {
                 Ok(())
             }
             if self.chunks.len() == 1 {
-                finish_chunk(&self.chunks[0], &self.pool, 4)?;
+                finish_chunk(&self.device, &self.chunks[0], &self.pool, 4)?;
             } else {
                 let group_size = self.chunks.len().div_ceil(4);
                 let lanes = 4 / self.chunks.len().min(4);
@@ -484,9 +499,10 @@ impl RasterCapture {
                     let mut jobs = Vec::new();
                     for group in self.chunks.chunks_mut(group_size) {
                         let pool = &self.pool;
+                        let device = &self.device;
                         jobs.push(scope.spawn(move || {
                             for chunk in group {
-                                finish_chunk(chunk, pool, lanes)?;
+                                finish_chunk(device, chunk, pool, lanes)?;
                             }
                             Ok::<_, String>(())
                         }));

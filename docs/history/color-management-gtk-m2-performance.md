@@ -559,3 +559,142 @@ hardware/power state and serial run boundaries, and
 All files, per-frame samples, raw logs and reports use `native-pool-probe-*`
 under `artifacts/color-m2/final-performance/`. No CPU build or other GPU test
 runs during measurement. This experiment changes no production source.
+
+## Shared validation bindings did not improve publication latency
+
+A prototype reused each native encoder's full bind group for a separate
+validation entry point, preparing all bounded batches before promotion. All
+13 primitive tests and five native-owner tests passed, including zero code
+error across 160 cases / 10,485,760 pixels. Test executable SHA-256:
+`bafae06244bee63649a590ba6769d3c133a9b623516838edf63b96473c9c4bba`.
+
+The initial three-repeat ProPhoto U16 palette pair improved CPU pen-up p99
+8.438 → 7.423 ms and completed pen-up 17.587 → 15.831 ms, but the repeat
+changed 8.796 → 8.274 ms and 17.745 → 17.649 ms. A larger nine-repeat pair
+(1,278 moves / 36 pen-ups per arm) regressed CPU pen-up 9.276 → 10.606 ms
+and completed pen-up 17.287 → 19.329 ms. All 36 pen-ups failed 8.33 ms in
+both arms. Smaller glaze, large-paint and sRGB8/P3 U8 comparisons likewise
+failed to establish a repeatable benefit. The complete candidate was removed.
+
+Pinned wgpu-core 30.0.1 `command/compute.rs::flush_bindings` merges the resources
+of each active bind group into every dispatch's usage scope. Sharing a larger
+layout therefore also tracks candidate output resources during validation.
+This is a concrete implementation property, not a measured attribution of the
+regression. The separate read-only validation layout remains in production.
+A follow-up batching prototype was set aside before runtime qualification to
+investigate presentation/backing scheduling independently.
+
+`native-shared-validation-*`, `run-native-shared-validation.py` and
+`run-native-shared-validation-cases.py` under `final-performance/` retain exact
+source changes, deleted-file identities, environment, commands and raw reports.
+Release candidate SHA-256:
+`3eb6ae5d3066860f06bf831d891083a352270ed647649b66ee65a8c4b102ac0a`.
+Every performance arm runs serially at the same staged executable pathname;
+no build or GPU correctness test overlaps measurement.
+
+## Presentation/backing separation: reject the extra-copy prototype
+
+At the user's request, investigate taking recovery/undo backing off canvas frame
+creation rather than only reducing the cost of the existing pen-up burst. CPU
+compression was already asynchronous. Native validation, encoding, promotion
+and copies into CPU-readable buffers still preceded canvas composition in the
+same command stream.
+
+The prototype retained immutable GPU-only buffers before reusing native scratch.
+A backing worker copied each buffer into CPU-readable storage, mapped and
+compressed it. GTK held a presentation-priority scope from canvas encoding
+through surface presentation submission. The worker checked that scope before
+submitting each bounded transfer, with at most one <=16 MiB transfer ahead of a
+new frame. Both GPU-only and mapping allocations shared the existing 64 MiB pool;
+active transfer bytes were added to diagnostics and admission reserved room for
+one transfer inside the 512 MiB pending-storage ceiling. No color/coverage math
+or precision changed.
+
+The new ownership test completed three canvas submissions while host transfer
+was deliberately held back. It reused all native scratch slots and the status
+buffer, then verified exact earlier U8/U16 color/mask snapshots after a later
+edit and a later failed publication. All six native-owner tests passed
+(60.46 s), including save/undo/reopen/replacement. Test SHA-256:
+`c7bd3ee8fd4961fdb7c0245ac465cace5422e192d54fefd4165302ce5e767efc`.
+This proves separation and snapshot correctness, not a presentation latency win.
+
+Three-repeat alternating palette ProPhoto U16 pairs initially improved completed
+pen-up p99 17.468 → 15.792 ms and 18.676 → 16.577 ms, while completed move p99
+regressed 6.798 → 8.500 ms and 7.022 → 8.289 ms. Canvas storage remained 571 MiB;
+capture allocated/reserved peak rose from 177 to 209.5 / 207.5 MiB.
+
+A second candidate combined this separation with the nonblocking worker wait
+described below. Sixteen capture/native-owner/recovery tests passed (72.22 s),
+with one explicit benchmark ignored. Its GTK release test executable compiled;
+no native presentation improvement is claimed from that build. Larger serial
+nine-repeat comparisons against the wait fix alone contributed 1,278 moves and
+36 pen-ups per arm:
+
+| Pair | Before / after pen-up CPU p99 ms | Before / after completed pen-up p99 ms | Before / after completed move p99 ms | Before / after move misses |
+| --- | --- | --- | --- | --- |
+| Initial | 8.474 / 8.694 | 16.771 / 16.952 | 6.924 / 7.483 | 2 / 9 |
+| Repeat | 9.600 / 8.979 | 18.049 / 17.070 | 6.836 / 7.419 | 2 / 9 |
+
+All 36 pen-ups fail 8.33 ms in each arm. Combined capture allocated/reserved
+peak reaches 215 MiB. The extra-copy design does not yield a repeatable pen-up
+improvement and increases move deadline misses, so **the entire deferred-copy
+prototype and its GTK scopes are removed**. Moving work to a thread did not
+remove competition on the shared GPU queue. Neither queue competition nor the
+resource-lock hypothesis alone is established as the whole remaining delay.
+Further separation needs a better snapshot ownership/scheduling strategy.
+
+Raw `native-deferred-capture-*`, `native-deferred-poll-*` and
+`native-deferred-poll-nine-*` reports, runners, patches, manifests, hardware/power
+samples and test logs retain both implementations. Initial release SHA-256:
+`f2e5a66e6af8450c12baae720560fb2a1771c00fc69c346ad23796b9c605f913`.
+Combined release SHA-256:
+`5e4817976a4bf2fc419ad7def44791e43d0c8d675557f78d3c9574e04624b27c`.
+Combined test SHA-256:
+`ee127bf0ee387dfa7d02c1c7322cdbc1ce50facf708d21dd72babcee889aa1f5`.
+No CPU build or GPU correctness test overlaps the performance runs. The original
+benchmark still waits for its exact canvas submission; deferred background GPU
+work is a changed boundary in the prototype, not evidence that all backing work
+finished or that native presentation met its deadline.
+
+## Release resource locks while awaiting capture mapping
+
+The retained change replaces the backing worker's blocking `Device::poll(Wait)`
+with nonblocking polls and sleeps on its mapping notification outside wgpu. It
+first checks for an already delivered result, then polls once and waits up to
+1 ms on the channel. The existing overall mapping timeout and ticket-failure
+handling remain. There is no busy spin and no periodic work after captures drain.
+
+Pinned wgpu-core 30.0.1 holds its snatchable-resource read lock across the GPU
+wait in `device/resource.rs::poll_and_return_closures` / `maintain`.
+`deferred_resource_destruction`, also reachable during queue submission, acquires
+the write lock to retire views/bind groups. Releasing that lock during a worker
+wait removes a concrete contention opportunity. It does not prove that the lock
+accounts for every measured completion-wait residual. The public
+[Device::poll contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Device.html#method.poll)
+and [buffer mapping contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async)
+also require explicit progress for headless mapping; simply waiting on the
+channel without polling would deadlock an otherwise idle owner.
+
+Fifteen capture/native/recovery tests pass (70.62 s), with one hardware benchmark
+ignored. They include device loss, abandoned/invalid captures, exact native
+samples, mixed chunks, undo/save/reopen, masks and subsequent painting. Exact
+test SHA-256:
+`e4a60f7a839d8af55733647adf35a6c9fc971d4d4c639f919cfccfc7f3b48d66`.
+
+| Three-repeat pair | Before / after pen-up CPU p99 ms | Before / after completed pen-up p99 ms | Before / after completed move p99 ms |
+| --- | --- | --- | --- |
+| Initial | 9.240 / 8.283 | 17.705 / 16.663 | 6.832 / 7.380 |
+| Repeat | 9.893 / 9.697 | 18.641 / 18.071 | 7.429 / 7.050 |
+
+Each arm has 426 moves and 12 pen-ups. Pen-up reductions are modest; move
+changes do not repeat in the same direction. All pen-ups still fail 8.33 ms;
+move misses are 0 / 0 in the initial pair and 1 / 1 in the repeat. Canvas storage
+remains 571 MiB and capture allocated/reserved peak remains 177 MiB. These
+measurements support a small synchronization fix, not completion of GTK latency
+qualification or a claim of measured battery savings.
+
+`run-native-capture-poll.py`, `native-capture-poll-*` reports, environment and
+source manifest reproduce this control. Exact release SHA-256:
+`2eb19745d4add952226e6b4c2571725767dee5d40657651c1092a172a029879f`.
+The same staged executable pathname is used for every arm, with immutable
+source binaries retained separately. No build/test overlaps measurement.
