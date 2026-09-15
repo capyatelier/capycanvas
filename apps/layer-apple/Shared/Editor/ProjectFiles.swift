@@ -27,7 +27,7 @@ import UIKit
     private var pickerCompletion: ((URL?) -> Void)?
     private var cancelled = false
     private var finishing = false
-    private var externalURL: URL?
+    private var externalOpen: (url: URL, submitted: Bool)?
     private var recovering: RecoveryRecord?
     private var closeCompletion: ((Bool) -> Void)?
     /// Dialog dependency keeps editor/file effects testable without driving
@@ -49,6 +49,7 @@ import UIKit
         return name.isEmpty ? "Untitled" : name
     }
     func receive(_ state: JSON) {
+        submitExternalOpen()
         let file = state["document_file"]
         if !busy { blocksEditor = file["close_ready"].bool }
         if !file["close_ready"].bool { handledClose = false }
@@ -75,7 +76,7 @@ import UIKit
             else { creationCompletion = completed; creating = true }
         case "export": exportPNG(name: document["name"].string)
         case "open":
-            if let url = externalURL { externalURL = nil; open(url) }
+            if let url = externalOpen?.url { externalOpen = nil; open(url) }
             else { chooseOpen { [weak self] url in
                 guard let self else { return }
                 if let url { open(url) } else { finish() }
@@ -85,21 +86,38 @@ import UIKit
         }
     }
     func openURL(_ url: URL) {
-        guard !busy else { error = "Finish the current document operation first"; return }
-        guard store?.command("open_document")["enabled"].bool == true else {
+        // Native URL delivery can repeat before the owner publishes its request.
+        // Keep the first destination reserved during that interval as well.
+        guard !busy, externalOpen == nil else { error = "Finish the current document operation first"; return }
+        guard let store else { error = "The canvas session is unavailable"; return }
+        if store.snapshot["gpu_ready"].bool && store.workspaceLibrary?.ready != false
+            && !store.command("open_document")["enabled"].bool {
             error = "Finish the canvas interaction before opening a drawing"; return
         }
-        externalURL = url; store?.invoke("open_document")
+        externalOpen = (url, false)
+        submitExternalOpen()
+    }
+    func submitExternalOpen() {
+        // File launch can precede the first snapshot, workspace restoration and
+        // Metal attachment. Publications resume this one pending request.
+        guard externalOpen?.submitted == false, let store,
+            store.workspaceLibrary?.ready != false, store.snapshot["gpu_ready"].bool,
+            store.command("open_document")["enabled"].bool else { return }
+        externalOpen?.submitted = true
+        store.edit(["type": "invoke", "command": "open_document"]) { [weak self] error in
+            guard let self, let error else { return }
+            externalOpen = nil; recovering = nil; self.error = error
+        }
     }
     func recover(_ record: RecoveryRecord) {
-        guard !busy, let url = store?.recovery.files.archive(record),
+        guard !busy, externalOpen == nil, let url = store?.recovery.files.archive(record),
             store?.command("open_document")["enabled"].bool == true else {
             error = "Finish the current canvas operation before recovering a drawing"; return
         }
         recovering = record; openURL(url)
     }
     func confirmClose(_ completion: @escaping (Bool) -> Void) {
-        guard !busy, let native = store?.native else { completion(false); return }
+        guard !busy, externalOpen == nil, let native = store?.native else { completion(false); return }
         busy = true; blocksEditor = true; closeCompletion = completion
         native.documentRequest(closeDecision: 0) { [weak self] error in
             DispatchQueue.main.async {
@@ -121,7 +139,7 @@ import UIKit
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error { self.report(error) }
-                if choice == "cancel" { self.externalURL = nil; self.recovering = nil }
+                if choice == "cancel" { self.externalOpen = nil; self.recovering = nil }
                 self.released()
             }
         }
@@ -291,7 +309,7 @@ import UIKit
         if let state = store?.state.json {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
-            if requestID == nil { recovering = nil; externalURL = nil }
+            if requestID == nil { recovering = nil; externalOpen = nil }
         }
     }
     private func chooseOpen(_ completion: @escaping (URL?) -> Void) {

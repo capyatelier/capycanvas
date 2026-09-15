@@ -65,10 +65,10 @@ Grouped native evidence and that milestone's Release metadata are under
 `artifacts/apple-brush-state-milestone-v1/` (`physical/`, `release/`). Both owned
 processes are stopped; the physical diagnostic is removed and its prior test
 runner restored, with the artist's editor descriptors unchanged.
-The later tool-control/color-preview batch rebuilds both Release apps; their
-current metadata is under `artifacts/apple-tool-color-milestone-v1/release/`.
-Its production changes affect native controls only, with no additional physical
-drawing run or performance claim.
+Later native-control and document-opening batches rebuild both Release apps;
+current metadata is under `artifacts/apple-document-open-milestone-v1/release/`.
+These changes do not affect the renderer, and add no physical drawing run or
+performance claim.
 
 ## Hardware tile hashing, short physical comparison — 2026-09-15
 

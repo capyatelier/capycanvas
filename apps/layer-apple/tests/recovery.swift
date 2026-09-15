@@ -169,13 +169,26 @@ import QuartzCore
                 } : nil))
             reopened.invoke("add_layer")
             try await wait("Current replacement fixture missing") { reopened.state["layers"].array.count == 3 }
-            reopened.recovery.restore(recovered)
-            try await wait("Recovery must ask about the current unsaved drawing") { reopened.projectFiles.confirming }
-            reopened.projectFiles.choose("cancel")
-            try await wait("Cancelled recovery did not settle") { !reopened.projectFiles.busy }
-            precondition(reopened.state["document_file"]["epoch"].uint == 0 && reopened.state["layers"].array.count == 3)
-            let cancelledReplacement = try await io { try files.current(recovered.scene) }
-            precondition(cancelledReplacement == recovered)
+            for recoveryFirst in [false, true] {
+                if recoveryFirst {
+                    reopened.recovery.restore(recovered)
+                    reopened.projectFiles.openURL(manual)
+                } else {
+                    reopened.projectFiles.openURL(manual)
+                    reopened.recovery.restore(recovered)
+                }
+                precondition(reopened.projectFiles.error == (recoveryFirst
+                    ? "Finish the current document operation first"
+                    : "Finish the current canvas operation before recovering a drawing"),
+                    "External Open and recovery must reserve their destination before shared busy state arrives")
+                reopened.projectFiles.error = nil
+                try await wait("Replacement must ask about the current unsaved drawing") { reopened.projectFiles.confirming }
+                reopened.projectFiles.choose("cancel")
+                try await wait("Cancelled replacement did not settle") { !reopened.projectFiles.busy }
+                precondition(reopened.state["document_file"]["epoch"].uint == 0 && reopened.state["layers"].array.count == 3)
+                let cancelledReplacement = try await io { try files.current(recovered.scene) }
+                precondition(cancelledReplacement == recovered)
+            }
             reopened.recovery.restore(recovered)
             try await wait("Save before recovery prompt missing") { reopened.projectFiles.confirming }
             reopened.projectFiles.choose("save")

@@ -89,6 +89,98 @@ import ImageIO
             try await invoke("save_document")
             precondition(!store.state["document_file"]["modified"].bool)
             let savedData = try Data(contentsOf: target)
+            // A file can launch the app before its first state publication or
+            // before the canvas attaches. Retain it through normal startup.
+            for published in [false, true] {
+                let cold = EditorStore(platform: platform, persistence: EditorPersistence(root:
+                    root.appendingPathComponent("startup-\(platform)-\(published)")))
+                cold.projectFiles = ProjectFiles(store: cold, dialogs: .init(
+                    open: { _ in preconditionFailure("An external URL must not open a picker") },
+                    save: { _, _, _ in preconditionFailure("Startup must not save a blank drawing") }))
+                if published {
+                    try await wait("Initial editor state missing") { !cold.state.isNull }
+                } else { precondition(cold.state.isNull) }
+                precondition(!cold.snapshot["gpu_ready"].bool)
+                cold.projectFiles.openURL(target)
+                if let error = cold.projectFiles.error {
+                    throw HostFailure(message: "Startup Open rejected the supplied file: \(error)")
+                }
+                cold.projectFiles.openURL(invalid)
+                precondition(cold.projectFiles.error == "Finish the current document operation first")
+                cold.projectFiles.error = nil
+                let surface = CAMetalLayer(); surface.bounds = layer.bounds
+                cold.native!.attach(surface, width: 128, height: 128, scale: 1)
+                // Match the recovery fixture: without a display link, prepare
+                // the committed boundary needed by workspace startup.
+                let prepared = await withCheckedContinuation { continuation in
+                    cold.native!.flushPersistence { continuation.resume(returning: $0) }
+                }
+                precondition(prepared, "Offscreen renderer preparation failed")
+                try await wait("Startup Open did not finish") {
+                    (cold.state["document_file"]["epoch"].uint == 1 && !cold.projectFiles.busy)
+                        || cold.projectFiles.error != nil || cold.failure != nil
+                }
+                if let error = cold.projectFiles.error ?? cold.failure {
+                    throw HostFailure(message: "Startup Open failed after preparation: \(error)")
+                }
+                precondition(cold.state["document_file"]["location"]["name"].string == target.lastPathComponent)
+                precondition(cold.state["layers"].array.contains { $0["label"].string == "Saved layer" })
+                precondition(!cold.state["document_file"]["modified"].bool)
+                precondition(cold.workspaceLibrary?.ready == true)
+                await cold.workspaceLibrary?.detach()
+                withExtendedLifetime(surface) {}
+            }
+            print("Startup Open passes for Apple platform \(platform)")
+            // OS Open URL delivery can arrive twice before the shared request
+            // publishes busy state. The second URL must not replace the first.
+            for duplicate in [true, false] {
+                let epoch = store.state["document_file"]["epoch"].uint
+                let originalChoices = choices
+                store.projectFiles.openURL(target)
+                if duplicate {
+                    var closeAllowed: Bool?
+                    store.projectFiles.confirmClose { closeAllowed = $0 }
+                    precondition(closeAllowed == false, "Window close must not overtake a pending external Open")
+                    store.projectFiles.openURL(invalid)
+                }
+                _ = await withCheckedContinuation { continuation in
+                    store.native!.submit(2, JSON(["type": "catalog"])) { continuation.resume(returning: $0 != nil) }
+                }
+                try await wait("External Open did not settle") {
+                    !store.projectFiles.busy && store.state["requests"].array.isEmpty
+                }
+                guard store.state["document_file"]["epoch"].uint == epoch + 1,
+                    store.state["document_file"]["location"]["name"].string == target.lastPathComponent else {
+                    throw HostFailure(message: "External Open must preserve the first URL: \(store.projectFiles.error ?? store.failure ?? "No document replacement")")
+                }
+                precondition(choices == originalChoices && store.failure == nil)
+                precondition(store.projectFiles.error == (duplicate ? "Finish the current document operation first" : nil),
+                    "Reject an overlapping URL without leaving a stale reservation after completion")
+                store.projectFiles.error = nil
+            }
+            // A command queued ahead of URL delivery may make Open unavailable
+            // before its request reaches Rust. Reject it as a document operation
+            // and retire the URL reservation so the next Open remains usable.
+            let extent = creationExtent
+            creationExtent = nil
+            store.invoke("new_document")
+            store.projectFiles.openURL(target)
+            _ = await withCheckedContinuation { continuation in
+                store.native!.submit(2, JSON(["type": "catalog"])) { continuation.resume(returning: $0 != nil) }
+            }
+            try await wait("Rejected external Open did not settle") {
+                !store.projectFiles.busy && store.state["requests"].array.isEmpty
+            }
+            precondition(store.failure == nil && store.projectFiles.error?.contains("unavailable during this interaction") == true,
+                "A rejected external Open belongs to the document alert, not a canvas failure")
+            creationExtent = extent; store.projectFiles.error = nil
+            let retryEpoch = store.state["document_file"]["epoch"].uint
+            store.projectFiles.openURL(target)
+            try await wait("External Open reservation survived a rejected command") {
+                store.state["document_file"]["epoch"].uint == retryEpoch + 1 && !store.projectFiles.busy
+            }
+            precondition(store.projectFiles.error == nil && store.failure == nil)
+            print("External Open admission passes for Apple platform \(platform)")
             saveLocation = nil
             try await invoke("save_document_as")
             precondition((try? Data(contentsOf: target)) == savedData)

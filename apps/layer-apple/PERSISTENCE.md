@@ -89,6 +89,15 @@ GTK can create another window. Undo returning to the saved checkpoint marks the
 document clean again, while later edits remain unsaved after an older snapshot
 finishes writing. New/Open and close decisions require an idle canvas. A late
 open result or input from the previous document cannot change a replacement.
+External Open and recovery reserve their pending URL before shared busy state
+arrives; another Open, recovery or window close cannot overtake that reservation.
+If a queued command makes Open unavailable, the document service reports the
+rejection and releases the URL so the next request remains usable.
+File delivery during launch waits for the first editor state, Metal attachment
+and workspace restoration. The same pending URL resumes from existing state
+publications and workspace initialization, without a startup timer or another
+picker. Local checks cover delivery before the first snapshot and before Metal
+attachment with temporary managed workspaces on both Apple configurations.
 
 macOS uses NSOpenPanel/NSSavePanel. iPad uses UIDocumentPickerViewController:
 Save As prepares an archive in a private temporary directory before presenting

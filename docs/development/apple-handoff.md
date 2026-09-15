@@ -10,6 +10,54 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current document Open milestone
+
+File launch now retains its URL through editor startup. The local reproduction
+delivers a saved drawing before the first snapshot; the former guard reports
+"Finish the canvas interaction before opening a drawing" and loses the file.
+The existing pending URL now records whether Open has been submitted, waits for
+Metal and workspace readiness, and resumes through existing publications and
+workspace initialization. No startup timer, polling loop or second picker is
+added. Both initial-state and pre-attachment delivery pass on both Apple policies
+with temporary managed workspaces, including overlapping-URL rejection and the
+saved drawing's identity/layers. The full project-file suite also passes.
+Evidence is under `artifacts/apple-startup-open-v1/` (`after-v3.log`). Two
+intermediate attempts timed out: the offscreen fixture first needed the existing
+recovery preparation step, and submission also needed workspace initialization's
+completion. These checks do not prove OS-level file-launch delivery.
+
+External Open and recovery now reserve their destination before Rust publishes
+the request's busy state. The reproduction submits a valid URL followed by an
+invalid URL in one MainActor turn; previously the second URL replaced the first
+and produced a file-read error. The existing pending URL now also prevents
+overlapping recovery and window close. External Open uses the existing edit
+completion to retire its reservation and report a document error when a queued
+command makes Open unavailable, preserving subsequent Open attempts.
+
+The complete local project-file and recovery fixtures pass on both Apple policies,
+including both Open/recovery arrival orders, cancellation, queued rejection and
+retry, Save/Export/Open and recovery save-before-replacement. Evidence is under
+`artifacts/apple-external-open-admission-v1/`; the final source also passes the
+full recovery suite in `artifacts/apple-startup-open-v1/recovery.log`. These are
+native file/owner checks with temporary storage and offscreen Metal surfaces,
+not provider UI or physical lifecycle acceptance.
+
+Both Release builds pass without compiler warnings. Current on-disk Release
+metadata is under `artifacts/apple-document-open-milestone-v1/release/`;
+the renderer is unchanged and no physical drawing run is repeated. Both existing
+Mac document workflows pass: native Save As/Save, process restart/Open and exact
+decoded PNG preservation, plus New Drawing validation and export cancellation.
+The existing UIKit New Drawing/export-picker cancellation workflow also passes:
+three native workflows total, no failures or skips. Neither host reports XCTest
+responsiveness/QoS warnings in these runs. All owned app/runner processes are
+verified stopped. Grouped evidence is under
+`artifacts/apple-document-open-milestone-v1/` (`mac-v1`, `simulator-v1`, `release/`).
+No physical iPad test is repeated. OS-level file-launch delivery, the full
+provider/lifecycle and physical-input matrices, remaining feature/visual/keyboard
+parity and sustained cadence acceptance remain open. Continue the remaining
+parity/keyboard gaps without repeating these passing checks absent a relevant
+change. The overall goal remains incomplete.
+
 ## Current tool controls and color preview milestone
 
 Tool settings now include the shared document epoch in their existing editing
@@ -33,7 +81,7 @@ UIKit capture shows the new swatch, while Mac's short panel is scrolled to RGB.
 Mac XCTest reports one responsiveness warning; UIKit reports none.
 
 Both Release builds pass without compiler warnings. Grouped evidence and
-**current on-disk Release metadata** are under
+**milestone Release metadata** are under
 `artifacts/apple-tool-color-milestone-v1/` (`mac-v5`, `simulator-v5`, `release/`).
 Earlier brush-state Release hashes no longer describe these rebuilt apps. Four
 earlier Mac workflow failures are retained: the configuration ancestor identifier

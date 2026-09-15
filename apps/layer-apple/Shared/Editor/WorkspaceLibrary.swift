@@ -120,7 +120,10 @@ import SwiftUI
                 ready = true; error = status["error"].isNull ? nil : status["error"]["message"].string
                 announcePreferences()
                 store?.native?.workspaceDidInitialize()
-                if let store { store.workspaceManager.receive(store.state.json) }
+                if let store {
+                    store.projectFiles.submitExternalOpen()
+                    store.workspaceManager.receive(store.state.json)
+                }
                 scheduleRenewal()
             } catch {
                 _ = try? await session(["type": "end"])
