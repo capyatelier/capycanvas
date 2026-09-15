@@ -464,9 +464,9 @@ struct StrokeCoveragePage {
     primary: PageSurface,
     secondary: PageSurface,
     active_secondary: bool,
+    // Persistent coverage is cleared when a stroke claims it; prediction forks
+    // committed coverage. Each batch copies the active surface before writing.
     owner: Option<StrokeId>,
-    primary_needs_clear: bool,
-    secondary_needs_clear: bool,
 }
 
 impl StrokeCoveragePage {
@@ -1489,7 +1489,10 @@ impl WgpuRasterizer {
                 && BrushPassPlan::for_style(&batch.style).requires_destination()
         }) {
             let damage = batch_pixel_rect(batch, self.document_extent);
-            let Some(layer_index) = self.paint_layers.iter().position(|l| l.id == batch.layer_id)
+            let Some(layer_index) = self
+                .paint_layers
+                .iter()
+                .position(|l| l.id == batch.layer_id)
             else {
                 continue;
             };
@@ -1682,8 +1685,6 @@ impl WgpuRasterizer {
                             secondary,
                             active_secondary: false,
                             owner: None,
-                            primary_needs_clear: true,
-                            secondary_needs_clear: true,
                         });
                 }
                 if plan.state.canvas_wetness
@@ -1802,8 +1803,6 @@ impl WgpuRasterizer {
                     secondary,
                     active_secondary: false,
                     owner: None,
-                    primary_needs_clear: false,
-                    secondary_needs_clear: false,
                 });
             }
         }
@@ -4251,9 +4250,14 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_pages.clear();
         } else {
             self.ensure_preview_pages(new_preview_damage);
-            self.ensure_preview_coverage_pages(packet.dab_batches);
             self.ensure_preview_watercolor_wetness_pages(new_preview_damage, preview_is_watercolor);
-            if !new_preview_from_persistent {
+            if new_preview_from_persistent {
+                // This pass reads committed coverage directly and writes only
+                // color. Retire any previous private fork instead of copying
+                // coverage into unused prediction attachments every frame.
+                self.preview_coverage_pages.clear();
+            } else {
+                self.ensure_preview_coverage_pages(packet.dab_batches);
                 self.ensure_preview_destination_companions(packet.dab_batches);
             }
         }
@@ -4348,22 +4352,6 @@ impl CanvasRenderer for WgpuRasterizer {
                     );
                 }
             }
-            for page in &layer.coverage_pages {
-                if page.primary_needs_clear {
-                    self.encode_clear(
-                        &mut encoder,
-                        &page.primary.view,
-                        "layer clear new stroke coverage A",
-                    );
-                }
-                if page.secondary_needs_clear {
-                    self.encode_clear(
-                        &mut encoder,
-                        &page.secondary.view,
-                        "layer clear new stroke coverage B",
-                    );
-                }
-            }
             for page in &layer.material_pages {
                 if page.needs_clear {
                     self.encode_clear(
@@ -4397,10 +4385,6 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         for layer in &mut self.paint_layers {
             for page in &mut layer.pages {
-                page.primary_needs_clear = false;
-                page.secondary_needs_clear = false;
-            }
-            for page in &mut layer.coverage_pages {
                 page.primary_needs_clear = false;
                 page.secondary_needs_clear = false;
             }

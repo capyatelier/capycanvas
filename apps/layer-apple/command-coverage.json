@@ -17,8 +17,8 @@
       "name": "Drawing tools",
       "commands": ["pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify"],
       "checks": ["native/src/workspace_tests.rs", "native/src/input_tests.rs", "native/src/tests.rs", "Shared/Tests/CanvasToolChecks.swift"],
-      "ios": "partial: native selection, scrolling and size editing for all thirty painting/erasing presets including the twelve contact brushes, earlier Blend/Liquify control workflows, grouped catalog and synthetic pixel/input oracles; physical Pencil artwork, sensors, interrupted strokes and performance remain",
-      "mac": "partial: real mouse strokes/erasure for all thirty painting/erasing presets including the twelve contact brushes, earlier contrasting-edge Blend/Liquify workflows, sampled artwork and one-step Undo/Redo, native selection, scrolling and size editing; tablet, sensors, interrupted strokes and performance remain"
+      "ios": "partial: native selection, scrolling and size editing for all thirty painting/erasing presets including the twelve contact brushes, earlier Blend/Liquify control workflows, grouped catalog and synthetic pixel/input oracles; physical Pencil artwork, sensors, interrupted strokes and performance remain; actual numeric workflow also passes valid/invalid Brush size draft retirement on preset switches and destination-brush preservation; mounted components cover size/opacity late-callback rejection and ordinary draft retention on both Apple policies",
+      "mac": "partial: real mouse strokes/erasure for all thirty painting/erasing presets including the twelve contact brushes, earlier contrasting-edge Blend/Liquify workflows, sampled artwork and one-step Undo/Redo, native selection, scrolling and size editing; tablet, sensors, interrupted strokes and performance remain; actual numeric workflow also passes valid/invalid Brush size draft retirement on preset switches and destination-brush preservation; mounted components cover size/opacity late-callback rejection and ordinary draft retention on both Apple policies"
     },
     {
       "name": "Selection, fill, and shapes",

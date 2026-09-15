@@ -257,3 +257,93 @@ fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
         "24 material cases, 120 full-image comparisons; maximum channel error={maximum_error}"
     );
 }
+
+#[test]
+fn single_prediction_borrows_coverage_and_survives_private_preview_transitions() {
+    let mut renderer = material_renderer();
+    renderer.resize_surface(384, 128).unwrap();
+    let layer = Layer::paint(LayerId(1), "Prediction coverage");
+    let mut style = test_style(BrushExecution::Dry);
+    style.rendering.accumulation = BrushAccumulation::Uniform;
+    let mut batch = DabBatch {
+        material_update: 0,
+        stroke_id: StrokeId(31),
+        layer_id: layer.id,
+        kind: DabBatchKind::Persistent,
+        stroke_start: true,
+        stroke_end: false,
+        first_dab: 0,
+        dab_count: 2,
+        style,
+        damage: Rect {
+            min: Point { x: 180., y: 0. },
+            max: Point { x: 330., y: 128. },
+        },
+    };
+    let seed = [
+        test_dab([240., 64.], [0.1, 0.2, 0.7, 0.8], 0.4),
+        test_dab([270., 64.], [0.1, 0.2, 0.7, 0.8], 0.4),
+    ];
+    let predicted = [
+        test_dab([253., 64.], [0.1, 0.2, 0.7, 0.8], 0.7),
+        test_dab([262., 64.], [0.1, 0.2, 0.7, 0.8], 0.7),
+    ];
+    let submit = |renderer: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
+        renderer
+            .submit(FramePacket {
+                view: ViewState {
+                    width_px: 384,
+                    ..test_view()
+                },
+                document_extent: [384, 128],
+                layers: std::slice::from_ref(&layer),
+                dabs,
+                dab_batches: batches,
+                restore_rasters: &[],
+                reset_layers: reset,
+                time_seconds: 0.,
+                composite_all: reset,
+            })
+            .unwrap();
+        renderer.readback_srgb_rgba8().unwrap()
+    };
+    let committed = submit(&mut renderer, &seed, &[batch.clone()], true);
+    batch.stroke_start = false;
+    batch.kind = DabBatchKind::Preview;
+    let expected = submit(&mut renderer, &predicted, &[batch.clone()], false);
+    assert_ne!(expected, committed, "prediction must add visible ink");
+    let mut private_page_counts = vec![renderer.preview_coverage_pages.len()];
+    // A multi-batch preview needs its own evolving coverage. Returning to a
+    // single batch must discard that fork and read the committed stroke again.
+    let mut first = batch.clone();
+    first.dab_count = 1;
+    let mut second = first.clone();
+    second.first_dab = 1;
+    submit(&mut renderer, &predicted, &[first, second], false);
+    assert_eq!(renderer.preview_coverage_pages.len(), 2);
+    assert_eq!(
+        submit(&mut renderer, &predicted, &[batch.clone()], false),
+        expected
+    );
+    private_page_counts.push(renderer.preview_coverage_pages.len());
+    assert_eq!(submit(&mut renderer, &[], &[], false), committed);
+    assert_eq!(renderer.metrics().preview_storage_bytes, 0);
+    assert_eq!(
+        submit(&mut renderer, &predicted, &[batch.clone()], false),
+        expected
+    );
+    private_page_counts.push(renderer.preview_coverage_pages.len());
+    let preview_bytes = renderer.metrics().preview_storage_bytes;
+    batch.kind = DabBatchKind::Persistent;
+    batch.stroke_end = true;
+    assert_eq!(submit(&mut renderer, &predicted, &[batch], false), expected);
+    eprintln!(
+        "single-preview private coverage pages={private_page_counts:?}, storage={preview_bytes}"
+    );
+    assert_eq!(
+        private_page_counts,
+        [0, 0, 0],
+        "single prediction borrows committed coverage"
+    );
+    assert_eq!(preview_bytes, 2 * PAGE_BYTES);
+}

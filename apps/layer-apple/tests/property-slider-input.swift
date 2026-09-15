@@ -10,10 +10,15 @@ import SwiftUI
 /// Temporary windows and in-memory documents; no renderer or artist storage.
 @main final class PropertySliderChecks: NativeWorkspaceInputFixture {
     @MainActor static func run() async throws {
+        let filter = ProcessInfo.processInfo.environment["CAPY_PROPERTY_CASE"] ?? ""
+        let cases = [("", "brush-size"), ("", "brush-opacity"),
+            ("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
+            ("brightness_contrast", "brightness"), ("split_tone", "red"),
+            ("gradient_map", "position"), ("gradient_map", "opacity"), ("gradient_map", "red")]
+            .filter { filter.isEmpty || $0.1.hasPrefix(filter) }
+        try require(!cases.isEmpty, "No property cases match \(filter)")
         for platform: UInt32 in [0, 1] {
-            for (effect, mode) in [("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
-                ("brightness_contrast", "brightness"), ("split_tone", "red"),
-                ("gradient_map", "position"), ("gradient_map", "opacity"), ("gradient_map", "red")] {
+            for (effect, mode) in cases {
                 let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
                 let deadline = Date().addingTimeInterval(15)
                 while store.state["layer_properties"]["controls"].array.isEmpty {
@@ -38,13 +43,16 @@ import SwiftUI
                     try await action(["type": "effect", "action": ["op": "insert", "effect": effect]])
                 }
                 let layer = store.state["layer_properties"]["layer"].uint
+                let brushControl = mode.hasPrefix("brush-")
                 let defaultControls = store.state["layer_properties"]["controls"].stableKey
                 let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient" : effect == "split_tone" ? "shadows"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
-                let identifier = mode == "layer-opacity" ? mode : effect == "gradient_map"
+                let identifier = brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
+                    : mode == "layer-opacity" ? mode : effect == "gradient_map"
                     ? (mode == "red" ? "gradient-stop-rgba-0" : "gradient-" + mode)
                     : "property-" + key + (mode == "red" ? "-rgba-0" : "")
                 func value() -> Double {
+                    if brushControl { return store.state["brush"][mode == "brush-size" ? "diameter" : "opacity"].number }
                     let value = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
                     if effect == "gradient_map" {
                         return mode == "position" ? value[1]["position"].number : value[1]["color"][mode == "red" ? 0 : 3].number
@@ -57,7 +65,11 @@ import SwiftUI
                 window.isReleasedWhenClosed = false
                 defer { window.contentView = nil; window.close() }
                 let content = AnyView(Group {
-                    if mode == "layer-opacity" { LayerOpacityField(store: store) }
+                    if brushControl {
+                        PanelControls(store: store, panel: JSON(["id": "sizes", "controls": [
+                            ["control": mode == "brush-size" ? "brush_size" : "brush_opacity", "visible_in_panel": true]
+                        ]]), scrollable: false, measureForWorkspace: false)
+                    } else if mode == "layer-opacity" { LayerOpacityField(store: store) }
                     else { LayerPropertiesPanel(store: store) }
                 }.padding(6).frame(width: 300, height: 500, alignment: .topLeading)
                     .coordinateSpace(name: "number-capture").environment(\.measureNumberControls, true)
@@ -96,6 +108,28 @@ import SwiftUI
                     try require(delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
                         "The retained native field must handle its commit callback")
                     try await drain()
+                }
+                if brushControl {
+                    let text = mode == "brush-size" ? "37 px" : "37 %"
+                    let (field, delegate) = try await draft(identifier, text)
+                    try await action(["type": "select_brush", "id": 2])
+                    let replacement = value()
+                    try await commit(field, delegate)
+                    try require(abs(value() - replacement) < 0.0001,
+                        "A retired \(identifier) draft must not edit the replacement brush: expected \(replacement), found \(value())")
+                    try require(!field.isDescendant(of: host), "Changing brush must discard its old numeric draft")
+                    let (current, currentDelegate) = try await draft(identifier, text)
+                    let actionType = mode == "brush-size" ? "set_brush_size" : "set_brush_opacity"
+                    let external = mode == "brush-size" ? 23.0 : 0.23
+                    try await action(["type": actionType, "value": external])
+                    try require(current.isDescendant(of: host) && current.stringValue == text,
+                        "An ordinary brush-value update must preserve its active draft")
+                    try await commit(current, currentDelegate)
+                    let accepted = mode == "brush-size" ? 37.0 : 0.37
+                    try require(abs(value() - accepted) < 0.0001,
+                        "The replacement brush's own field must still accept edits: expected \(accepted), found \(value())")
+                    note("PASS: platform \(platform), \(identifier), brush switch rejects retired edits while ordinary updates preserve drafts")
+                    continue
                 }
                 if effect == "curves" {
                     func points() -> JSON {

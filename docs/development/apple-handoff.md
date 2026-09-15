@@ -10,6 +10,51 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current brush-state milestone
+
+Brush size and opacity fields now capture the selected preset, discard their
+draft when it changes and reject retired callbacks. The component reproduction
+changes Pencil's 14-pixel size to 37 through the former G-Pen field. Four mounted
+cases across both Apple policies pass, including preservation of active drafts
+through ordinary value updates and subsequent accepted edits. An intermediate
+fixture called the control factory outside observed PanelControls and retained
+its initial capture; mounting the real panel resolves that fixture failure.
+Evidence is under `artifacts/apple-brush-draft-context-v1/`.
+
+The shared renderer skips private coverage allocation/copying when the existing
+single-batch prediction pass reads committed coverage directly. A two-page Metal
+regression reproduces the unused resources before the change; afterwards preview
+storage falls from 768 to 512 KiB, with exact image equality through multiple-to-
+single preview transitions, cancellation and commit. Multiple-batch/watercolor
+prediction keeps its private state. Duplicate initial coverage clears and their
+two flags are removed: the stroke-owner clear and batch copy already initialize
+both surfaces before use. All thirteen final Metal checks pass, including 120
+material image comparisons with zero channel difference, coverage reset,
+watercolor, contact and project/mask save/reopen/Undo/Redo. Focused evidence is
+under `artifacts/performance/preview-coverage-retirement-v1/`.
+
+Both actual Mac and UIKit numeric workflows pass valid/invalid Brush size draft
+switching and destination-brush preservation, together with their existing
+expression, validation and brush-memory checks: two workflows, no failures or
+skips. Both Release builds pass without compiler warnings. The final native
+captures are reviewed; Mac XCTest retains two responsiveness/QoS warnings,
+UIKit none. Grouped results and **current on-disk Release metadata** are under
+`artifacts/apple-brush-state-milestone-v1/` (`mac-v1`, `simulator-v1`, `release/`).
+Earlier editing/dialog Release hashes no longer describe these rebuilt apps.
+
+The final Release apps each complete the existing 45-second eight-layer 4K G-Pen
+workload, serially after builds and UI automation. Both accept all input, finish
+the postlude and report no renderer errors, overflow or missing/zero-time measured
+presentations. The Mac artwork and live Navigator capture are reviewed. Cadence
+still fails: Mac has 49 long intervals out of 3,748; iPad has 41 out of 5,046.
+These are current short runs, not a controlled before/after improvement or
+sustained acceptance. Full results and limitations are in PERFORMANCE.md and
+this milestone's `physical/` evidence. All owned processes are stopped; the
+physical diagnostic is removed and its prior test runner restored, preserving
+both artist editor descriptors. All eleven recovery stashes remain. Full feature/
+visual, physical input/provider/lifecycle and sustained performance gates remain
+open; the overall goal is incomplete.
+
 ## Current native feature milestone
 
 Prioritize visible Web/Android parity gaps and simple shared solutions. Keep the

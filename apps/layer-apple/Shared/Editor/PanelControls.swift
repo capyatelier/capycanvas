@@ -73,9 +73,11 @@ struct PanelControls: View {
         }
     }
     private func number(_ label: String, key: String, spec: String, action: String) -> some View {
-        NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) { value, completion in
+        let preset = store.state["brush"]["preset"].uint
+        return NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) { value, completion in
+            guard preset == store.state["brush"]["preset"].uint else { completion(nil); return }
             store.edit(["type": action, "value": value], completion: completion)
-        }
+        }.id(preset)
     }
     private var sizes: some View {
         let lineHeight = max(1, store.catalog["text_size_pt"].number * 4 / 3) * 1.42

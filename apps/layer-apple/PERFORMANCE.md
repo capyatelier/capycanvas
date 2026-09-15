@@ -17,6 +17,55 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Coverage preparation cleanup and physical validation — 2026-09-15
+
+Review of the retained command-encoding profile identifies redundant coverage
+work in the shared renderer. Single-batch destination prediction already reads
+committed coverage directly, but still allocated and initialized a private
+coverage pair. The existing prediction-mode decision now retires that unused
+pair. Multiple-batch and watercolor prediction retain their private coverage.
+New persistent coverage pages also no longer receive two preliminary clear
+passes: their stroke-owner transition clears the active surface, and the normal
+batch copy initializes the inactive surface before rendering. The duplicate
+initialization flags and loops are removed; no new rendering path is added.
+
+A focused Metal regression first reproduces two unused coverage pairs across a
+two-page prediction, then passes after the cleanup: prediction storage falls
+from 768 to 512 KiB. Full-image equality holds when returning from a multiple-batch
+preview, cancelling, recreating the preview and committing its ink. This is a
+resource reduction, not a timing or presentation-cadence measurement.
+
+All thirteen final Metal checks pass, including 120 material full-image
+comparisons with zero channel difference, stroke-coverage reset, watercolor
+prediction/pen-up, contact invariants and project/mask save/reopen/Undo/Redo.
+Evidence is under ignored `artifacts/performance/preview-coverage-retirement-v1/`.
+The cleanup accompanies the brush-draft milestone. Both final Release builds
+pass, and the rebuilt apps complete one existing 45-second eight-layer 4K G-Pen
+workload per physical host, with prediction and 240 Hz synthetic input. The runs
+are serial and follow all builds/UI automation, with GPU timestamps and CPU
+sampling disabled. Both measured intervals and postludes finish with nominal
+thermal state, no rejected input, renderer errors, overflow or missing/zero-time
+measured presentation callbacks. The Mac artwork/live Navigator is reviewed.
+
+| Measurement | Mac, 90 Hz | Physical iPad, 120 Hz |
+| --- | ---: | ---: |
+| Measured seconds | 45.009 | 45.000 |
+| Actual presentations | 3,777 | 5,075 |
+| CPU owner p99 / max, ms | 3.733 / 14.886 | 9.097 / 17.692 |
+| CPU frames over host budget | 28 | 67 |
+| Long continuous intervals / total | 49 / 3,748 | 41 / 5,046 |
+| Continuous interval p99 / max, ms | 22.222 / 22.222 | 8.334 / 25.000 |
+| Measured footprint growth / peak, MiB | 51.88 / 1,276.97 | 22.02 / 1,299.80 |
+
+Both cadence gates still fail. These current short runs are not a controlled
+before/after comparison and do not establish a timing or memory-growth benefit.
+No ten-minute run follows. Sustained cadence, physical-input latency, isolated
+GPU timing, recorder overhead and the complete performance matrix remain open.
+Grouped native evidence and current Release metadata are under
+`artifacts/apple-brush-state-milestone-v1/` (`physical/`, `release/`). Both owned
+processes are stopped; the physical diagnostic is removed and its prior test
+runner restored, with the artist's editor descriptors unchanged.
+
 ## Hardware tile hashing, short physical comparison — 2026-09-15
 
 The retained valid CPU profile identifies software SHA-256 work inside
