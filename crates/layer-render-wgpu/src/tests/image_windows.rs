@@ -3,7 +3,7 @@ use super::*;
 use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
 use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, LayerMask, Selection};
 
-fn effect(id: u64, generator: bool, global: bool) -> Layer {
+pub(super) fn effect(id: u64, generator: bool, global: bool) -> Layer {
     let mut p = (*fixture("exposure").program()).clone();
     p.kind = if generator {
         EffectKind::Generator

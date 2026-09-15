@@ -7,6 +7,8 @@ mod images;
 #[path = "filter_previews.rs"]
 mod previews;
 mod metadata;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
 #[cfg(not(target_arch = "wasm32"))]
 mod sources;
@@ -217,14 +219,21 @@ impl Scene {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        r.metrics.source_upload_submissions += 1;
+        Self::submit_chunk(r, encoder, "after source upload")
+    }
+    fn submit_chunk(
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        label: &'static str,
+    ) -> Result<(), GpuRasterError> {
         let next = crate::submission::CommandEncoder::new(&r.device,
-            &wgpu::CommandEncoderDescriptor { label: Some("after source upload") });
+            &wgpu::CommandEncoderDescriptor { label: Some(label) });
         let previous = std::mem::replace(encoder, next);
         r.uploads.finish(&previous);
         let submission = previous.submit(&r.queue);
-        r.metrics.source_upload_submissions += 1;
-        // GTK runs this cold work on its render owner, never its input thread.
-        // Wait for this exact chunk so upload residency cannot grow with photos.
+        // Native hosts run this work on their render owner. Wait for this exact
+        // chunk before releasing/replacing resources charged to its ceiling.
         #[cfg(not(target_arch = "wasm32"))]
         r.device.poll(wgpu::PollType::Wait {
             submission_index: Some(submission), timeout: Some(READBACK_TIMEOUT),
@@ -1304,9 +1313,27 @@ impl Scene {
         overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(native) = &r.native_edit
+            && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?
+        {
+            return self.compose_windows(r, packet, dirty, encoder, overlay, plan);
+        }
         self.image_window = None;
         self.effects.retain(packet.layers);
         let dirty = self.update_images(r, packet, dirty, encoder)?;
+        self.compose_pixels(r, packet, dirty, encoder, overlay, tiles)
+    }
+
+    fn compose_pixels(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>,
+        dirty: PixelRect,
+        encoder: &mut crate::submission::CommandEncoder,
+        overlay: bool,
+        tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
+    ) -> Result<(), GpuRasterError> {
         if dirty.is_empty() {
             return Ok(());
         }
@@ -1337,7 +1364,11 @@ impl Scene {
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: source,
-                    origin,
+                    origin: wgpu::Origin3d {
+                        x: dirty.min_x() - self.images.bounds.min_x(),
+                        y: dirty.min_y() - self.images.bounds.min_y(),
+                        z: 0,
+                    },
                     ..source.as_image_copy()
                 },
                 wgpu::TexelCopyTextureInfo {

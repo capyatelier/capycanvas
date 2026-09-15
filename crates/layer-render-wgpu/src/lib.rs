@@ -209,6 +209,11 @@ pub struct GpuRasterMetrics {
     pub source_upload_submissions: u64,
     pub source_tile_hits: u64,
     pub source_tile_misses: u64,
+    /// Native physical-filter window execution, separate from source uploads.
+    /// Pixel caches include clipping uniforms here, but exclude tile scratch,
+    /// paint, the full composite and driver allocations.
+    pub image_window_submissions: u64,
+    pub image_window_peak_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4054,6 +4059,12 @@ impl CanvasRenderer for WgpuRasterizer {
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         #[cfg(not(target_arch = "wasm32"))]
+        if let Some(native) = &self.native_edit {
+            // Reject unsupported global dependencies before clearing/restoring
+            // paint, allocating the composite, or submitting any part of a frame.
+            scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
             // capture spare pool during loading, before the first stroke needs it.
@@ -6887,6 +6898,8 @@ mod tests {
     }
     mod adjustments;
     mod image_windows;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod live_windows;
     mod curve_reference;
     mod filter_library;
     mod material;

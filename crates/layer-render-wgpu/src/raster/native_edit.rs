@@ -19,6 +19,10 @@ struct ScalarSlot {
     canonical: wgpu::Texture,
 }
 pub(crate) struct NativeEdit {
+    /// Provisional ceiling for live physical-filter pixel allocations, separate
+    /// from source, paint and composite residency. Qualify the host budget before
+    /// enabling native photo documents in GTK.
+    pub image_pixel_bytes: u64,
     transfer: NativeTransfer,
     color: NativeTileEncoder,
     scalar: NativeScalarEncoder,
@@ -71,6 +75,7 @@ impl NativeEdit {
             })
             .collect();
         Self {
+            image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,
             transfer,
             colors,
             scalars,

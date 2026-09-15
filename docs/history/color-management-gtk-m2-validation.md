@@ -21,8 +21,11 @@ dithering without changing the master. Custom ICC selection now connects
 RGB/grayscale/CMYK delivery with worker validation and retained profile bytes.
 CPU brush dynamics now retain document RGB through previews, corrections and
 recovery; exact native GPU publication/save/reopen checks include color jitter.
-Remaining tool/effect precision, bounded mutable/composite/filter residency and
-mips, managed GTK viewing, color/photo controls and interchange are still required.
+Native live physical filters now use bounded windows above a provisional image
+allocation ceiling, with complete halos and preflight rejection of oversized
+document-wide dependencies. Remaining tool/effect precision, bounded mutable and
+composite residency, source mips, global-job scheduling/cancellation, managed GTK
+viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
 diagnostics and GPU recovery continue to receive regression checks; these do not
 substitute for qualification of the new workflows. The implementation sections
@@ -3386,3 +3389,90 @@ DPI retention remain unfinished. Native GTK photo editing, managed viewing,
 bounded live residency/mips and final measured memory/latency gates also remain
 open. Other hosts have not been integrated or qualified. No benchmarking or
 performance optimization was performed during this stage.
+
+## Native live physical-filter windows (2026-09-14)
+
+Parent: `4e14a2e5`. Current-code inspection confirmed that snapshot captures had
+bounded dependency windows while live physical filters still allocated their
+inputs, outputs, masks and clipping backdrops at document dimensions. This stage
+connects the same document-coordinate compositor to bounded live filter windows.
+It does **not** enable native photo documents in GTK.
+
+The native renderer now preflights physical-filter image pixels before restoring
+paint, resizing the composite or submitting a frame. Below a provisional **256
+MiB image-pixel ceiling**, it retains the ordinary incremental image cache. Above
+that ceiling, neighborhood chains use 1024-, 512- or 256-pixel output windows,
+including every visible pass's cumulative halo. Output pages do not overlap;
+input halos do. Groups, clipping, translated masks, mask-area overlays and
+document-coordinate sampling use the existing compositor and Float32 formats.
+Adjustment/topology/background changes invalidate the complete result; paint
+damage expands through the chain; animation refreshes even without paint damage.
+
+Each window finishes its queued work before releasing its image set and staging.
+An initial drain retires the previous cache before replacing it. Source uploads
+and window drains share one submission helper and retain separate counters.
+This is a correctness-first execution path on the render owner, with bounded
+image lifetimes; chunk scheduling, cancellation and latency optimization remain
+unfinished. The queue/staging ownership was checked against the pinned
+[wgpu 30.0.1 queue contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.write_buffer)
+and [polling contract](https://docs.rs/wgpu/30.0.1/wgpu/type.PollType.html).
+
+A document-wide sampler still receives the entire document. If its conservative
+allocation plan exceeds the ceiling, or a neighborhood halo cannot fit around
+one output page, the renderer returns an explicit error before changing the
+current document or canvas. It does not crop the dependency or narrow precision.
+Small supported global effects continue to use their full inputs. An asynchronous
+global-job workflow and the corresponding GTK limits/error handling remain work.
+
+Correctness evidence on the existing Linux/Vulkan RTX PRO 6000 reference system
+(driver 610.57.04, kernel 7.1.10-200.fc44.x86_64):
+
+| Check | Result and evidence under `artifacts/color-m2/` |
+| --- | --- |
+| Window planning | Two tests pass for 24/45/60 MP and a 32768×257 strip, including full output coverage, complete halos, per-window bounds and explicit global/halo rejection. `live-filter-plan.log`. These are dimension/allocation-plan tests, not rendered large-photo measurements. |
+| Live GPU windows | Four tests pass, 42.66 s total. Four spaces × both depths × clipping on/off × isolated group on/off, with translated masks and mask-area overlays; full/window transitions, partial damage, animation/frozen time, paint crossing seams, undo/redo, renderer recreation and metadata invalidation. `live-filter-final-gpu.log`. |
+| Image allocation ownership | The 777×533 comparison fixtures force a 16 MiB ceiling. Full image caches occupy 33,131,280–46,383,888 bytes; peak window caches occupy 6,094,080–8,531,808 bytes, including clipping uniforms. These counters describe owned resources, not driver residency or process RSS. |
+| Edited-image comparison | The numerical ceiling is absolute 3e-6 per Float32 premultiplied channel. Observed maximum difference is zero in these fixtures; exact equality is not the filter acceptance requirement. Rejected frames preserve the exact existing composite; undo and raster ownership remain exact. |
+| Existing image windows | Two tests pass, 16.63 s; `live-filter-windows.log`. |
+| Native publication/history | Four tests pass, 40.48 s, including invalid/abandoned frames and paint → undo → save/reopen → continue → device replacement; `live-filter-native-edit.log`. |
+| Snapshot/interchange | Eight tests pass, 44.35 s, including exact source identity, profiles, matte, dithering, dependency budget and cancellation; `live-filter-snapshot.log`. |
+| Existing filters | Twenty correctness tests pass, 30.45 s, including the runtime pixel reference, physical/fused paths, masks and incremental invalidation. Latency tests explicitly excluded; `live-filter-filters.log`. |
+| GTK | Production check and test build pass. Native diagnostics/fault/recovery check passes, 6.01 s; its invalid-scissor GPU failure is intentional. Native save/reopen and profiled file workflows pass, 38.41 s, including the optional custom CMYK branch. `live-filter-gtk-check.log`, `live-filter-final-gtk-build.{json,log}`, `live-filter-recovery.log`, `live-filter-files.log`. |
+| External output handoff | ImageMagick reproduces all 983,040 integer16 RGB/gray/CMYK output samples and embedded ICC bytes exactly. `live-filter-handoff.log`; files from GTK process 1306851 are retained in `live-filter-ui/`. |
+
+The final saved executables are `live-filter-final-gpu-tests` and
+`live-filter-final-gtk-tests`; Cargo build mappings use `live-filter-final-build`
+and `live-filter-final-gtk-build`. The earlier `live-filter-reviewed-gpu-tests`
+ran the unchanged full-image, snapshot, native-publication and filter regressions;
+the final binary adds the window-specific metadata invalidation and its tests.
+`live-filter-provenance.json` records source, binary and log hashes.
+
+Reproduce with the previously documented local libjpeg pkg-config setup:
+
+```sh
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo test -p layer-render-wgpu --offline --lib --no-run --message-format=json
+ABSOLUTE_GPU_TEST_BINARY scene::windows::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY tests::live_windows --test-threads=1 --nocapture
+ABSOLUTE_GPU_TEST_BINARY tests::image_windows --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY raster::native_edit::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY snapshot::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY tests::filter_library --test-threads=1 --skip latency
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_diagnostics_and_gpu_failure_recovery ABSOLUTE_REPORT_PREFIX
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_document_files ABSOLUTE_REPORT_PREFIX
+python3 tools/validation/icc_export_handoff.py \
+  artifacts/familiar-workspace/files GTK_TEST_PROCESS_ID
+```
+
+The ceiling excludes source decoding, paint/material/mask pages, the full live
+composite, reusable scene tiles, effect preparation tables, history, other
+documents, surfaces and driver allocations. Those need their own bounds and a
+combined measured budget. Live mutable/composite residency and source mips remain
+prerequisites, as do native GTK activation, complete color/photo controls,
+managed viewing and the remaining interchange journeys. The pre-existing latency
+failures remain open. No frame-creation benchmark or performance optimization was
+run in this stage; all elapsed times above are test durations. Other hosts remain
+unintegrated and require user approval after GTK qualification.

@@ -170,6 +170,11 @@ pub(super) struct ImageStages {
     pub mask_pixels: u64,
 }
 impl ImageStages {
+    pub(super) fn metadata_changed(&self, layers: &[Layer], background: [f32; 4]) -> bool {
+        self.background != background
+            || self.metadata.len() != layers.len()
+            || self.metadata.iter().zip(layers).any(|(old, layer)| *old != Metadata::new(layer))
+    }
     pub fn scene_texture(&self, layer: &Layer) -> Option<&wgpu::Texture> {
         let stage = self.stages.iter().find(|s| s.id == layer.id && s.valid)?;
         if layer.properties.clipped {
