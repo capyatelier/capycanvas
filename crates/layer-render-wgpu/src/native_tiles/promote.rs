@@ -3,6 +3,9 @@
 //! input-owner readback is needed before subsequent edits see committed values.
 use super::{MAX_BATCH_TILES, NativeEncodeStatus, STATUS_BYTES};
 use crate::{GpuRasterError, PipelineDevice};
+use wgpu::util::DeviceExt;
+
+const FULL_REGION: [u32; 4] = [0, 0, 256, 256];
 
 pub struct NativePromotion<'a> {
     pub canonical: &'a wgpu::Texture,
@@ -13,9 +16,8 @@ pub struct NativePromotion<'a> {
 
 struct Job {
     binding: wgpu::BindGroup,
-    target: wgpu::TextureView,
     format: usize,
-    region: [u32; 4],
+    groups: [u32; 2],
 }
 pub struct NativePromotionBatch(Vec<Job>);
 impl NativePromotionBatch {
@@ -23,87 +25,107 @@ impl NativePromotionBatch {
         self.0.is_empty()
     }
     pub(crate) fn pass_count(&self) -> usize {
-        self.0.len()
+        usize::from(!self.is_empty())
     }
 }
 
 pub struct NativePromoter {
-    layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::RenderPipeline; 2],
+    layouts: [wgpu::BindGroupLayout; 2],
+    pipelines: [wgpu::ComputePipeline; 2],
+    full_region: wgpu::Buffer,
 }
 impl NativePromoter {
-    /// Prepare with native encoding pipelines before interaction. Existing
-    /// working attachments need no additional storage-texture usage.
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.full_region.size()
+    }
+
+    /// Prepare with native encoding pipelines before interaction. Working
+    /// destinations require write-only storage access in their Float32 format.
     pub fn new(device: &wgpu::Device) -> Self {
         Self::with_device(&device.clone().into())
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("native canonical promotion"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(STATUS_BYTES),
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("native canonical promotion"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("promote.wgsl").into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("native canonical promotion"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipelines = [
+        let formats = [
             wgpu::TextureFormat::Rgba32Float,
             wgpu::TextureFormat::R32Float,
-        ]
-        .map(|format| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        ];
+        let layouts = formats.map(|format| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("native canonical promotion"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: std::num::NonZeroU64::new(STATUS_BYTES),
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    super::buffer_entry(3, wgpu::BufferBindingType::Uniform, false, 16),
+                ],
+            })
+        });
+        let pipelines = std::array::from_fn(|index| {
+            let source = include_str!("promote.wgsl").replace(
+                "FORMAT",
+                if index == 0 {
+                    "rgba32float"
+                } else {
+                    "r32float"
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
+            );
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("native canonical promotion"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("native canonical promotion"),
+                bind_group_layouts: &[Some(&layouts[index])],
+                immediate_size: 0,
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("native canonical promotion"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
                 cache: None,
             })
         });
-        Self { layout, pipelines }
+        // Whole-tile publication is the interactive path. Reuse this immutable
+        // record instead of allocating parameter uploads for each commit chunk.
+        let full_region = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("native full-tile promotion region"),
+            contents: FULL_REGION.map(u32::to_le_bytes).as_flattened(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        Self {
+            layouts,
+            pipelines,
+            full_region,
+        }
     }
 
     /// Preflight the whole batch before recording writes. All canonical inputs
@@ -145,7 +167,7 @@ impl NativePromoter {
                 || !r
                     .working
                     .usage()
-                    .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+                    .contains(wgpu::TextureUsages::STORAGE_BINDING)
                 || !r
                     .canonical
                     .usage()
@@ -167,14 +189,47 @@ impl NativePromoter {
                 ));
             }
         }
+        if requests
+            .iter()
+            .all(|r| r.region[2] == 0 || r.region[3] == 0)
+        {
+            return Ok(NativePromotionBatch(Vec::new()));
+        }
+        let full = requests.iter().all(|r| r.region == FULL_REGION);
+        let stride = 16u32.next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
+        let parameters = if full {
+            self.full_region.clone()
+        } else {
+            let parameters = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("batched native promotion regions"),
+                size: u64::from(stride) * requests.len() as u64,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: true,
+            });
+            {
+                let mut bytes = parameters
+                    .get_mapped_range_mut(..)
+                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+                for (i, r) in requests.iter().enumerate() {
+                    bytes
+                        .slice(i * stride as usize..i * stride as usize + 16)
+                        .copy_from_slice(r.region.map(u32::to_le_bytes).as_flattened());
+                }
+            }
+            parameters.unmap();
+            parameters
+        };
         let jobs = requests
             .iter()
-            .filter(|r| r.region[2] != 0 && r.region[3] != 0)
-            .map(|r| {
+            .enumerate()
+            .filter(|(_, r)| r.region[2] != 0 && r.region[3] != 0)
+            .map(|(i, r)| {
+                let format = usize::from(r.working.format() == wgpu::TextureFormat::R32Float);
                 let view = r.canonical.create_view(&Default::default());
+                let target = r.working.create_view(&Default::default());
                 let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("native canonical promotion"),
-                    layout: &self.layout,
+                    layout: &self.layouts[format],
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
@@ -184,13 +239,28 @@ impl NativePromoter {
                             binding: 1,
                             resource: status.buffer().as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&target),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &parameters,
+                                offset: if full {
+                                    0
+                                } else {
+                                    i as u64 * u64::from(stride)
+                                },
+                                size: wgpu::BufferSize::new(16),
+                            }),
+                        },
                     ],
                 });
                 Job {
                     binding,
-                    target: r.working.create_view(&Default::default()),
-                    format: usize::from(r.working.format() == wgpu::TextureFormat::R32Float),
-                    region: r.region,
+                    format,
+                    groups: [r.region[2].div_ceil(8), r.region[3].div_ceil(8)],
                 }
             })
             .collect();
@@ -198,28 +268,17 @@ impl NativePromoter {
     }
 
     pub fn encode(&self, commands: &mut wgpu::CommandEncoder, batch: &NativePromotionBatch) {
+        if batch.is_empty() {
+            return;
+        }
+        let mut pass = commands.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("batched native canonical promotion"),
+            timestamp_writes: None,
+        });
         for job in &batch.0 {
-            let mut pass = commands.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("native canonical promotion"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &job.target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
             pass.set_pipeline(&self.pipelines[job.format]);
             pass.set_bind_group(0, &job.binding, &[]);
-            let [x, y, width, height] = job.region;
-            pass.set_scissor_rect(x, y, width, height);
-            pass.draw(0..3, 0..1);
+            pass.dispatch_workgroups(job.groups[0], job.groups[1], 1);
         }
     }
 }

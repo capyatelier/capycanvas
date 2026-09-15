@@ -265,3 +265,63 @@ the cache target excluded current write scratch; retained failed runs document
 the corrected budget and idle-redraw setup. Final test executable SHA-256:
 `ae387997c82f9c4f9120bee2f213b0de5607ecf1aac45440dd02f3a8fe2ddcf5`;
 logs/manifests use `native-companion-pressure-*` under `artifacts/color-m2/`.
+
+## Batched canonical promotion
+
+The next palette-knife probe separates command finishing from queue submission.
+For 12 measured ProPhoto U16 pen-ups, it records 336 / 344 native color/scalar
+inputs at p50 / p95. CPU p50 / p95 in microseconds: validation 994 / 1166,
+encoding preparation 1622 / 1732, promotion preparation 994 / 1115, command
+finish 4965 / 7270, queue submit 255 / 439. Capture preparation is 85 / 94.
+This identifies command construction/finishing, not queue submission alone, as
+the largest CPU cost. `build-penup-probe.py`, its source archive/build manifest,
+`penup-probe-palette.log` and `penup-probe-summary.json` retain the instrumented
+diagnostic; its timing is not substituted for acceptance measurements.
+
+Canonical adoption now uses one compute pass per bounded batch instead of one
+render pass per tile. Each dispatch loads canonical Float32 samples and stores
+them into a distinct working texture, gated by the same publication-wide status.
+Partial rectangles leave surrounding pixels untouched. Full-tile publication
+reuses a 16-byte immutable parameter record, included in native storage metrics.
+Color and scalar working targets declare storage usage; encoding, global
+validation, bounded scratch reuse and asynchronous capture retain their order.
+The old promotion vertex/fragment path is removed.
+
+The format decision was checked against the pinned `wgpu-types 30.0.1`
+`texture/format.rs::guaranteed_format_features`: both R32Float and Rgba32Float
+support write-only storage without a new optional device feature. Compute
+dispatches provide separate resource-usage scopes, consistent with the
+[WebGPU synchronization model](https://www.w3.org/TR/webgpu/#programming-model-synchronization).
+This changes shared renderer code for GTK qualification; no additional host is
+integrated or qualified.
+
+All three original promotion correctness cases pass (5.90 s); a new mixed
+color/scalar batch checks independent partial regions across an empty entry
+(3.67 s). Five native editing cases pass (54.25 s), including exact history,
+save/reopen, device replacement, scalar coverage, late mixed-plane failure and
+abandoned publication. Test binaries/logs use `native-compute-promotion-*`;
+final test SHA-256 is
+`6cacd25bcd7c3575d81972ed399f85edd16fce025cda5891afafc3ef6652a1d5`.
+The subsequent accounting-only change adds the cached 16-byte uniform to metrics.
+
+Uninstrumented ProPhoto U16 pairs use three repetitions of each scenario:
+
+| Scenario | Before / after pen-up CPU p99 ms | Before / after pen-up completed p99 ms | Before / after move completed p99 ms |
+| --- | --- | --- | --- |
+| Palette knife | 14.374 / 10.325 | 23.464 / 21.761 | 7.092 / 6.881 |
+| Transparent glaze | 7.169 / 6.105 | 14.210 / 12.561 | 1.979 / 1.837 |
+| Large paintbrush | 8.766 / 7.512 | 14.443 / 13.970 | 2.742 / 2.810 |
+
+Palette/glaze contribute 426 move and 12 pen-up frames per arm; large paintbrush
+contributes 591 move and only three pen-ups. Pen-up deadline misses change from
+12 to 12, 12 to 10, and 3 to 3 respectively. The after palette run has one move
+at 8.596 ms; its p99 remains below 8.33 ms. These runs show an improvement but
+do **not** pass the completed-work gate. The small pen-up sample is not a
+sustained native presentation qualification.
+
+`run-compute-promotion.py` records serial run commands, boundaries, process
+high-water and GPU telemetry. No build or correctness run overlaps measurement.
+Reports and `compute-promotion-runs.json` retain exact frame/CPU counts. Before
+uses the saved companion executable; after SHA-256 is
+`9add4aaf4ccac38ffab258f9204d93287912ca226f6cca63b927f16c058eff58`,
+with matching `compute-promotion-accounted-build-sources.json` and source patch.

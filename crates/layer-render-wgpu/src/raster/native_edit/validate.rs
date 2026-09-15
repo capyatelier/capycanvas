@@ -80,7 +80,7 @@ impl Validator {
                     wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::R32Float
                 )
                 || !texture.usage().contains(
-                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
                 )
             {
                 return Err(GpuRasterError::Color(

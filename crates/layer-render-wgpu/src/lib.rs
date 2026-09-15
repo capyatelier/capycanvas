@@ -6067,7 +6067,10 @@ fn create_target(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST,
+            | wgpu::TextureUsages::COPY_DST
+            | if matches!(format, wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::R32Float) {
+                wgpu::TextureUsages::STORAGE_BINDING
+            } else { wgpu::TextureUsages::empty() },
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

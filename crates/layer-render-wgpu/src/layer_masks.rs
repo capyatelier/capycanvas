@@ -23,7 +23,10 @@ impl MaskPage {
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
+                | wgpu::TextureUsages::COPY_DST
+                | if device.scalar_format() == wgpu::TextureFormat::R32Float {
+                    wgpu::TextureUsages::STORAGE_BINDING
+                } else { wgpu::TextureUsages::empty() },
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());

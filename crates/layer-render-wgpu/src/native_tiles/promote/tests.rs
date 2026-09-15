@@ -115,6 +115,64 @@ fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
 }
 
 #[test]
+fn mixed_promotion_batch_keeps_independent_regions_across_empty_entries() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let promoter = NativePromoter::new(&r.device);
+    let status = NativeEncodeStatus::new(&r.device);
+    let regions = [
+        [1, 2, 3, 4],
+        [256, 256, 0, 0],
+        [255, 255, 1, 1],
+        [250, 249, 6, 7],
+    ];
+    let formats = [
+        wgpu::TextureFormat::Rgba32Float,
+        wgpu::TextureFormat::Rgba32Float,
+        wgpu::TextureFormat::R32Float,
+        wgpu::TextureFormat::Rgba32Float,
+    ];
+    let originals = formats.map(|format| {
+        floats(
+            (0..65536 * format.block_copy_size(None).unwrap() / 4)
+                .map(|i| (i % 65536) as f32 / 65535.),
+        )
+    });
+    let replacements = formats.map(|format| {
+        floats(
+            (0..65536 * format.block_copy_size(None).unwrap() / 4)
+                .map(|i| 0.12345 + (i % 65536) as f32 / 65535.),
+        )
+    });
+    let canonical = formats.map(|format| texture(&r, format));
+    let working = formats.map(|format| texture(&r, format));
+    for i in 0..4 {
+        upload(&r, &canonical[i], &replacements[i]);
+        upload(&r, &working[i], &originals[i]);
+    }
+    let requests = std::array::from_fn::<_, 4, _>(|i| NativePromotion {
+        canonical: &canonical[i],
+        working: &working[i],
+        region: regions[i],
+    });
+    let batch = promoter.prepare(&r.device, &requests, &status).unwrap();
+    let mut commands = r.device.create_command_encoder(&Default::default());
+    status.reset(&mut commands);
+    promoter.encode(&mut commands, &batch);
+    r.queue.submit([commands.finish()]);
+    for i in 0..4 {
+        let mut expected = originals[i].clone();
+        let [x, y, width, height] = regions[i];
+        let pixel_bytes = formats[i].block_copy_size(None).unwrap() as usize;
+        for row in y..y + height {
+            let start = (row * 256 + x) as usize * pixel_bytes;
+            let end = start + width as usize * pixel_bytes;
+            expected[start..end].copy_from_slice(&replacements[i][start..end]);
+        }
+        assert!(page_bytes(&r, &working[i]) == expected, "mixed region {i}");
+    }
+}
+
+#[test]
 fn late_color_or_scalar_failure_rejects_every_promotion_and_capture() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let color_encoder = NativeTileEncoder::new(&r.device);
