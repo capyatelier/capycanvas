@@ -1592,6 +1592,9 @@ impl Workspace {
     pub(crate) fn view_color(&self) -> crate::display_color::ViewColor {
         self.gpu.borrow().as_ref().map_or(Default::default(), |g| g.session.engine().backend().view_color)
     }
+    pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
+        self.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.engine().backend().snapshot_gpu()
+    }
     pub(crate) fn display_description(&self) -> String {
         let mut description = self.view_color().description().to_string();
         if let Some(monitor) = self.window.surface().and_then(|s| s.display().monitor_at_surface(&s)) {

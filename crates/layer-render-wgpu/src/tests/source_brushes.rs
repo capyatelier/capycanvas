@@ -40,7 +40,7 @@ fn source_neighborhood_brushes_match_materialized_pixels_across_cache_and_predic
         r.adapter.clone(),
         r.device.clone(),
         r.queue.clone(),
-        false,
+        Initialization::Warm,
     )
     .unwrap();
     reference

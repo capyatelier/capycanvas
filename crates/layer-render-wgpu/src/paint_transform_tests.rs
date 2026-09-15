@@ -1246,7 +1246,7 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
         r.adapter.clone(),
         r.device.clone(),
         r.queue.clone(),
-        false,
+        Initialization::Warm,
     )
     .unwrap();
     reference

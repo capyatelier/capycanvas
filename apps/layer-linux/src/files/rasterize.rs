@@ -22,7 +22,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
             session.engine().animation_time(),
         )
     };
-    let comparison = super::preview::Comparison::new(project, w.view_color());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color());
     comparison.invalidate("Converting the retained original…");
     let explanation = gtk::Label::builder()
         .wrap(true)

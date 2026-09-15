@@ -718,9 +718,19 @@ impl Pipelines {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Initialization {
+    Warm,
+    Interactive,
+    /// A worker compiles only the dependencies of its immutable capture.
+    Snapshot,
+}
+
 /// Headless-capable wgpu brush renderer. A platform presenter can sample the
 /// same composite texture rather than requesting readback.
 pub struct WgpuRasterizer {
+    #[cfg(not(target_arch = "wasm32"))]
+    snapshot_worker: bool,
     startup: Option<startup::Startup>,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
@@ -834,24 +844,24 @@ impl WgpuRasterizer {
         Self::new_headless_async().await
     }
 
-    /// Fully warmed hardware renderer for headless tests, export and benchmarks.
+    /// Fully warmed hardware renderer for headless tests and benchmarks.
     /// Interactive applications use from_wgpu_staged[_cached] instead.
     pub fn new_headless() -> Result<Self, GpuRasterError> {
         pollster::block_on(Self::new_headless_async())
     }
 
     pub async fn new_headless_async() -> Result<Self, GpuRasterError> {
-        Self::headless_with_working_format(SRGB8_FORMAT, Default::default()).await
+        Self::headless_with_working_format(SRGB8_FORMAT, Default::default(), Initialization::Warm).await
     }
 
     #[cfg(test)]
     fn new_float32() -> Result<Self, GpuRasterError> {
         pollster::block_on(Self::headless_with_working_format(
-            wgpu::TextureFormat::Rgba32Float, Default::default(),
+            wgpu::TextureFormat::Rgba32Float, Default::default(), Initialization::Warm,
         ))
     }
 
-    async fn headless_with_working_format(format: wgpu::TextureFormat, space: layer_core::color::RgbSpace) -> Result<Self, GpuRasterError> {
+    async fn headless_with_working_format(format: wgpu::TextureFormat, space: layer_core::color::RgbSpace, initialization: Initialization) -> Result<Self, GpuRasterError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::PRIMARY;
         // Keep D3D12 shaders optimized even in a Rust debug build. DXC's -Od
@@ -906,12 +916,11 @@ impl WgpuRasterizer {
             .await
             .map_err(|error| GpuRasterError::DeviceRequest(error.to_string()))?;
 
-        // Headless tests/benchmarks explicitly need a fully warmed renderer.
         Self::from_wgpu_inner(
             adapter,
             PipelineDevice::from(device).with_working_format(format)?.with_working_space(space),
             queue,
-            false,
+            initialization,
         )
     }
 
@@ -925,7 +934,7 @@ impl WgpuRasterizer {
         device: wgpu::Device,
         queue: wgpu::Queue,
     ) -> Result<Self, GpuRasterError> {
-        Self::from_wgpu_inner(adapter, device.into(), queue, false)
+        Self::from_wgpu_inner(adapter, device.into(), queue, Initialization::Warm)
     }
 
     /// Show compositing first; the native host drives dependency-prioritized warmup.
@@ -934,7 +943,7 @@ impl WgpuRasterizer {
         device: wgpu::Device,
         queue: wgpu::Queue,
     ) -> Result<Self, GpuRasterError> {
-        Self::from_wgpu_inner(adapter, device.into(), queue, true)
+        Self::from_wgpu_inner(adapter, device.into(), queue, Initialization::Interactive)
     }
 
     /// Native staged startup with a disposable cache in a host-owned private directory.
@@ -946,7 +955,7 @@ impl WgpuRasterizer {
         directory: &std::path::Path,
     ) -> Result<Self, GpuRasterError> {
         let device = PipelineDevice::cached(device, &adapter, directory);
-        let mut renderer = Self::from_wgpu_inner(adapter, device, queue, true)?;
+        let mut renderer = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
         renderer.startup.as_mut().unwrap().host_catalog_pending = true;
         Ok(renderer)
     }
@@ -955,7 +964,7 @@ impl WgpuRasterizer {
         adapter: wgpu::Adapter,
         device: PipelineDevice,
         queue: wgpu::Queue,
-        staged: bool,
+        initialization: Initialization,
     ) -> Result<Self, GpuRasterError> {
         let hardware = adapter.get_info().device_type != wgpu::DeviceType::Cpu;
         // Unit-test binaries can explicitly admit a software backend for
@@ -1081,6 +1090,8 @@ impl WgpuRasterizer {
         let scene_pipelines = scene::Pipelines::new(&device);
         let transforms = Some(paint_transform::PaintTransforms::new(&device));
         let mut renderer = Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            snapshot_worker: initialization == Initialization::Snapshot,
             startup: None,
             telemetry,
             adapter,
@@ -1168,13 +1179,11 @@ impl WgpuRasterizer {
             pending_readback: None,
             metrics: GpuRasterMetrics::default(),
         };
-        if !staged {
+        if initialization == Initialization::Warm {
             renderer.install_builtin_masks()?;
             for pipeline in &renderer.scene_pipelines.pipeline {
                 pipeline.compile();
             }
-        }
-        if !staged {
             renderer.pipelines.compile_all();
             renderer.layer_masks.compile_all();
             renderer.selection_clip.compile_all();
@@ -1182,7 +1191,7 @@ impl WgpuRasterizer {
                 pipeline.compile();
             }
         }
-        if staged {
+        if initialization == Initialization::Interactive {
             renderer.upload_mask(&AssetId::from(WHITE_MASK_ASSET), 1, 1, 1, &[255])?;
             // Hosts can present paper with the flat compositor; tiled document
             // composition is prepared next, before loaded content is replayed.

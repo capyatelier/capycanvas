@@ -361,7 +361,7 @@ impl Drop for PreparedCapture {
 // lock. Sleep on the mapping notification outside wgpu instead; headless owners
 // still make progress, with no busy spin and the same failure deadline.
 #[cfg(not(target_arch = "wasm32"))]
-fn wait_mapping(
+pub(crate) fn wait_mapping(
     device: &wgpu::Device,
     ready: &mpsc::Receiver<Result<(), String>>,
 ) -> Result<(), String> {

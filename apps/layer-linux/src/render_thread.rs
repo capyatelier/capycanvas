@@ -1,4 +1,4 @@
-//! Bounded frame handoff and sole GPU/WSI owner. No GTK calls on the worker.
+//! Bounded frame handoff and canvas GPU/WSI owner. No GTK calls on the worker.
 //! Small dab/layer records cross threads; live canvas pixels remain on the GPU.
 use crate::wayland::{Child, Geometry, Parent};
 use gtk::prelude::WidgetExt;
@@ -94,7 +94,7 @@ enum Command {
 }
 enum Reply {
     ColorAdopted(u64, HashMap<AssetId, TipOutline>),
-    Initialized(crate::display_color::ViewColor),
+    Initialized(crate::display_color::ViewColor, layer_render_wgpu::snapshot::SnapshotGpu),
     Startup(
         u64,
         layer_render_wgpu::StartupProgress,
@@ -114,6 +114,7 @@ enum Reply {
 pub struct RenderWorker {
     transform_preview: Option<layer_render::TransformPreview>,
     initialized: bool,
+    snapshot_gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
     pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
     pub(super) startup: layer_render_wgpu::StartupProgress,
@@ -217,6 +218,7 @@ impl RenderWorker {
         Ok(Self {
             transform_preview: None,
             initialized: false,
+            snapshot_gpu: None,
             view_color: Default::default(),
             first_frame_sent: false,
             startup: Default::default(),
@@ -307,17 +309,23 @@ impl RenderWorker {
             if let Some(id) = self.awaiting_color_adoption {
                 match reply {
                     Reply::ColorAdopted(current, outlines) if current == id => {
+                        // Color candidates retain this device. Snapshot jobs
+                        // select primaries from their own immutable project.
                         self.awaiting_color_adoption = None;
                         self.outlines = outlines;
                     }
-                    Reply::Error(error) => return Err(error),
+                    Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                     _ => (),
                 }
                 continue;
             }
             match reply {
                 Reply::ColorAdopted(..) => (),
-                Reply::Initialized(color) => { self.initialized = true; self.view_color = color; },
+                Reply::Initialized(color, gpu) => {
+                    self.initialized = true;
+                    self.view_color = color;
+                    self.snapshot_gpu = Some(gpu);
+                },
                 Reply::Startup(generation, progress, outlines) => {
                     if generation == self.startup_generation {
                         self.startup = progress;
@@ -341,11 +349,12 @@ impl RenderWorker {
                     self.filter_previews_pending = false;
                     self.filter_previews.push_back(image);
                 }
-                Reply::Error(error) => return Err(error),
+                Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                 Reply::Readback(image) => self.readbacks.push_back(image),
             }
         }
         if self.thread.as_ref().is_some_and(|t| t.is_finished()) {
+            self.snapshot_gpu = None;
             return Err("GPU worker stopped".into());
         }
         Ok(self.initialized
@@ -356,13 +365,22 @@ impl RenderWorker {
     pub(super) fn worker_is_joined(&self) -> bool {
         self.thread.is_none()
     }
+    pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
+        if self.thread.as_ref().is_none_or(|thread| thread.is_finished()) {
+            return Err("Canvas renderer stopped".into());
+        }
+        self.snapshot_gpu.clone().ok_or_else(|| "Canvas renderer is still preparing".into())
+    }
     pub(super) fn stop(&mut self) {
+        self.snapshot_gpu = None;
         let _ = self.discard_prepared_color();
         if let Some(thread) = self.thread.take() {
             let _ = self.send(Command::Stop);
             // Wayland children must die before GTK releases their parent.
             let _ = thread.join();
         }
+        // Unconsumed initialization replies also own a device handle.
+        for reply in self.replies.try_iter() { drop(reply); }
     }
 }
 impl Drop for RenderWorker {
@@ -642,7 +660,7 @@ impl Worker {
         count: &AtomicUsize,
         #[cfg(test)] worker_stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
     ) -> Result<(), String> {
-        if reply.send(Reply::Initialized(self.view_color)).is_err() {
+        if reply.send(Reply::Initialized(self.view_color, self.renderer.snapshot_gpu())).is_err() {
             return Ok(());
         }
         #[cfg(test)]

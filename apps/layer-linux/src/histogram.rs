@@ -4,7 +4,7 @@ use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use layer_core::{Revision, color::histogram::Histogram};
-use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
+use layer_render_wgpu::snapshot::CaptureControl;
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -127,11 +127,14 @@ impl Inspector {
             {
                 return;
             }
+            let Ok(snapshot_gpu) = gpu.session.engine().backend().snapshot_gpu() else {
+                return;
+            };
             gpu.session
                 .capture_project_recovery()
-                .map(|p| (p, gpu.session.engine().animation_time()))
+                .map(|p| (p, gpu.session.engine().animation_time(), snapshot_gpu))
         };
-        let (project, time) = match snapshot {
+        let (project, time, snapshot_gpu) = match snapshot {
             Ok(p) => p,
             Err(error) => {
                 self.status.set_label(&error);
@@ -149,7 +152,7 @@ impl Inspector {
         glib::MainContext::default().spawn_local(async move {
             let worker_control = control.clone();
             let result = gio::spawn_blocking(move || {
-                let mut renderer = SnapshotRenderer::with_control(
+                let mut renderer = snapshot_gpu.capture(
                     project,
                     key.background,
                     time,

@@ -2,7 +2,7 @@
 //! history checks. This is offscreen work latency, never GTK presentation time.
 use super::*;
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-use layer_render_wgpu::snapshot::{CaptureControl, CaptureLimits, SnapshotRenderer};
+use layer_render_wgpu::snapshot::{CaptureControl, CaptureLimits};
 use std::sync::{Arc, Barrier};
 
 struct Frame {
@@ -225,6 +225,7 @@ struct Job {
     name: &'static str,
     start: Instant,
     end: Instant,
+    setup: Option<Instant>,
     cleanup: Option<Instant>,
 }
 fn concurrent(
@@ -235,6 +236,7 @@ fn concurrent(
 ) -> Result<(Vec<Job>, u64)> {
     let snapshot = canvas.snapshot()?;
     let export_snapshot = snapshot.clone();
+    let export_gpu = canvas.engine.backend().snapshot_gpu();
     let saved_snapshot = snapshot.clone();
     let barrier = Arc::new(Barrier::new(3));
     let start_gate = barrier.clone();
@@ -254,6 +256,7 @@ fn concurrent(
             name: "save",
             start,
             end: Instant::now(),
+            setup: None,
             cleanup: None,
         })
     });
@@ -265,14 +268,16 @@ fn concurrent(
     let export = std::thread::spawn(move || -> std::result::Result<Job, String> {
         start_gate.wait();
         let start = Instant::now();
-        let mut renderer = SnapshotRenderer::with_control(
-            export_snapshot,
-            [0.; 4],
-            0.,
-            CaptureLimits::default(),
-            export_control,
-        )
-        .map_err(|e| e.to_string())?;
+        let mut renderer = export_gpu
+            .capture(
+                export_snapshot,
+                [0.; 4],
+                0.,
+                CaptureLimits::default(),
+                export_control,
+            )
+            .map_err(|e| e.to_string())?;
+        let setup = Instant::now();
         let target = SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: IntegerDepth::U16,
@@ -293,6 +298,7 @@ fn concurrent(
             name: "export",
             start,
             end: Instant::now(),
+            setup: Some(setup),
             cleanup: Some(cleanup),
         })
     });
@@ -399,6 +405,20 @@ fn report(
             job.name,
             job.end.duration_since(job.start).as_secs_f64() * 1000.
         );
+        if let Some(setup) = job.setup {
+            writeln!(
+                file,
+                "{}-setup,{:.6},{:.6}",
+                job.name,
+                job.start.duration_since(origin).as_secs_f64() * 1000.,
+                setup.duration_since(origin).as_secs_f64() * 1000.
+            )?;
+            println!(
+                "{} setup {:.3} ms",
+                job.name,
+                setup.duration_since(job.start).as_secs_f64() * 1000.
+            );
+        }
         if let Some(cleanup) = job.cleanup {
             writeln!(
                 file,
@@ -500,7 +520,7 @@ pub(super) fn run(
         }
         let control = CaptureControl::with_allocation_tracking();
         let start = Instant::now();
-        let mut capture = SnapshotRenderer::with_control(
+        let mut capture = canvas.engine.backend().snapshot_gpu().capture(
             canvas.snapshot()?,
             [0.; 4],
             0.,
@@ -547,6 +567,7 @@ pub(super) fn run(
                 name: "histogram",
                 start,
                 end,
+                setup: None,
                 cleanup: None,
             });
         }
@@ -586,10 +607,12 @@ pub(super) fn run(
             output,
         )?;
         println!(
-            "Conservative aggregate GPU reservation bound (sum of component peaks, workers serialized except save/export): {} bytes",
+            "Conservative aggregate GPU reservation bound (capture shares active device; other canvas peaks summed): {} bytes",
             retained_gpu
-                + observations.gpu_reserved_peak
-                + export_gpu.max(histogram_gpu.reserved_bytes)
+                + observations
+                    .gpu_reserved_peak
+                    .max(export_gpu)
+                    .max(histogram_gpu.reserved_bytes)
         );
         canvas.memory()?;
     }

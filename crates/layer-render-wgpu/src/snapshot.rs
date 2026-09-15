@@ -31,6 +31,8 @@ pub struct CaptureControl {
 }
 /// Allocator observations at capture allocation boundaries, including readback
 /// staging. Driver-private memory and retained CPU sources are separate charges.
+/// With `SnapshotGpu`, these cover the entire shared device; do not add its live
+/// canvas allocations a second time when computing an aggregate process bound.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CaptureAllocationPeaks {
     pub observations: u64,
@@ -76,6 +78,38 @@ impl CaptureControl {
     }
 }
 
+/// Sendable device ownership for a snapshot worker. Shares the live device and
+/// pipeline cache, never its mutable paint pages, scene buffers or input state.
+#[derive(Clone)]
+pub struct SnapshotGpu {
+    adapter: wgpu::Adapter,
+    device: PipelineDevice,
+    queue: wgpu::Queue,
+}
+impl WgpuRasterizer {
+    pub fn snapshot_gpu(&self) -> SnapshotGpu {
+        SnapshotGpu {
+            adapter: self.adapter.clone(),
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+        }
+    }
+}
+impl SnapshotGpu {
+    /// Run on the file/inspection worker. Cloned handles keep the device alive
+    /// through this job even if its canvas closes; loss still fails the job.
+    pub fn capture(
+        &self,
+        project: Project,
+        background: [f32; 4],
+        time: f32,
+        limits: CaptureLimits,
+        control: CaptureControl,
+    ) -> Result<SnapshotRenderer, GpuRasterError> {
+        SnapshotRenderer::construct(project, background, time, limits, control, Some(self))
+    }
+}
+
 pub struct SnapshotRenderer {
     renderer: WgpuRasterizer,
     layers: Vec<Layer>,
@@ -107,6 +141,16 @@ impl SnapshotRenderer {
         time: f32,
         limits: CaptureLimits,
         control: CaptureControl,
+    ) -> Result<Self, GpuRasterError> {
+        Self::construct(project, background, time, limits, control, None)
+    }
+    fn construct(
+        project: Project,
+        background: [f32; 4],
+        time: f32,
+        limits: CaptureLimits,
+        control: CaptureControl,
+        gpu: Option<&SnapshotGpu>,
     ) -> Result<Self, GpuRasterError> {
         control.check()?;
         project
@@ -178,7 +222,15 @@ impl SnapshotRenderer {
             }
         }
         control.check()?;
-        let mut renderer = WgpuRasterizer::new_native_headless(project.document.color)?;
+        let mut renderer = match gpu {
+            Some(gpu) => WgpuRasterizer::native_capture_on_gpu(
+                gpu.adapter.clone(),
+                gpu.device.clone(),
+                gpu.queue.clone(),
+                project.document.color,
+            )?,
+            None => WgpuRasterizer::new_native_capture(project.document.color)?,
+        };
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
         if let Some(paper) = layers.iter().find(|l| l.kind == LayerKind::Background) {
@@ -442,23 +494,15 @@ impl SnapshotRenderer {
             target.size(),
         );
         r.uploads.finish(&encoder);
-        let submission = encoder.submit(&r.queue);
+        encoder.submit(&r.queue);
         self.control.observe_allocations(&r.device);
         let (tx, rx) = mpsc::channel();
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
+                let _ = tx.send(result.map_err(|e| e.to_string()));
             });
-        r.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(READBACK_TIMEOUT),
-            })
-            .map_err(|e| GpuRasterError::WaitFailed(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
-            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+        crate::raster::wait_mapping(&r.device, &rx).map_err(GpuRasterError::MapFailed)?;
         let bytes = buffer
             .slice(..)
             .get_mapped_range()

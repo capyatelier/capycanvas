@@ -1,9 +1,10 @@
 //! Stream the complete composition into a separate editable raster document.
 use super::*;
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation, SourceKind};
-use layer_render_wgpu::snapshot::SnapshotRenderer;
+use layer_render_wgpu::snapshot::SnapshotGpu;
 
 pub(super) fn prepare(
+    gpu: SnapshotGpu,
     project: Project,
     color: DocumentColor,
     options: ConversionOptions,
@@ -28,7 +29,7 @@ pub(super) fn prepare(
         },
     )?;
     let mut source = SourceBuilder::new(extent, destination, LIMIT)?;
-    let mut renderer = SnapshotRenderer::with_control(
+    let mut renderer = gpu.capture(
         project,
         background,
         time,

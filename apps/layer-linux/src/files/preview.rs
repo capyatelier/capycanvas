@@ -1,7 +1,7 @@
 //! Full-stack color comparison, reduced only after native linear composition.
 //! All GPU/readback work stays on the worker; this image never feeds artwork.
 use super::*;
-use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
+use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::cell::{Cell, RefCell};
 
 struct Image {
@@ -10,6 +10,7 @@ struct Image {
     clipped: Option<u64>,
 }
 fn thumbnail(
+    gpu: &SnapshotGpu,
     project: Project,
     background: [f32; 4],
     time: f32,
@@ -18,7 +19,7 @@ fn thumbnail(
     output: Option<ExportRecipe>,
 ) -> Result<Image, String> {
     let mut renderer =
-        SnapshotRenderer::with_control(project, background, time, Default::default(), control)
+        gpu.capture(project, background, time, Default::default(), control)
             .map_err(|e| e.to_string())?;
     let (preview, clipped) = if let Some(recipe) = output {
         recipe.validate()?;
@@ -65,6 +66,7 @@ struct Pending {
 /// starting its successor, so rapid profile changes cannot accumulate GPU jobs.
 pub(super) struct Comparison {
     pub widget: gtk::Box,
+    gpu: SnapshotGpu,
     view: crate::display_color::ViewColor,
     before: gtk::Picture,
     after: gtk::Picture,
@@ -79,13 +81,14 @@ pub(super) struct Comparison {
     pub changed: RefCell<Option<Box<dyn Fn(bool)>>>,
 }
 impl Comparison {
-    pub fn new(original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
-        Self::with_labels(original, view, ["Before", "After"])
+    pub fn new(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
+        Self::with_labels(gpu, original, view, ["Before", "After"])
     }
-    pub fn for_output(original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
-        Self::with_labels(original, view, ["Master", "Output"])
+    pub fn for_output(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
+        Self::with_labels(gpu, original, view, ["Master", "Output"])
     }
     fn with_labels(
+        gpu: SnapshotGpu,
         original: Project,
         view: crate::display_color::ViewColor,
         labels: [&str; 2],
@@ -116,6 +119,7 @@ impl Comparison {
         widget.append(&pictures);
         widget.append(&status);
         Rc::new(Self {
+            gpu,
             view,
             widget,
             before,
@@ -199,10 +203,12 @@ impl Comparison {
                 let original = this.original.borrow().clone();
                 let serial = next.serial;
                 let view = this.view;
+                let gpu = this.gpu.clone();
                 let result = gio::spawn_blocking(move || {
                     let before = original
                         .map(|project| {
                             thumbnail(
+                                &gpu,
                                 project,
                                 next.background,
                                 next.time,
@@ -213,6 +219,7 @@ impl Comparison {
                         })
                         .transpose()?;
                     let after = thumbnail(
+                        &gpu,
                         next.project,
                         next.background,
                         next.time,

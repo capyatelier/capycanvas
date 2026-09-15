@@ -72,7 +72,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
     let hint = gtk::Label::builder().wrap(true).xalign(0.).build();
     hint.set_widget_name("source-profile-hint");
     content.append(&hint);
-    let comparison = super::preview::Comparison::new(project, w.view_color());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color());
     content.append(&comparison.widget);
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)

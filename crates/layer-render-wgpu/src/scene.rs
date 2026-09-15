@@ -234,9 +234,17 @@ impl Scene {
         // Native hosts run this work on their render owner. Wait for this exact
         // chunk before releasing/replacing resources charged to its ceiling.
         #[cfg(not(target_arch = "wasm32"))]
-        r.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission), timeout: Some(READBACK_TIMEOUT),
-        }).map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+        if r.snapshot_worker {
+            // A snapshot can share the live device. Do not hold wgpu's resource
+            // lock while the background queue waits for a bounded upload batch.
+            let (tx, rx) = mpsc::channel();
+            r.queue.on_submitted_work_done(move || { let _ = tx.send(Ok(())); });
+            crate::raster::wait_mapping(&r.device, &rx).map_err(GpuRasterError::WaitFailed)?;
+        } else {
+            r.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission), timeout: Some(READBACK_TIMEOUT),
+            }).map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+        }
         #[cfg(target_arch = "wasm32")]
         let _ = submission; // Browser queue draining needs separate host qualification.
         Ok(())

@@ -1404,3 +1404,123 @@ arms for that comparison and the recorded matched input prefix for foreground
 work. Native GTK histogram/export correctness checks above remain applicable;
 no live renderer, brush math, saving, history, diagnostics or recovery code was
 changed by the band reader.
+
+### Shared capture device removes the measured lifecycle stalls
+
+Following `de3e6311`, splitting export into explicit setup, capture/output and
+cleanup intervals located large foreground waits during both device creation and
+destruction. Removing eager brush/mask/transform warmup alone did not fix them:
+24 MP setup fell from 356.406 to 289.207 ms, but cleanup stayed 34.731/33.746 ms
+and the worst paint frame rose from 132.040 to 197.226 ms. Keep this failed
+hypothesis in the evidence; lazy construction alone is not the claimed fix.
+
+Snapshot workers now clone the canvas's adapter/device/queue and optional pipeline
+cache. They build private renderers, source windows and readback buffers from the
+immutable project. Their initialization skips unrelated brush warmup. GPU waits
+poll briefly and then sleep on completion notifications outside wgpu's resource
+lock, including bounded scene-upload chunks. No live paint buffers or mutable
+scene state are shared, and no second device is created or destroyed per job.
+The current wgpu implementation and the earlier readback contention experiment
+motivate the nonblocking wait; the lifecycle timings do not identify a specific
+internal driver lock.
+
+GTK export, output/color/source/rasterization previews, flattened conversion and
+histogram use this path. The render owner supplies the handle after initialization;
+stop/failure retires it, and restart publishes the replacement device. Existing
+jobs retain their device ownership until completion/cancellation, including if a
+canvas closes. Jobs on a physically lost device can still fail; the existing
+checked file publication and recovery checkpoint rules remain in force.
+
+Two serialized full 24 MP comparisons use the same staged executable pathname,
+corrected complete worker lifetime and identical first 128 paint events. The
+larger dynamic editing loop can complete different numbers of later events, so
+those differing post-edit histogram/blur populations are not a controlled
+rendering regression comparison.
+
+| Observation | Before run 1 / run 2 | Shared device run 1 / run 2 |
+| --- | --- | --- |
+| Export setup, ms | 356.406 / 468.344 | 8.261 / 8.407 |
+| Export cleanup, ms | 34.731 / 38.558 | 0.810 / 0.717 |
+| First 128 paint completed p95, ms | 3.272 / 2.668 | 3.173 / 2.572 |
+| First 128 paint completed p99, ms | 44.473 / 86.492 | 4.169 / 3.212 |
+| First 128 paint maximum, ms | 132.040 / 179.160 | 4.239 / 3.260 |
+| First 128 paint misses over 8.33 ms | 2 / 2 | 0 / 0 |
+| Export complete worker, ms | 3584 / 3563 | 3215 / 2546 |
+| Process RSS high-water, MiB | 802.9 / 790.1 | 749.0 / 764.3 |
+| Conservative GPU reservation bound, MiB | 896 / 896 | 640 / 640 |
+
+On a shared device, capture allocator observations already include live canvas
+allocations. The harness takes the maximum of that device's observations and adds
+peaks for other canvas devices; summing canvas and capture reports would count
+those same reservations twice. Driver-private memory remains reported separately.
+This does not make per-request capture planning an aggregate admission policy.
+
+Exact release executable SHA-256:
+
+- Before (`de3e6311` production with the setup/cleanup harness):
+  `b9a4690ec577125e3f8907cf825fcb24c4eafbfd8dd6719ffd2f73541db83491`.
+- Lazy-only experiment:
+  `c965a289168ff9790f0eeea6d0e34301e88d1296b800997e7516216f5921c809`.
+- Shared-device candidate:
+  `2297154cb4fdbc124215e94a5d18ea6e0741002662e1ff26cd6bb75f9745e290`.
+
+Sources, patches, build logs, executable copies and per-run environment/raw data
+are `snapshot-lazy-*`, `photo-expanded-lazy-*`, `snapshot-shared-*`,
+`photo-expanded-shared-*` under `artifacts/color-m2/final-performance/`.
+`run-photo-expanded.py` stages each executable at the same pathname;
+`analyze-photo-shared.py` records the matched prefix and exact setup/cleanup
+intersections. Repeats retain distinct output names and the same executable hashes.
+
+All 13 snapshot GPU tests pass (23.54 s), including a new concurrent live-edit
+comparison in sRGB8 and ProPhoto16, private capture pixels, completion after canvas
+closure, and cancellation. The existing profile/sample/hidden-RGB, mask/effect,
+resampling/dither and bounded-band tests remain passing. Exact GPU test executable:
+`f323b4b2ce68d8cfe3439d20a2e7c527cad95e2770cc69ccdb0ba34e9a20dc00`.
+The lazy initialization refactor separately passed all eight startup tests,
+including eager/cached parity and compiler shutdown. That test executable is
+`8a516c7c01c224a575c63f0b0ddbd3036379d7bde216fdfc62e0dfcd7434c247`.
+
+The fixed-snapshot 24/60 MP arms also ran twice, serialized without builds or other
+GPU tests. Exact PNG sample CRCs remain `059569d1` / `1dbe9195`; all histogram
+repetitions retain `217b99ae` / `9cd46a99`. Native/source/profile/archive checks
+pass in every run. The aliases are `photo-expanded-shared-capture-{before,after}`
+and their `-repeat` counterparts, using the same executable hashes above.
+
+| Fixed snapshot | Before run 1 / run 2 | Shared device run 1 / run 2 |
+| --- | --- | --- |
+| 24 MP export complete worker, ms | 3030 / 3890 | 3333 / 2590 |
+| 60 MP export complete worker, ms | 8154 / 7979 | 7487 / 6914 |
+| 24 MP RSS high-water, MiB | 733.8 / 738.6 | 688.4 / 688.5 |
+| 60 MP RSS high-water, MiB | 1046.5 / 1043.6 | 1007.2 / 1008.1 |
+| 24 MP conservative GPU reservation bound, MiB | 640 / 640 | 640 / 640 |
+| 60 MP conservative GPU reservation bound, MiB | 896 / 896 | 640 / 640 |
+
+The initial 24 MP export slowdown triggered the second pair; it did not repeat,
+and both arms show substantial full-operation variability. Do not claim a stable
+24 MP throughput gain from these few observations. Setup/cleanup reduction and
+foreground latency are the repeatable result. Histogram observations across both
+runs span 1214–1717 / 1222–1241 ms at 24 MP and 3194–4583 / 3223–4455 ms at 60 MP
+(before / after). Sharing the device does not fix histogram's processing cost.
+
+GTK release tests run one per process on the private 120 Hz Mutter display.
+Histogram refresh and document preservation pass (7.48 s), export output sizing,
+profile/depth/metadata and repeated cancellation/dialog release pass (10.01 s),
+and P3-U8/ProPhoto-U16 GPU failure/restart with diagnostics, exact surviving pixels
+and undo/redo pass (3.39 s). The recovery test now also verifies rejection of new
+snapshot jobs on the failed owner and exact full-composite capture through the
+replacement device. Its deliberately invalid render command is the recorded
+failure injection, not an unexpected test failure. Exact GTK test executable:
+`1b6a73a58d41f68e9606b6e0f7bae2998a5b33b581d975a5c516960a8f6971e4`.
+
+The same GTK executable also passes complete assignment/conversion/depth history
+and flattened-copy delivery (13.72 s), retained-source profile repair with baked
+edits preserved (6.94 s), and off-canvas source rasterization with paint/mask/save
+reopen preservation (4.97 s). These exercise previews whose document primaries
+differ from the shared live canvas, without changing the displayed original.
+
+The measured lifecycle improvement does not close the milestone. Native pen-up
+presentation p99, cold large-photo navigation, full-resolution slider/blur rebuilds
+and histogram latency still exceed their declared gates. Large transforms, dense
+edit/scalar residency, overlapping worker admission, codec limits and the remaining
+precision/display matrix still need qualification. Other platform host integration
+remains unapproved; no GTK acceptance or broader platform qualification is claimed.

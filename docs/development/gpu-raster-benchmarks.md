@@ -72,11 +72,14 @@ resource workload, not a photographic accuracy corpus.
 Frame and worker CSVs share one monotonic clock. Use their overlap fields to
 select frames actually concurrent with save/export, and separate source misses
 from warm frames. Whole-operation durations include worker setup, file sync and
-GPU renderer destruction; a separate cleanup interval identifies that last cost.
+GPU renderer destruction; separate setup and cleanup intervals identify those costs.
 These are offscreen CPU/GPU completion measurements, not native presentation
 latency. Optional allocator observations occur outside frame timings and at
-capture allocation boundaries. The sum of component reservation peaks is a
-conservative overlap estimate; record process RSS high-water and driver memory
+capture allocation boundaries. Capture workers reuse the active canvas device
+with private pixels and nonblocking completion waits. Its allocator report covers
+all live owners: take the maximum reported peak for that device, then add peaks
+for other canvas devices. Do not add the same device's reservation twice. This is
+a conservative overlap estimate; record process RSS high-water and driver memory
 separately. Three histogram repetitions are individual observations, not a
 well-sampled p99 distribution.
 

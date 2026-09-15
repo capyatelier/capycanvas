@@ -3,7 +3,7 @@ use super::*;
 use layer_core::color::{
     ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels, RenderingIntent,
 };
-use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
+use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::sync::{Arc, Mutex};
 mod presets;
 
@@ -62,6 +62,7 @@ impl ExportJob {
 }
 
 pub(crate) fn write_snapshot(
+    gpu: SnapshotGpu,
     snapshot: DocumentExport,
     recipe: ExportRecipe,
     path: &std::path::Path,
@@ -74,7 +75,7 @@ pub(crate) fn write_snapshot(
             snapshot.project.document.height,
         ])?;
         let resolution = recipe.output_resolution(snapshot.project.document.resolution)?;
-        let mut renderer = SnapshotRenderer::with_control(
+        let mut renderer = gpu.capture(
             snapshot.project,
             snapshot.background,
             snapshot.time,
@@ -747,7 +748,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         });
     }
     let comparison =
-        super::preview::Comparison::for_output(snapshot.project.clone(), w.view_color());
+        super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color());
     let compression_note = gtk::Label::builder()
         .label(
             "JPEG preview includes size, color and background. Compression artifacts are excluded.",
@@ -945,6 +946,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         snapshot.project.document.width,
         snapshot.project.document.height,
     ])?[1];
+    let gpu = w.snapshot_gpu()?;
     let job = ExportJob::default();
     let progress = gtk::ProgressBar::builder()
         .show_text(true)
@@ -984,7 +986,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
     let remembered = recipe.clone();
     let result = gio::spawn_blocking({
         let job = job.clone();
-        move || write_snapshot(snapshot, recipe, &path, &job)
+        move || write_snapshot(gpu, snapshot, recipe, &path, &job)
     })
     .await
     .map_err(|_| "Image export worker failed".to_string());

@@ -326,7 +326,7 @@ mod tests {
             adapter.clone(),
             device.clone().into(),
             queue.clone(),
-            false,
+            crate::Initialization::Warm,
         )
         .unwrap();
         let doc = layer_core::Document::new("cached", 64, 64);

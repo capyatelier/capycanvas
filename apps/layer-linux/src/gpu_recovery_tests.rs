@@ -8,6 +8,22 @@ fn until(mut ready: impl FnMut() -> bool) {
     }
 }
 
+fn snapshot_pixels(w: &Workspace) -> Vec<[f32; 4]> {
+    let gpu = w.snapshot_gpu().unwrap();
+    let (project, background, time) = {
+        let canvas = w.gpu.borrow();
+        let session = &canvas.as_ref().unwrap().session;
+        (session.capture_project_recovery().unwrap(),
+         session.engine().view().background_rgba_linear,
+         session.engine().animation_time())
+    };
+    glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+        let extent = [project.document.width, project.document.height];
+        let mut renderer = gpu.capture(project, background, time, Default::default(), Default::default()).unwrap();
+        renderer.read_region([0, 0, extent[0], extent[1]]).unwrap()
+    })).unwrap()
+}
+
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_diagnostics_and_gpu_failure_recovery() {
@@ -131,6 +147,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     let before = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 8001))
         .unwrap();
+    let snapshot_before = snapshot_pixels(&w);
     let checkpoint = w
         .gpu
         .borrow()
@@ -153,6 +170,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         matches!(failed_root.try_data(), Some(Err(_))),
         "failed producer resolves immediately"
     );
+    assert!(w.snapshot_gpu().is_err(), "failed owners cannot start new capture jobs");
     {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().unwrap().session;
@@ -200,6 +218,8 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         after.bytes, before.bytes,
         "restart restores exact surviving pixels"
     );
+    assert_eq!(snapshot_pixels(&w), snapshot_before,
+        "snapshot workers use the replacement canvas device after recovery");
     assert_eq!(
         w.gpu
             .borrow()

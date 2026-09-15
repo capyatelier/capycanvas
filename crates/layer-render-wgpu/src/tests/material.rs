@@ -29,7 +29,7 @@ fn material_renderer() -> WgpuRasterizer {
             })
             .await
             .unwrap();
-        WgpuRasterizer::from_wgpu_inner(adapter, device.into(), queue, false).unwrap()
+        WgpuRasterizer::from_wgpu_inner(adapter, device.into(), queue, Initialization::Warm).unwrap()
     })
 }
 
@@ -114,7 +114,7 @@ fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
         specialized.adapter.clone(),
         specialized.device.clone(),
         specialized.queue.clone(),
-        false,
+        Initialization::Warm,
     )
     .unwrap();
     use_uniform_dispatch(&mut reference);

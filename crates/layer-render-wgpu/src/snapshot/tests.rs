@@ -365,6 +365,53 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
 }
 
 #[test]
+fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close() {
+    for color in [DocumentColor::default(), DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 }] {
+        let project = rich_project(color, 1);
+        let (mut live, expected) = frame(&project);
+        let expected = Arc::new(expected);
+        let [width, height] = [project.document.width, project.document.height];
+        let mut capture = live.snapshot_gpu().capture(project.clone(), [0.; 4], 0., Default::default(), Default::default()).unwrap();
+        let check = |actual: &[[f32; 4]], expected: &[[f32; 4]]| {
+            assert_eq!(actual.len(), expected.len());
+            for (a, b) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                assert!((a-b).abs() <= 2e-6, "shared capture changed: {a} != {b}");
+            }
+        };
+        let saved = expected.clone();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let pixels = capture.read_region([0, 0, width, height]).unwrap();
+                check(&pixels, &saved);
+            }
+            capture
+        });
+        let mut layers = project.document.layers.clone();
+        for i in 0..16 {
+            layers[0].opacity = if i % 2 == 0 { 0.2 } else { 0.9 };
+            live.submit(FramePacket {
+                view: layer_render::ViewState {
+                    width_px: width, height_px: height,
+                    background_rgba_linear: [0.; 4],
+                    document_to_surface: [1., 0., 0., 1., 0., 0.],
+                },
+                document_extent: [width, height], layers: &layers,
+                dabs: &[], dab_batches: &[], restore_rasters: &[],
+                reset_layers: false, composite_all: true, time_seconds: 0.,
+            }).unwrap();
+            live.wait_idle().unwrap();
+        }
+        let mut capture = worker.join().unwrap();
+        drop(live);
+        // Closing a canvas releases its resources, not the device still owned
+        // by an immutable file worker. The snapshot remains exactly its own.
+        check(&capture.read_region([0, 0, width, height]).unwrap(), &expected);
+        capture.control().cancel();
+        assert!(capture.read_region([0, 0, 1, 1]).is_err());
+    }
+}
+
+#[test]
 fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
     let project = rich_project(color, 1);

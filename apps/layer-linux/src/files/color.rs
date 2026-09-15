@@ -23,6 +23,7 @@ enum Candidate {
 }
 struct Conversion {
     workspace: std::rc::Weak<Workspace>,
+    gpu: layer_render_wgpu::snapshot::SnapshotGpu,
     original: Project,
     epoch: u64,
     background: [f32; 4],
@@ -60,11 +61,12 @@ impl Conversion {
                 let background = state.background;
                 let time = state.time;
                 let worker_control = control.clone();
+                let gpu = state.gpu.clone();
                 let result = gio::spawn_blocking(move || {
                     if choice.flattened {
                         let DocumentColorChange::Convert { space, options } = choice.change else { return Err("Only color conversion can create a flattened copy".into()); };
                         let color = DocumentColor { space, ..source.document.color };
-                        flatten::prepare(source, color, options, background, time, worker_control)
+                        flatten::prepare(gpu, source, color, options, background, time, worker_control)
                     } else { layer_color::prepare_document_color(&source, choice.change, LIMIT, || worker_control.is_cancelled()) }
                 }).await.map_err(|_| "Color conversion worker failed".to_string()).and_then(|r| r);
                 state.active.borrow_mut().take();
@@ -141,7 +143,7 @@ pub(super) async fn run(
         )
     };
     let color = project.document.color;
-    let comparison = super::preview::Comparison::new(project.clone(), w.view_color());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color());
     let detail = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)
@@ -229,6 +231,7 @@ pub(super) async fn run(
         move |ready| dialog.set_response_enabled("apply", ready)
     )));
     let state = Rc::new(Conversion {
+        gpu: w.snapshot_gpu()?,
         workspace: Rc::downgrade(w),
         original: project,
         epoch,
