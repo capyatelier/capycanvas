@@ -1484,31 +1484,25 @@ impl WgpuRasterizer {
     }
 
     fn ensure_destination_companions(&mut self, batches: &[DabBatch]) {
-        let mut destination_pages = Vec::new();
         for batch in batches.iter().filter(|batch| {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_style(&batch.style).requires_destination()
         }) {
             let damage = batch_pixel_rect(batch, self.document_extent);
-            if !damage.is_empty() {
-                destination_pages.extend(
-                    page_coordinates(damage).map(|coordinate| (batch.layer_id, coordinate)),
-                );
-            }
-        }
-        for layer_index in 0..self.paint_layers.len() {
-            let layer_id = self.paint_layers[layer_index].id;
-            let missing = self.paint_layers[layer_index]
-                .pages
-                .iter()
-                .enumerate()
-                .filter(|(_, page)| {
-                    page.secondary.is_none()
-                        && destination_pages.contains(&(layer_id, page.coordinate))
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            for page_index in missing {
+            let Some(layer_index) = self.paint_layers.iter().position(|l| l.id == batch.layer_id)
+            else {
+                continue;
+            };
+            // Visit only pages touched by destination-reading paint. Ordinary
+            // ink needs no companions, regardless of the document's size.
+            for coordinate in page_coordinates(damage) {
+                let Some(page_index) = self.paint_layers[layer_index]
+                    .pages
+                    .iter()
+                    .position(|page| page.coordinate == coordinate && page.secondary.is_none())
+                else {
+                    continue;
+                };
                 let secondary = self.create_page_surface("layer sparse destination companion");
                 let page = &mut self.paint_layers[layer_index].pages[page_index];
                 page.secondary = Some(secondary);

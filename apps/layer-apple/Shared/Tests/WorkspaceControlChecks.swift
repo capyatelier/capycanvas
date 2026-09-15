@@ -2,11 +2,9 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
-        #if os(macOS)
+        // Child frames use screen coordinates in windowed iPad scenes, while
+        // the application frame can retain a zero origin. Use the editor window.
         return app.windows.firstMatch
-        #else
-        return app
-        #endif
     }
     @MainActor func workspaceActivate(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10))

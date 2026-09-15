@@ -175,6 +175,9 @@ part of the broader input gate.
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.
+Brush previews fill the row above a right-aligned single-line label, matching Web.
+Open tool buttons use the adjoining drawer's panel color; selection keeps its
+shared accent highlight.
 The Tool panel shows the active tool's numeric fields and actions. Numeric
 expressions, units, ranges, slider mappings and stepping resolve through Rust.
 The shared Apple control
@@ -182,6 +185,20 @@ handles optimistic edits and local validation feedback; small AppKit/UIKit
 adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
 Native focus changes are deferred until after SwiftUI updates to avoid entering
 the hosting responder graph recursively when accepting an expression.
+
+For focused canvas checks without simulator startup:
+
+```bash
+cargo test -p layer-apple apple_region_ -- --nocapture
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/canvas-native-input.swift
+```
+
+The region checks exercise the Apple pointer/action bridge with Metal. The
+canvas fixture sends local AppKit mouse, key and focus events through the real
+canvas for lasso/fill and ruler workflows, checking exact exported pixels and
+saved ruler geometry through cancellation and Undo/Redo. Both shared Apple
+configurations run on Mac; these checks do not establish UIKit or physical
+Pencil/tablet delivery. Group full-editor UI runs at milestone boundaries.
 
 Numeric labels truncate within compact panels, leaving values readable. Spin
 fields keep the shared unit suffix when idle, with the value and both step buttons

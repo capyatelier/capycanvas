@@ -20,22 +20,95 @@ Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
 checks without a relevant change. Commit only major milestones. All eleven
 recovery stashes remain.
 
-The user's latest speed guidance keeps slow simulator workflows out of the
-critical implementation loop. Use focused shared Rust, Apple bridge and native
-component checks for routine changes; group related implementation work before
-running broader native acceptance. Reserve simulator runs for specific UIKit,
-layout and input questions or milestone validation. A fixture failure should
-first get a focused correction/check, rather than repeatedly replaying unrelated
-setup. Preserve the distinction between shared/component evidence and actual
-native acceptance; all required native and physical gates still apply.
+The current milestone matches the latest Web toolset and open-drawer styling,
+qualifies native region/ruler workflows, and simplifies shared renderer page
+preparation. Grouped Mac app acceptance passes painting controls/artwork,
+figures/gradients and title-bar tool drawers. Simulator painting controls and
+figures/gradients pass in version 1; its drawer bounds assertion mixed application
+and screen coordinates in a windowed scene. Using the editor window on both
+platforms removes the test helper's platform branch, and the focused version-2
+drawer rerun passes. There is no product input change for that fixture failure.
+Mac and iPad Debug/Release builds pass. Representative full-editor captures are
+reviewed; no physical iPad run accompanies this milestone. Evidence is under
+`artifacts/apple-toolset-parity-v1/app-qualification-v1/`.
 
-The current mask/layer/lifecycle milestone fixes activation ordering with the
+The latest grouped UI runs take about 19 minutes on Mac and 10 minutes on
+simulator; the focused drawer rerun takes 24 seconds. Region bridge checks take
+about 10 seconds including incremental compilation, and sixteen native canvas
+workflow groups take 84 seconds including their build. Keep broad UI sweeps and
+automation troubleshooting out of the critical implementation loop. Use the
+focused commands in `apps/layer-apple/README.md` for relevant changes, and existing
+component captures for visual questions. After a fixture correction, rerun only
+the affected workflow. Broader UI runs belong at major milestones, with physical
+checks reserved for the evidence they alone provide. Do not repeat rejected
+input/profile experiments without a concrete new hypothesis. Shared/component
+results do not close native and physical acceptance gates.
+
+The previously published mask/layer/lifecycle milestone `1e41766` fixes activation ordering with the
 existing suspension state, qualifies mask and layer-content workflows on Mac
 and simulator, and removes the unused UIKit menu converter. Both coordinator
 configurations, affected shared checks and both Debug/Release builds pass.
 The detailed scope and retained failures are recorded below. This closes the
 queued layer-content batch; remaining native feature/visual, physical input,
 provider/lifecycle and sustained performance gates remain open.
+
+This milestone's focused performance cleanup removes the shared destination-texture
+helper's whole-document scan and two temporary collections. Fourteen relevant
+Metal contact, history, destination-brush and sparse-page checks pass; both Apple
+Release builds pass. A short Mac run without a sampler completes correctly but
+still misses 53 of 3,740 continuous display intervals. The valid CPU profile
+points mainly to wgpu command encoding/finish; it does not establish the cause
+of cadence misses. Failed sampler runs are retained and must not be used for
+before/after claims. No simulator or physical-iPad run accompanies this batch.
+See `apps/layer-apple/PERFORMANCE.md` and ignored
+`artifacts/performance/contact-page-preparation-v1/`. This is a simpler preparation
+path, not a demonstrated frame-rate improvement.
+
+The following native canvas component batch passes ten workflows using the real
+AppKit canvas, local event queue, serial owner and Metal with both shared Apple
+configurations. Concave freehand selection/direct fill, Escape/focus/tool
+cancellation, next-contact recovery, all three rulers' constrained/free painting
+and complete exported-PNG pixel Undo/Redo pass. Native window bounds stay fixed.
+The final build/run takes 63 seconds with no simulator or physical-iPad launch.
+These are AppKit component results, not UIKit/Pencil or full-editor menu acceptance.
+Retained failures exposed an artificial focus-loss step that left the fixture
+window inactive, and carrying Snap-off into the next new document. Waiting for
+published state alone did not fix the focus issue. It now verifies event delivery
+and key-window ownership, uses two
+owned windows for real focus changes, and restores the Snap preference. Temporary
+input logging is removed; no product input change is required. The new fixture is
+`tests/canvas-native-input.swift`; logs and failures are ignored under
+`artifacts/apple-canvas-native-input-v1/`. The extended fixture below supersedes
+this initial ten-workflow scope and is included in this milestone.
+
+The extended canvas batch now passes sixteen workflow groups in 84 seconds,
+including all three rulers' create/edit cancellation by Escape, actual focus loss
+and tool change, preserved Redo, next-contact recovery and exact saved geometry
+history. Straight/parallel handle edits respond to native Shift press/release;
+ruler operations preserve every artwork pixel. The fixture uses normal Save As
+to inspect committed project geometry. Earlier failures requested a save task
+without a pending Save and grabbed the radial ruler's initial rather than final
+center; both fixture mistakes are corrected, with no product input change.
+Evidence is under `artifacts/apple-ruler-native-input-v1/`. UIKit/tablet delivery,
+stationary Shift preview pixels and full-editor ruler acceptance remain separate.
+
+Main is now integrated through `81ed348`, adding the Web packaging fix, refreshed
+reference screenshots and GTK/Web/Android open-tool drawer backgrounds. Apple
+subtools use the new Web vertical preview/right-aligned single-line label layout,
+two-point row spacing and matching minimum height. Eight direct SwiftUI/Web
+comparisons cover Pen/Figure at narrow/wide widths in both themes; they retain
+every pixel and have mean channel differences of 0.69–3.38 on a 0–255 scale.
+Normal-size review accepts the remaining native text/image rasterization
+differences. Open tool controls now reuse the shared button style to fill with
+the adjoining panel color, retaining selected-state priority. Six further native
+component captures verify both header button paths in light/dark, open/closed
+states and selected-state styling. Both current macOS and iPadOS Release builds
+pass; the command audit passes against the retained inventory (reference checking,
+not a fresh GPU inventory). Captures/builds are retained under
+`artifacts/apple-toolset-parity-v1/`. The grouped app-level layout/scrolling
+acceptance recorded above completes this batch. Complete feature/menu coverage,
+windowed iPad input, physical Pencil/keyboard, provider/interruption and sustained
+Mac 90 Hz / iPad 120 Hz acceptance remain open.
 
 Earlier published Apple milestone `1952f31` fixed Color wheel height allocation, the
 collapsed-column footer grip rotation, and gray header backgrounds chosen by
@@ -417,6 +490,24 @@ bundle; version 4 reran both checks after that build was terminal. Final GUI
 workflows ran serially and all current jobs are terminal. Evidence and the current
 checkpoint are ignored under
 `artifacts/apple-region-selection-v1/`.
+
+The focused Apple region bridge batch passes two Metal tests for both host
+configurations without launching either app UI. Thirty-two pen/mouse cases cover
+Fill and Auto select expansion, contraction and smoothing. The closed-outline
+fixture checks every output pixel, the selected mask's bounds, softened corners
+and exact whole-image Undo/Redo; selection history is checked separately from
+paint history. Four gap-closing cases distinguish a leaking two-pixel break from
+a contained fill. Thirty-two cancellation cases cover contact cancellation,
+Escape press/release, blur, tool changes and setting changes before release or
+while released-region processing still blocks a document snapshot. They preserve
+the artwork, empty selection and existing Redo, then regain snapshot readiness.
+No production change is needed for these covered behaviors. The final focused
+run takes nine seconds after compilation, with no failures or skips. These are
+actual Apple ABI and Metal checks on the Mac; they do not replace native widget,
+physical Pencil/keyboard or device lifecycle acceptance. Keep the existing
+passing GUI results and group the remaining native refinement cases with the
+next feature milestone. Tests are in `native/src/region_tests.rs`; private logs
+and the checkpoint are under `artifacts/apple-region-refinement-v1/`.
 
 ## Ongoing native canvas navigation
 
@@ -852,6 +943,26 @@ a left header menu also opened its neighbor; lower-button taps reach the correct
 menu in the artwork workflow. Keep top-edge input acceptance open. Evidence is
 under `artifacts/apple-windowed-input-v1/`; the matching earlier physical title-bar
 workflows pass. No event-forwarding or window-input workaround is adopted.
+
+The follow-up probe rules out stale source validation for the reproduced top-edge
+failure: the direct touch reaches the correct item, the contact remains valid at
+UIKit's begin decision, and no hold is required, but the pan never begins. The
+full-window capture reports no top safe-area inset, so fixed top padding is not
+justified. An interactive overlay with the public window-drag failure relationship
+also fails the bank-add step and is removed. A small standalone UIKit fixture
+then reproduces a top-edge failure on iOS 26.5 with the status bar hidden and
+the pan and window-drag interaction on the same header view. Removing the hold
+recognizer and custom simultaneous-gesture policy still produces no completed
+drag. The iOS 27 comparison with the app-like policy begins and then cancels its
+pan. Initial fixture runs left the status bar visible and do not match editor
+presentation; keep that distinction in the retained results. These checks do not
+establish a new physical-iPad regression or an accepted fix. All production
+input changes and temporary test drivers are removed. Evidence, the small UIKit
+reproduction and rejected patches are under `artifacts/apple-header-edge-v1/`.
+Do not automatically repeat full editor workflows or rejected window-input
+experiments. Continue remaining feature/menu gaps with focused shared, bridge and
+component checks; return to this native issue with a concrete new hypothesis or
+grouped physical acceptance.
 
 Complete feature/menu coverage, windowed iPad input, physical Pencil/keyboard,
 provider/interruption and sustained Mac 90 Hz / iPad 120 Hz acceptance remain

@@ -19,6 +19,36 @@ and does not block current Mac milestones. The iPad target remains **120 Hz
 
 ## Current contact renderer, eight-layer 4K ink — 2026-09-14
 
+A later 20-second CPU sample of the retained milestone Release app completes
+during the same 45-second workload. The main render-owner branch is command
+encoding/finish in wgpu; snapshot publication and history trimming contribute
+much less sampled work. The profile also identifies an unnecessary scan of all
+paint pages in destination-companion preparation. That helper now visits only
+the persistent destination-reading batches' damaged pages, removing two temporary
+collections without another rendering path. Fourteen existing Metal contact,
+project/history, destination-brush and sparse-page checks pass, as do both Apple
+Release builds. A frame-rate improvement is not established by these checks.
+
+Two other sampling attempts abort the workload and are invalid: the initial
+collector also exited before its sampler report was ready; the post-change
+report is mostly idle samples after the abort. Do not compare those samples to
+the valid baseline or repeat sampler retries as the routine development loop.
+The valid baseline and failures remain under ignored
+`artifacts/performance/contact-cpu-profile-v1/`, `contact-cpu-profile-v2/` and
+`contact-page-preparation-v1/`. CPU sample counts are not GPU timings, calibrated
+CPU milliseconds, or proof of the cause of missed display intervals.
+
+The post-change Mac Release run without the sampler completes all 45 measured
+seconds and its postlude: 10,129 accepted samples, 3,769 presentations, no renderer
+errors, recorder overflow or missing/zero-time measured callbacks. CPU owner
+p99/max is 3.931/19.064 ms, with 26 frames above 11.11 ms. There are 53 long
+continuous intervals out of 3,740, so the 90 Hz gate still fails. Measured footprint
+grows 24.83 MiB; thermal state stays nominal. The full capture shows the completed
+ink and live Navigator. This single run is not a calibrated before/after comparison
+or sustained acceptance. All owned apps/profilers are terminal; the iPad build is
+not installed or launched in this batch. The clean result is retained under
+`artifacts/performance/contact-page-preparation-v1/clean/`.
+
 After integrating the shared swept-contact renderer, both current Release apps
 complete a 45-second `layered-4k` diagnostic. Each uses the unchanged 4096-square,
 eight-paint-layer G-Pen fixture, prediction, pressure variation and 240 Hz input,

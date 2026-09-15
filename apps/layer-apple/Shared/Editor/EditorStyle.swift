@@ -84,11 +84,12 @@ struct IconTile: View {
     var joinedEdge: String?
     var background: Color?
     var keepsBackground = false
+    var drawerBackground: Color?
     let action: () -> Void
     var body: some View {
         Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
             .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge,
-                background: background, keepsBackground: keepsBackground))
+                background: background, keepsBackground: keepsBackground, drawerBackground: drawerBackground))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -103,6 +104,7 @@ struct EditorControlButtonStyle: ButtonStyle {
     var joinedEdge: String?
     var background: Color?
     var keepsBackground = false
+    var drawerBackground: Color?
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
             bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
@@ -117,6 +119,8 @@ struct EditorControlButtonStyle: ButtonStyle {
                 }
                 if selected {
                     shape.fill(EditorPalette.sharedAccent.opacity(0.22))
+                } else if let drawerBackground {
+                    shape.fill(drawerBackground)
                 } else if configuration.isPressed || active {
                     shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
                 }
