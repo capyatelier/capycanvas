@@ -67,6 +67,23 @@ sRGB; unfamiliar supported ICC gamuts use ProPhoto working RGB while preserving
 the original source interpretation. Familiar matrix gamuts select the corresponding
 built-in working space from colorimetry, never a profile name.
 
+Preferences → Color edits future drawing defaults and reuses the New form for
+dimensions and saved presets. Photo opening defaults to source depth; optional
+16-bit editing changes the new document's precision while retaining original
+source samples at their original depth. Native masters ignore photo-open policies.
+Untagged RGB/grayscale can assume sRGB or ask for an interpretation before Open,
+Place or Paste publishes the image. Valid tagged images keep their profile without
+a mismatch prompt. Cancelling interpretation leaves the destination untouched.
+
+The same page manages a reusable ICC library for source and delivery choosers.
+Imports preserve exact bytes, deduplicate by content and validate the profile;
+each chooser also validates its actual input/output transform. Removal affects
+the library copy, leaving source files and embedded document profiles intact.
+The library admits 128 profiles, 16 MiB per profile and 64 MiB total. It lives in
+the user's data directory under `capycanvas/color-profiles`, or beside an explicitly
+selected `LAYER_SETTINGS_FILE` in `color-profiles`. The Color page currently
+reports the canvas's explicit sRGB fallback; managed monitor details remain pending.
+
 File → Import Image as Layer and Edit → Paste Image as Layer retain original
 PNG/JPEG/TIFF source data while keeping the destination document's working mode.
 Paste prefers TIFF, then PNG, then JPEG; transfer and worker decoding can be

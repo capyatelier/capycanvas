@@ -96,7 +96,7 @@ pub use settings::{
     ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
-    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon,
+    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,

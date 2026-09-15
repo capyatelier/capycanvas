@@ -5267,3 +5267,93 @@ inspector/export/conversion memory, and revision-based over-invalidation still
 need the final workload matrix and optimization. Color preferences, managed wide
 viewing, remaining output controls and the other documented gaps stay open.
 No performance workloads or other host integration were performed in this stage.
+
+## GTK Color preferences and reusable ICC profiles (2026-09-15)
+
+Preferences → Color now owns defaults for future drawings (space, depth and
+background), dimensions/preset management, optional promotion of opened photos to
+16-bit editing, and the choice to assume sRGB or ask about untagged RGB/grayscale
+images. These preferences persist without changing an existing drawing. Promotion
+changes document editing precision; retained original samples keep their source
+depth and profile. Native masters ignore photo-opening policy. Tagged photos open
+without a prompt. Open, Place and Paste share the optional interpretation sheet;
+cancellation publishes nothing, and Place/Paste keep the destination's mode.
+Malformed profiles and ambiguous CMYK remain explicit decoder errors.
+
+The native ICC library imports exact bytes into application-owned, SHA-256-named
+files, with limits of 128 profiles, 16 MiB per profile and 64 MiB total. Import is
+atomic and deduplicates exact profiles. Missing/damaged files cannot be selected;
+changed files remain visible for removal or repair by reimport. Source and export
+choosers validate the selected profile for their actual CMM role. Removing an entry
+removes only its library copy; originals and profiles embedded in drawings remain
+intact. File reading, validation and writes use worker jobs. These library limits
+are component limits, not evidence of a combined application-memory bound.
+
+Evidence under `artifacts/color-m2/color-preferences-*`:
+
+- `shared-test.log` passes the shared policy/serialization test. `shared-suite.log`
+  initially reports 389 UI passes and two stale metadata/copy expectations. After
+  correcting the six-page count and shortening descriptions, the 11 affected
+  settings tests and metadata test pass in `reviewed-settings-tests.log` and
+  `reviewed-metadata-test.log`. All 86 native-workspace tests pass in
+  `workspace-tests.log`.
+- `file-tests.log` passes all seven selected file tests, including source-depth
+  promotion, unchanged native masters, exact library bytes, deduplication,
+  corrupt/oversized rejection, checksum repair and preservation after removal.
+- `visible-workflow.log` passes the original native preference/Open/Paste journey
+  (7.88 s). Its Color page and untagged-interpretation captures were inspected;
+  shortened choice labels fit. `reviewed-workflow.log` extends that journey with
+  a real library-profile PNG export and verifies the exact embedded ICC bytes
+  (9.92 s, process 1953324). The test also checks saved preferences, unchanged
+  existing drawing, cancelled Open/Paste, interpretation without altering source
+  pixels, library removal and native save/reopen.
+
+The existing preferences regression exposed two real host routing gaps: settings
+broadcasts were discarded by the workspace input gate during loading/ownership
+changes, and the main Preferences dialog lost shared type-to-search routing.
+Host RestoreSettings now crosses that gate, and the main dialog retains its
+search behavior while nested sheets own their keys. The regression explicitly
+selects the application keyboard controller instead of assuming GTK controller
+order. Its old prediction-control assertion now checks the current disabled
+control and unavailable-system explanation. Earlier failing attempts are retained
+in `regression.log`, `reviewed-regression.log`, `complete-regression.log` and
+`named-regression.log`; they are not passing evidence. The last stale assertion
+looked for Preferences at the top level of the GTK main menu; it now checks its
+current Edit-menu location (`accepted-regression.log` records that failure).
+
+The final captured binary `color-preferences-verified-tests` has SHA-256
+`95e0ed081841e53bdf623a122b654afcfd31dc8cefd7e3a0e22a77f903d076b9`.
+`verified-build.{json,log}` and `verified-sources.json` identify its inputs.
+`verified-regression.log` passes the complete existing preferences test (16.79 s),
+including dark/light pages, search, native shortcut recording, persistence and a
+new window. `verified-workflow.log` passes the complete Color/ICC journey (9.90 s,
+process 1963836). The light Color page and final interpretation dialog were
+visually inspected. `accepted-production-check.log` passes GTK/shared FFI checks
+(1.03 s); only test expectations changed after that check.
+
+Reproduce using the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-ui -p layer-workspace --features native --offline
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/color-preferences-verified-exact" \
+  workspace::tests::native_preferences_and_shortcuts \
+  "$PWD/artifacts/color-m2/color-preferences-verified-regression"
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/color-preferences-verified-exact" \
+  workspace::tests::color_preferences::native_color_preferences_profiles_and_untagged_photo_policy \
+  "$PWD/artifacts/color-m2/color-preferences-verified-workflow"
+```
+
+`color-preferences-provenance.json` records source/build/output hashes. Final
+Color fixtures and captures are under `color-preferences-ui/1963836/`; the
+existing preference captures are retained under `color-preferences-regression-ui/`.
+
+No performance workload ran in this stage. The Color page accurately reports the
+current sRGB canvas fallback. Managed-wide canvas/widget/monitor agreement,
+remaining export controls, combined resource/job limits and final precision and
+workload qualification remain open. Fresh frame-creation baselines, regression
+investigation and optimization remain last. Other platform hosts remain
+unintegrated pending approval after GTK completion.

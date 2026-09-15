@@ -3,6 +3,9 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+#[path = "settings_color.rs"]
+mod color;
+pub use color::{MissingProfilePolicy, PhotoOpenPolicy};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -86,6 +89,7 @@ impl ClockVisibility {
 pub struct Settings {
     pub version: u32,
     pub new_document: NewDocumentSettings,
+    pub photo_open: PhotoOpenPolicy,
     pub theme: Option<Theme>,
     // Keep the persisted key compatible with the original clock-only setting.
     pub show_clock: ClockVisibility,
@@ -111,6 +115,7 @@ impl Default for Settings {
         Self {
             version: 1,
             new_document: NewDocumentSettings::default(),
+            photo_open: PhotoOpenPolicy::default(),
             theme: None,
             show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
@@ -206,14 +211,16 @@ pub enum SettingsPage {
     #[default]
     Appearance,
     Canvas,
+    Color,
     Input,
     Shortcuts,
     About,
 }
 impl SettingsPage {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Appearance,
         Self::Canvas,
+        Self::Color,
         Self::Input,
         Self::Shortcuts,
         Self::About,
@@ -222,6 +229,7 @@ impl SettingsPage {
         match self {
             Self::Appearance => "appearance",
             Self::Canvas => "canvas",
+            Self::Color => "color",
             Self::Input => "input",
             Self::Shortcuts => "shortcuts",
             Self::About => "about",
@@ -231,6 +239,7 @@ impl SettingsPage {
         match self {
             Self::Appearance => "Appearance",
             Self::Canvas => "Canvas",
+            Self::Color => "Color",
             Self::Input => "Pen & Input",
             Self::Shortcuts => "Keyboard Shortcuts",
             Self::About => "About",
@@ -240,6 +249,7 @@ impl SettingsPage {
         match self {
             Self::Appearance => "appearance",
             Self::Canvas => "fit",
+            Self::Color => "color",
             Self::Input => "brush",
             Self::Shortcuts => "keyboard",
             Self::About => "info",
@@ -249,6 +259,11 @@ impl SettingsPage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
+    NewColorSpace,
+    NewBitDepth,
+    NewBackground,
+    PhotoDepth,
+    MissingProfile,
     Theme,
     ShowClock,
     /// Retired preference ID, retained to decode saved custom actions.
@@ -274,6 +289,11 @@ pub enum PreferenceId {
 impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
+            Self::NewColorSpace => "new-color-space",
+            Self::NewBitDepth => "new-bit-depth",
+            Self::NewBackground => "new-background",
+            Self::PhotoDepth => "photo-depth",
+            Self::MissingProfile => "missing-profile",
             Self::Theme => "theme",
             Self::ShowClock => "show-clock",
             Self::TotalZen => "total-zen",
@@ -685,7 +705,7 @@ impl Settings {
                 r.enabled = self.feedback;
             }
         }
-        let mut groups = [
+        let mut groups = vec![
             vec![PreferenceGroup {
                 title: "Interface".into(),
                 rows: vec![
@@ -880,9 +900,11 @@ impl Settings {
                 group.rows.retain(|row| row.id != ShowClock);
             }
         }
+        groups.insert(2, self.color_groups());
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
+            .filter(|(id, _)| *id != SettingsPage::Color || platform == Platform::Gtk)
             .map(|(id, groups)| PreferencePage {
                 id,
                 title: id.title().into(),
@@ -953,6 +975,7 @@ impl Settings {
         }
         let n = value.number().unwrap_or(0.0);
         match id {
+            NewColorSpace | NewBitDepth | NewBackground | PhotoDepth | MissingProfile => self.edit_color(id, value.choice().unwrap()),
             Theme => {
                 self.theme = match value.choice().unwrap() {
                     1 => Some(crate::Theme::Light),

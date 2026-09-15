@@ -11,7 +11,7 @@ pub(crate) mod open;
 mod properties;
 mod color;
 mod place;
-mod profile;
+pub(crate) mod profile;
 mod source;
 mod preview;
 mod rasterize;
@@ -221,9 +221,18 @@ async fn document_request(
     };
     match request {
         DocumentRequest::Open => {
-            let (project, location) = gio::spawn_blocking(move || open::read(&path, location))
+            let policy = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.state().settings.photo_open;
+            let (mut project, location) = gio::spawn_blocking(move || open::read(&path, location, policy))
             .await
             .map_err(|_| "Project reader failed")??;
+            if location.is_none() {
+                let source = std::sync::Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
+                let Some(source) = open::interpret(w, source, policy).await? else { return Ok(false); };
+                let profile = source.interpretation.profile.clone();
+                project.document.color.space = gio::spawn_blocking(move || layer_color::suggested_working_space(&profile))
+                    .await.map_err(|_| "Profile reader failed")??.unwrap_or(layer_core::color::RgbSpace::ProPhoto);
+                project.document.layers[0].source = Some(std::sync::Arc::new(source));
+            }
             w.open_document
                 .borrow()
                 .as_ref()

@@ -4,6 +4,8 @@ use layer_core::color::{ColorProfile, ProfileChannels};
 use layer_core::color::{RgbSpace, source::SourceInterpretation};
 use std::cell::{Cell, RefCell};
 use std::io::Read;
+mod library;
+pub(crate) use library::manage;
 
 #[derive(Clone)]
 pub(super) enum ProfilePurpose {
@@ -198,6 +200,18 @@ async fn choose(
     working: RgbSpace,
     purpose: ProfilePurpose,
 ) -> Result<Option<ExportProfile>, String> {
+    let entries = gio::spawn_blocking(|| library::list(&library::directory())).await.map_err(|_| "Profile library reader failed")??;
+    if !entries.is_empty() {
+        match library::select(parent, &entries).await {
+            library::Selection::Cancel => return Ok(None),
+            library::Selection::File(path) => return gio::spawn_blocking(move || library::read_entry(&path, working, &purpose)).await.map_err(|_| "Profile reader failed".to_string())?.map(Some),
+            library::Selection::Browse => (),
+        }
+    }
+    choose_file(parent, working, purpose).await
+}
+
+async fn choose_file(parent: &adw::ApplicationWindow, working: RgbSpace, purpose: ProfilePurpose) -> Result<Option<ExportProfile>, String> {
     let dialog = gtk::FileDialog::builder()
         .title(if matches!(purpose, ProfilePurpose::Output) {
             "Choose delivery profile"

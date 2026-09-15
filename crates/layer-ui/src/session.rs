@@ -15010,7 +15010,7 @@ mod tests {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         invoke(&mut s, CommandId::Settings);
-        assert_eq!(s.preferences().unwrap().pages.len(), 5);
+        assert_eq!(s.preferences().unwrap().pages.len(), 6);
         let rows = |s: &UiSession<Recorder>| {
             s.preferences()
                 .unwrap()

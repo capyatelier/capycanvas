@@ -217,6 +217,8 @@ pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> 
     }
     dialog.close();
     let (name, source) = result?;
+    let policy = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.state().settings.photo_open;
+    let Some(source) = super::open::interpret(w, source, policy).await? else { return Ok(false); };
     let mut gpu = w.gpu.borrow_mut();
     let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
     let document = session.engine().document();

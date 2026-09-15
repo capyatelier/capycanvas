@@ -964,6 +964,37 @@ impl Preferences {
                 self.shortcuts.set_header_suffix(Some(&reset));
                 content.add(&self.shortcuts);
             }
+            if page.id == SettingsPage::Color {
+                let group = adw::PreferencesGroup::new();
+                let row = text_row("Drawing defaults and presets", "Choose dimensions, use a saved preset, or manage your drawing presets.");
+                let button = gtk::Button::with_label("Configure…");
+                button.set_widget_name("color-drawing-defaults");
+                button.set_valign(gtk::Align::Center);
+                button.connect_clicked(glib::clone!(#[weak] w, move |_| {
+                    glib::MainContext::default().spawn_local(glib::clone!(#[strong] w, async move {
+                        if let Err(error) = crate::new_document::configure(&w, true).await { w.changed(Err(error)); }
+                    }));
+                }));
+                row.add_suffix(&button);
+                row.set_activatable_widget(Some(&button));
+                group.add(&row);
+                let row = text_row("ICC profile library", "Import or remove reusable source and delivery profiles.");
+                let button = gtk::Button::with_label("Manage…");
+                button.set_widget_name("color-profile-library");
+                button.set_valign(gtk::Align::Center);
+                button.connect_clicked(glib::clone!(#[weak] w, move |_| {
+                    glib::MainContext::default().spawn_local(glib::clone!(#[strong] w, async move {
+                        if let Err(error) = crate::files::profile::manage(&w).await { w.changed(Err(error)); }
+                    }));
+                }));
+                row.add_suffix(&button);
+                row.set_activatable_widget(Some(&button));
+                group.add(&row);
+                let display = text_row("Canvas display", "sRGB fallback. Wide document values remain in the drawing; this canvas presentation currently clips colors outside sRGB.");
+                display.set_widget_name("color-display-details");
+                group.add(&display);
+                content.add(&group);
+            }
             self.stack.add_titled_with_icon(
                 &content,
                 Some(page.id.key()),

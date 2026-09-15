@@ -95,6 +95,10 @@ impl Form {
 }
 
 pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>, String> {
+    configure(w, false).await
+}
+
+pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<Option<layer_core::Project>, String> {
     let settings = w
         .gpu
         .borrow()
@@ -106,10 +110,10 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>
         .new_document
         .clone();
     let dialog = adw::AlertDialog::builder()
-        .heading("New drawing")
+        .heading(if defaults_only { "Drawing defaults and presets" } else { "New drawing" })
         .content_width(400)
         .build();
-    dialog.set_widget_name("new-document-dialog");
+    dialog.set_widget_name(if defaults_only { "drawing-defaults-dialog" } else { "new-document-dialog" });
     let group = adw::PreferencesGroup::new();
     let combo = |title: &str, name: &str, choices: &[&str]| {
         let row = adw::ComboRow::builder()
@@ -172,6 +176,7 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>
     buttons.append(&remove);
     let remember = gtk::CheckButton::with_label("Use these settings for new drawings");
     remember.set_widget_name("new-document-remember");
+    if defaults_only { remember.set_active(true); remember.set_visible(false); }
     remember.set_margin_top(8);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     for child in [group.upcast_ref::<gtk::Widget>(), note.upcast_ref()] {
@@ -188,7 +193,7 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>
     body.append(&buttons);
     body.append(&remember);
     dialog.set_extra_child(Some(&body));
-    dialog.add_responses(&[("cancel", CANCEL_DOCUMENT_LABEL), ("create", "Create")]);
+    dialog.add_responses(&[("cancel", CANCEL_DOCUMENT_LABEL), ("create", if defaults_only { "Use Defaults" } else { "Create" })]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("create"));
     dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);

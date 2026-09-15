@@ -9540,6 +9540,7 @@ fn native_preferences_and_shortcuts() {
             controllers
                 .item(i)
                 .and_downcast::<gtk::EventControllerKey>()
+                .filter(|keys| keys.name().as_deref() == Some("workspace-shortcuts"))
         })
         .unwrap();
     assert!(keys.emit_by_name::<bool>(
@@ -9865,13 +9866,12 @@ fn native_preferences_and_shortcuts() {
         .is_sensitive()
     );
     feedback.set_active(true);
-    assert!(
-        find_named(
-            w.preferences.dialog.upcast_ref(),
-            "setting-platform-prediction"
-        )
-        .is_none()
-    );
+    let prediction = find_named(
+        w.preferences.dialog.upcast_ref(),
+        "setting-platform-prediction",
+    ).unwrap().downcast::<adw::SwitchRow>().unwrap();
+    assert!(!prediction.is_sensitive());
+    assert_eq!(prediction.subtitle().as_deref(), Some("Unavailable for this system or connected pen."));
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Shortcuts,
     });
@@ -10007,7 +10007,7 @@ fn native_preferences_and_shortcuts() {
             .as_ref()
             .unwrap()
             .session
-            .application_menu(ApplicationMenu::Primary)
+            .application_menu(ApplicationMenu::Edit)
             .sections
             .iter()
             .flatten()
@@ -14918,3 +14918,6 @@ mod document_color;
 
 #[path = "histogram_tests.rs"]
 mod histogram;
+
+#[path = "color_preferences_tests.rs"]
+mod color_preferences;

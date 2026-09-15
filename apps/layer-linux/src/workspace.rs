@@ -1137,6 +1137,7 @@ impl Workspace {
             }
         ));
         let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("workspace-shortcuts"));
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed(glib::clone!(
             #[weak(rename_to = this)]
@@ -1145,9 +1146,10 @@ impl Workspace {
             glib::Propagation::Proceed,
             move |_, key, _, modifiers| {
                 this.update_zen();
-                // Native dialogs own their keys. Workspace previews block canvas
-                // input, but must not swallow button activation or navigation.
-                if this.window.visible_dialog().is_some()
+                // Native sheets own their keys. The main Preferences dialog
+                // retains the shared type-to-search behavior; its focused text
+                // inputs and nested sheets still own ordinary typing.
+                if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
                     || this.preferences.recording()
                     || this.header.is_editing()
                 {
@@ -1185,7 +1187,7 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |_, key, _, modifiers| {
-                if this.window.visible_dialog().is_some() {
+                if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog) {
                     return;
                 }
                 // Release the shortcut that opened the editor, even though its
@@ -1599,6 +1601,8 @@ impl Workspace {
         if self.refreshing.get() {
             return;
         }
+        // Display-wide settings arrive from the host, including while another
+        // window owns this workspace or its layout is still loading.
         if !matches!(
             &action,
             UiAction::WorkspaceManager { .. }
@@ -1624,6 +1628,7 @@ impl Workspace {
                 | UiAction::MeasureTitlebar { .. }
                 | UiAction::MeasureHeader { .. }
                 | UiAction::SystemThemeChanged { .. }
+                | UiAction::RestoreSettings { .. }
                 | UiAction::WindowFullscreen { .. }
         ) && !self.workspaces.accepts_input(self)
         {
@@ -1639,6 +1644,7 @@ impl Workspace {
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
                     | UiAction::SystemThemeChanged { .. }
+                    | UiAction::RestoreSettings { .. }
                     | UiAction::WindowFullscreen { .. }
             )
         {
