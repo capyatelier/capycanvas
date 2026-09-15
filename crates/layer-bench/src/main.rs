@@ -21,6 +21,16 @@ const HEIGHT: u32 = 4096;
 const EVENTS_PER_FRAME: usize = 8;
 const FRAME_BUDGET_MICROS: u64 = 8_333;
 
+// One explicit mode for every canvas in this process, including warm-up,
+// feedback comparisons and report probes. Initialized once before GPU work.
+static DOCUMENT_COLOR: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+
+fn document_mode() -> String {
+    let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
+    format!("{} integer{depth}; native integer backing, Float32 working tiles",
+        ["sRGB", "Display P3", "Adobe RGB", "ProPhoto RGB"][space as usize])
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScenarioKind {
     GPen,
@@ -151,6 +161,7 @@ impl ScenarioKind {
 
 #[derive(Debug)]
 struct Options {
+    color: (u32, u32),
     scenarios: Vec<ScenarioKind>,
     output_dir: PathBuf,
     report_path: PathBuf,
@@ -251,11 +262,13 @@ impl Canvas {
             dab_capacity: 65_536,
             batch_capacity: 64,
             background_rgba_linear: [0.93, 0.92, 0.88, 1.0],
+            ..LayerCanvasConfig::default()
         };
         Self::configured(config)
     }
 
-    fn configured(config: LayerCanvasConfig) -> Result<Self, String> {
+    fn configured(mut config: LayerCanvasConfig) -> Result<Self, String> {
+        (config.color_space, config.integer_depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
         let mut raw = ptr::null_mut();
         check(
             unsafe { layer_canvas_create(&config, &mut raw) },
@@ -488,6 +501,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return previews::generate(Path::new("apps/layer-web/brush-previews"));
     }
     let options = parse_options()?;
+    DOCUMENT_COLOR.set(options.color).expect("benchmark color initialized once");
+    eprintln!("Document mode: {}", document_mode());
     if let Some(validation) = options.brush_validation {
         run_brush_validation(&options.output_dir, validation)?;
         return Ok(());
@@ -517,6 +532,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
+    let mut color = (0, 8);
     let mut scenarios = ScenarioKind::LEGACY.to_vec();
     let mut output_dir = PathBuf::from("artifacts/images");
     let mut report_path = PathBuf::from("artifacts/benchmarks/gpu-4k.md");
@@ -526,6 +542,19 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--space" => {
+                color.0 = match arguments.next().ok_or("--space needs a value")?.as_str() {
+                    "srgb" => 0,
+                    "p3" => 1,
+                    "adobe-rgb" => 2,
+                    "prophoto" => 3,
+                    _ => return Err("--space needs srgb, p3, adobe-rgb, or prophoto".into()),
+                };
+            }
+            "--depth" => {
+                color.1 = arguments.next().ok_or("--depth needs a value")?.parse()?;
+                if !matches!(color.1, 8 | 16) { return Err("--depth needs 8 or 16".into()); }
+            }
             "--scenario" => {
                 let value = arguments.next().ok_or("--scenario needs a value")?;
                 scenarios = if value == "all" {
@@ -589,6 +618,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 println!(
                     "gpu-bench [--scenario all|legacy|painter|dry|watercolor|SCENARIO_NAME] \
                      [--output-dir PATH] [--report PATH] [--repeats N] \
+                     [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16] \
                      [--feedback-comparison] [--brush-validation blank|destination|watercolor|transport]"
                 );
                 std::process::exit(0);
@@ -597,6 +627,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         }
     }
     Ok(Options {
+        color,
         scenarios,
         output_dir,
         report_path,
@@ -1885,9 +1916,11 @@ fn write_feedback_report(
         .position(|byte| *byte == 0)
         .unwrap_or(gpu.name_utf8.len());
     let gpu_name = String::from_utf8_lossy(&gpu.name_utf8[..name_end]);
+    let mode = document_mode();
     let mut report = format!(
         "# Instant stroke feedback — 4096×4096\n\n\
          Adapter: `{gpu_name}`; backend code {}; device type code {}.\n\n\
+         Document: {mode}.\n\n\
          Release build with debug symbols. Each scenario has at least 32 visible paint layers. The on run keeps an 8 ms replaceable real-input tail, submits platform-style predictions at +4/+8 ms, locks terminal coverage to the expected +8 ms presentation position, submits once, and then waits only for benchmark measurement. The off run bypasses all tail and preview work. Setup, warm-up, undo, and export are outside the timing window. Concurrent GPU load is not controlled.\n\n\
          | brush | off completed p95 ms | on completed p95 ms | off completed p99 ms | on completed p99 ms | p99 delta ms | p99 regression | off submit p95 ms | on submit p95 ms | on frames >8.33 ms | tip gap p95/p99 px | correction p95/p99 px | extra preview dabs | preview pages | on resident MiB |\n\
          |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
@@ -1941,9 +1974,11 @@ fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Erro
         .position(|byte| *byte == 0)
         .unwrap_or(gpu.name_utf8.len());
     let gpu_name = String::from_utf8_lossy(&gpu.name_utf8[..name_end]);
+    let mode = document_mode();
     let mut report = format!(
         "# GPU raster benchmark — 4096×4096\n\n\
          Adapter: `{gpu_name}`; backend code {}; device type code {}.\n\n\
+         Document: {mode}.\n\n\
          Release build with debug symbols. Each frame submits eight simulated coalesced pen samples through the public C ABI, calls the ABI frame function, then waits for that submission to complete. Every scenario has at least 32 visible paint layers. Each repetition creates a fresh canvas, warms the exact scenario pipeline, undoes the warm-up stroke, and contributes every measured frame to the reported distribution. Setup, shader/pipeline creation, canvas allocation, scenario warm-up/undo, brush selection, layer creation, and PNG export are outside the timing window. Submit latency is the production non-blocking path; completed-work latency serializes each measured frame to isolate its GPU work. Concurrent system/GPU load is not controlled, so these are reproducible workload references rather than cross-machine scores.\n\n\
          | scenario | state features | repeats | frames | move completed p50 ms | move completed p95 ms | move completed p99 ms | pen-up completed p99 ms | max move ms | submit p95 ms | move/pen-up frames > 8.33 ms | dabs | conservative contact Mpx | composite visits Mpx | paint pages | coverage pages | material pages | preview pages | resident canvas MiB |\n\
          |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",

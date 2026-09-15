@@ -75,9 +75,9 @@ enum {
   LAYER_BRUSH_NATURAL_BLENDER = 24,
 };
 
-/* Document mode: sRGB primaries, D65, SDR, encoded 8-bit RGB and linear
- * 8-bit coverage. Paint stores encode(linear_RGB * alpha); GPU shaders and
- * color settings use Float32 linear values. Export uses straight sRGB RGBA8.
+/* SDR document mode: native encoded integer8/integer16 backing and bounded
+ * Float32 working tiles, matching GTK editing. Brush colors are straight linear
+ * RGB in the document space. Explicit diagnostic export uses straight sRGB RGBA8.
  * Display backgrounds and overlays never participate in project pixels. */
 typedef struct LayerCanvasConfig {
   uint32_t document_width;
@@ -89,6 +89,8 @@ typedef struct LayerCanvasConfig {
   uint32_t dab_capacity;
   uint32_t batch_capacity;
   float background_rgba_linear[4];
+  uint32_t color_space; /* 0: sRGB, 1: Display P3, 2: Adobe RGB, 3: ProPhoto RGB. */
+  uint32_t integer_depth; /* 8 or 16. Defaults to sRGB8. */
 } LayerCanvasConfig;
 
 typedef struct LayerPenEvent {

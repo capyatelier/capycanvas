@@ -33,6 +33,11 @@ prediction sources, horizon/distance clamps, tip-lock strength, and correction
 shape. Settings are validated and take effect at the next pen-down.
 
 The current C ABI constructs a headless wgpu renderer for tests and benchmarks.
+`LayerCanvasConfig.color_space` selects sRGB (0), Display P3 (1), Adobe RGB (2)
+or ProPhoto RGB (3); `integer_depth` accepts 8 or 16. Defaults are sRGB8.
+All configurations use native encoded integer backing and Float32 working tiles,
+matching the GTK editing path. Brush RGB coordinates are linear in that document
+space. Invalid mode values fail before GPU allocation.
 Creation fails when no hardware GPU adapter is available. Surface creation is a
 platform adapter concern; it will receive a dedicated native handle API rather
 than a host-memory presentation view.

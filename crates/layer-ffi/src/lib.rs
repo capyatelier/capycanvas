@@ -48,6 +48,10 @@ pub struct LayerCanvasConfig {
     pub dab_capacity: u32,
     pub batch_capacity: u32,
     pub background_rgba_linear: [f32; 4],
+    /// 0: sRGB, 1: Display P3, 2: Adobe RGB, 3: ProPhoto RGB.
+    pub color_space: u32,
+    /// Native encoded integer backing: 8 or 16 bits per color component.
+    pub integer_depth: u32,
 }
 
 impl Default for LayerCanvasConfig {
@@ -62,6 +66,8 @@ impl Default for LayerCanvasConfig {
             dab_capacity: 65_536,
             batch_capacity: 64,
             background_rgba_linear: [1.0, 1.0, 1.0, 1.0],
+            color_space: 0,
+            integer_depth: 8,
         }
     }
 }
@@ -102,6 +108,7 @@ pub struct LayerBrushSettings {
     pub preset: u32,
     pub diameter_document_px: f32,
     pub opacity: f32,
+    /// Straight linear RGB in the configured document space, plus alpha.
     pub color_rgba_linear: [f32; 4],
     pub streamline: f32,
     pub pressure_smoothing: f32,
@@ -276,6 +283,9 @@ pub unsafe extern "C" fn layer_canvas_create(
         let output = unsafe { output.as_mut() }.ok_or(LayerStatus::NullPointer)?;
         *output = ptr::null_mut();
         validate_config(config)?;
+        let color = decode_document_color(config)?;
+        let mut document = Document::new("untitled", config.document_width, config.document_height);
+        document.color = color;
 
         let (producer, consumer) = input_queue(config.input_capacity as usize);
         let view = ViewState {
@@ -285,8 +295,8 @@ pub unsafe extern "C" fn layer_canvas_create(
             background_rgba_linear: config.background_rgba_linear,
         };
         let engine = CanvasEngine::with_capacity(
-            WgpuRasterizer::new_headless().map_err(|_| LayerStatus::RenderError)?,
-            Document::new("untitled", config.document_width, config.document_height),
+            WgpuRasterizer::new_native_headless(color).map_err(|_| LayerStatus::RenderError)?,
+            document,
             consumer,
             view,
             ViewTransform::IDENTITY,
@@ -856,7 +866,26 @@ fn decode_feedback(
     Ok(config)
 }
 
+fn decode_document_color(config: LayerCanvasConfig) -> Result<layer_core::color::DocumentColor, LayerStatus> {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    Ok(DocumentColor {
+        space: match config.color_space {
+            0 => RgbSpace::Srgb,
+            1 => RgbSpace::DisplayP3,
+            2 => RgbSpace::AdobeRgb,
+            3 => RgbSpace::ProPhoto,
+            _ => return Err(LayerStatus::InvalidArgument),
+        },
+        depth: match config.integer_depth {
+            8 => IntegerDepth::U8,
+            16 => IntegerDepth::U16,
+            _ => return Err(LayerStatus::InvalidArgument),
+        },
+    })
+}
+
 fn validate_config(config: LayerCanvasConfig) -> Result<(), LayerStatus> {
+    decode_document_color(config)?;
     let extents = [
         config.document_width,
         config.document_height,
@@ -1005,6 +1034,34 @@ fn ffi_boundary(operation: impl FnOnce() -> Result<(), LayerStatus>) -> LayerSta
 mod tests {
     use super::*;
     struct Canvas(*mut LayerCanvas);
+
+    #[test]
+    fn document_modes_validate_before_allocation_and_reach_the_renderer() {
+        use layer_render::CanvasRenderer;
+        for (color_space, integer_depth) in [(4, 8), (u32::MAX, 16), (0, 0), (0, 32)] {
+            let config = LayerCanvasConfig { color_space, integer_depth, ..Default::default() };
+            let mut raw = ptr::dangling_mut();
+            assert_eq!(unsafe { layer_canvas_create(&config, &mut raw) }, LayerStatus::InvalidArgument);
+            assert!(raw.is_null());
+        }
+        for color_space in 0..4 {
+            for integer_depth in [8, 16] {
+                let config = LayerCanvasConfig {
+                    document_width: 16, document_height: 16,
+                    surface_width: 16, surface_height: 16,
+                    color_space, integer_depth, ..Default::default()
+                };
+                let mut raw = ptr::null_mut();
+                assert_eq!(unsafe { layer_canvas_create(&config, &mut raw) }, LayerStatus::Ok);
+                let canvas = Canvas(raw);
+                let expected = decode_document_color(config).unwrap();
+                let engine = &unsafe { &*canvas.0 }.engine;
+                assert_eq!(engine.document().color, expected);
+                assert_eq!(engine.backend().document_color(), expected);
+                assert_eq!(unsafe { layer_canvas_draw_frame(canvas.0) }, LayerStatus::Ok);
+            }
+        }
+    }
 
     impl Canvas {
         fn new(width: u32, height: u32) -> Self {
@@ -1326,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn predicted_dry_paint_draws_directly_without_preview_pages() {
+    fn predicted_dry_paint_uses_one_private_native_page_and_cancels_exactly() {
         let canvas = Canvas::new(128, 128);
         let paint = LayerBrushSettings {
             preset: 1,
@@ -1365,7 +1422,9 @@ mod tests {
             unsafe { layer_canvas_get_metrics(canvas.0, &mut metrics) },
             LayerStatus::Ok
         );
-        assert_eq!(metrics.preview_pages, 0);
+        // Native integer backing uses an isolated Float32 page for prediction;
+        // this 128² mark must remain within one 256² working tile.
+        assert_eq!(metrics.preview_pages, 1);
         assert_eq!(metrics.platform_prediction_frames, 1);
 
         let mut pixels = vec![0_u8; 128 * 128 * 4];
@@ -1393,7 +1452,7 @@ mod tests {
             },
             LayerStatus::Ok
         );
-        assert!(pixels[predicted_center] > 240);
+        assert_eq!(pixels, vec![255; 128 * 128 * 4], "cancel restores the entire blank document");
     }
 
     #[test]

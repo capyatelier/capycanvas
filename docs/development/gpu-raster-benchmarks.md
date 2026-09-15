@@ -15,6 +15,13 @@ dense-image/concurrent-save workloads, capture memory and native presentation.
 through the public C ABI. Every scenario has at least 32 visible paint layers
 and every frame contains eight simulated coalesced pen samples.
 
+The current diagnostic factory uses GTK's native integer-backed SDR renderer
+with Float32 working tiles. Select `--space srgb|p3|adobe-rgb|prophoto` and
+`--depth 8|16`; defaults are sRGB8. Generated reports identify the mode. Reports
+from before this replacement used the older sRGB8 working renderer and cannot
+qualify the current native editing path. The [final GTK SDR qualification](../history/color-management-gtk-m2-performance.md)
+records comparison arms and declared budgets.
+
 It reports two time boundaries:
 
 - **submit**: event validation, queueing, shared brush dynamics/contact
