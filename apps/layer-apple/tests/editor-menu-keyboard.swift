@@ -9,8 +9,15 @@ import SwiftUI
     var menuWidth: CGFloat = 340
     var menu: AppleContextMenu {
         func leaf(_ name: String, enabled: Bool = true) -> [String: Any] {
-            ["label": name, "enabled": enabled, "selected": name == selected, "action": ["id": name],
-             "bindings": name == "Direct" ? [["key": "z", "command": true, "shift": true]] : []]
+            let bindings: [[String: Any]]
+            switch name {
+            case "Direct": bindings = [["key": "z", "command": true, "shift": true]]
+            case "Nested": bindings = [["key": "n", "command": true, "alt": true]]
+            case "Disabled child": bindings = [["key": "x", "command": true, "alt": true]]
+            default: bindings = []
+            }
+            return ["label": name, "enabled": enabled, "selected": name == selected, "action": ["id": name],
+                "bindings": bindings]
         }
         if rowCount > 0 {
             return AppleContextMenu(JSON(["sections": [(0..<rowCount).map { leaf("Row \($0)") }]])) {
@@ -58,6 +65,15 @@ private struct MenuFixtureView: View {
         func send(_ value: String, _ code: UInt16) async throws {
             try key(value, code: code, window: window); try await drain()
         }
+        func shortcut(_ value: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags) async throws {
+            for type: NSEvent.EventType in [.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: value, charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            try await drain()
+        }
         try await send("\u{F703}", 124)
         try await send("\r", 36)
         try require(!fixture.presented && fixture.actions == ["Nested"],
@@ -74,13 +90,7 @@ private struct MenuFixtureView: View {
         try require(!fixture.presented && fixture.actions == ["Nested", "Direct"],
             "Escape must dismiss without executing an action")
         fixture.presented = true; try await drain()
-        for type: NSEvent.EventType in [.keyDown, .keyUp] {
-            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [.command, .shift],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, characters: "Z", charactersIgnoringModifiers: "Z", isARepeat: false, keyCode: 6)!
-            NSApp.postEvent(event, atStart: false)
-        }
-        try await drain()
+        try await shortcut("Z", 6, [.command, .shift])
         try require(!fixture.presented && fixture.actions == ["Nested", "Direct", "Direct"],
             "Shifted letters must match the shared shortcut's normalized key")
         fixture.selected = "Direct"
@@ -114,6 +124,19 @@ private struct MenuFixtureView: View {
         try await send("\r", 36)
         try require(!fixture.presented && fixture.actions.last == "Deep child" && fixture.actions.count == 7,
             "Returning through nested menus must restore each parent row, including a later submenu")
+        fixture.selected = nil
+        fixture.presented = true; try await drain()
+        try await send("\u{F703}", 124)
+        try await shortcut("Z", 6, [.command, .shift])
+        try require(!fixture.presented && fixture.actions.last == "Direct" && fixture.actions.count == 8,
+            "A root action's shortcut must remain available while a submenu is open")
+        fixture.presented = true; try await drain()
+        try await shortcut("x", 7, [.command, .option])
+        try require(fixture.presented && fixture.actions.count == 8,
+            "A disabled submenu action's shortcut must not execute or dismiss the menu")
+        try await shortcut("n", 45, [.command, .option])
+        try require(!fixture.presented && fixture.actions.last == "Nested" && fixture.actions.count == 9,
+            "A nested action's shortcut must work before its submenu is opened")
         print("PASS: shared popup keyboard focus, submenu return, disabled rows, action dismissal and Escape")
         try await checkWindowFit()
     }

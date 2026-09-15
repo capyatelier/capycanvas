@@ -58,7 +58,7 @@ struct LayerPanel: View {
             }
     }
     @ViewBuilder private var dragPreview: some View {
-        if !interaction.nativeDragging, let drag = interaction.drag,
+        if let drag = interaction.drag,
            let layer = layers.first(where: { $0["id"].uint == drag.id }) {
             LayerRow(store: store, layer: layer, previews: store.layerThumbnails, preview: true)
                 .frame(width: drag.bounds.width)

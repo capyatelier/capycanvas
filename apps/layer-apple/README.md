@@ -106,8 +106,11 @@ Both hosts support all five shared toolbar styles: small, medium, large, medium
 labeled and large labeled. Ribbons, floating panels and content drawers
 use the Rust icon sizes, label line counts and weight. Labeled tiles place
 text beside the icon; size controls retain the shared size glyph. Vertical bars
-use horizontal separators. Zen hides editor controls until Tab restores them;
-disabled toolbar controls apply one dimming step while remaining inactive.
+use horizontal separators. Zen hides editor controls until Tab restores them.
+UIKit observes chrome contacts before button activation so the Zen button's
+release cannot immediately reveal chrome again. Its passive observer excludes
+the native canvas, which owns contact dismissal and drawing. Mac retains its
+tap observer. Disabled toolbar controls apply one dimming step while inactive.
 `testToolbarStylesAndActions` checks native style selection, button bounds,
 the Zoom action and Zen visibility. Direct bridge checks cover all style
 projections and workspace history on both hosts.
@@ -193,7 +196,9 @@ width keeps page labels readable. Shared
 text fields ignore unchanged native callbacks so ending editing cannot resubmit
 the old query after navigation clears it. Run `tests/settings-text-input.swift` with
 `scripts/test-project-files.sh` for both theme-color fields on the shared Apple
-presets. The grouped `testNumericSettingsDone` editor workflow checks expression
+presets, including Reset to Default while a text draft is focused and subsequent
+Done/reopen. Updated theme-color values replace the focused draft so Done cannot
+restore a discarded value. The grouped `testNumericSettingsDone` editor workflow checks expression
 entry, Done, reopen, search-result/sidebar navigation and iPad keyboard dismissal
 through the actual native Settings window.
 Toolbar Color/Opacity controls use their existing drawers; the explicit
@@ -459,7 +464,12 @@ labels; Mac's Select All command respects the focused native text editor.
 The direct menu keyboard check uses native events in its own Mac window for
 arrows, Return, Escape, disabled rows and shifted shortcuts. Submenu pages retain
 their parent row, so returning from a later submenu restores keyboard navigation
-to that row instead of the first enabled item. Menus shrink to the available
+to that row instead of the first enabled item. Accelerators search the complete
+menu tree, so an enabled action remains reachable from another page or before
+its submenu opens; disabled actions stay inactive. The focused
+`EditorMenuChecks/testCompactMenuShortcutAcrossPages` checks Undo/Redo through
+the real iPad compact menu; its last result fails and acceptance remains open
+in the [handoff](../../docs/development/apple-handoff.md). Menus shrink to the available
 window bounds while retaining their native scroller. The fixture verifies
 700×500, 360×500 and 700×760 windows, including scrolling to and activating the
 last row; set `CAPY_MENU_CAPTURES` to save captures of its owned windows.

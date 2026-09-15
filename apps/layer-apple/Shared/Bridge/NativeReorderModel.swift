@@ -7,8 +7,6 @@ import CoreGraphics
     var contact: ReorderContact { get }
     var viewport: CGRect { get set }
     var enabled: Bool { get }
-    func nativeMenu(at point: CGPoint) -> NativeReorderMenu?
-    func nativeDragChanged(_ active: Bool)
     func source(at point: CGPoint) -> ReorderTarget?
     func acceptsContext(at point: CGPoint) -> Bool
     func context(at point: CGPoint)
@@ -18,8 +16,6 @@ import CoreGraphics
 }
 
 extension NativeReorderModel {
-    func nativeMenu(at point: CGPoint) -> NativeReorderMenu? { nil }
-    func nativeDragChanged(_ active: Bool) {}
     func recognizeHold() { contact.recognizeHold() }
     func nativeInputDetached() {
         // Native recognizers are already detached. SwiftUI can still own its
@@ -28,17 +24,5 @@ extension NativeReorderModel {
         DispatchQueue.main.async { [self] in
             if contact.generation == generation { cancel() }
         }
-    }
-}
-
-@MainActor struct NativeReorderMenu {
-    let id: String
-    let bounds: CGRect
-    let load: AppleContextMenuRequest
-    init(id: String, bounds: CGRect, content: AppleContextMenu) {
-        self.id = id; self.bounds = bounds; load = { $0(content) }
-    }
-    init(id: String, bounds: CGRect, load: @escaping AppleContextMenuRequest) {
-        self.id = id; self.bounds = bounds; self.load = load
     }
 }

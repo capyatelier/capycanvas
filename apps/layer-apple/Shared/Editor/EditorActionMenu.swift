@@ -89,12 +89,12 @@ struct EditorActionMenu: View {
         }.padding(.horizontal, 10).frame(minHeight: 36).contentShape(Rectangle())
     }
     private func key(_ key: String, command: Bool, shift: Bool, alt: Bool) {
-        if let index = entries.firstIndex(where: { item in
-            item.bindings.contains { binding in
+        if let item = model.actions.first(where: { item in
+            item.enabled && item.bindings.contains { binding in
                 binding["key"].string == key.lowercased() && binding["command"].bool == command
                     && binding["shift"].bool == shift && binding["alt"].bool == alt
             }
-        }) { activate(index); return }
+        }) { dismiss(); item.action?(); return }
         guard !command && !alt else { return }
         switch key {
         case "arrowdown": step(1)

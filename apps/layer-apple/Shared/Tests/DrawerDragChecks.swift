@@ -2,7 +2,7 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkDrawerDragAndDock(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":4,"drawers":true}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)

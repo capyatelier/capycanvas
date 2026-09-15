@@ -26,7 +26,7 @@ struct RecoveryPicker: View {
                 }.padding(.vertical, 4)
             }.frame(minHeight: 160)
             if let error = recovery.error { Text(error).foregroundStyle(.red) }
-        }.padding(24).frame(minWidth: 450, idealWidth: 600, minHeight: 300, idealHeight: 420)
+        }.padding(24).frame(minWidth: 320, idealWidth: 600, minHeight: 300, idealHeight: 420)
             .confirmationDialog("Discard this recovered drawing?", isPresented: Binding(
                 get: { discarding != nil }, set: { if !$0 { discarding = nil } })) {
                 Button("Discard", role: .destructive) {

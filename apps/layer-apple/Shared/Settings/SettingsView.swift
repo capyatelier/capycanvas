@@ -134,7 +134,7 @@ private struct PreferenceText: View {
     private var field: some View {
         TextField(label, text: $text).focused($editing).onSubmit { commit(text) }
             .focusedValue(\.editorTextCommit, { commit(text) })
-            .onAppear { text = value }.onChange(of: value) { _, next in if !editing { text = next } }
+            .onAppear { text = value }.onChange(of: value) { _, next in text = next }
             .onChange(of: editing) { old, next in if old && !next { commit(text) } }
     }
 }

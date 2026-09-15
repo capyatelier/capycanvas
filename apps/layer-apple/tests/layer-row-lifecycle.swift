@@ -105,7 +105,7 @@ import QuartzCore
         note("PASS platform \(platform): active source removal/rename, late release, deletion Undo and list remount cancellation")
 
         // New documents can reuse numeric layer IDs. Capture must also retain
-        // document identity, including a deferred menu that outlives the reset.
+        // document identity across the reset.
         let reused = initial[initial.count - 2]
         scroll.contentView.scroll(to: CGPoint(x: 0, y: scroll.documentView!.bounds.height - scroll.contentView.bounds.height))
         scroll.reflectScrolledClipView(scroll.contentView); try await drain()
@@ -115,7 +115,6 @@ import QuartzCore
         }
         let resetStart = body(reused), resetEnd = CGPoint(x: resetStart.x, y: resetStart.y - 45)
         try await send(.leftMouseDown, resetStart) // Native admission refreshes the scrolled viewport.
-        guard let deferred = model.nativeMenu(at: resetStart) else { throw HostFailure(message: "No menu for the admitted reset source") }
         let epoch = store.state["document_file"]["epoch"].uint
         try await send(.leftMouseDragged, resetEnd)
         try require(model.contact.dragging, "Document reset must interrupt an active drag")
@@ -138,15 +137,11 @@ import QuartzCore
         try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
         try require(order(store).contains(reused) && model.contact.target == nil && model.drag == nil,
             "A new document must cancel capture even when it reuses the source layer ID")
-        var completed = false, stale: AppleContextMenu?
-        deferred.load { stale = $0; completed = true }
-        try await wait("Old document menu did not complete") { completed }
-        try require(stale == nil, "An old document cannot provide a menu for a recycled layer ID")
         let freshOrder = order(store)
         try await send(.leftMouseUp, resetEnd)
         try require(order(store) == freshOrder && store.failure == nil && store.projectFiles.error == nil,
             "Late release cannot edit the replacement document")
-        note("PASS platform \(platform): document replacement cancels capture and deferred menus despite reused layer IDs")
+        note("PASS platform \(platform): document replacement cancels capture despite reused layer IDs")
     }
     @MainActor static func hierarchy(_ platform: UInt32) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))

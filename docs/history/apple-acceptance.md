@@ -108,6 +108,31 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Zen, editor dialogs and row cleanup — 2026-09-15
+
+UIKit reports chrome contacts before button activation through a passive native
+observer, fixing the toolbar Zen transition while retaining native canvas touch
+routing. Mac keeps its working tap observer. The initial shared spatial-gesture
+candidate failed Mac mask menus and UIKit panning; it is removed. The batch also
+removes the unused native row-menu adapter and always-false drag flags, preserves
+focused Settings defaults after Reset, fits the recovery picker to narrow windows,
+and searches enabled menu accelerators across the complete menu model.
+
+All eight final grouped workflows pass with no failures or skips: three on Mac
+and five on the iPad simulator. They cover Zen/Tab, Mac mouse stroke/history/mask
+actions, UIKit finger navigation, drawer dragging, and UIKit immediate-grip and
+held-menu layer dragging. Both final Release builds pass. Three native row suites,
+four Settings text cases and the native menu keyboard fixture pass in their
+documented component scopes. Representative drawer/navigation captures are
+reviewed. The drawer fixture now explicitly selects individual-panel mode.
+
+The compact-menu UIKit shortcut regression remains unqualified: its last run
+fails, and it is not counted among the eight passing workflows. No physical-device
+run accompanies this refinement batch. Complete feature/visual, physical input,
+provider/lifecycle and sustained Mac 90 Hz / iPad 120 Hz acceptance remain open.
+The [handoff](../development/apple-handoff.md) records final source/build evidence
+and retained failures. The overall goal remains **incomplete**.
+
 ## Native editor workflows and current hardware drawing — 2026-09-14
 
 This major milestone groups the native control, document and artwork workflows

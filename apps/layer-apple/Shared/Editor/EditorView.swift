@@ -68,9 +68,9 @@ struct EditorView<Canvas: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(EditorPopoverHost())
         .coordinateSpace(name: "editor-workspace")
-        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor-workspace")).onEnded { event in
-            store.workspace.chrome(["kind": "contact", "position": [event.location.x, event.location.y], "canvas": false])
-        })
+        .editorChromeContact { point in
+            store.workspace.chrome(["kind": "contact", "position": [point.x, point.y], "canvas": false])
+        }
         .onContinuousHover(coordinateSpace: .named("editor-workspace")) { phase in
             switch phase {
             case .active(let point): store.workspace.chrome(["kind": "motion", "position": [point.x, point.y]])

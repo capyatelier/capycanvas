@@ -15,6 +15,12 @@ import Foundation
         let sections: [[Item]]
         let action: (() -> Void)?
     }
+    var actions: [Item] {
+        func leaves(_ sections: [[Item]]) -> [Item] {
+            sections.flatMap { $0.flatMap { $0.sections.isEmpty ? [$0] : leaves($0.sections) } }
+        }
+        return leaves(sections)
+    }
     init(_ model: JSON, invoke: @escaping (JSON) -> Void) {
         title = model["title"].string
         func decodeSections(_ value: JSON, parentEnabled: Bool = true) -> [[Item]] {

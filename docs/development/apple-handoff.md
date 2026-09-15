@@ -14,11 +14,122 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 
 Prioritize visible Web/Android parity gaps and simple shared solutions. Keep the
 routine implementation loop in focused shared, bridge and native component
-checks. Use the iPad simulator for targeted UI questions and grouped milestone
-acceptance; reserve physical iPad runs for major milestones and hardware-specific
-Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
-checks without a relevant change. Commit only major milestones. All eleven
-recovery stashes remain.
+checks. The user's latest clarification also places simulator runs outside that
+routine loop: name the UIKit-specific question before each run, reuse the existing
+build when its source is unchanged, and group workflow acceptance at milestones.
+Reserve physical iPad runs for major milestones and hardware-specific Pencil,
+provider, lifecycle and performance acceptance. Build both Release targets for
+the completed batch; avoid repeating passing checks without a relevant change.
+For a simple presentation edit, inspect the existing focused capture instead of
+building new accessibility or geometry probes. After an inconclusive UI failure,
+require new evidence and a specific hypothesis before another run or input
+workaround. Keep unresolved acceptance explicit while continuing independent
+parity fixes. Commit only major milestones. All eleven recovery stashes remain.
+
+This refinement batch fixes the iPad toolbar's Zen transition. A direct owner
+check on both Apple policies demonstrates that a contact after Zen activation
+reveals chrome again, while contact before activation leaves it hidden. The
+first `SpatialEventGesture` candidate passes simulator Zen/Tab but subsequently
+fails Mac mask-menu and UIKit canvas-pan acceptance. A controlled Mac comparison
+with the old observer passes the mask workflow. Those candidates are rejected;
+do not restore them based on the earlier Zen-only pass.
+
+The current `editorChromeContact` helper keeps Mac's existing tap observer.
+UIKit uses a passive native recognizer delegate to report chrome contacts before
+button activation and always declines gesture recognition. It excludes the
+native canvas, whose C ABI already reports and can consume a contact before
+drawing. The gesture-state contact set is removed. All eight final grouped
+workflows pass with no failures or skips: Mac Zen/Tab, mouse stroke/history/mask
+actions, and drawer dragging; UIKit Zen/Tab, finger navigation, drawer dragging,
+layer grips and held layer-menu dragging. Both final Release builds pass.
+Representative owned-window Mac and simulator drawer/navigation captures are
+reviewed. The drawer fixture explicitly selects individual-panel mode: its old
+setup opened the whole column and then waited for drawer-only tabs. Evidence,
+retained failures and final source hashes are under
+`artifacts/apple-chrome-milestone-v1/`; final results are `mac-v4`, `simulator-v2`
+and `passive-release`. Earlier Zen evidence is under
+`artifacts/apple-zen-contact-v1/`. No physical-device run accompanies this batch;
+Pencil, keyboard, provider/lifecycle and sustained performance acceptance remain
+open. These results do not claim every visual state or every native workflow.
+
+The same batch removes the unused native row-menu adapter, its menu projection
+and always-false native-drag flags. Both native input adapters already use the
+retained shared row menus; only obsolete fixture calls remained. Layer menu
+loading stays in the existing guarded query. The two affected fixtures now use
+the current menu entry point and retain document-replacement capture coverage.
+All three existing AppKit-hosted input fixtures pass on both Apple policies:
+layer pickup/menu/history, layer lifecycle/hierarchy, and workspace input/scrolling.
+These component checks exercise local native mouse/tablet events; the later
+editor workflows above cover the root observer. Neither establishes physical
+Pencil acceptance. The row cleanup removes 57 net production lines.
+Evidence and source hashes are under `artifacts/apple-row-cleanup-v1/`.
+
+The batch also fixes focused Settings text fields retaining an obsolete
+draft after Reset to Default. The shared reset already publishes the default;
+`PreferenceText` now accepts that updated value while focused. A native AppKit
+reproduction fails before this one-line change. The existing text fixture now
+passes ordinary typing/Done/reopen and focused Reset/Done/reopen for both theme
+colors on both Apple policies (four cases). It sends the same shared reset action
+as the context-menu item; it does not automate the native menu or establish UIKit
+delivery. Evidence is under `artifacts/apple-settings-reset-v1/`. Both final
+Release builds include this fix; UIKit Reset menu delivery remains unqualified.
+
+The shared menu handler also fixes accelerator lookup across submenu
+pages. `AppleContextMenu` exposes its leaf actions; the existing menu key handler
+finds enabled bindings in that complete model instead of only the visible page.
+The native keyboard fixture fails before the fix and passes afterward, including
+a root command from a child page, an unopened child command, and an ignored
+disabled child shortcut. Existing navigation, selection, dismissal and three
+window-fit cases still pass. Both final Release builds include this change.
+
+The last iPad `testCompactMenuShortcutAcrossPages` result fails: Command-Z
+does not dismiss the File page or undo the layer created by the fixture. The
+existing `testSubmenusAndShortcuts` passes in the same grouped simulator run.
+A direct owner check confirms correct compact-menu bindings and availability
+after Add/Undo/Redo on the iPad policy; its subsequent Mac setup fails because
+it assumes an iPad-only header item, so it is not a passing two-policy check.
+The later v6 diagnostic confirms that `CaptureView` retains first-responder
+ownership through submenu updates, with no Command-Z callback. Focus restoration
+is therefore not a supported fix. The earlier explicit UIKit key-command
+registration also received no callback. In v7, removing the duplicate SwiftUI
+row shortcut registration still leaves compact-menu acceptance failing while
+the ordinary menu workflow passes. Both experiments and all temporary diagnostics
+are removed. These observations do not establish the delivery failure's cause or
+physical keyboard behavior. Keep that acceptance open; do not resume speculative
+registration/focus workarounds or restart the simulator. Evidence and retained
+failures are under `artifacts/apple-menu-accelerators-v1/`. This case is not
+repeated for the final passive-contact change without a new keyboard-delivery
+hypothesis; its acceptance remains open. The installed simulator app/runner now
+contain the reviewed passive-contact source (`simulator-v2` above), and the
+Mac test product is `mac-v4`. The shared menu source matches the prior passing
+native keyboard check. Keep the failing compact-menu regression visible in the
+test suite and do not count it among the eight passing workflows above.
+
+The shortcut editor needs no added Escape handler. A focused AppKit check of
+the real shared sheets and serial owner passes on both Apple policies: native
+typing records a shortcut, Escape cancels recording, and another Escape closes
+the shortcut editor while retaining Settings and all original bindings.
+Evidence is under `artifacts/apple-shortcut-dismissal-v1/`; it does not establish
+UIKit or physical-keyboard delivery.
+
+The batch also fixes the recovery picker's narrow-window
+clipping with one standard frame constraint: minimum width is 320 instead of
+450 points, while its normal ideal width remains 600. The original 360-point
+owned-window capture clips the heading, Done and Discard. Eight subsequent
+AppKit-hosted captures cover 360/600 points, both themes and both Apple policies;
+representative captures are reviewed and show the full heading and actions.
+Both Release builds pass. These are shared-view presentation checks with
+disposable recovery metadata, not new UIKit/provider or artwork-restoration
+acceptance. The grouped editor runs do not exercise the recovery picker or its
+native file providers.
+
+Evidence is under `artifacts/apple-recovery-fit-v1/`. Initial accessibility
+probes could not resolve the SwiftUI Done button, and a geometry-preference
+probe reported zero; neither establishes an action or bounds result. Those
+failures remain recorded. The final capture-only fixture stays in ignored
+artifacts, and temporary product identifiers are removed. Do not resume that
+probe for this one-line sizing change. Main fetch finds no newer commits, and
+all eleven recovery stashes remain.
 
 The menu milestone follows `7bc66f4`. Shared editor menus retain the parent row
 index with each submenu page; returning restores the row that opened the page
@@ -41,13 +152,22 @@ The grouped checks exposed an invalid Mac capture-label lookup after a modal
 menu hid its source from accessibility, and an obsolete partial-Zen expectation
 in the toolbar fixture. The fixture now caches that label before opening and
 expects full Zen, restoring through Tab as in the existing dedicated Zen check.
-The simulator toolbar workflow passes menu bounds and the style action, but its
-focused rerun still reports a failure at the Zen portion. The built and installed
-test bundles match and contain the updated assertion; no old runner remains
-live. Its cause is unresolved. Keep UIKit Zen/toolbar-restoration acceptance open
-and do not repeat the run or restart the simulator without a new hypothesis.
+At that checkpoint the simulator toolbar workflow passed menu bounds and the
+style action but failed at Zen. Matching built/installed bundles and stopped
+old runners ruled out the proposed stale-runner explanation. The contact-order
+fix and passing Zen/Tab result above supersede that unresolved transition.
 The production source stays unchanged through these editor runs; only the
 affected workflows are repeated after fixture corrections.
+
+Inspection of the retained simulator toolbar recording shows a black frame
+after the Zen tap, before teardown. A subsequent direct launch of the existing
+compiled app into Zen, without XCTest, produces a normal visible canvas with
+chrome hidden. Its bounded trace and capture are retained under
+`artifacts/apple-zen-canvas-v1/`; the direct-launch process has finished and its
+owned app was terminated. Startup in Zen does not validate the toolbar transition
+or Tab restoration, and the recording alone does not establish a renderer fault.
+The later contact-order fix resolves the tested transition without a rendering
+change; retain these earlier observations as evidence of the investigation.
 
 Evidence is under `artifacts/apple-menu-navigation-v1/`,
 `artifacts/apple-menu-fit-v1/` and `artifacts/apple-menu-milestone-v1/`.

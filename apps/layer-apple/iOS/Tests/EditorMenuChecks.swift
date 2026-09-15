@@ -73,6 +73,36 @@ final class EditorMenuChecks: XCTestCase {
         expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
     }
+    @MainActor func testCompactMenuShortcutAcrossPages() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"header","action":{"type":"remove","id":2}}},{"type":"customize","action":{"type":"header","action":{"type":"add","zone":"left","before":null,"item":{"kind":"menu"}}}},{"type":"invoke","command":"add_layer"}]"#
+        app.launch()
+        let trigger = app.buttons["application-menus"]
+        XCTAssertTrue(trigger.waitForExistence(timeout: 20))
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        trigger.tap()
+        let menu = app.descendants(matching: .any)["application-menu-content"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        let file = app.buttons["menu-action-File"]
+        XCTAssertTrue(file.waitForExistence(timeout: 5)); file.tap()
+        XCTAssertTrue(app.buttons["editor-menu-back"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["command-undo"].exists)
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 5), "Undo must execute from the other submenu and dismiss")
+        expectation(for: NSPredicate { _, _ in rows.count == 2 }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        trigger.tap()
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["command-redo"].exists)
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 5), "Redo must execute before its submenu is opened")
+        expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
     @MainActor func testWorkspaceMenuDragBothDirections() {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
