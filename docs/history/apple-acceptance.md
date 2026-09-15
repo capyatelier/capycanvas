@@ -108,6 +108,25 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Numeric Settings Reset and color popup fit — 2026-09-15
+
+Reset to Default now discards the selected numeric setting's unfinished editor
+and rejects late callbacks from that discarded draft. Ordinary numeric draft
+preservation is unchanged. The actual Mac menu reproduces retained focused text
+before the fix. Final Mac and UIKit workflows pass idle/valid/invalid-draft
+Reset, error removal and Done/reopen, plus ordinary numeric editing/navigation:
+four workflows, no failures or skips. Both Release builds pass without compiler
+warnings; final Settings captures are reviewed. Mac XCTest retains runtime
+responsiveness/QoS warnings. This does not establish performance acceptance.
+
+The color popup also shrinks its existing wheel within narrow sheet margins,
+fixing a clipped foreground swatch with a one-line frame change. Eight focused
+AppKit-hosted captures cover both Apple policies, themes and narrow/normal widths.
+The [handoff](../development/apple-handoff.md) records evidence, retained failures
+and scope. Full feature/visual states, focused UIKit text Reset, physical input,
+provider/lifecycle and sustained Mac 90 Hz / iPad 120 Hz acceptance remain open.
+The overall goal remains **incomplete**.
+
 ## Layers configuration and preview ownership — 2026-09-15
 
 Apple Layers configuration now uses the shared compact layer choice, percentage

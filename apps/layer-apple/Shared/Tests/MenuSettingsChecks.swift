@@ -4,6 +4,53 @@ import AppKit
 #endif
 
 extension XCTestCase {
+    @MainActor func checkSettingsNumericReset(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"reveal","id":"pressure"}}]"#
+        app.launch()
+        let value = app.buttons["number-value-Pressure response"]
+        let entry = app.textFields["number-entry-Pressure response"]
+        XCTAssertTrue(value.waitForExistence(timeout: 20))
+        let defaultDisplay = value.value as? String ?? ""
+        XCTAssertFalse(defaultDisplay.isEmpty)
+        for draft in ["", "2 + 0.25", "2 + ("] {
+            workspaceActivate(app.buttons["number-increase-Pressure response"])
+            expectation(for: NSPredicate(format: "value != %@", defaultDisplay), evaluatedWith: value)
+            waitForExpectations(timeout: 5)
+            if !draft.isEmpty {
+                workspaceActivate(value)
+                XCTAssertTrue(entry.waitForExistence(timeout: 5))
+                entry.typeText(draft)
+                XCTAssertEqual(entry.value as? String, draft)
+            }
+            let label = app.staticTexts["Pressure response"].firstMatch
+            #if os(macOS)
+            label.rightClick()
+            let reset = app.menuItems["Reset to Default"]
+            #else
+            label.press(forDuration: 0.7)
+            let reset = app.buttons["Reset to Default"]
+            #endif
+            XCTAssertTrue(reset.waitForExistence(timeout: 5)); XCTAssertTrue(reset.isEnabled)
+            workspaceActivate(reset)
+            XCTAssertFalse(app.staticTexts["number-error-Pressure response"].exists,
+                "Reset must discard an invalid draft's error")
+            if !draft.isEmpty {
+                XCTAssertNotEqual(entry.exists ? entry.value as? String : nil, draft,
+                    "Reset must replace the unfinished expression")
+            }
+            workspaceActivate(app.buttons["settings-done"])
+            XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
+            workspaceActivate(app.buttons["settings-button"])
+            workspaceActivate(app.staticTexts["settings-page-input"])
+            XCTAssertTrue(value.waitForExistence(timeout: 10))
+            XCTAssertEqual(value.value as? String, defaultDisplay,
+                "Done/reopen must retain Reset instead of restoring the discarded draft")
+        }
+        attachEditor(in: app, name: "settings-numeric-reset")
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkSettingsChoicePresentation(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"reveal","id":"zen_icon"}}]"#
         app.launch()

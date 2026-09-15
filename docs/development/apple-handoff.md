@@ -35,6 +35,45 @@ actual remaining gaps and use existing screenshots for presentation review;
 do not build new automation infrastructure for each control. Hardware-only
 acceptance and unresolved native delivery cases remain separate explicit gates.
 
+The numeric Settings Reset milestone fixes an actual native-menu failure:
+Reset left the focused expression `2 + 0.25` in the field. Settings now changes
+only that number editor's identity when its explicit Reset action runs; a guard
+rejects late edit callbacks from the discarded editor. Ordinary numeric snapshot,
+expression and draft semantics are unchanged. No new input adapter or preference
+row extraction is added. The final actual-menu workflow covers idle, valid and
+invalid drafts, error removal and Done/reopen retaining the shared default.
+
+Both final grouped Mac and UIKit workflows pass numeric Reset and ordinary
+numeric expression/Done, search/sidebar navigation and keyboard dismissal: four
+workflows, no failures or skips. Both Release builds pass without compiler
+warnings. Mac XCTest retains responsiveness/QoS warnings; these results do not
+establish performance acceptance. Final Settings captures are reviewed on both
+hosts. Evidence is under `artifacts/apple-settings-native-reset-v1/`; final
+results are `mac-v3`, `simulator-v1` and `release`. The exact test apps and runner
+are stopped. The first Mac run assumed Settings reopened on Pen & Input; its
+hierarchy shows Appearance. The corrected test explicitly opens Pen & Input,
+and `mac-v2` then reproduces the stale draft before the production fix. Those
+failures remain recorded. Main fetch finds no new commits; eleven recovery
+stashes remain. No physical workflow is repeated. Focused UIKit text Reset,
+remaining feature/window/keyboard states and hardware/performance gates stay open.
+
+The same batch fixes the explicit color popup at narrow widths: its fixed
+320-point wheel consumed the 24-point side margins and clipped the foreground
+swatch outline in a 320-point sheet. A maximum width lets the existing
+`ColorPanel` shrink while retaining its normal size in wider dialogs. Eight
+AppKit-hosted captures cover both Apple policies, light/dark and 320/500-point
+sheets; representative captures are reviewed. The toolbar picker fits at the
+narrow width and is unchanged. Evidence is under
+`artifacts/apple-workspace-dialog-fit-v1/` (`before-v2`, `after`). The initial
+unconstrained fixture host failed to capture a window; the existing fixed-size
+host pattern and absolute capture paths resolve the fixture. This retained
+failure establishes no product defect. No separate UIKit color-popup workflow
+or full-editor pixel comparison is claimed. The command-coverage file records
+the published Layers, Settings and property acceptance and this Reset workflow;
+its audit uses the retained inventory, without claiming fresh GPU enumeration.
+Only explicit Brush Color opens the popup; toolbar Color/Opacity use drawers.
+Do not restore the obsolete opacity popup fixture or add another popup path.
+
 The Layers milestone replaces three partial
 `LayerPanel` instances with the compact selection menu, percentage opacity field
 and four labeled catalog actions used by Web/Android. This restores direct Raise
@@ -120,12 +159,12 @@ Settings state, focused text/numeric Reset, physical keyboard delivery or full
 windowed-iPad acceptance. Main fetch finds no newer commits; all eleven recovery
 stashes remain.
 
-The separate numeric Settings Reset fixture is inconclusive: its initial field
-click/key checks and later native-menu observation do not establish the intended
-workflow or a product failure. Temporary preference-row extraction is removed;
-number draft semantics are unchanged. Preserve the failed evidence under
-`artifacts/apple-settings-number-reset-v1/` and do not repeat that fixture without
-new evidence. The earlier image-choice component fixture also needed capture-based
+The earlier numeric Settings Reset component fixture remains inconclusive: its
+field click/key checks and native-menu observation never established a product
+failure. Its temporary preference-row extraction stays removed. Preserve
+`artifacts/apple-settings-number-reset-v1/` without repeating that fixture;
+the later actual-menu milestone above reproduces and resolves the focused
+numeric Reset case. The earlier image-choice component fixture also needed capture-based
 clicks because its in-process Form accessibility traversal omitted rows; its
 failures remain recorded. Neither investigation adds a product input workaround.
 

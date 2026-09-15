@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var store: EditorStore
     @FocusedValue(\.editorTextCommit) private var commitText
     @FocusState private var searching: Bool
+    @State private var numberResets: [String: UInt64] = [:]
     private var model: JSON { store.snapshot["preferences"] }
     private var page: JSON { model["pages"].array.first { $0["id"].string == model["page"].string } ?? JSON() }
     var body: some View {
@@ -95,9 +96,13 @@ struct SettingsView: View {
             case "text":
                 PreferenceText(label: row["title"].string, value: kind["value"].string) { edit(row, $0) }
             case "number":
+                let reset = numberResets[row["id"].string, default: 0]
                 NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"]) { value, completion in
+                    // Reset replaces this draft; a late focus callback from the
+                    // discarded editor must not overwrite the shared default.
+                    guard reset == numberResets[row["id"].string, default: 0] else { completion(nil); return }
                     store.edit(["type": "preferences", "action": ["type": "edit", "id": row["id"].raw, "value": value]], completion: completion)
-                }
+                }.id(reset)
             case "info":
                 LabeledContent(row["title"].string, value: kind["value"].string)
             case "link":
@@ -113,7 +118,12 @@ struct SettingsView: View {
             if !row["description"].string.isEmpty { Text(row["description"].string).font(.caption).foregroundStyle(.secondary) }
         }.disabled(!row["enabled"].bool)
             .contextMenu {
-                if !row["reset"].isNull { Button(row["reset"]["label"].string) { action(["type": "reset", "id": row["id"].raw]) }.disabled(!row["reset"]["enabled"].bool) }
+                if !row["reset"].isNull {
+                    Button(row["reset"]["label"].string) {
+                        if kind["type"].string == "number" { numberResets[row["id"].string, default: 0] &+= 1 }
+                        action(["type": "reset", "id": row["id"].raw])
+                    }.disabled(!row["reset"]["enabled"].bool)
+                }
             }
     }
     @ViewBuilder private func choice(_ row: JSON) -> some View {
