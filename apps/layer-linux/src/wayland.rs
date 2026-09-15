@@ -1,4 +1,5 @@
 //! Our child surface only. GTK retains its connection, parent, input and chrome.
+mod color;
 use gtk::{gdk, glib::translate::*, prelude::*};
 use std::{
     ptr::NonNull,
@@ -186,12 +187,14 @@ pub struct Child {
     state: Events,
     geometry: Option<Geometry>,
     presentation: Option<wp_presentation::WpPresentation>,
+    color: Option<color::ColorSurface>,
     #[cfg(not(test))]
     last_feedback: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
 struct Events {
+    color: color::State,
     clock: Arc<FrameClock>,
     monotonic: bool,
     feedback_pending: bool,
@@ -225,6 +228,7 @@ impl Child {
         subsurface.set_desync();
         subcompositor.destroy();
         let presentation = globals.bind(&qh, 1..=1, ()).ok();
+        let color = color::ColorSurface::bind(&globals, &qh);
         Ok(Self {
             surface,
             subsurface,
@@ -236,6 +240,7 @@ impl Child {
             },
             geometry: None,
             presentation,
+            color,
             #[cfg(not(test))]
             last_feedback: None,
         })
@@ -302,6 +307,7 @@ impl Child {
 impl Drop for Child {
     fn drop(&mut self) {
         // The caller drops the Vulkan surface/swapchain BEFORE this object.
+        self.color.take();
         self.subsurface.destroy();
         self.surface.destroy();
         if let Some(presentation) = &self.presentation {

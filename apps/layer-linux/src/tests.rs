@@ -14921,3 +14921,6 @@ mod histogram;
 
 #[path = "color_preferences_tests.rs"]
 mod color_preferences;
+
+#[path = "managed_view_tests.rs"]
+mod managed_view;

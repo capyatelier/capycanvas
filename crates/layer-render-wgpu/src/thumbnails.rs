@@ -36,6 +36,27 @@ impl Thumbnails {
     }
 }
 impl WgpuRasterizer {
+    /// Configure the display-only byte outputs before requesting any previews.
+    /// Native saves, exact sampling and exports retain their own color contracts.
+    pub fn configure_ui_previews(
+        &mut self,
+        space: layer_core::color::RgbSpace,
+    ) -> Result<(), GpuRasterError> {
+        if self.thumbnails.pending != 0
+            || self.canvas_preview_pending()
+            || self.filter_previews.is_some()
+        {
+            return Err(GpuRasterError::Color(
+                "Configure preview color before starting UI image jobs".into(),
+            ));
+        }
+        self.ui_preview_space = space;
+        self.ui_preview_pipeline = None;
+        self.thumbnails = Thumbnails::new();
+        self.canvas_preview = crate::canvas_preview::CanvasOverview::new();
+        Ok(())
+    }
+
     pub fn thumbnails_pending(&self) -> bool {
         self.thumbnails.pending > 0
     }
@@ -102,7 +123,45 @@ impl WgpuRasterizer {
         reply: impl FnOnce(Result<ReadbackImage, GpuRasterError>) + Send + 'static,
     ) {
         let target = UiImageTarget::new(&self.device, [width, height]);
-        target.encode(&mut encoder, &self.pipelines.export, source);
+        let pipeline = if self.ui_preview_space == layer_core::color::RgbSpace::Srgb {
+            &*self.pipelines.export
+        } else {
+            self.ui_preview_pipeline.get_or_insert_with(|| {
+                let shader = self
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("managed UI image conversion"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            format!(
+                                "{}\n{}",
+                                view_color::shader(
+                                    self.device.working_space(),
+                                    self.ui_preview_space
+                                ),
+                                include_str!("export.wgsl")
+                            )
+                            .into(),
+                        ),
+                    });
+                let layout = self
+                    .device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("managed UI image layout"),
+                        bind_group_layouts: &[Some(&self.texture_layout)],
+                        immediate_size: 0,
+                    });
+                fullscreen_pipeline(
+                    &self.device,
+                    &layout,
+                    &shader,
+                    "fragment_main",
+                    None,
+                    EXPORT_FORMAT,
+                    "managed UI image",
+                )
+            })
+        };
+        target.encode(&mut encoder, pipeline, source);
         self.uploads.finish(&encoder);
         encoder.submit(&self.queue);
         target.map(request_id, reply);
@@ -119,7 +178,7 @@ pub(super) struct UiImageTarget {
 }
 impl UiImageTarget {
     pub fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
-        let (texture, view) = create_target(device, size, EXPORT_FORMAT, "UI image sRGB");
+        let (texture, view) = create_target(device, size, EXPORT_FORMAT, "profiled UI image");
         let stride = (size[0] * 4).div_ceil(256) * 256;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("small UI image readback"),

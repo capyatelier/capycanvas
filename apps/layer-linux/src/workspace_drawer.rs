@@ -172,7 +172,7 @@ impl Body {
             Self::Toolbar(v) => v.refresh(w, state),
             Self::Tools(v) => v.refresh(w, &state.tool_set, state.theme),
             Self::Settings(v) => v.refresh(w, state),
-            Self::Color(v) => v.refresh(&state.colors),
+            Self::Color(v) => v.refresh(&state.colors, w.view_color()),
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),

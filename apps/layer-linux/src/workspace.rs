@@ -1039,6 +1039,7 @@ impl Workspace {
         this.install_chrome();
         this.tooltips.install(&this.window);
         crate::input::install(&this);
+        crate::display_color::bind_monitor_updates(&this);
         this.install_gpu();
         this.restart_canvas.connect_clicked(glib::clone!(
             #[weak]
@@ -1597,6 +1598,18 @@ impl Workspace {
         self.system_status.set_visibility(fullscreen, show_clock);
         self.dispatch(UiAction::WindowFullscreen { fullscreen });
     }
+    pub(crate) fn view_color(&self) -> crate::display_color::ViewColor {
+        self.gpu.borrow().as_ref().map_or(Default::default(), |g| g.session.engine().backend().view_color)
+    }
+    pub(crate) fn display_description(&self) -> String {
+        let mut description = self.view_color().description().to_string();
+        if let Some(monitor) = self.window.surface().and_then(|s| s.display().monitor_at_surface(&s)) {
+            if let Some(name) = monitor.description().or_else(|| monitor.model()).or_else(|| monitor.connector()) {
+                description.push_str(&format!(" Monitor: {name}."));
+            }
+        }
+        description
+    }
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
         if self.refreshing.get() {
             return;
@@ -2042,7 +2055,7 @@ impl Workspace {
             self.tool_settings.refresh(self, &state);
         }
         if regions & regions::BRUSH != 0 {
-            self.color_panel.refresh(&state.colors);
+            self.color_panel.refresh(&state.colors, self.view_color());
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
             let [r, g, b, a] = state.brush.color;

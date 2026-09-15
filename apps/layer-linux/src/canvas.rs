@@ -10,6 +10,7 @@ use layer_ui::{CanvasCursor, UiChange, UiSession};
 pub struct GpuCanvas {
     pub session: UiSession<RenderWorker>,
     cursor: CanvasCursor,
+    view_color: crate::display_color::ViewColor,
     // Alive until the worker and its borrowed Wayland handles are gone.
     _parent: gtk::gdk::Surface,
     pub needs_present: bool,
@@ -108,6 +109,7 @@ impl GpuCanvas {
         Ok(Self {
             session,
             cursor: CanvasCursor::default(),
+            view_color: Default::default(),
             _parent: parent,
             needs_present: true,
         })
@@ -132,6 +134,8 @@ impl GpuCanvas {
             self.needs_present = true;
             return Ok(UiChange::default());
         }
+        let view_color_changed = self.view_color != renderer.view_color;
+        self.view_color = renderer.view_color;
         let geometry = Geometry::of(area);
         if renderer.geometry != Some(geometry) {
             renderer.geometry = Some(geometry);
@@ -145,6 +149,7 @@ impl GpuCanvas {
         let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
         changed.regions |= resized.regions;
+        if view_color_changed { changed.regions |= layer_ui::regions::BRUSH | layer_ui::regions::SETTINGS; }
         self.needs_present = !self.session.engine().backend().startup.complete;
         #[cfg(test)]
         {

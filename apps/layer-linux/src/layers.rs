@@ -26,7 +26,7 @@ pub struct LayerPanel {
     context: gtk::PopoverMenu,
     owner: Rc<RefCell<Weak<Workspace>>>,
     rows: Rc<RefCell<HashMap<usize, Row>>>,
-    previews: RefCell<HashMap<(u64, bool), (u64, gdk::MemoryTexture)>>,
+    previews: RefCell<HashMap<(u64, bool), (u64, gdk::Texture)>>,
     requested: RefCell<HashMap<(u64, bool), u64>>,
     pending: RefCell<HashMap<u64, (u64, bool, u64)>>,
     next_preview: Cell<u64>,
@@ -1191,13 +1191,9 @@ impl LayerPanel {
                     self.pending.borrow_mut().remove(&image.request_id)
                 && self.requested.borrow().get(&(id, mask)) == Some(&revision)
             {
-                let texture = gdk::MemoryTexture::new(
-                    image.width as i32,
-                    image.height as i32,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &glib::Bytes::from_owned(image.bytes),
-                    image.stride as usize,
-                );
+                let texture = g.session.engine().backend().view_color.texture(
+                    [image.width, image.height], gdk::MemoryFormat::R8g8b8a8,
+                    image.stride as usize, image.bytes);
                 self.previews
                     .borrow_mut()
                     .insert((id, mask), (revision, texture));

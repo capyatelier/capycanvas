@@ -358,18 +358,24 @@ impl ColorState {
     }
     /// Explicit SDR fallback for hosts whose widget colors are sRGB.
     pub fn preview(&self, color: RgbColor) -> [f32; 4] {
+        self.preview_in(color, RgbSpace::Srgb)
+    }
+    pub fn preview_in(&self, color: RgbColor, display: RgbSpace) -> [f32; 4] {
         color
-            .encoded_in(RgbSpace::Srgb)
+            .encoded_in(display)
             .expect("validated paint color")
             .map(|v| v.clamp(0., 1.))
     }
     pub fn gamut_description(&self) -> String {
+        self.gamut_description_in(RgbSpace::Srgb)
+    }
+    pub fn gamut_description_in(&self, display: RgbSpace) -> String {
         let mut text = format!("Document RGB: {}", self.rgb_space.name());
         if !self.definition().in_gamut(self.rgb_space).unwrap() {
             text.push_str(" · Outside document gamut");
         }
-        if !self.definition().in_gamut(RgbSpace::Srgb).unwrap() {
-            text.push_str(" · Outside sRGB preview gamut");
+        if !self.definition().in_gamut(display).unwrap() {
+            text.push_str(&format!(" · Outside {} preview gamut", display.name()));
         }
         text
     }
@@ -419,32 +425,32 @@ impl ColorState {
             fallback,
         )
     }
-    pub fn wheel_hue_color(&self, hue: f32) -> [f32; 3] {
-        if self.wheel_shape() == ColorShape::Circle {
-            // Perceptual hue is absolute. Keep the smooth sRGB reference guide;
-            // the disc itself spans the complete document gamut.
-            okhsv::hue_preview(hue)
-        } else {
-            self.preview_rgb(hue_color(hue))
-        }
-    }
     fn preview_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
         display_rgb(self.rgb_space, RgbSpace::Srgb, rgb)
     }
-    /// Complete field evaluation in working RGB precedes the display transform.
-    /// Hosts cache by size, hue, shape and RGB space, then clip the field edge.
+    pub fn wheel_hue_color(&self, hue: f32) -> [f32; 3] {
+        self.wheel_hue_color_in(hue, RgbSpace::Srgb)
+    }
+    pub fn wheel_hue_color_in(&self, hue: f32, display: RgbSpace) -> [f32; 3] {
+        if self.wheel_shape() == ColorShape::Circle {
+            // The perceptual reference guide remains sRGB-defined. Its display
+            // transform is separate from the full document-gamut field.
+            display_rgb(RgbSpace::Srgb, display, okhsv::hue_preview(hue))
+        } else {
+            display_rgb(self.rgb_space, display, hue_color(hue))
+        }
+    }
+    /// Complete field evaluation precedes the display transform. View pixels
+    /// never replace portable definitions or the document's paint coordinates.
     pub fn render_field(&self, side: u32, rgba: &mut [u8]) -> bool {
+        self.render_field_in(side, RgbSpace::Srgb, rgba)
+    }
+    pub fn render_field_in(&self, side: u32, display: RgbSpace, rgba: &mut [u8]) -> bool {
         let hue = self.wheel_components()[0];
         match self.wheel_shape() {
-            ColorShape::Circle => {
-                render_okhsv_disc_in(side, hue, self.rgb_space, RgbSpace::Srgb, rgba)
-            }
-            ColorShape::Square => {
-                render_hsv_field_in(side, hue, self.rgb_space, RgbSpace::Srgb, rgba)
-            }
-            ColorShape::Triangle => {
-                render_hls_field_in(side, hue, self.rgb_space, RgbSpace::Srgb, rgba)
-            }
+            ColorShape::Circle => render_okhsv_disc_in(side, hue, self.rgb_space, display, rgba),
+            ColorShape::Square => render_hsv_field_in(side, hue, self.rgb_space, display, rgba),
+            ColorShape::Triangle => render_hls_field_in(side, hue, self.rgb_space, display, rgba),
         }
     }
     /// Only the Okhsv circle rotates: its RGB blue hue is about 264 degrees,
@@ -2132,5 +2138,44 @@ mod tests {
                 .is_err()
         );
         assert_eq!(state, before);
+    }
+}
+
+#[cfg(test)]
+mod managed_view_tests {
+    use super::*;
+    #[test]
+    fn display_fields_match_exact_picker_definitions_without_mutating_them() {
+        let side = 41u32;
+        let geometry = ColorWheelGeometry::new(side as f32).unwrap();
+        for space in RgbSpace::ALL {
+            for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
+                let mut state = ColorState::default();
+                state.set_rgb_space(space).unwrap();
+                state.apply(ColorAction::SetSlot {
+                    slot: ColorSlot::Foreground,
+                    color: RgbColor::new(space, [0.85, 0.35, 0.2, 1.]).unwrap(),
+                }).unwrap();
+                state.apply(ColorAction::Shape { shape }).unwrap();
+                let original = state.clone();
+                for display in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
+                    let mut bytes = vec![0; (side * side * 4) as usize];
+                    assert!(state.render_field_in(side, display, &mut bytes));
+                    for index in (0..(side * side) as usize).step_by(11) {
+                        let point = [(index % side as usize) as f32 + 0.5,
+                            (index / side as usize) as f32 + 0.5];
+                        if geometry.hit_shape(point, shape) != Some(ColorWheelPart::Field) { continue; }
+                        let mut picked = state.clone();
+                        picked.apply(ColorAction::PickWheel { part: ColorWheelPart::Field, point, size: side as f32 }).unwrap();
+                        let expected = picked.definition().encoded_in(display).unwrap().map(|v| v.clamp(0.,1.));
+                        for (actual, expected) in bytes[index*4..][..4].iter().zip(expected) {
+                            assert!((*actual as f32 - expected*255.).abs() <= 0.6,
+                                "{space:?} {shape:?} {display:?} {point:?}: {actual} != {expected}");
+                        }
+                    }
+                    assert_eq!(state, original);
+                }
+            }
+        }
     }
 }

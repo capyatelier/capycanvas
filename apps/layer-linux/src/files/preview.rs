@@ -1,9 +1,8 @@
 //! Full-stack color comparison, reduced only after native linear composition.
 //! All GPU/readback work stays on the worker; this image never feeds artwork.
 use super::*;
-use gtk::gdk;
 use layer_core::color::{
-    ColorProfile, IntegerDepth, RgbSpace,
+    ColorProfile, IntegerDepth,
     source::{SourceChannels, SourceInterpretation},
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
@@ -18,6 +17,7 @@ fn thumbnail(
     background: [f32; 4],
     time: f32,
     control: CaptureControl,
+    view: crate::display_color::ViewColor,
 ) -> Result<Image, String> {
     let source = [project.document.width, project.document.height];
     let scale = (220. / source[0] as f64)
@@ -56,13 +56,12 @@ fn thumbnail(
     let target = SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth: IntegerDepth::U8,
-        profile: ColorProfile::Builtin(RgbSpace::Srgb),
+        profile: ColorProfile::Builtin(view.space()),
         profile_assumed: false,
     };
     let encoder = layer_color::WorkingEncoder::new(space, &target, Default::default())?;
     let mut bytes = vec![0; linear.len() * 4];
-    // Explicit sRGB preview contract, matching GTK's current canvas fallback.
-    // Monitor-managed wide previews will replace this display-only encoding.
+    // The GTK texture carries the same negotiated view space as the canvas.
     encoder.encode_premultiplied(&linear, &mut bytes, None, [0, 0])?;
     Ok(Image { extent, bytes })
 }
@@ -105,6 +104,7 @@ struct Pending {
 /// starting its successor, so rapid profile changes cannot accumulate GPU jobs.
 pub(super) struct Comparison {
     pub widget: gtk::Box,
+    view: crate::display_color::ViewColor,
     before: gtk::Picture,
     after: gtk::Picture,
     pub status: gtk::Label,
@@ -118,7 +118,7 @@ pub(super) struct Comparison {
     pub changed: RefCell<Option<Box<dyn Fn(bool)>>>,
 }
 impl Comparison {
-    pub fn new(original: Project) -> Rc<Self> {
+    pub fn new(original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pictures.set_homogeneous(true);
@@ -144,6 +144,7 @@ impl Comparison {
         widget.append(&pictures);
         widget.append(&status);
         Rc::new(Self {
+            view,
             widget,
             before,
             after,
@@ -170,7 +171,7 @@ impl Comparison {
         if let Some(control) = self.control.borrow().as_ref() {
             control.cancel();
         }
-        self.after.set_paintable(None::<&gdk::Paintable>);
+        self.after.set_paintable(None::<&gtk::gdk::Paintable>);
         self.status.set_label(message);
         self.mark_ready(false);
     }
@@ -207,13 +208,14 @@ impl Comparison {
                 *this.control.borrow_mut() = Some(control.clone());
                 let original = this.original.borrow().clone();
                 let serial = next.serial;
+                let view = this.view;
                 let result = gio::spawn_blocking(move || {
                     let before = original
                         .map(|project| {
-                            thumbnail(project, next.background, next.time, control.clone())
+                            thumbnail(project, next.background, next.time, control.clone(), view)
                         })
                         .transpose()?;
-                    let after = thumbnail(next.project, next.background, next.time, control)?;
+                    let after = thumbnail(next.project, next.background, next.time, control, view)?;
                     Ok::<_, String>((before, after))
                 })
                 .await
@@ -226,20 +228,14 @@ impl Comparison {
                 match result {
                     Ok((before, after)) => {
                         let set = |picture: &gtk::Picture, image: Image| {
-                            picture.set_paintable(Some(&gdk::MemoryTexture::new(
-                                image.extent[0] as i32,
-                                image.extent[1] as i32,
-                                gdk::MemoryFormat::R8g8b8a8,
-                                &glib::Bytes::from_owned(image.bytes),
-                                image.extent[0] as usize * 4,
-                            )));
+                            picture.set_paintable(Some(&view.rgba8(image.extent, image.bytes)));
                         };
                         if let Some(before) = before {
                             set(&this.before, before);
                             this.original.borrow_mut().take();
                         }
                         set(&this.after, after);
-                        this.status.set_label("Complete canvas · sRGB preview");
+                        this.status.set_label(&format!("Complete canvas · {} preview", view.space().name()));
                         this.mark_ready(true);
                     }
                     Err(error) => {

@@ -1,8 +1,7 @@
 //! Native palette management, backed by shared workspace color definitions.
-use crate::{color_editor::draw_preview, workspace::Workspace};
+use crate::{display_color::ColorPatch, workspace::Workspace};
 use adw::prelude::*;
 use gtk::glib;
-use layer_core::color::RgbSpace;
 use layer_ui::{ColorAction, ColorLibraryAction as Action, ColorSlot, UiAction};
 use std::{
     cell::{Cell, RefCell},
@@ -99,6 +98,7 @@ impl Library {
             return;
         };
         self.updating.set(true);
+        let view = self.workspace.upgrade().map_or(Default::default(), |w| w.view_color());
         let library = &colors.library;
         let items: Vec<_> = library
             .palettes
@@ -135,14 +135,14 @@ impl Library {
             row.set_use_markup(false);
             row.set_widget_name(&format!("saved-color-{}", swatch.id));
             let mut detail = swatch.color.space.name().to_string();
-            if !swatch.color.in_gamut(RgbSpace::Srgb).unwrap() {
-                detail.push_str(" · Outside sRGB preview gamut");
+            if !swatch.color.in_gamut(view.space()).unwrap() {
+                detail.push_str(&format!(" · Outside {} preview gamut", view.space().name()));
             }
             row.set_tooltip_text(Some(&detail));
             let subtitle = format!(
                 "{}{}",
                 swatch.color.space.name(),
-                if swatch.color.in_gamut(RgbSpace::Srgb).unwrap() {
+                if swatch.color.in_gamut(view.space()).unwrap() {
                     ""
                 } else {
                     " · !"
@@ -153,13 +153,10 @@ impl Library {
                 .update_property(&[gtk::accessible::Property::Description(&detail)]);
             row.set_subtitle_lines(1);
             let color = swatch.color;
-            let preview = gtk::DrawingArea::builder()
-                .width_request(36)
-                .height_request(28)
-                .valign(gtk::Align::Center)
-                .build();
-            preview
-                .set_draw_func(move |_, cr, width, height| draw_preview(cr, width, height, color));
+            let preview = ColorPatch::new(false);
+            preview.set_size_request(36, 28);
+            preview.set_valign(gtk::Align::Center);
+            preview.set_color(color, view);
             row.add_prefix(&preview);
             let weak = Rc::downgrade(self);
             let id = swatch.id;

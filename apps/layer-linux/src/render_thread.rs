@@ -87,14 +87,14 @@ enum Command {
     Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
     Readback(u64),
-    Capture(mpsc::Sender<Result<ReadbackImage, String>>),
+    Capture(crate::display_color::ViewColor, mpsc::Sender<Result<ReadbackImage, String>>),
     Stop,
     #[cfg(test)]
     FailNextFrame,
 }
 enum Reply {
     ColorAdopted(u64, HashMap<AssetId, TipOutline>),
-    Initialized,
+    Initialized(crate::display_color::ViewColor),
     Startup(
         u64,
         layer_render_wgpu::StartupProgress,
@@ -114,6 +114,7 @@ enum Reply {
 pub struct RenderWorker {
     transform_preview: Option<layer_render::TransformPreview>,
     initialized: bool,
+    pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
@@ -150,8 +151,11 @@ pub struct RenderWorker {
 }
 impl RenderWorker {
     pub(super) fn capture(&self) -> Result<ReadbackImage, String> {
+        self.capture_in(crate::display_color::ViewColor::Srgb)
+    }
+    pub(super) fn capture_in(&self, view: crate::display_color::ViewColor) -> Result<ReadbackImage, String> {
         let (tx, rx) = mpsc::channel();
-        self.send(Command::Capture(tx)).map_err(error)?;
+        self.send(Command::Capture(view, tx)).map_err(error)?;
         rx.recv_timeout(Duration::from_secs(30)).map_err(error)?
     }
     pub(super) fn new(
@@ -213,6 +217,7 @@ impl RenderWorker {
         Ok(Self {
             transform_preview: None,
             initialized: false,
+            view_color: Default::default(),
             first_frame_sent: false,
             startup: Default::default(),
             startup_generation: 0,
@@ -312,7 +317,7 @@ impl RenderWorker {
             }
             match reply {
                 Reply::ColorAdopted(..) => (),
-                Reply::Initialized => self.initialized = true,
+                Reply::Initialized(color) => { self.initialized = true; self.view_color = color; },
                 Reply::Startup(generation, progress, outlines) => {
                     if generation == self.startup_generation {
                         self.startup = progress;
@@ -576,6 +581,7 @@ struct Worker {
     presenter: ViewportPresenter,
     prepared_color: Option<color::Prepared>,
     config: wgpu::SurfaceConfiguration,
+    view_color: crate::display_color::ViewColor,
     last_view: Option<(ViewState, [f32; 4])>,
     area: gtk::glib::SendWeakRef<gtk::Picture>,
     cursor: Vec<CursorSegment>,
@@ -632,7 +638,7 @@ impl Worker {
         count: &AtomicUsize,
         #[cfg(test)] worker_stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
     ) -> Result<(), String> {
-        if reply.send(Reply::Initialized).is_err() {
+        if reply.send(Reply::Initialized(self.view_color)).is_err() {
             return Ok(());
         }
         #[cfg(test)]
@@ -898,8 +904,8 @@ impl Worker {
                     .map_err(error)?,
                 Command::Release(id) => self.renderer.release_asset(&id),
                 Command::Readback(id) => self.renderer.request_readback(id).map_err(error)?,
-                Command::Capture(reply) => {
-                    let _ = reply.send(self.capture());
+                Command::Capture(view, reply) => {
+                    let _ = reply.send(self.capture(view));
                 }
                 Command::Stop => break,
             }
@@ -912,7 +918,7 @@ impl Worker {
         clock: Arc<crate::wayland::FrameClock>,
         color: layer_core::color::DocumentColor,
     ) -> Result<Self, String> {
-        let child = Child::new(parent, clock)?;
+        let mut child = Child::new(parent, clock)?;
         // One process-lifetime loader/instance, not one per window. On the
         // tested NVIDIA driver, destroying our instance invalidates Wayland WSI
         // entry points still used by GTK's instance. Devices/surfaces/resources
@@ -938,14 +944,10 @@ impl Worker {
         let mut config = surface
             .get_default_config(&adapter, 1, 1)
             .ok_or("Vulkan Wayland swapchain unavailable")?;
-        // The current host route is explicitly tagged sRGB. Auto can select
-        // linear scRGB for floating surfaces, which requires different shader
-        // encoding. Native wide-color mode will select its matching route.
-        config.color_space = wgpu::SurfaceColorSpace::Srgb;
-        config.format = caps.formats.iter().copied()
-            .filter(|f| caps.color_spaces(*f).contains(wgpu::SurfaceColorSpaces::SRGB))
-            .min_by_key(|f| f.is_srgb())
-            .ok_or("The Wayland canvas requires an explicit sRGB surface")?;
+        let format = crate::display_color::ViewColor::format(&caps)?;
+        let view_color = child.describe_sdr()?;
+        config.color_space = wgpu::SurfaceColorSpace::PassThrough;
+        config.format = format;
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         if !caps.alpha_modes.contains(&config.alpha_mode) {
             return Err(
@@ -988,14 +990,16 @@ impl Worker {
         let cache = gtk::glib::user_cache_dir()
             .join("capycanvas")
             .join("shaders");
-        let renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
+        let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
             adapter, device, queue, &cache, color,
         ).map_err(error)?;
+        renderer.configure_ui_previews(view_color.space()).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
-        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, layer_render_wgpu::SdrSurfaceColor::Srgb)
+        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, view_color.surface())
             .map_err(error)?;
         presenter.prepare_overviews(&renderer);
         Ok(Self {
+            view_color,
             paper_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),
             surface,
@@ -1181,7 +1185,7 @@ impl Worker {
         self.pending_present = false;
         Ok(())
     }
-    fn capture(&mut self) -> Result<ReadbackImage, String> {
+    fn capture(&mut self, color: crate::display_color::ViewColor) -> Result<ReadbackImage, String> {
         let (view, surround) = self.last_view.ok_or("Canvas has not rendered")?;
         // Explicit screenshot only. No host pixels or texture imports in ink.
         let texture = self
@@ -1201,7 +1205,7 @@ impl Worker {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-        let mut presenter = ViewportPresenter::for_renderer(&self.renderer, texture.format());
+        let mut presenter = ViewportPresenter::for_surface(&self.renderer, texture.format(), color.surface()).map_err(error)?;
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         presenter.set_overviews(&self.renderer, &self.overviews);
         let mut encoder = self

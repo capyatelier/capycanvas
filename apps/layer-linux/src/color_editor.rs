@@ -1,9 +1,10 @@
 //! Native numeric color drafts. Shared Rust owns parsing, conversion and the
 //! palette definitions; this sheet publishes one accepted paint change.
+use crate::display_color::{ColorPatch, ViewColor};
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::glib;
-use layer_core::color::{RgbColor, RgbSpace};
+use layer_core::color::RgbSpace;
 use layer_ui::{ColorAction, ColorEditor, ColorInputModel, ColorSlot, UiAction};
 use std::{
     cell::{Cell, RefCell},
@@ -18,7 +19,8 @@ struct Form {
     fields: [adw::EntryRow; 4],
     description: gtk::Label,
     validation: gtk::Label,
-    preview: gtk::DrawingArea,
+    preview: ColorPatch,
+    view: ViewColor,
     space: RgbSpace,
 }
 impl Form {
@@ -49,12 +51,13 @@ impl Form {
                 if !color.in_gamut(self.space).unwrap() {
                     text.push_str(" · Outside document gamut");
                 }
-                if !color.in_gamut(RgbSpace::Srgb).unwrap() {
-                    text.push_str(" · Outside sRGB preview gamut");
+                if !color.in_gamut(self.view.space()).unwrap() {
+                    text.push_str(&format!(" · Outside {} preview gamut", self.view.space().name()));
                 }
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);
+                self.preview.set_color(color, self.view);
             }
             Err(error) => {
                 self.validation.add_css_class("error");
@@ -115,7 +118,8 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
     description.add_css_class("dim-label");
     let validation = gtk::Label::builder().wrap(true).xalign(0.).build();
     validation.set_widget_name("edit-color-validation");
-    let preview = gtk::DrawingArea::builder().height_request(48).build();
+    let preview = ColorPatch::new(false);
+    preview.set_height_request(48);
     preview.set_widget_name("edit-color-preview");
     content.append(&description);
     content.append(&group);
@@ -138,6 +142,7 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         description,
         validation,
         preview,
+        view: workspace.view_color(),
         space,
     });
     for (i, row) in form.fields.iter().enumerate() {
@@ -184,16 +189,6 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
             form.refresh_preview();
         }
     });
-    let weak = Rc::downgrade(&form);
-    form.preview.set_draw_func(move |_, cr, width, height| {
-        let Some(form) = weak.upgrade() else {
-            return;
-        };
-        let Ok(color) = form.editor.borrow().color() else {
-            return;
-        };
-        draw_preview(cr, width, height, color);
-    });
     form.populate();
     glib::MainContext::default().spawn_local(glib::clone!(
         #[weak]
@@ -225,21 +220,4 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
             }
         }
     ));
-}
-
-pub(crate) fn draw_preview(cr: &gtk::cairo::Context, width: i32, height: i32, color: RgbColor) {
-    for y in 0..(height + 7) / 8 {
-        for x in 0..(width + 7) / 8 {
-            let v = if (x + y) % 2 == 0 { 0.8 } else { 0.6 };
-            cr.set_source_rgb(v, v, v);
-            cr.rectangle((x * 8) as f64, (y * 8) as f64, 8., 8.);
-            let _ = cr.fill();
-        }
-    }
-    let rgba = color
-        .encoded_in(RgbSpace::Srgb)
-        .unwrap()
-        .map(|v| v.clamp(0., 1.) as f64);
-    cr.set_source_rgba(rgba[0], rgba[1], rgba[2], rgba[3]);
-    let _ = cr.paint();
 }

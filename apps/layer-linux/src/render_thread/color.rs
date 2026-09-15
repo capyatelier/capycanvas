@@ -180,6 +180,7 @@ impl Worker {
             request.project.document.color,
         )
         .map_err(error)?;
+        renderer.configure_ui_previews(self.view_color.space()).map_err(error)?;
         for (id, asset) in &request.project.assets {
             check()?;
             renderer.prepare_owned_asset(id, asset).map_err(error)?;
@@ -245,7 +246,7 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(
             &renderer,
             self.config.format,
-            layer_render_wgpu::SdrSurfaceColor::Srgb,
+            self.view_color.surface(),
         )
         .map_err(error)?;
         presenter.prepare_overviews(&renderer);

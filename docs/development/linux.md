@@ -81,8 +81,31 @@ each chooser also validates its actual input/output transform. Removal affects
 the library copy, leaving source files and embedded document profiles intact.
 The library admits 128 profiles, 16 MiB per profile and 64 MiB total. It lives in
 the user's data directory under `capycanvas/color-profiles`, or beside an explicitly
-selected `LAYER_SETTINGS_FILE` in `color-profiles`. The Color page currently
-reports the canvas's explicit sRGB fallback; managed monitor details remain pending.
+selected `LAYER_SETTINGS_FILE` in `color-profiles`. The Color page reports the
+negotiated canvas view space and the monitor reported by GTK. Viewing prefers
+Display P3, then sRGB. Vulkan color pass-through is required so the application
+can describe the pixels itself. The
+compositor owns monitor/profile conversion. Physical monitor/profile
+qualification remains pending.
+
+GTK 4.22 disables its Wayland color-manager binding unless `GDK_DEBUG=color-mgmt`
+is enabled. The application enables that flag before GTK initialization, preserving
+other diagnostic flags; the native test harness sets it before launching tests.
+This is a version-specific workaround because GTK has no public equivalent API.
+The app-owned canvas uses Wayland's explicit piecewise sRGB transfer function
+(color-management v2 TF 14), or a matching generated ICC profile when needed.
+It never relies on legacy TF 9: Mutter 50.4 interprets that value as gamma 2.2.
+If no color-management protocol is available, canvas and controls use the same
+untagged sRGB fallback. An available protocol that rejects both precise SDR
+descriptions reports an initialization error instead of displaying incorrect
+colors. The narrowly patched wgpu dependency is documented in
+[`vendor/README.md`](../../vendor/README.md).
+
+The app-owned canvas and GTK parent each publish their own color description;
+tagging only the canvas does not qualify the controls. GTK selects its own output
+color state and converts the explicitly tagged artwork textures into it. A
+Wayland protocol trace verifies both surfaces, while physical monitor moves,
+profile changes and alternate GTK renderers still require qualification.
 
 File → Import Image as Layer and Edit → Paste Image as Layer retain original
 PNG/JPEG/TIFF source data while keeping the destination document's working mode.
@@ -94,8 +117,8 @@ check covers import, clipboard format preference, history, reopen and cancellati
 File → Repair Source Profile and the layer context menu correct retained originals.
 The ICC chooser validates input profiles against the image channels and validates
 export profiles against the output transform. Repair previews the complete Before/After
-canvas on a cancellable worker before Apply, using an explicit sRGB preview while
-managed wide viewing is unfinished. Repair preserves original sample
+canvas on a cancellable worker before Apply, using the same tagged display space
+as the canvas. Repair preserves original sample
 bytes; a layer with baked edits gets a separate corrected source layer. The native
 `workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits`
 check covers correction, cancellation, mismatched profiles, history and reopening.
@@ -119,7 +142,11 @@ change together. Cancel discards pending work; Undo/Redo restores exact backing 
 the matching renderer and picker space. The native
 `workspace::tests::document_color::native_document_color_assignment_conversion_depth_history_and_copy`
 check covers these controls, save/reopen, continued drawing and GPU recovery.
-Comparison and canvas currently use the explicit sRGB display fallback.
+Canvas, comparisons, picker fields, paint/palette samples, layer thumbnails and
+filter thumbnails use the negotiated display space. View-only encoding never
+feeds document edits, exact sampling or profiled export. Generic effect/gradient
+color editors still need the managed numeric-color route; monitor/profile and
+complete preview-matrix qualification remain open.
 
 View → Histogram opens a separate window that stays available while editing.
 It counts the full-resolution committed composite, including visible paper and

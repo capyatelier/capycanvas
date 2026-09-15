@@ -129,67 +129,99 @@ fn float_surface_close(actual: &[u8], format: wgpu::TextureFormat, expected: [f6
 #[test]
 fn native_export_navigator_thumbnails_and_raw_samples_keep_their_declared_color_coordinates() {
     use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
-    for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
-            let mut r =
-                WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
-            for codes in [
-                [17000, 65000, 5000, 65535],
-                [64000, 30000, 8000, 17000],
-                [45000, 32000, 28000, 1],
-            ] {
-                // Retain ProPhoto numbers, including values outside the working
-                // gamut. No view path may clip in document coordinates first.
-                let layer = source(RgbSpace::ProPhoto, codes);
-                frame(&mut r, &layer);
-                let before =
-                    crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
-                let expected = linear(RgbSpace::ProPhoto, codes, RgbSpace::Srgb);
-                let alpha = f64::from(codes[3]) / 65535.;
-                let export = r.readback_srgb_rgba8().unwrap();
-                close(&export[0..4], bytes(expected, alpha), "sRGB export");
-                assert!(r.request_canvas_preview(None).unwrap());
-                complete(&r);
-                let navigator = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
-                close(&navigator.bytes[..4], bytes(expected, alpha), "Navigator");
-                r.request_thumbnail(7, layer.id).unwrap();
-                complete(&r);
-                let thumbnail = r.take_thumbnail().unwrap().unwrap();
-                let i = (16 * 32 + 16) * 4;
-                close(
-                    &thumbnail.bytes[i..i + 4],
-                    bytes(expected.map(|v| v * alpha + 0.855 * (1. - alpha)), 1.),
-                    "retained photo thumbnail",
-                );
-                for area in [ColorSampleArea::Point, ColorSampleArea::Average5] {
-                    assert!(
-                        r.request_color_sample(ColorSampleRequest {
-                            request_id: 8,
-                            source: ColorSampleSource::Composite,
-                            position: [16, 16],
-                            area,
-                        })
-                        .unwrap()
-                    );
+    for preview_space in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
+        for space in RgbSpace::ALL {
+            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+                let mut r =
+                    WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
+                r.configure_ui_previews(preview_space).unwrap();
+                for codes in [
+                    [17000, 65000, 5000, 65535],
+                    [64000, 30000, 8000, 17000],
+                    [45000, 32000, 28000, 1],
+                ] {
+                    // Retain ProPhoto numbers, including values outside the working
+                    // gamut. No view path may clip in document coordinates first.
+                    let layer = source(RgbSpace::ProPhoto, codes);
+                    frame(&mut r, &layer);
+                    let before =
+                        crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+                    let expected = linear(RgbSpace::ProPhoto, codes, RgbSpace::Srgb);
+                    let preview = linear(RgbSpace::ProPhoto, codes, preview_space);
+                    let alpha = f64::from(codes[3]) / 65535.;
+                    let export = r.readback_srgb_rgba8().unwrap();
+                    close(&export[0..4], bytes(expected, alpha), "sRGB export");
+                    assert!(r.request_canvas_preview(None).unwrap());
                     complete(&r);
-                    let sample = r.take_color_sample().unwrap().unwrap();
-                    let working = linear(RgbSpace::ProPhoto, codes, space);
-                    for c in 0..3 {
-                        assert!(
-                            (f64::from(sample.rgba[c]) - working[c]).abs() < 3e-6,
-                            "{space:?} raw {area:?}"
-                        );
+                    let navigator = r.take_canvas_preview().unwrap().unwrap().image.unwrap();
+                    close(&navigator.bytes[..4], bytes(preview, alpha), "Navigator");
+                    r.request_thumbnail(7, layer.id).unwrap();
+                    complete(&r);
+                    let thumbnail = r.take_thumbnail().unwrap().unwrap();
+                    let i = (16 * 32 + 16) * 4;
+                    close(
+                        &thumbnail.bytes[i..i + 4],
+                        bytes(preview.map(|v| v * alpha + 0.855 * (1. - alpha)), 1.),
+                        "retained photo thumbnail",
+                    );
+                    if codes[3] == 65535 {
+                        r.request_filter_previews(layer_render::FilterPreviewRequest {
+                            request_id: 9,
+                            target: layer.id,
+                            size: [200, 40],
+                            extent: [256; 2],
+                            view: view(),
+                            layers: vec![layer.composite_snapshot()],
+                            filters: vec![Arc::new(layer_core::EffectInstance::new(
+                                fixture("exposure").program(),
+                            ))],
+                        })
+                        .unwrap();
+                        let image = (0..100)
+                            .find_map(|_| {
+                                complete(&r);
+                                r.take_filter_previews()
+                            })
+                            .expect("filter image completes")
+                            .unwrap()
+                            .image;
+                        let mut opaque = 0;
+                        for pixel in image.bytes.chunks_exact(4).filter(|p| p[3] == 255) {
+                            close(pixel, bytes(preview, 1.), "zero exposure filter preview");
+                            opaque += 1;
+                        }
+                        assert!(opaque > 500);
                     }
-                    assert!((f64::from(sample.rgba[3]) - alpha).abs() < 2e-7);
+                    for area in [ColorSampleArea::Point, ColorSampleArea::Average5] {
+                        assert!(
+                            r.request_color_sample(ColorSampleRequest {
+                                request_id: 8,
+                                source: ColorSampleSource::Composite,
+                                position: [16, 16],
+                                area,
+                            })
+                            .unwrap()
+                        );
+                        complete(&r);
+                        let sample = r.take_color_sample().unwrap().unwrap();
+                        let working = linear(RgbSpace::ProPhoto, codes, space);
+                        for c in 0..3 {
+                            assert!(
+                                (f64::from(sample.rgba[c]) - working[c]).abs() < 3e-6,
+                                "{space:?} raw {area:?}"
+                            );
+                        }
+                        assert!((f64::from(sample.rgba[3]) - alpha).abs() < 2e-7);
+                    }
+                    assert_eq!(
+                        crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
+                        before
+                    );
+                    assert!(
+                        r.paint_layers[0].pages.is_empty(),
+                        "viewing must not rasterize the source"
+                    );
                 }
-                assert_eq!(
-                    crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
-                    before
-                );
-                assert!(
-                    r.paint_layers[0].pages.is_empty(),
-                    "viewing must not rasterize the source"
-                );
             }
         }
     }
@@ -353,7 +385,9 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
         let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let binding = r.composite_bind_group.as_ref().unwrap().clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        r.submit_ui_readback(encoder, &binding, [1; 2], 42, move |image| { tx.send(image).unwrap(); });
+        r.submit_ui_readback(encoder, &binding, [1; 2], 42, move |image| {
+            tx.send(image).unwrap();
+        });
         complete(&r);
         assert!(rx.recv().unwrap().unwrap().bytes.iter().all(|v| *v == 0));
         assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);

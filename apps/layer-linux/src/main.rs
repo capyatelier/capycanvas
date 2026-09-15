@@ -1,4 +1,5 @@
 mod canvas;
+mod display_color;
 mod effects;
 mod files;
 mod histogram;
@@ -39,6 +40,8 @@ fn stylesheet() -> String {
 }
 
 fn main() -> gtk::glib::ExitCode {
+    // SAFETY: first operation, before GTK initialization or worker creation.
+    unsafe { display_color::enable_gtk_color_management() };
     glib::set_application_name(layer_ui::APP_NAME);
     let app = adw::Application::builder()
         .application_id("art.capycanvas.CapyCanvas")
@@ -182,21 +185,11 @@ fn snapshot(workspace: &workspace::Workspace) -> gtk::gdk::Texture {
 
 fn with_canvas_snapshot<T>(workspace: &workspace::Workspace, capture: impl FnOnce() -> T) -> T {
     // Explicit screenshot: GTK snapshots omit app-owned child surfaces.
-    let image = workspace
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .capture()
-        .expect("capture canvas");
-    let pixels = gtk::glib::Bytes::from_owned(image.bytes);
-    let canvas = gtk::gdk::MemoryTexture::new(
-        image.width as i32,
-        image.height as i32,
-        gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
-        &pixels,
-        image.stride as usize,
-    );
+    let color = workspace.view_color();
+    let image = workspace.gpu.borrow().as_ref().unwrap().session.engine().backend()
+        .capture_in(color).expect("capture managed canvas");
+    let canvas = color.texture([image.width, image.height],
+        gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied, image.stride as usize, image.bytes);
     workspace.area.set_paintable(Some(&canvas));
     let context = gtk::glib::MainContext::default();
     let until = std::time::Instant::now() + std::time::Duration::from_millis(50);

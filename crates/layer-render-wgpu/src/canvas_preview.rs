@@ -109,7 +109,7 @@ impl WgpuRasterizer {
                                     "{}\n{}\n{}",
                                     view_color::shader(
                                         self.device.working_space(),
-                                        layer_core::color::RgbSpace::Srgb
+                                        self.ui_preview_space
                                     ),
                                     include_str!("overview_sample.wgsl"),
                                     if native {

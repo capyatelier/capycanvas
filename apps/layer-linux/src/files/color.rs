@@ -141,7 +141,7 @@ pub(super) async fn run(
         )
     };
     let color = project.document.color;
-    let comparison = super::preview::Comparison::new(project.clone());
+    let comparison = super::preview::Comparison::new(project.clone(), w.view_color());
     let detail = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)

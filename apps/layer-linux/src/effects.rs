@@ -16,6 +16,7 @@ use std::{
 struct PreviewKey {
     revision: (u64, u64, u64),
     size: [u32; 2],
+    color: crate::display_color::ViewColor,
 }
 
 pub struct EffectPanels {
@@ -33,7 +34,7 @@ pub struct EffectPanels {
     picker_visible: RefCell<Vec<std::sync::Arc<str>>>,
     picker_rows: RefCell<HashMap<std::sync::Arc<str>, (gtk::Button, gtk::Picture)>>,
     preview_key: Cell<Option<PreviewKey>>,
-    preview_loaded: RefCell<HashMap<std::sync::Arc<str>, gtk::gdk::MemoryTexture>>,
+    preview_loaded: RefCell<HashMap<std::sync::Arc<str>, gtk::gdk::Texture>>,
     preview_request: Cell<u64>,
     preview_pending: Cell<Option<(u64, PreviewKey)>>,
     pub properties: gtk::Box,
@@ -398,6 +399,7 @@ impl EffectPanels {
             return;
         };
         let revision = gpu.session.filter_preview_revision();
+        let view_color = gpu.session.engine().backend().view_color;
         while let Some(result) = gpu.session.renderer_mut().take_filter_previews() {
             let pending = self.preview_pending.take();
             let Ok(result) = result else {
@@ -405,6 +407,7 @@ impl EffectPanels {
             };
             if pending.is_none_or(|(id, key)| {
                 id != result.image.request_id
+                    || key.color != view_color
                     || key.revision != revision
                     || Some(key) != self.preview_key.get()
             }) {
@@ -417,13 +420,8 @@ impl EffectPanels {
             for (i, id) in result.filters.into_iter().enumerate() {
                 let start = i * height as usize * stride;
                 let row = glib::Bytes::from_bytes(&bytes, start..start + height as usize * stride);
-                let texture = gtk::gdk::MemoryTexture::new(
-                    result.image.width as i32,
-                    height as i32,
-                    gtk::gdk::MemoryFormat::R8g8b8a8,
-                    &row,
-                    stride,
-                );
+                let texture = view_color.texture_bytes([result.image.width, height],
+                    gtk::gdk::MemoryFormat::R8g8b8a8, stride, row);
                 self.preview_loaded.borrow_mut().insert(id, texture);
             }
         }
@@ -465,7 +463,7 @@ impl EffectPanels {
                 size[1].max((40 * scale).min(128)),
             ]
         });
-        let key = PreviewKey { revision, size };
+        let key = PreviewKey { revision, size, color: view_color };
         if self.preview_key.get() != Some(key) {
             self.preview_loaded.borrow_mut().clear();
             self.preview_key.set(Some(key));

@@ -77,6 +77,7 @@ pub struct Preferences {
     empty: gtk::Label,
     error: gtk::Label,
     fields: RefCell<BTreeMap<PreferenceId, Field>>,
+    display: RefCell<Option<adw::ActionRow>>,
     groups: RefCell<Vec<(SettingsPage, usize, adw::PreferencesGroup)>>,
     shortcuts: adw::PreferencesGroup,
     shortcut_rows: RefCell<Vec<(String, adw::ActionRow, gtk::Label)>>,
@@ -469,6 +470,7 @@ impl Preferences {
             empty,
             error,
             fields: RefCell::new(BTreeMap::new()),
+            display: RefCell::new(None),
             groups: RefCell::default(),
             shortcuts: adw::PreferencesGroup::new(),
             shortcut_rows: RefCell::default(),
@@ -990,9 +992,10 @@ impl Preferences {
                 row.add_suffix(&button);
                 row.set_activatable_widget(Some(&button));
                 group.add(&row);
-                let display = text_row("Canvas display", "sRGB fallback. Wide document values remain in the drawing; this canvas presentation currently clips colors outside sRGB.");
+                let display = text_row("Canvas display", &w.display_description());
                 display.set_widget_name("color-display-details");
                 group.add(&display);
+                *self.display.borrow_mut() = Some(display);
                 content.add(&group);
             }
             self.stack.add_titled_with_icon(
@@ -1027,6 +1030,7 @@ impl Preferences {
             );
         }
         self.updating.set(true);
+        if let Some(row) = self.display.borrow().as_ref() { row.set_subtitle(&w.display_description()); }
         let open = [
             view.is_some(),
             view.as_ref().is_some_and(|v| v.shortcut_editor.is_some()),

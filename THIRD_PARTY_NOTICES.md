@@ -107,9 +107,13 @@ NDK and emulator packages are development tools installed separately, not vendor
 or included as source assets. Android binary releases must collect notices for
 their exact Maven and native dependencies as well as the notices below.
 
-Cargo downloads dependencies separately; their sources and compiled libraries
-are not vendored in this repository. `Cargo.lock` records exact versions and
-checksums. [deny.toml](deny.toml) enforces the reviewed Rust license allowlist,
+The published wgpu 30.0.1 `wgpu`, `wgpu-hal` and `wgpu-types` crates are included
+under [vendor](vendor/README.md) with a local Vulkan color pass-through patch.
+They retain their MIT OR Apache-2.0 licenses and copyright notices; each package
+contains `LICENSE.MIT` and `LICENSE.APACHE`.
+
+Cargo downloads other dependencies separately. `Cargo.lock` records exact
+versions and registry checksums. [deny.toml](deny.toml) enforces the reviewed Rust license allowlist,
 including build/dev dependencies and non-Linux targets. An allowed license is
 not permission to omit its copyright notices or other distribution conditions.
 

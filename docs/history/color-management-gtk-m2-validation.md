@@ -5357,3 +5357,176 @@ remaining export controls, combined resource/job limits and final precision and
 workload qualification remain open. Fresh frame-creation baselines, regression
 investigation and optimization remain last. Other platform hosts remain
 unintegrated pending approval after GTK completion.
+
+## GTK managed artwork and explicit Wayland SDR descriptions — 2026-09-15
+
+This checkpoint follows `96c41bd0`. It connects managed viewing; it does not
+complete milestone 2 or qualify a physical monitor. The GTK canvas, picker
+fields/ring/markers, paint samples, saved palettes, numeric-color sheet,
+Before/After comparisons, layer thumbnails and filter thumbnails now carry a
+consistent view definition. View conversion never feeds document edits, exact
+sampling, native persistence or profiled delivery. GTK follows the compositor's
+output state; monitor enter/leave notifications refresh the informational Color
+page without changing document/history state. Generic effect and gradient color
+editors remain outstanding.
+
+The renderer chooses an advertised 8-bit Vulkan pass-through format, then the
+host negotiates an exact SDR image description: Display P3 first, sRGB second.
+The preferred description uses Wayland color-management v2's
+`compound_power_2_4` transfer (14). A generated matrix/TRC ICC profile provides
+an alternative, including protocol v1. If the compositor exposes no color manager,
+both GTK artwork and the canvas use the untagged sRGB fallback. If an available
+manager rejects both precise SDR descriptions, initialization reports the error.
+No document values are clipped to the view gamut; clipping occurs only in the
+view outputs. HDR surface modes are not selected.
+
+Independent checks changed the initially proposed integration:
+
+- GTK 4.22.4 ignores the color-manager global unless `GDK_DEBUG=color-mgmt` is
+  enabled. The first protocol trace showed only the canvas publishing a color
+  description. The production entry point now enables that flag before GTK or
+  worker initialization and preserves other debug flags. Native tests set it in
+  their launch environment. This is a scoped workaround for an upstream runtime
+  gate without a public API, confirmed against the
+  [GTK 4.22.4 Wayland implementation](https://github.com/GNOME/gtk/blob/4.22.4/gdk/wayland/gdkdisplay-wayland.c).
+- NVIDIA's WSI described its initial P3 swapchain using the legacy sRGB transfer
+  value 9. [Mutter 50.4](https://github.com/GNOME/mutter/blob/50.4/src/wayland/meta-wayland-color-management.c)
+  interprets that value as gamma 2.2, unlike the piecewise curve encoded by our
+  presenter. Matching offscreen RGB values did not establish correct display
+  interpretation. The raw Vulkan capability probe confirmed pass-through support.
+  The [Vulkan specification](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html)
+  defines that mode as the way to prevent WSI from owning the Wayland color
+  object. A small wgpu patch exposes it; provenance, exact source patch and
+  licenses are in [vendor/README.md](../../vendor/README.md). wgpu retains
+  swapchain acquisition, synchronization and presentation.
+- The ICC alternative initially failed with `Couldn't parse ICC profile`.
+  Mutter's [file reader](https://github.com/GNOME/mutter/blob/50.4/src/core/util.c)
+  reads from the received descriptor's current position. Rewinding the anonymous
+  profile file before transferring it fixes the failure; the profile bytes and
+  declared offset remain unchanged. A subsequent native v1 ICC run passes.
+- A GTK snapshot caught fractional checker-edge alpha seams: an opaque swatch
+  produced alpha about 0.755. Waiting for animations did not change the result.
+  Painting one opaque base beneath alternating checker tiles fixes the seam.
+  The regression compares the actual GTK widget's rendered RGBA with the canvas.
+
+GDK textures carry explicit ColorState metadata, using P3/D65 and the piecewise
+sRGB curve for P3. Color samples composite transparency in linear light before
+view clipping. The GPU's small UI-image encoder has a separate configured output
+space, including Navigator readback and filter previews. It does not change the
+sRGB diagnostic/export readback contract or exact document-space samples. Color
+conversion, depth changes, Undo/Redo and GPU recovery preserve the selected view
+route when preparing a replacement renderer. The former untagged Cairo artwork
+paths for picker fields, paint samples, palette samples and numeric previews are
+removed; neutral outlines remain native GTK/Cairo.
+
+All evidence below is in `artifacts/color-m2/managed-view-*`. The environment is
+GTK 4.22.4, Mutter 50.4, the recorded Fedora 44/NVIDIA 610.57.04 workstation and a
+private 1600×1000@120 Hz Wayland monitor. These are correctness checks, not
+performance workloads; their elapsed times do not qualify frame creation or
+input latency.
+
+- `shared-color-tests.log`: 37 existing shared color tests pass. The separate
+  `field-tests.log` checks all four working spaces, three picker shapes and both
+  output gamuts against exact picker definitions at real field pixel centers;
+  rendering leaves color state unchanged.
+- `gpu-final-tests.log`: four GPU view tests pass (47.23 s). The expanded
+  export/Navigator/thumbnail/sample case covers both UI output gamuts, all four
+  working spaces and both integer depths. It includes zero-exposure filter
+  previews and verifies that sRGB export coordinates and native samples stay
+  independent of the selected UI output. Source and composite bytes stay intact.
+- `explicit-wayland.log`: native P3 canvas/widget comparison passes (6.50 s).
+  The trace identifies GTK parent `wl_surface#48` and canvas child `#73`.
+  The app's color manager `#90` creates a P3 description with transfer 14,
+  receives `ready2`, and attaches it through color surface `#160`. GTK independently
+  attaches its output description through `#51`. WSI does not create a second
+  color object for the child.
+- `explicit-srgb.log`: the managed sRGB fallback passes (2.91 s) with the same
+  wide-gamut source and exact retained data.
+- `qualified-icc.log`: protocol-v1 P3 through a 580-byte ICC profile passes
+  (3.19 s), including descriptor acceptance and canvas/widget comparison.
+- `qualified-unmanaged.log`: disabling color management for both native clients
+  passes the shared untagged sRGB fallback (2.77 s).
+- `qualified-recovery.log`: Assign/Convert/Depth, Before/After, exact Undo/Redo,
+  save/reopen, a flat copy, continued drawing and deliberate GPU failure/restart
+  pass with the explicit managed route (33.43 s).
+- `qualified-selection.log`: unsupported and mismatched pass-through format
+  choices are rejected; selection uses the actual format/capability pairs.
+- `vulkan-mapping-online-tests.log`: all three upstream Vulkan mapping tests
+  pass, including the newly added pass-through round trip. Initial workspace
+  selection attempts could not run an excluded dependency's dev tests; the
+  standalone offline attempt lacked `glam`. The successful standalone run fetched
+  test dependencies and retained its lockfile as `wgpu-hal-test.lock`.
+- `qualified-production-check.log`: GTK and shared FFI checks pass (3.90 s).
+- `patched-gpu-tests.log`: all four GPU view tests also pass against the patched
+  dependencies (49.73 s), with executable SHA-256
+  `1f4679a1ef48df5d937de793daae763c0210cbdd7d550857c60de1a1343430ff`.
+- `qualified-numeric.log`: numeric editing and saved palettes pass (7.55 s).
+- `explicit-production-wayland.log`: the real application exits successfully
+  after capturing its window. With the GTK flag initially absent, both parent
+  and child publish descriptions; the child uses P3 and transfer 14. This proves
+  the production startup path rather than relying on the test harness's flag.
+
+The final GTK test executable `managed-view-qualified-tests` has SHA-256
+`a106b91ee0379702cb28e03cb270a181bd07c0475542e5fd2d1bd5d362237dd0`.
+The production executable `managed-view-explicit-production-app` has SHA-256
+`7ddd33995156838f502066e6b263238ff0d3a4b2a34f8d707125da72bd649499`.
+Build JSON/logs and captured source hashes accompany them. The ICC run's screenshot
+`managed-view-ui/2011864/p3-canvas-and-picker.png` was visually inspected: canvas,
+Navigator, layer preview and selected paint sample agree, with intact picker
+geometry. The raw capability probe's C source is retained as `wsi-formats.c`.
+`managed-view-provenance.json` records the final inputs, executable hashes,
+validation outputs and remaining qualification gaps. All 308 captured Rust
+source hashes still matched when the checkpoint was recorded.
+
+Reproduce the main native routes with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/managed-view-qualified-exact" \
+  workspace::tests::managed_view::native_managed_canvas_and_gtk_artwork_agree \
+  "$PWD/artifacts/color-m2/managed-view-repeat-p3"
+LAYER_TEST_VIEW_ICC=1 bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/managed-view-qualified-exact" \
+  workspace::tests::managed_view::native_managed_canvas_and_gtk_artwork_agree \
+  "$PWD/artifacts/color-m2/managed-view-repeat-icc"
+LAYER_TEST_VIEW_SRGB=1 bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/managed-view-qualified-exact" \
+  workspace::tests::managed_view::native_managed_canvas_and_gtk_artwork_agree \
+  "$PWD/artifacts/color-m2/managed-view-repeat-srgb"
+```
+
+Add `WAYLAND_DEBUG=client` to capture the actual surface descriptions. The
+unmanaged fixture additionally sets `LAYER_TEST_VIEW_UNMANAGED=1` and
+`GDK_WAYLAND_DISABLE=wp_color_manager_v1`. Those route overrides exist only in test
+builds. Production enables GTK's flag itself; its smoke wrapper deliberately
+starts without `color-mgmt` so the check exercises the application entry point.
+
+The upstream Vulkan mapping tests use the vendored package's standalone manifest:
+
+```sh
+cp artifacts/color-m2/managed-view-wgpu-hal-test.lock vendor/wgpu-hal/Cargo.lock
+CARGO_TARGET_DIR="$PWD/target" cargo test \
+  --manifest-path vendor/wgpu-hal/Cargo.toml --locked --offline --features vulkan --lib \
+  --config "patch.crates-io.wgpu-types.path=\"$PWD/vendor/wgpu-types\"" \
+  vulkan::conv::tests:: -- --test-threads=1
+```
+
+Earlier `probe-workflow.log` and `previews-workflow.log` are failing checker-seam
+attempts, and `explicit-icc.log` is the failing file-position attempt. Earlier
+`enabled-wayland.log` and production traces still used WSI's ambiguous transfer
+value and are not accepted managed-display evidence. `gpu-selection-error.log`
+ran zero tests after selecting an integration-test binary; it is not passing
+matrix evidence. `gdk-flags.log` intentionally failed display initialization while
+listing GTK debug flags. These records are retained to explain the findings.
+
+Physical calibrated-monitor agreement, monitor/profile changes, window spanning,
+alternate GTK renderers and final zoom/anisotropic quality remain unqualified.
+A fixed assumed SDR surface description is valid across monitors because
+[Wayland assigns monitor transforms to the compositor](https://wayland.freedesktop.org/docs/book/Color.html);
+that protocol contract is not physical measurement. Effect/gradient color
+controls, remaining delivery controls, combined job/resource limits and the final
+precision/workload matrix remain open. Benchmarking, fresh frame-creation
+baselines, regression investigation and optimization remain last. Other platform
+hosts have not been integrated or built for this checkpoint and require approval
+after GTK completion.
