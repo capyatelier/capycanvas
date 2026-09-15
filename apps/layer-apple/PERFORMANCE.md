@@ -64,10 +64,13 @@ investigation's Release metadata are under ignored
 `artifacts/performance/gpu-clock-correlation-v1/`. All workload processes are
 closed. The disposable iPad app is removed, its original stopped test runner is
 restored, and both artist editor descriptors are unchanged.
-The subsequent OS file-launch startup fix rebuilt both apps; current Release
+The subsequent OS file-launch startup fix rebuilt both apps; its Release
 metadata is under `artifacts/apple-os-file-launch-v1/after/`. That fix changes
 Open admission only, so no drawing workload is repeated and no new performance
 claim is made.
+The [handoff](../../docs/development/apple-handoff.md) identifies the latest
+on-disk Release builds; later feature/lifecycle builds do not add performance
+evidence unless a corresponding workload is recorded here.
 
 ## Coverage preparation cleanup and physical validation — 2026-09-15
 

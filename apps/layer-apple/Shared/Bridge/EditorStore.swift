@@ -125,8 +125,9 @@ import SwiftUI
     }
     func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
         guard let native else { completion(false); return }
-        native.flushPersistence { [weak self] succeeded in DispatchQueue.main.async {
-            guard let self else { completion(false); return }
+        // Scene teardown may release its view while this barrier is in flight.
+        // Keep the document owner through the final recovery acknowledgement.
+        native.flushPersistence { [self] succeeded in DispatchQueue.main.async {
             Task { @MainActor in
                 var workspaceSaved = true
                 if let library = self.workspaceLibrary {
@@ -134,7 +135,9 @@ import SwiftUI
                     catch { library.error = error.localizedDescription; workspaceSaved = false }
                 }
                 let saved = succeeded && workspaceSaved
-                self.recovery.flush { completion(saved && $0) }
+                self.recovery.flush { [self] result in
+                    completion(saved && result); withExtendedLifetime(self) {}
+                }
             }
         } }
     }

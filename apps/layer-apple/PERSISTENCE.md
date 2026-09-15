@@ -190,8 +190,11 @@ atomic manifest publication. Preparation alone never acknowledges durability.
 This includes pen-up queued immediately
 before a surface stops. Mac cleanup follows actual window close or final accepted
 application termination; iPad cleanup follows an authorized scene's view detachment.
-Cancelled termination does not consume recovery copies. Barriers retain the
-coordinator if the UI owner disappears while its write completes. The iPad uses
+Cancelled termination does not consume recovery copies. The barrier retains the
+editor and recovery coordinator through the final acknowledgement, even if scene
+teardown releases the last UI reference before native preparation returns. Local
+checks on both Apple configurations verify that this flush finishes, releases
+its owner and leaves an archive that reopens with the accepted edits. The iPad uses
 the OS background-task allowance; a kill or allowance expiration before durable
 publication can still leave only the previous completed copy. Full physical
 expiration/interruption and sustained storage overhead remain acceptance work.

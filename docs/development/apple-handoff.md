@@ -10,6 +10,39 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current input and scene-recovery milestone
+
+Scene teardown could abandon an accepted lifecycle flush before artwork recovery
+began: the native flush callback held the editor weakly. The existing barrier now
+retains the editor through the final recovery acknowledgement. The local
+reproduction fails before this change. Afterward, both Apple configurations
+complete the flush after their last external editor reference is released,
+release the editor after completion, and reopen the archive with its named layer
+and unsaved state intact. The complete recovery suite also passes. Evidence is
+under `artifacts/apple-scene-flush-v1/`; this tests owner lifetime and real file
+storage, not OS background-task expiration or forced process termination.
+
+The grouped UIKit hover fix sends the existing shared cancel phase on recognizer
+cancellation as well as normal exit. Its standalone callback check fails before
+the fix and passes afterward, including active-Pencil exclusion, fresh hover and
+unchanged artwork history. Each executable attempt takes about 37 seconds
+including compilation, using the existing booted simulator without XCTest or
+editor UI automation. Evidence is under `artifacts/apple-hover-cancel-v1/`; the
+disposable callback app is stopped and removed. Its fixture compile correction
+and SDK deployment link warnings are retained separately.
+
+Both final Release builds pass without compiler warnings. Current on-disk
+Release metadata is under `artifacts/apple-input-lifecycle-milestone-v1/release/`.
+Main was fetched and was current. No physical-device, broad UI or drawing
+performance run is repeated for these focused lifetime/callback fixes. Full
+feature/visual, physical input/provider/lifecycle and sustained Mac 90 Hz/iPad
+120 Hz acceptance remain open; the overall goal is incomplete.
+
+The keyboard review found no new delivery evidence beyond the retained missing
+Command-A/Command-Z callbacks, so no speculative routing fix or repeated keyboard
+run was added. Current SDK headers still provide no native iPad fullscreen
+request. The preceding published OS file-launch milestone is `8bc6322`.
+
 ## Current OS file-launch milestone
 
 Cold OS file delivery reproduced an iPad failure: the drawing was rejected with
@@ -31,7 +64,7 @@ warm delivery retains the process on each host. Mac opens a second independent
 document window and retains the first. Source files remain byte-identical,
 including iPad container readback. The device uses `devicectl --payload-url` and
 native screenshot capture; no Files authentication, XCTest or simulator is needed.
-Evidence is under ignored `artifacts/apple-os-file-launch-v1/`, with current
+Evidence is under ignored `artifacts/apple-os-file-launch-v1/`, with that milestone's
 Release metadata and final captures in `after/`. All owned processes are closed;
 the disposable iPad app is removed and its original stopped test runner restored,
 with both artist editor descriptors unchanged. Main was fetched and was current.

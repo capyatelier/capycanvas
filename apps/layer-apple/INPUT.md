@@ -12,6 +12,13 @@ contacts paint, right/middle contacts pan, and other buttons follow the shared
 ignore policy. Normal and cancelled keyboard releases both end held shortcuts,
 including Space-to-pan.
 
+Pencil hover ends on both normal recognizer exit and cancellation. Both send the
+existing shared cancel phase to clear the cursor; an active Pencil contact still
+suppresses hover updates. `tests/canvas-hover.swift` runs the actual UIKit callback
+and records its accepted native input, covering exit, cancellation, contact
+exclusion, fresh hover and unchanged artwork history. Supplied recognizer states
+do not establish physical Pencil recognition or rendered cursor appearance.
+
 Trackpad and mouse-wheel navigation uses standard UIKit pan, pinch and rotation
 recognizers with the app's existing indirect-input opt-in. They accept scroll
 and transform events; finger and Pencil contacts keep their existing routing.

@@ -42,10 +42,52 @@ import QuartzCore
         precondition(store.failure == nil, store.failure ?? "")
         return layer
     }
+    @MainActor static func releaseDuringFlush(platform: UInt32, root: URL) async throws {
+        let persistence = EditorPersistence(root: root), files = RecoveryFiles(root: root)
+        var store: EditorStore? = EditorStore(platform: platform, persistence: persistence)
+        let layer = try await attach(store!)
+        store!.invoke("add_layer")
+        try await wait("Released-scene layer missing") { store!.state["layers"].array.count == 3 }
+        let id = store!.state["layer_tools"]["editing_layer"]["id"].uint
+        store!.layer(["op": "rename", "id": id, "name": "Released scene survivor"])
+        try await wait("Released-scene edit missing") {
+            store!.state["layers"].array.contains { $0["label"].string == "Released scene survivor" }
+        }
+        weak let released = store
+        var completed: Bool?
+        store!.flushPersistence { completed = $0 }
+        // Scene teardown can release its last owner before the native barrier's
+        // reply reaches MainActor. The full recovery write must still finish.
+        store = nil
+        try await wait("Released-scene flush did not reply") { completed != nil }
+        precondition(completed == true, "Scene release must not abandon an accepted recovery flush")
+        try await wait("Completed flush retained its editor") { released == nil }
+        let records = try await io { try files.list().records }
+        precondition(records.count == 1, "The released scene's committed drawing must remain recoverable")
+
+        let reopened = EditorStore(platform: platform, persistence: persistence)
+        let reopenedLayer = try await attach(reopened)
+        reopened.recovery.restore(records[0])
+        try await wait("Released-scene archive did not reopen") {
+            reopened.state["document_file"]["epoch"].uint == 1 && !reopened.projectFiles.busy
+        }
+        precondition(reopened.projectFiles.error == nil && reopened.failure == nil)
+        precondition(reopened.state["layers"].array.count == 3
+            && reopened.state["layers"].array.contains { $0["label"].string == "Released scene survivor" })
+        precondition(reopened.state["document_file"]["modified"].bool,
+            "Recovery must preserve the unsaved drawing instead of acknowledging Save")
+        let closed = await withCheckedContinuation { continuation in
+            reopened.recovery.close { continuation.resume(returning: $0) }
+        }
+        precondition(closed)
+        withExtendedLifetime((layer, reopenedLayer)) {}
+        print("Recovery survives released scene on Apple platform \(platform)"); fflush(stdout)
+    }
     @MainActor static func main() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-recovery-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         for platform: UInt32 in [0, 1] {
+            try await releaseDuringFlush(platform: platform, root: directory.appendingPathComponent("released-\(platform)"))
             let root = directory.appendingPathComponent("platform-\(platform)")
             let persistence = EditorPersistence(root: root), files = RecoveryFiles(root: root)
             let scene = UUID().uuidString

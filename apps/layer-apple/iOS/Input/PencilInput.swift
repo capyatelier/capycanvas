@@ -171,7 +171,7 @@ extension CanvasView {
             atan2(cos(altitude) * cos(azimuth), sin(altitude)),
             atan2(cos(altitude) * sin(azimuth), sin(altitude)),
             recognizer.rollAngle, recognizer.zOffset,
-            CACurrentMediaTime() * 1_000_000_000, recognizer.state == .ended ? 4 : 0]
+            CACurrentMediaTime() * 1_000_000_000, recognizer.state == .ended || recognizer.state == .cancelled ? 4 : 0]
         store.native?.pointer(id: 0, tool: 0, button: 0, records: record, predicted: false, revision: store.cameraRevision)
         wake()
     }
