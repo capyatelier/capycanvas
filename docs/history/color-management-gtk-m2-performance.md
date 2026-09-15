@@ -325,3 +325,84 @@ Reports and `compute-promotion-runs.json` retain exact frame/CPU counts. Before
 uses the saved companion executable; after SHA-256 is
 `9add4aaf4ccac38ffab258f9204d93287912ca226f6cca63b927f16c058eff58`,
 with matching `compute-promotion-accounted-build-sources.json` and source patch.
+
+## Reuse full-tile parameters; reject an unhelpful counter change
+
+The follow-up `compute-penup-probe` confirms the reduction in command finishing:
+palette pen-up finish p50 / p95 is 2650 / 3944 µs, versus 4965 / 7270 µs before
+compute promotion. Validation and resource preparation remain material: 1124 /
+1267 µs for validation, 1722 / 1838 µs for encoding preparation, and 1132 / 1297
+µs for promotion preparation. These are 12 instrumented pen-ups, not acceptance
+timings. The archive, build script, exact manifest and summary retain the probe.
+
+Clipping counters were nonzero in 54 of 348 capture-status observations across
+the complete probe, including setup; the maximum observed count was 79,450.
+A workgroup-counter experiment preserved all 160 numeric cases (10,485,760
+pixels, zero code error), but did not improve the failing palette workload:
+completed pen-up p99 was 20.981 ms before and 21.700 ms after. The shader change
+was **removed**. `native-counter-source.patch`, its exact binary/manifest and
+`writeback-counter-*` / `native-counter-*` logs retain this negative result.
+
+The retained change prepares immutable full-tile encoding records with the
+color/scalar pipelines. Requests select their depth, transfer curve and alpha
+association without allocating a parameter buffer for every chunk. Partial
+rectangles retain bounded private records. At the device's 256-byte alignment,
+the cached color/scalar tables cost 4096 / 512 bytes; native storage metrics
+include them. Per-batch `parameter_bytes` is zero for full tiles because the
+encoder owns these shared records separately.
+
+Five color tests pass (25.29 s), including 160 exact numeric cases, stable
+repeated publication, restore/capture, failure and cancellation. Four scalar
+tests pass (8.03 s), including both depths, partial packed words, mixed failure
+and exact restore/capture cycles. Exact test SHA-256:
+`c9a21ab61dc5de7333c41e54f5fd32157ea58b7d045b376c7d21311320c16e2e`.
+Logs/manifests use `native-parameters-*` under `artifacts/color-m2/`.
+
+The existing hardware kernel matrix also passes, with 100 measured samples
+after 20 warm-up iterations per case. For unclipped ProPhoto U16, 16 full tiles
+and fresh bindings, CPU preparation/submission p95 changes from 0.7288 to 0.6340
+ms and completed p95 from 0.9250 to 0.8230 ms. These are matching Rust test
+builds, distinct from release application timing. Exact raw results and all
+other depth/curve/partial/clipped cases are in `writeback-counter-before.log`
+and `writeback-parameters-benchmark.log`.
+
+Two release pairs each contribute 426 move / 12 pen-up frames per arm:
+
+| Pair | Before / after pen-up CPU p99 ms | Before / after completed pen-up p99 ms | Before / after completed move p99 ms |
+| --- | --- | --- | --- |
+| Initial | 10.719 / 9.531 | 20.612 / 20.658 | 7.077 / 6.772 |
+| Repeat | 11.488 / 10.515 | 22.881 / 20.263 | 6.778 / 6.695 |
+
+All pen-ups still miss 8.33 ms. The after repeat has one move at 8.819 ms;
+other move deadline counts are zero. Native PNG outputs from the first pair
+are byte-identical; exact U16 correctness is established by the numeric tests,
+not by the diagnostic sRGB8 PNG. CPU creation improves in these pairs, but the
+remaining completed-work gap is not qualified as GPU execution alone without
+timestamps separating GPU work from host waiting/callbacks.
+
+### Control the launch path when measuring setup
+
+The candidate initially took 17.56 / 17.06 seconds for the entire three-repeat
+process, versus 6.18 / 6.21 seconds before, despite comparable measured frames.
+Existing slow-frame traces ruled out the unmeasured brush frames. Isolated
+scope probes located the extra time in canvas creation. Parameter creation
+itself took 0.038 ms for color and 0.032 ms for scalar; the first draw, undo,
+export and teardown did not account for the difference.
+
+Copying the **unchanged** before executable to a fresh path increased its
+one-repeat process duration from about 2.7 to 5.3 seconds. A stronger control
+alternated before/after/before/after at the same `/tmp` executable pathname,
+preserving exact source binaries separately. Process times were 5.27, 2.42,
+2.40 and 2.49 seconds: after the first launch, both versions have comparable
+setup/whole-process duration. Executable context affects this startup comparison;
+a driver cache is a plausible explanation, not a directly inspected fact.
+
+Future before/after setup comparisons use a common launch path and explicitly
+record cold versus reused context. Saved immutable binaries, commands and
+hashes remain separate. This control does not qualify GTK startup or physical
+presentation. `run-parameters-path-control.py`, `parameters-path-control-runs.json`,
+`parameters-path-*`, both setup probe archives, and the trace/path-control logs
+retain the investigation. Application pairs use `run-native-parameters.py` and
+its repeat script; after SHA-256 is
+`93230fc26db585597622d82cfa396b30cc56535f358c1bd13dee5dc7e9cfed97`,
+with matching `native-parameters-build-sources.json` and source patch.

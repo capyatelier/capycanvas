@@ -146,6 +146,8 @@ impl NativeScalarBatch {
 pub struct NativeScalarEncoder {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::ComputePipeline,
+    full_parameters: wgpu::Buffer,
+    parameter_stride: u32,
 }
 impl NativeScalarEncoder {
     /// Prepare alongside the color encoder, before interaction.
@@ -214,7 +216,28 @@ impl NativeScalarEncoder {
             compilation_options: Default::default(),
             cache: None,
         });
-        Self { layout, pipeline }
+        let records = [IntegerDepth::U8, IntegerDepth::U16].map(|depth| {
+            [
+                depth.maximum(),
+                4 / depth.bytes() as u32,
+                0,
+                0,
+                0,
+                0,
+                256,
+                256,
+            ]
+        });
+        let (full_parameters, parameter_stride) = super::full_parameters(device, &records);
+        Self {
+            layout,
+            pipeline,
+            full_parameters,
+            parameter_stride,
+        }
+    }
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.full_parameters.size()
     }
     pub fn prepare(
         &self,
@@ -246,35 +269,41 @@ impl NativeScalarEncoder {
                 parameter_bytes: 0,
             });
         }
-        let stride = 32u32.next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
-        let size = u64::from(stride) * requests.len() as u64;
-        let parameters = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("batched native scalar parameters"),
-            size,
-            usage: wgpu::BufferUsages::UNIFORM,
-            mapped_at_creation: true,
-        });
-        {
-            let mut bytes = parameters
-                .get_mapped_range_mut(..)
-                .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-            for (i, r) in requests.iter().enumerate() {
-                let values = [
-                    r.depth.maximum(),
-                    4 / r.depth.bytes() as u32,
-                    0,
-                    0,
-                    r.region[0],
-                    r.region[1],
-                    r.region[2],
-                    r.region[3],
-                ];
-                let data: Vec<_> = values.into_iter().flat_map(u32::to_le_bytes).collect();
-                let start = i * stride as usize;
-                bytes.slice(start..start + 32).copy_from_slice(&data);
+        let full = requests.iter().all(|r| r.region == [0, 0, 256, 256]);
+        let stride = self.parameter_stride;
+        let (parameters, size) = if full {
+            (self.full_parameters.clone(), 0)
+        } else {
+            let size = u64::from(stride) * requests.len() as u64;
+            let parameters = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("batched native scalar parameters"),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: true,
+            });
+            {
+                let mut bytes = parameters
+                    .get_mapped_range_mut(..)
+                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+                for (i, r) in requests.iter().enumerate() {
+                    let values = [
+                        r.depth.maximum(),
+                        4 / r.depth.bytes() as u32,
+                        0,
+                        0,
+                        r.region[0],
+                        r.region[1],
+                        r.region[2],
+                        r.region[3],
+                    ];
+                    let data: Vec<_> = values.into_iter().flat_map(u32::to_le_bytes).collect();
+                    let start = i * stride as usize;
+                    bytes.slice(start..start + 32).copy_from_slice(&data);
+                }
             }
-        }
-        parameters.unmap();
+            parameters.unmap();
+            (parameters, size)
+        };
         let jobs = requests
             .iter()
             .enumerate()
@@ -316,7 +345,11 @@ impl NativeScalarEncoder {
                     (r.region[0] + r.region[2]).div_ceil(components) - r.region[0] / components;
                 (
                     binding,
-                    i as u32 * stride,
+                    if full {
+                        u32::from(r.depth == IntegerDepth::U16) * stride
+                    } else {
+                        i as u32 * stride
+                    },
                     [
                         if r.region[2] == 0 {
                             0

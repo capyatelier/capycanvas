@@ -97,6 +97,8 @@ impl NativeEdit {
     pub fn storage_bytes(&self) -> u64 {
         STATUS_BYTES
             + self.promoter.storage_bytes()
+            + self.color.storage_bytes()
+            + self.scalar.storage_bytes()
             + self
                 .colors
                 .iter()

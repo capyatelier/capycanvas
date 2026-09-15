@@ -179,6 +179,8 @@ impl NativeTileBatch {
 pub struct NativeTileEncoder {
     layouts: [wgpu::BindGroupLayout; 2],
     pipelines: [wgpu::ComputePipeline; 2],
+    full_parameters: wgpu::Buffer,
+    parameter_stride: u32,
 }
 impl NativeTileEncoder {
     pub fn new(device: &wgpu::Device) -> Self {
@@ -272,7 +274,33 @@ impl NativeTileEncoder {
                 cache: None,
             })
         });
-        Self { layouts, pipelines }
+        let records = std::array::from_fn::<_, 16, _>(|i| {
+            let depth = if i / 2 % 2 == 0 {
+                IntegerDepth::U8
+            } else {
+                IntegerDepth::U16
+            };
+            [
+                depth.maximum(),
+                65535 / depth.maximum(),
+                (i / 4) as u32,
+                (i % 2) as u32,
+                0,
+                0,
+                256,
+                256,
+            ]
+        });
+        let (full_parameters, parameter_stride) = full_parameters(device, &records);
+        Self {
+            layouts,
+            pipelines,
+            full_parameters,
+            parameter_stride,
+        }
+    }
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.full_parameters.size()
     }
     /// Prepare and validate the whole batch before recording any tile writes.
     /// Bindings and parameters can be reused while these resources/regions remain.
@@ -306,40 +334,46 @@ impl NativeTileEncoder {
                 parameter_bytes: 0,
             });
         }
-        let stride = 32u32.next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
-        let size = u64::from(stride) * requests.len() as u64;
-        let mut bytes = vec![0; size as usize];
-        for (i, r) in requests.iter().enumerate() {
-            let values = [
-                r.depth.maximum(),
-                65535 / r.depth.maximum(),
-                r.transfer.curve,
-                u32::from(r.alpha == AlphaAssociation::Straight),
-                r.region[0],
-                r.region[1],
-                r.region[2],
-                r.region[3],
-            ];
-            for (slot, value) in bytes[i * stride as usize..][..32]
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(values)
-            {
-                *slot = value.to_le_bytes();
+        let full = requests.iter().all(|r| r.region == [0, 0, 256, 256]);
+        let stride = self.parameter_stride;
+        let (parameters, size) = if full {
+            (self.full_parameters.clone(), 0)
+        } else {
+            let size = u64::from(stride) * requests.len() as u64;
+            let mut bytes = vec![0; size as usize];
+            for (i, r) in requests.iter().enumerate() {
+                let values = [
+                    r.depth.maximum(),
+                    65535 / r.depth.maximum(),
+                    r.transfer.curve,
+                    u32::from(r.alpha == AlphaAssociation::Straight),
+                    r.region[0],
+                    r.region[1],
+                    r.region[2],
+                    r.region[3],
+                ];
+                for (slot, value) in bytes[i * stride as usize..][..32]
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(values)
+                {
+                    *slot = value.to_le_bytes();
+                }
             }
-        }
-        let parameters = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("batched native tile parameters"),
-            size,
-            usage: wgpu::BufferUsages::UNIFORM,
-            mapped_at_creation: true,
-        });
-        parameters
-            .get_mapped_range_mut(..)
-            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
-            .copy_from_slice(&bytes);
-        parameters.unmap();
+            let parameters = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("batched native tile parameters"),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: true,
+            });
+            parameters
+                .get_mapped_range_mut(..)
+                .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
+                .copy_from_slice(&bytes);
+            parameters.unmap();
+            (parameters, size)
+        };
         let jobs = requests
             .iter()
             .enumerate()
@@ -385,7 +419,14 @@ impl NativeTileEncoder {
                 Job {
                     binding,
                     format,
-                    offset: i as u32 * stride,
+                    offset: if full {
+                        (r.transfer.curve * 4
+                            + format as u32 * 2
+                            + u32::from(r.alpha == AlphaAssociation::Straight))
+                            * stride
+                    } else {
+                        i as u32 * stride
+                    },
                     groups: [r.region[2].div_ceil(8), r.region[3].div_ceil(8)],
                 }
             })
@@ -408,6 +449,25 @@ impl NativeTileEncoder {
         }
     }
 }
+/// Immutable full-tile records prepared with the mode's pipelines. Partial
+/// rectangles still own their bounded parameter uploads; common publications
+/// reuse these records across tiles, batches and frames.
+fn full_parameters(device: &wgpu::Device, records: &[[u32; 8]]) -> (wgpu::Buffer, u32) {
+    use wgpu::util::DeviceExt;
+    let stride = 32u32.next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
+    let mut bytes = vec![0; stride as usize * records.len()];
+    for (i, record) in records.iter().enumerate() {
+        bytes[i * stride as usize..i * stride as usize + 32]
+            .copy_from_slice(record.map(u32::to_le_bytes).as_flattened());
+    }
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("immutable native full-tile parameters"),
+        contents: &bytes,
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    (buffer, stride)
+}
+
 pub(crate) fn buffer_entry(
     binding: u32,
     ty: wgpu::BufferBindingType,
