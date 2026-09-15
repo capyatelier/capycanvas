@@ -63,6 +63,7 @@ pub(crate) fn write_snapshot(
     job: &ExportJob,
 ) -> Result<u64, String> {
     let result = (|| {
+        recipe.validate()?;
         let mut renderer = SnapshotRenderer::with_control(
             snapshot.project,
             snapshot.background,
@@ -88,6 +89,16 @@ pub(crate) fn write_snapshot(
                         &target,
                         Default::default(),
                         recipe.background.matte(),
+                    ),
+                    ExportFormat::Jpeg => renderer.write_jpeg(
+                        file,
+                        &target,
+                        Default::default(),
+                        recipe
+                            .background
+                            .matte()
+                            .ok_or("Choose a JPEG background")?,
+                        recipe.jpeg_quality,
                     ),
                 }?;
                 clipped = statistics.clipped_channels;
@@ -134,7 +145,7 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             "Custom",
         ],
     );
-    let format = combo(&group, "Format", "export-format", &["PNG", "TIFF"]);
+    let format = combo(&group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
     let space = combo(
         &group,
         "Color space",
@@ -153,6 +164,62 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
         "export-background",
         &["Keep transparency", "White background", "Black background"],
     );
+    let quality = adw::SpinRow::with_range(1., 100., 1.);
+    quality.set_title("JPEG quality");
+    quality.set_widget_name("export-jpeg-quality");
+    quality.set_value(90.);
+    quality.set_snap_to_ticks(true);
+    quality.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+    quality.set_visible(false);
+    group.add(&quality);
+    let jpeg_hint = gtk::Label::builder()
+        .label("JPEG uses 8-bit color and needs an opaque background.")
+        .wrap(true)
+        .xalign(0.)
+        .visible(false)
+        .build();
+    jpeg_hint.add_css_class("dim-label");
+    format.connect_selected_notify(glib::clone!(
+        #[weak]
+        depth,
+        #[weak]
+        background,
+        #[weak]
+        quality,
+        #[weak]
+        jpeg_hint,
+        move |format| {
+            let jpeg = format.selected() == 2;
+            quality.set_visible(jpeg);
+            jpeg_hint.set_visible(jpeg);
+            depth.set_sensitive(!jpeg);
+            if jpeg {
+                depth.set_selected(0);
+                if background.selected() == 0 {
+                    background.set_selected(1);
+                }
+            }
+        }
+    ));
+    background.connect_selected_notify(glib::clone!(
+        #[weak]
+        format,
+        #[weak]
+        dialog,
+        move |background| {
+            dialog.set_response_enabled(
+                "export",
+                format.selected() != 2 || background.selected() != 0,
+            );
+        }
+    ));
+    format.connect_selected_notify(glib::clone!(
+        #[weak]
+        background,
+        move |_| {
+            background.notify("selected");
+        }
+    ));
     let updating = Rc::new(std::cell::Cell::new(false));
     preset.connect_selected_notify(glib::clone!(
         #[weak]
@@ -225,6 +292,7 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
     ));
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&group);
+    content.append(&jpeg_hint);
     content.append(&note);
     dialog.set_extra_child(Some(&content));
     dialog.add_responses(&[("cancel", "Cancel"), ("export", "Choose file…")]);
@@ -234,11 +302,11 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
     if dialog.choose_future(Some(&w.window)).await != "export" {
         return None;
     }
-    Some(ExportRecipe {
-        format: if format.selected() == 0 {
-            ExportFormat::Png
-        } else {
-            ExportFormat::Tiff
+    let recipe = ExportRecipe {
+        format: match format.selected() {
+            1 => ExportFormat::Tiff,
+            2 => ExportFormat::Jpeg,
+            _ => ExportFormat::Png,
         },
         color: DocumentColor {
             space: RgbSpace::ALL[space.selected() as usize],
@@ -253,7 +321,9 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             2 => ExportBackground::Black,
             _ => ExportBackground::Preserve,
         },
-    })
+        jpeg_quality: quality.value() as u8,
+    };
+    Some(recipe)
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
@@ -269,6 +339,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
     let Some(recipe) = choose_recipe(w, color).await else {
         return Ok(false);
     };
+    recipe.validate()?;
     let dialog = gtk::FileDialog::builder()
         .title("Export image")
         .accept_label("Export")
@@ -289,6 +360,9 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
     filter.add_suffix(recipe.format.extension());
     if recipe.format == ExportFormat::Tiff {
         filter.add_suffix("tiff");
+    }
+    if recipe.format == ExportFormat::Jpeg {
+        filter.add_suffix("jpeg");
     }
     let filters = gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
@@ -315,6 +389,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
     let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
     if !extension.eq_ignore_ascii_case(recipe.format.extension())
         && !(recipe.format == ExportFormat::Tiff && extension.eq_ignore_ascii_case("tiff"))
+        && !(recipe.format == ExportFormat::Jpeg && extension.eq_ignore_ascii_case("jpeg"))
     {
         return Err(format!(
             "Use a .{} filename for this image format.",

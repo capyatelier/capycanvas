@@ -623,10 +623,12 @@ fn native_document_files() {
     let save_path = output.join(format!("copy-{}.capy", std::process::id()));
     let png_path = output.join(format!("export-{}.png", std::process::id()));
     let tiff_path = output.join(format!("export-{}.tif", std::process::id()));
+    let jpeg_path = output.join(format!("export-{}.jpg", std::process::id()));
     for (command, path) in [
         (CommandId::SaveDocumentAs, &save_path),
         (CommandId::ExportDocument, &png_path),
         (CommandId::ExportDocument, &tiff_path),
+        (CommandId::ExportDocument, &jpeg_path),
     ] {
         w.dispatch(UiAction::Invoke { command });
         if command == CommandId::ExportDocument {
@@ -651,7 +653,29 @@ fn native_document_files() {
                 find_named(options.upcast_ref(), "export-space").unwrap()
                     .downcast::<adw::ComboRow>().unwrap().set_selected(3);
             }
-            capture_reference(&w, output.join(if path == &tiff_path { "export-tiff-options.png" } else { "export-options.png" }).to_str().unwrap(), 1.);
+            if path == &jpeg_path {
+                find_named(options.upcast_ref(), "export-format").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap().set_selected(2);
+                let depth = find_named(options.upcast_ref(), "export-depth").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap();
+                assert_eq!(depth.selected(), 0);
+                assert!(!depth.is_sensitive());
+                let background = find_named(options.upcast_ref(), "export-background").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap();
+                assert_eq!(background.selected(), 1);
+                background.set_selected(0);
+                assert!(!options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
+                background.set_selected(2);
+                assert!(options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
+                find_named(options.upcast_ref(), "export-space").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap().set_selected(1);
+                let quality = find_named(options.upcast_ref(), "export-jpeg-quality").unwrap()
+                    .downcast::<adw::SpinRow>().unwrap();
+                assert!(quality.is_visible());
+                quality.set_value(95.);
+            }
+            pump(80);
+            capture_reference(&w, output.join(if path == &tiff_path { "export-tiff-options.png" } else if path == &jpeg_path { "export-jpeg-options.png" } else { "export-options.png" }).to_str().unwrap(), 1.);
             click(&find_button(options.upcast_ref(), "Choose file…").unwrap());
         }
         let save = chooser();
@@ -671,6 +695,12 @@ fn native_document_files() {
     assert_eq!(tiff.interpretation.depth, layer_core::color::IntegerDepth::U16);
     assert_eq!(layer_color::profile_bytes(&tiff.interpretation.profile).unwrap(),
         layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)).unwrap());
+    let jpeg = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&jpeg_path).unwrap()), Default::default()).unwrap();
+    assert_eq!(jpeg.extent, [384, 256]);
+    assert_eq!(jpeg.interpretation.depth, layer_core::color::IntegerDepth::U8);
+    assert_eq!(jpeg.interpretation.channels, layer_core::color::source::SourceChannels::Rgb);
+    assert_eq!(layer_color::profile_bytes(&jpeg.interpretation.profile).unwrap(),
+        layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::DisplayP3)).unwrap());
     let mut png = png::Decoder::new(std::fs::File::open(png_path).unwrap())
         .read_info()
         .unwrap();

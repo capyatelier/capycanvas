@@ -14,7 +14,8 @@ Document-coordinate region capture and chunked filter-preview sources now have
 connected correctness coverage, including spatial support and cancellation.
 Standalone native snapshots now restore window dependencies and stream profiled
 PNG/TIFF rows, with exact untouched-source delivery. GTK export now uses that
-worker with explicit profile, depth and transparency choices and cancellation.
+worker with explicit profile, depth and transparency choices and cancellation;
+profiled JPEG output adds quality and an explicit opaque background.
 CPU brush dynamics now retain document RGB through previews, corrections and
 recovery; exact native GPU publication/save/reopen checks include color jitter.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
@@ -3106,3 +3107,124 @@ mode before installing the model; the earlier initial-label failure remains in
 visually reviewed and retained in `export-worker-ui/`, together with the produced
 sRGB8 PNG and ProPhoto16 TIFF. Source/binary/log hashes and revision mapping are
 in `export-worker-provenance.json`. Final `git diff --check` passes.
+
+
+## Streaming JPEG and GTK delivery (2026-09-14)
+
+JPEG import now decodes scanlines directly into retained source tiles. The old
+full compressed-file/full decoded-image `zune-jpeg` path and its direct
+dependency are deleted. A small C shim uses **libjpeg-turbo 3.1.3**, the installed
+Fedora library. Error recovery stays inside C; Rust I/O callbacks return errors
+or caught panics before C raises a codec error. Failed contexts cannot be reused.
+Two fixed 64 KiB I/O buffers (one per encoder/decoder), a scanline and bounded
+codec state replace full decoded staging. The existing TIFF dependency still
+uses its own `zune-jpeg` version; it was not removed.
+
+Metadata preflight reads through all JPEG scans without retaining the compressed
+file. ICC chunk sequence/count/size, EXIF orientation, end-of-image and a maximum
+256 scans are checked before choosing the source interpretation. Untagged
+RGB/gray records its sRGB assumption; invalid ICC does not become untagged.
+Adobe CMYK and YCCK decode to conventional ink channels before the CMM; ambiguous
+CMYK polarity requires an explicit interpretation. CMYK without a profile is
+rejected. HDR gain-map namespaces and multiple-picture JPEG require an explicit
+rendition/image choice, rather than silently becoming plain SDR. All eight EXIF
+orientations retain their existing exact sample permutation.
+
+The implementation follows the installed [libjpeg-turbo API manual](https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/doc/libjpeg.txt)
+for scanline I/O, source/destination managers, fatal-error destruction and
+coefficient-buffer behavior. [ICC embedding guidance](https://www.color.org/technotes/ICC-Technote-ProfileEmbedding.pdf)
+defines the APP2 chunk protocol. Independent handoff uses
+[Pillow's JPEG encoder](https://github.com/python-pillow/Pillow/blob/main/src/libImaging/JpegEncode.c)
+for direct Adobe CMYK and [ImageMagick's JPEG codec](https://github.com/ImageMagick/ImageMagick/blob/main/coders/jpeg.c)
+for YCCK and reference ink decoding. Both use libjpeg-turbo internally, so this
+is independent wrapper/profile/polarity validation, not an independent DCT
+algorithm comparison. Pillow 12.3.0 bundles libjpeg-turbo 3.1.4.1; ImageMagick is
+7.1.2-27 Q16-HDRI on this machine. Fixture/profile hashes are retained.
+
+JPEG output streams opaque 8-bit RGB/gray/CMYK, embeds the actual profile, uses
+full chroma resolution at all qualities, and never requests further rows after
+provider failure. It performs no progressive/optimized encoding that would need
+a complete coefficient image. Source/native master data is unchanged by lossy
+export. GTK adds JPEG to the export recipe, quality 1–100 (default 90), explicit
+white/black backgrounds and an 8-bit explanation. Selecting JPEG makes its depth
+constraint visible; keeping transparency disables continuation. The recipe is
+also validated before file selection and worker setup. `.jpg` and `.jpeg` are
+accepted. Existing snapshot cancellation and atomic publication are reused.
+
+Correctness evidence:
+
+- The complete color suite covers **33 tests including the supplied external
+  fixtures**. `jpeg-external-core.log` has 32 passes and one setup failure caused
+  by the missing `LAYER_TEST_CMYK_PROFILE` variable. With that variable supplied,
+  the remaining CMM test passes in `jpeg-cmyk-cmm.log`. RGB/gray JPEG at both
+  qualities preserves profile bytes, stays within declared lossy tolerances, and
+  saves/reopens the decoded source exactly. Error, panic, malformed/truncated
+  stream and cancelled provider cases return failures without false success.
+- `jpeg-fixtures/` contains direct CMYK, YCCK, progressive RGB 4:2:0, progressive
+  gray and EXIF-rotated fixtures. Decoded ink/RGB/gray samples match the reference
+  within one 8-bit code. Independent Pillow reopening of our CMYK exports
+  preserves ICC and polarity with maximum ink-code differences **0 and 1**
+  (`jpeg-handoff.log`, `jpeg-fixtures/handoff.json`). This validates code/profile
+  handoff; it is not a calibrated print or external-editor UI comparison.
+- An **8192×7324 baseline JPEG** decodes under an **8 MiB codec planning limit**.
+  A 60 MP progressive 4:4:4 fixture is rejected under the default 128 MiB limit
+  before coefficient allocation and succeeds with an explicit **384 MiB** limit.
+  This is structural/correctness evidence, not measured peak RSS or a qualified
+  shipping budget. Progressive coefficients need document-scale storage; the
+  default policy for large progressive photos remains open for final measured
+  qualification. The source tile budget (default 512 MiB), orientation work,
+  CMM, process and driver allocations are additional.
+- The GPU JPEG snapshot test passes (`jpeg-snapshot.log`, 3.89 s). Explicit
+  linear matte and conversion into each of the four RGB spaces match PNG output
+  within four 8-bit codes at JPEG quality 100; clipping statistics agree.
+- Real GTK `native_document_files` passes (`jpeg-files-session.log`, 20.17 s).
+  It drives quality/background/depth constraints, writes and reopens P3 JPEG,
+  and continues checking PNG, 16-bit ProPhoto TIFF, save/reopen and renderer
+  replacement. The JPEG sheet was visually reviewed. Diagnostics and device-loss
+  recovery pass (`jpeg-recovery-session.log`, 1.97 s), including the intentional
+  GPU validation failure. Portal/GVFS teardown warnings are harness noise.
+
+Reproduce the external fixtures with locally supplied profiles:
+
+```sh
+# Install Pillow in a local venv or an ignored target directory first.
+python3 tools/validation/jpeg_interchange.py prepare artifacts/color-m2/jpeg-fixtures \
+  --cmyk-profile /usr/share/color/icc/krita/cmyk.icm \
+  --rgb-profile /usr/share/color/icc/krita/sRGB-elle-V2-srgbtrc.icc
+LAYER_TEST_JPEG_FIXTURES="$PWD/artifacts/color-m2/jpeg-fixtures" \
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  cargo test --offline --release -p layer-color -- --include-ignored --test-threads=1
+python3 tools/validation/jpeg_interchange.py verify artifacts/color-m2/jpeg-fixtures
+```
+
+This session used `PYTHONPATH="$PWD/artifacts/deps/jpeg-python"` for Pillow.
+The system development package was unavailable to install without interactive
+administrator credentials. Its matching **3.1.3-1.fc44.x86_64** RPM was downloaded
+with `dnf download`, extracted locally using `rpm2cpio`/`cpio`, and its ignored
+`libjpeg.pc` prefix made relative to the extracted directory. The local linker
+symlink resolves to the already installed `/lib64/libjpeg.so.62`. Cargo used
+`PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig"`. Standard builds
+use installed development headers via pkg-config; no local path is compiled into
+the build script. The [Linux setup guide](../development/linux.md) records this
+new system dependency. Non-GTK native/Web packaging and codec dependency
+integration remain unqualified and require the user's later platform approval.
+
+JPEG completes another functional export format, not milestone 2. Remaining
+interchange work includes metadata/DPI retention, resize/dither/preview, custom
+ICC/intents/BPC controls, remembered recipes and richer clipboard/source repair.
+Native GTK photo activation, bounded live residency/mips, complete color tools,
+managed viewing and final memory/latency gates remain outstanding. No performance
+workload or optimization was run in this stage; correctness job durations above
+are not latency evidence.
+
+
+Final source builds are mapped by `jpeg-reviewed-build.{json,log}` and saved as
+`jpeg-reviewed-{color,ui,gpu,gtk}-tests`. The final color executable passes **all
+33 tests**, including external fixtures, in 1.58 s (`jpeg-reviewed-color.log`).
+The shared UI suite passes **371 tests** in 0.71 s (`jpeg-reviewed-ui.log`), and
+**all 7 snapshot GPU tests** pass in 27.47 s (`jpeg-reviewed-snapshot.log`).
+The two file publication/cancellation policy tests pass in `jpeg-file-policy.log`.
+Source, binary, dependency, fixture and capture hashes are retained in
+`jpeg-provenance.json`; JPEG/PNG/TIFF sheet captures are in `jpeg-ui/`.
+The final GTK file workflow also passes in 17.34 s
+(`jpeg-reviewed-files-session.log`). Final `git diff --check` passes.

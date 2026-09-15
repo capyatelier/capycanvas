@@ -537,3 +537,48 @@ fn cancelled_snapshot_does_not_initialize_a_device_or_resolve_backing() {
     assert!(matches!(result, Err(GpuRasterError::Color(e)) if e.contains("cancelled")));
     assert_eq!(control.output_rows(), 0);
 }
+
+#[test]
+fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
+    let project = source_project(
+        DocumentColor {
+            space: RgbSpace::ProPhoto,
+            depth: IntegerDepth::U16,
+        },
+        [33, 17],
+    );
+    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    for space in RgbSpace::ALL {
+        let target = SourceInterpretation {
+            channels: SourceChannels::Rgb,
+            depth: IntegerDepth::U8,
+            profile: ColorProfile::Builtin(space),
+            profile_assumed: false,
+        };
+        let matte = [0.25, 0.5, 0.75];
+        let mut png = Vec::new();
+        let expected_stats = reader
+            .write_png(&mut png, &target, Default::default(), Some(matte))
+            .unwrap();
+        let mut jpeg = Vec::new();
+        let actual_stats = reader
+            .write_jpeg(&mut jpeg, &target, Default::default(), matte, 100)
+            .unwrap();
+        assert_eq!(expected_stats, actual_stats);
+        let expected = decode(png);
+        let actual = decode(jpeg);
+        assert_eq!(actual.interpretation.channels, SourceChannels::Rgb);
+        assert_eq!(actual.interpretation.depth, IntegerDepth::U8);
+        assert_eq!(
+            layer_color::profile_bytes(&actual.interpretation.profile).unwrap(),
+            layer_color::profile_bytes(&target.profile).unwrap()
+        );
+        let a = raw_rows(&expected);
+        let b = raw_rows(&actual);
+        let max = a.iter().zip(&b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(
+            max <= 4,
+            "{space:?} JPEG quality 100 differs by {max} codes"
+        );
+    }
+}

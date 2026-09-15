@@ -7,18 +7,21 @@ use serde::{Deserialize, Serialize};
 pub enum ExportFormat {
     Png,
     Tiff,
+    Jpeg,
 }
 impl ExportFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Png => "png",
             Self::Tiff => "tif",
+            Self::Jpeg => "jpg",
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Self::Png => "PNG image",
             Self::Tiff => "TIFF image",
+            Self::Jpeg => "JPEG image",
         }
     }
 }
@@ -45,6 +48,7 @@ pub struct ExportRecipe {
     pub format: ExportFormat,
     pub color: DocumentColor,
     pub background: ExportBackground,
+    pub jpeg_quality: u8,
 }
 impl ExportRecipe {
     pub fn web_share() -> Self {
@@ -52,6 +56,7 @@ impl ExportRecipe {
             format: ExportFormat::Png,
             color: DocumentColor::default(),
             background: ExportBackground::Preserve,
+            jpeg_quality: 90,
         }
     }
     pub fn wide_color() -> Self {
@@ -71,6 +76,7 @@ impl ExportRecipe {
                 depth: IntegerDepth::U16,
             },
             background: ExportBackground::Preserve,
+            jpeg_quality: 90,
         }
     }
     pub fn interpretation(self) -> SourceInterpretation {
@@ -84,6 +90,20 @@ impl ExportRecipe {
             profile: ColorProfile::Builtin(self.color.space),
             profile_assumed: false,
         }
+    }
+    pub fn validate(self) -> Result<(), String> {
+        if !(1..=100).contains(&self.jpeg_quality) {
+            return Err("JPEG quality must be between 1 and 100".into());
+        }
+        if self.format == ExportFormat::Jpeg {
+            if self.color.depth != IntegerDepth::U8 {
+                return Err("JPEG output requires 8-bit samples".into());
+            }
+            if self.background == ExportBackground::Preserve {
+                return Err("Choose a background for JPEG transparency".into());
+            }
+        }
+        Ok(())
     }
     pub fn filename(self, suggested: &str) -> String {
         let stem = suggested

@@ -12,7 +12,11 @@ ports are compared.
 ## Prerequisites
 
 Install a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`,
-GTK4 and libadwaita development packages, and Wayland development libraries.
+GTK4 and libadwaita development packages, Wayland development libraries, and
+libjpeg-turbo 3.1 or later development headers/libraries (Fedora:
+`libjpeg-turbo-devel`). The shared photo codec uses the native
+scanline API through a small C boundary; JPEG development files must be visible
+to `pkg-config`. ICC transforms use the existing `lcms2` Rust dependency.
 Package names vary by distribution. GTK 4.22 or later is required for the shared
 SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features are declared in
 [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
@@ -20,7 +24,7 @@ SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features
 Check the libraries visible to the build:
 
 ```bash
-pkg-config --modversion gtk4 libadwaita-1 wayland-client
+pkg-config --modversion gtk4 libadwaita-1 wayland-client libjpeg
 ```
 
 Running the canvas requires a Wayland session and a hardware Vulkan driver with
@@ -70,7 +74,8 @@ dist/capycanvas-linux/bin/capycanvas
 ```
 
 The staging directory includes the executable, desktop launcher, icon, runtime
-filters and project notices. GTK/libadwaita remain system dependencies. The script
+filters and project notices. GTK/libadwaita and libjpeg-turbo remain system
+dependencies. The script
 does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
 

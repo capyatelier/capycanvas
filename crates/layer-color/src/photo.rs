@@ -5,11 +5,13 @@ use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, Sour
 use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace};
 use std::io::{BufRead, Read, Seek, Write};
 
+mod jpeg_codec;
 mod jpeg_io;
+mod jpeg_markers;
 mod orientation;
 mod png_io;
 mod tiff_io;
-pub use jpeg_io::read_jpeg;
+pub use jpeg_io::{read_jpeg, write_jpeg, write_jpeg_rows};
 pub use png_io::{read_png, write_png, write_png_rows};
 pub use tiff_io::{read_tiff, write_tiff, write_tiff_rows};
 
@@ -119,3 +121,5 @@ fn err(error: impl std::fmt::Display) -> String {
 mod output_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod jpeg_tests;

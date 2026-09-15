@@ -431,6 +431,18 @@ impl SnapshotRenderer {
             layer_color::photo::write_tiff_rows(output, extent, target, row)
         })
     }
+    pub fn write_jpeg(
+        &mut self,
+        output: impl std::io::Write,
+        target: &SourceInterpretation,
+        options: layer_core::color::ConversionOptions,
+        matte: [f32; 3],
+        quality: u8,
+    ) -> Result<layer_color::OutputStatistics, String> {
+        self.write_rows(target, options, Some(matte), |extent, target, row| {
+            layer_color::photo::write_jpeg_rows(output, extent, target, quality, row)
+        })
+    }
     fn identity_source(
         &self,
         target: &SourceInterpretation,

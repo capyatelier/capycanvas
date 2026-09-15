@@ -10,4 +10,7 @@ layer-core = { path = "../layer-core" }
 lcms2 = "=6.2.0"
 png = "=0.18.1"
 tiff = "=0.10.3"
-zune-jpeg = "=0.5.15"
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"
