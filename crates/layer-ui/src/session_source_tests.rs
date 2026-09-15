@@ -126,3 +126,193 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
         Some(&source)
     );
 }
+
+#[test]
+fn source_profile_repair_preserves_samples_and_baked_edits() {
+    use layer_core::{
+        color::{ColorProfile, IntegerDepth, RgbSpace, source::*},
+        raster::*,
+    };
+    use std::sync::Arc;
+    let mut builder = SourceBuilder::new(
+        [1, 1],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U16,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: true,
+        },
+        1024,
+    )
+    .unwrap();
+    let samples: Vec<u8> = [65535u16, 12345, 54321, 1]
+        .into_iter()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    builder.push_row(&samples).unwrap();
+    let mut session = session();
+    session.engine.backend_mut().tiled_sources = true;
+    session
+        .import_layer_source("Original", builder.finish().unwrap())
+        .unwrap();
+    let id = session.engine.document().active_layer;
+    session.state.platform = Platform::Gtk;
+    let change = session.dispatch(UiAction::Layer {
+        action: LayerAction::RepairSourceProfile { id: id.0 },
+    }).unwrap();
+    assert_ne!(change.regions & regions::HOST, 0, "native dialog must be serviced");
+    let request_id = session.state.requests.last().unwrap().id;
+    session.complete_document_request(request_id, Ok(false)).unwrap();
+
+    let original = session
+        .engine
+        .document()
+        .layer(id)
+        .unwrap()
+        .source
+        .clone()
+        .unwrap();
+    let mut corrected = (*original).clone();
+    corrected.interpretation.profile = ColorProfile::Builtin(RgbSpace::DisplayP3);
+    corrected.interpretation.profile_assumed = false;
+    let before = session.engine.document().clone();
+    let mut invalid = corrected.clone();
+    invalid.extent[0] += 1;
+    assert!(session.repair_layer_source(id, &original, invalid).is_err());
+    assert_eq!(session.engine.document(), &before);
+    assert_eq!(
+        session
+            .repair_layer_source(id, &original, corrected.clone())
+            .unwrap(),
+        id
+    );
+    let after = session
+        .engine
+        .document()
+        .layer(id)
+        .unwrap()
+        .source
+        .as_ref()
+        .unwrap();
+    assert_eq!(after.interpretation, corrected.interpretation);
+    assert!(Arc::ptr_eq(
+        after.tiles.values().next().unwrap(),
+        original.tiles.values().next().unwrap()
+    ));
+    assert!(
+        session
+            .repair_layer_source(id, &original, corrected.clone())
+            .unwrap_err()
+            .contains("source changed")
+    );
+    session
+        .dispatch(UiAction::Invoke {
+            command: CommandId::Undo,
+        })
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        session
+            .engine
+            .document()
+            .layer(id)
+            .unwrap()
+            .source
+            .as_ref()
+            .unwrap(),
+        &original
+    ));
+
+    // Simulate an immutable committed paint tile plus live layer/mask metadata.
+    let mut layer = session.engine.document().layer(id).unwrap().clone();
+    layer.properties.offset = layer_core::Point { x: 4., y: 9. };
+    layer.mask = Some(layer_core::LayerMask::reveal_all(
+        session.engine.allocate_layer_id(),
+        Default::default(),
+    ));
+    let descriptor = session.engine.document().color.paint_descriptor();
+    let bytes = vec![55; descriptor.byte_len([TILE_SIZE; 2]).unwrap()];
+    let key = TileKey {
+        plane: RasterPlane::Color,
+        coordinate: [0, 0],
+    };
+    let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
+    layer.raster = RasterRevision::backed(RasterData {
+        tiles: [(key, tile)].into(),
+        watercolor: None,
+    });
+    session
+        .engine
+        .apply_edit(layer_core::Edit::ReplaceLayer(Box::new(layer.clone())))
+        .unwrap();
+    let next_id = session
+        .repair_layer_source(id, &original, corrected.clone())
+        .unwrap();
+    assert_ne!(next_id, id);
+    let doc = session.engine.document();
+    assert_eq!(
+        doc.layer(id).unwrap(),
+        &layer,
+        "baked layer and its mask stay intact"
+    );
+    let next = doc.layer(next_id).unwrap();
+    assert_eq!(next.properties.offset, layer.properties.offset);
+    assert_eq!(next.source.as_deref(), Some(&corrected));
+    assert!(next.raster.is_empty());
+    assert!(next.mask.is_none());
+    assert_eq!(doc.active_layer, next_id);
+    let mut archive = Vec::new();
+    session
+        .capture_project_recovery()
+        .unwrap()
+        .write(&mut archive)
+        .unwrap();
+    let reopened =
+        layer_core::Project::read(std::io::Cursor::new(archive), Default::default()).unwrap();
+    assert_eq!(
+        reopened.document.layer(id).unwrap().source.as_deref(),
+        Some(original.as_ref())
+    );
+    assert_eq!(
+        reopened.document.layer(next_id).unwrap().source.as_deref(),
+        Some(&corrected)
+    );
+    assert_eq!(
+        reopened
+            .document
+            .layer(id)
+            .unwrap()
+            .raster
+            .wait_data()
+            .unwrap()
+            .tiles[&key]
+            .wait_backing()
+            .unwrap()
+            .decode()
+            .unwrap(),
+        bytes
+    );
+    session
+        .dispatch(UiAction::Invoke {
+            command: CommandId::Undo,
+        })
+        .unwrap();
+    assert!(session.engine.document().layer(next_id).is_none());
+    assert_eq!(session.engine.document().layer(id).unwrap(), &layer);
+    assert_eq!(session.engine.document().active_layer, id);
+    session
+        .dispatch(UiAction::Invoke {
+            command: CommandId::Redo,
+        })
+        .unwrap();
+    assert_eq!(session.engine.document().layer(id).unwrap(), &layer);
+    assert_eq!(
+        session
+            .engine
+            .document()
+            .layer(next_id)
+            .unwrap()
+            .source
+            .as_deref(),
+        Some(&corrected)
+    );
+}

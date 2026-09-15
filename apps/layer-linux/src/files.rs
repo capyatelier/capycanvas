@@ -10,6 +10,8 @@ pub(crate) mod export;
 pub(crate) mod open;
 mod properties;
 mod place;
+mod profile;
+mod source;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
@@ -171,6 +173,9 @@ async fn document_request(
 ) -> Result<bool, String> {
     if matches!(request, DocumentRequest::Place | DocumentRequest::Paste) {
         return place::run(w, matches!(request, DocumentRequest::Paste)).await;
+    }
+    if let DocumentRequest::RepairSourceProfile { layer } = request {
+        return source::repair(w, *layer).await;
     }
     if matches!(request, DocumentRequest::Properties) {
         return properties::show(w).await;

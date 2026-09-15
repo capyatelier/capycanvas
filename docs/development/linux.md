@@ -74,6 +74,13 @@ cancelled. Clear removes retained content, and Undo restores it exactly. The nat
 `workspace::tests::place_source::native_profiled_place_paste_and_source_history`
 check covers import, clipboard format preference, history, reopen and cancellation.
 
+File → Repair Source Profile and the layer context menu correct retained originals.
+The ICC chooser validates input profiles against the image channels and validates
+export profiles against the output transform. Repair preserves original sample
+bytes; a layer with baked edits gets a separate corrected source layer. The native
+`workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits`
+check covers correction, cancellation, mismatched profiles, history and reopening.
+
 File → Document Properties shows working color/depth and each retained source's
 profile or assumption. New/Open preserve the current drawing in its own window
 while the incoming document is validated. An opened photo has no native Save

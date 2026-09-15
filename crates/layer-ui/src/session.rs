@@ -8,6 +8,8 @@ use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurv
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
+#[path = "source_edit.rs"]
+mod source_edit;
 #[path = "figures.rs"]
 pub(crate) mod figures;
 #[path = "operation.rs"]
@@ -1747,6 +1749,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .as_ref()
                         .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
             }
+            CommandId::RepairSourceProfile => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy
+                    && !self.engine.document().active_mask
+                    && self.can_repair_source(self.engine.document().active_layer)
+            }
             CommandId::ImportImage | CommandId::PasteImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
             }
@@ -2084,9 +2091,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
+                let host = matches!(action, LayerAction::RepairSourceProfile { .. });
                 self.layer_action(action)?;
                 self.refresh_document();
-                (DOCUMENT | BRUSH, true)
+                (DOCUMENT | BRUSH | if host { HOST } else { 0 }, !host)
             }
             UiAction::MeasureWorkspaceBottom { inset } => {
                 if !inset.is_finite() || !(0.0..1_000_000.0).contains(&inset) {
@@ -3385,6 +3393,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::RepairSourceProfile => {
+                self.request_source_repair(self.engine.document().active_layer)?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::ImportImage | CommandId::PasteImage => {
                 self.request_document(if command == CommandId::ImportImage { DocumentRequest::Place } else { DocumentRequest::Paste })?;
                 Ok((DOCUMENT | HOST, false))

@@ -131,6 +131,7 @@ pub enum LayerAction {
     Clear {
         id: u64,
     },
+    RepairSourceProfile { id: u64 },
     CopyMask {
         id: u64,
     },
@@ -558,6 +559,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             action
         };
         match action {
+            LayerAction::RepairSourceProfile { id } => self.request_source_repair(LayerId(id))?,
             LayerAction::Visibility { id, value } => self.layer_edit(Edit::SetLayerVisibility {
                 id: LayerId(id),
                 visible: value,
@@ -1139,6 +1141,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let item = |label: &str, action: A| {
             let enabled = match &action {
+                A::RepairSourceProfile { .. } => self.state.platform == Platform::Gtk && self.can_repair_source(l.id) && !self.state.document_file.busy,
                 A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0)).is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
                 A::DeleteSelected => doc.can_delete_layers(&roots),
@@ -1414,6 +1417,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 },
             ]);
+            if l.source.is_some() && self.state.platform == Platform::Gtk {
+                protection.push(item("Repair Source Profile…", A::RepairSourceProfile { id }));
+            }
             let mut destructive = Vec::new();
             if paint {
                 destructive.push(item("Clear layer", A::Clear { id }));

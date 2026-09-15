@@ -53,6 +53,7 @@ pub enum DocumentRequest {
     Place,
     Paste,
     Properties,
+    RepairSourceProfile { layer: u64 },
     New,
     Open,
     Save {
@@ -72,6 +73,7 @@ impl DocumentRequest {
             Self::Place => "Import image as layer",
             Self::Paste => "Paste image as layer",
             Self::Properties => "Document Properties",
+            Self::RepairSourceProfile { .. } => "Repair Source Profile",
             Self::New => "New drawing",
             Self::Open => "Open drawing or photo",
             Self::Save { .. } => "Save drawing",
@@ -84,6 +86,7 @@ impl DocumentRequest {
             Self::Place => "Import",
             Self::Paste => "Paste",
             Self::Properties => "Done",
+            Self::RepairSourceProfile { .. } => "Apply",
             Self::New => "Create",
             Self::Open => "Open",
             Self::Export { .. } => "Export",

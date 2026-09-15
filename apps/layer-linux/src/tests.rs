@@ -14906,3 +14906,6 @@ async fn read_canvas_pixels(
         glib::timeout_future(std::time::Duration::from_millis(16)).await;
     }
 }
+
+#[path = "source_repair_tests.rs"]
+mod source_repair;

@@ -2,7 +2,7 @@ use super::new_photo::{chooser, finish, invoke, ready};
 use super::*;
 use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
 
-fn source() -> SourceImage {
+pub(super) fn source() -> SourceImage {
     let mut builder = SourceBuilder::new(
         [128, 64],
         SourceInterpretation {
@@ -27,7 +27,7 @@ fn source() -> SourceImage {
     }
     builder.finish().unwrap()
 }
-fn snapshot(w: &Rc<Workspace>) -> Vec<u8> {
+pub(super) fn snapshot(w: &Rc<Workspace>) -> Vec<u8> {
     let project = w
         .gpu
         .borrow()

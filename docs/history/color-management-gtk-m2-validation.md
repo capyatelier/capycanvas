@@ -4535,3 +4535,93 @@ inspection, Color preferences, remaining output controls, managed wide viewing
 and combined memory/job bounds remain open. Fresh performance baselines,
 regression investigation and optimization remain last. Other host integration
 still requires approval after GTK completion.
+
+## GTK source-profile repair and shared ICC chooser (2026-09-15)
+
+File → Repair Source Profile and the retained layer's context menu now correct
+its original color interpretation. Shared Rust enforces idle/lock/source identity,
+unchanged extent/channels/depth and reuse of every immutable source sample tile.
+Untouched sources change interpretation in one undoable edit. A source with baked
+raster/transform/mask-application content instead offers **Add Corrected Source**:
+a plain corrected original at the same placement and parent, leaving the existing
+layer's pixels, masks and adjustments intact. The new layer is selected and has
+its own normal paint-layer properties. This does not reconstruct old strokes.
+
+The GTK ICC chooser moved from the export-only module to `files/profile.rs` and
+now validates the role: delivery compiles/probes an actual output transform;
+source repair checks actual RGB/gray/CMYK channels and compiles the input transform
+into working RGB. File parsing/CMM setup remain on a worker. Original selected
+ICC bytes are retained. Builtin source choices also receive worker validation
+before publication. Profile selection and cancellation do not mutate the project;
+publication rejects a changed document epoch/revision/source. Assumed metadata is
+cleared only by an explicit successful interpretation choice.
+
+Artifacts use `artifacts/color-m2/source-repair-*` with the hardware/software
+setup recorded above:
+
+- `shared-suite.log`: all 387 shared UI checks pass (30.35 s). The new policy
+  test checks unchanged U16/low-alpha sample ownership, invalid/stale source
+  rejection, exact undo, source insertion beside an unchanged baked layer/mask,
+  single-step undo/redo and exact native archive restoration. `host-policy.log`
+  passes again after adding the layer-menu host-notification regression assertion.
+- `profile-roles-final.log`: both profile-reader checks pass. They retain RGB and
+  gray ICC bytes, reject corrupt/oversized profiles, and validate/reject source
+  RGB, gray-alpha and CMYK channel combinations using the actual source role.
+- `production-final.log`: production GTK and shared FFI check without warnings.
+  No other platform host was built or integrated.
+- `final-journey.log`: the real native
+  `workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits`
+  passes in 7.85 s. It exercises both command routes, Cancel, rejection of a gray
+  ICC for an RGB photo, applying an Adobe RGB ICC, exact original tile sharing,
+  changed display appearance and exact Undo display restoration. It paints on
+  that source, cancels a second repair, adds a ProPhoto corrected original beside
+  the unchanged baked layer, saves/reopens in a fresh window with identical native
+  archive/display bytes, then undoes/redoes insertion without changing baked data.
+
+The final captured binary is `final-gtk-tests`, SHA-256
+`646f9a37f31299497391e2c86ab7c9195a431e4b55e4ea3db9e2009107538688`;
+`final-build.{json,log}` and `final-sources.json` identify its inputs. The earlier
+complete `serviced-journey.log` also passes (7.22 s). The first native run failed
+because the layer action queued a host request without publishing the HOST region;
+that integration bug is fixed and covered by the shared regression assertion.
+Initial compile logs and an invalid test-only ID allocator fixture remain recorded;
+the fixture now allocates its mask ID normally.
+
+Visual review of the original, mismatch and baked-source sheets prompted a wider
+layout and an explicit RGB-profile mismatch message. Final screenshots in `ui/`
+were inspected. They verify presentation in the declared sRGB fallback, not
+calibrated physical color agreement. A Before/After source-repair preview is still
+outstanding; this section qualifies source ownership, history and the repair action,
+not the complete consequential-color-change preview journey.
+
+`existing-files.log` passes the existing native Open/Save/Export/failure/cancellation
+and recovery workflow (36.04 s) on `serviced-gtk-tests`, SHA-256
+`6e309ce7bbf35aaac7234150b56ce7516e4a5e47c0d3458f976aa4169159db35`.
+The later changes only widen the source sheet and clarify source-only validation
+messages. Export uses the same validated output-role behavior. ImageMagick
+independently checks all 983,040 U16 RGB/gray/CMYK samples and matching ICC bytes
+from GTK process 1772689; every maximum code difference is zero
+(`external-handoff.log`). CMYK uses `/usr/share/color/icc/krita/cmyk.icm`.
+Nonfatal private-session GVFS warnings remain in the logs.
+
+Reproduce using the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-ui --offline -- --test-threads=1
+cargo test -p layer-linux --offline files::profile:: -- --test-threads=1
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/source-repair-final-gtk-exact" \
+  workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits \
+  "$PWD/artifacts/color-m2/source-repair-final-journey"
+python3 tools/validation/icc_export_handoff.py artifacts/familiar-workspace/files 1772689
+```
+
+`source-repair-provenance.json` records code/build/profile/output/screenshot hashes.
+Source-repair Before/After, explicit rasterization, document assignment/conversion/
+depth, inspection, Color preferences and remaining output controls are still open.
+Managed wide viewing, complete tool precision and combined memory/job budgets also
+remain open. These correctness durations are not benchmark acceptance. Fresh
+baselines, frame-creation regressions, optimization and the memory/latency matrix
+remain last; other host integration remains approval-gated after GTK completion.

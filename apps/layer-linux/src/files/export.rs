@@ -7,7 +7,7 @@ use layer_core::color::{
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
 use std::sync::{Arc, Mutex};
 
-mod profile;
+use super::profile::{ProfileChooser, ProfilePurpose};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -167,7 +167,7 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             "Custom ICC",
         ],
     );
-    let profile = profile::ProfileChooser::new(&w.window, &space, document.space);
+    let profile = ProfileChooser::new(&w.window, &space, document.space, ProfilePurpose::Output);
     group.add(&profile.row);
     let selected_profile = profile.selected.clone();
     let depth = combo(
