@@ -124,8 +124,16 @@ premultiplied composition before output profile conversion, matte application an
 integer quantization. Reductions integrate covered source pixels; enlargements
 use Catmull–Rom interpolation. PNG/TIFF/JPEG share the bounded row pipeline, and
 an unchanged-size identity export retains exact integer samples. Resizing never
-changes the editable master or its dirty state. Output preview, named recipes and
-resolution metadata remain under implementation.
+changes the editable master or its dirty state. Named recipes and resolution
+metadata remain under implementation.
+
+Export's Master/Output comparison uses the same immutable snapshot as the final
+file. Output rows pass through size, profile, depth, dithering and matte before
+being interpreted for viewing and reduced. JPEG compression artifacts are
+explicitly excluded. Shared renderer previews also serve Assign/Convert and
+source repair/rasterization; GTK applies a linear checker and tags the opaque
+thumbnail with its sRGB/P3 viewing space. Closing cancels and drains the preview
+worker. See the [output-preview validation](../history/color-management-gtk-m2-validation.md#2026-09-15--preview-the-delivered-sdr-samples).
 
 GTK alert waits use `alert::choose`, which disconnects its response handler on
 completion and closes the dialog if its future is abandoned. The installed

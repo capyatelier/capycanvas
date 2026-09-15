@@ -423,6 +423,8 @@ impl SnapshotRenderer {
 }
 
 mod output;
+mod preview;
+pub use preview::SnapshotPreview;
 
 #[cfg(test)]
 mod tests;

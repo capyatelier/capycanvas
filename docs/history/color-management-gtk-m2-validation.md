@@ -5864,3 +5864,99 @@ brush/filter/precision/large-document qualification, monitor/profile and alterna
 GTK-renderer checks. Fresh frame-creation baselines, regression investigation,
 peak/steady memory, p95/p99 latency and optimization stay last. Other platform host
 integration still requires user approval after GTK completion and qualification.
+
+## 2026-09-15 — Preview the delivered SDR samples
+
+Implementation starts from `5e1cdc62`. This completes the current GTK output
+comparison functionality, not milestone 2 qualification. No benchmarking or
+optimization was performed. Other platform hosts were not integrated or built.
+
+Export captures an immutable project snapshot before opening its options. The
+Master/Output comparison and final file use that same snapshot, background and
+time. Output preview uses the encoder's shared row pipeline: resizing, actual
+output ICC interpretation, depth, matte and dithering precede thumbnail reduction.
+Grayscale uses the actual generated grayscale profile. CMYK samples are decoded
+through their output ICC profile for viewing. The returned clipping statistics
+cover the whole output. JPEG explicitly discloses that compression artifacts are
+excluded; changing JPEG quality therefore does not invalidate this preview.
+
+The shared renderer now provides bounded linear associated previews, replacing
+the GTK-only area accumulator. Master preview reduces the native composition and
+maps linear RGB to the viewing space. Output preview reduces interpreted delivery
+samples. GTK applies its checker in linear light and creates an opaque texture
+tagged with the selected sRGB/P3 view, so GTK theme/alpha composition cannot alter
+translucent artwork edges. Neither preview enters editing, sampling or export.
+Bounds are limited to 1024 per axis; GTK requests 220×160. The row resampler and
+16-row capture bands avoid a whole-document CPU image. This is a structural bound,
+not aggregate CPU/GPU memory or large-photo latency qualification.
+
+The existing comparison controller retains one active worker and one replaceable
+pending request. Changes cancel the active request, stale results cannot publish,
+and closing the sheet cancels and waits for worker acknowledgement. The same
+shared preview implementation now serves Assign/Convert, source repair and
+rasterization comparisons. Each comparison currently captures its viewing route
+when opened; live route changes inside an already-open modal and physical monitor
+movement remain part of the outstanding viewing qualification.
+
+Validation paths are under `artifacts/color-m2/`. GPU tests used the local RTX PRO
+6000 Blackwell Max-Q / NVIDIA 610.57.04. Native tests used the private Mutter
+1600×1000@120 harness, GTK 4.22.4, libadwaita 1.9.3 and GSK Vulkan.
+
+- `export-preview-gpu-qualified-tests.log`: 1 passed (5.06 s). Both sRGB and P3
+  viewing spaces cover native ProPhoto RGBA16, resized/dithered sRGB RGBA8,
+  resized P3 RGB8 with matte, enlarged grayscale-alpha16, and CMYK8/16 TIFF with
+  different mattes. Preview is compared to decoded actual exported files with an
+  independent area integral, within 5e-4 linear associated channels. Master
+  preview matches the independent native render/linear matrix within 2e-7.
+  Whole-output statistics and row progress match exactly; cancellation, invalid
+  bounds and unchanged project data are checked.
+- `export-preview-native.log`: 1 passed (21.08 s), P3; the same test in
+  `export-preview-native-srgb.log` passed (17.97 s) using `LAYER_TEST_VIEW_SRGB=1`.
+  Actual PNG/TIFF files match downloaded GTK preview textures within two viewing
+  codes, including the linear checker. PNG/TIFF/JPEG preview dimensions, JPEG
+  disclosure and unchanged texture after quality changes are checked. Repeated
+  cancellation releases sizing widgets; project bytes, revision, dirty state
+  and location remain unchanged.
+- Affected native regression logs use prefix `export-preview-`: document
+  Assign/Convert/depth/history/copy passed (34.49 s), source repair passed
+  (14.97 s), source rasterization passed (8.48 s), and `native_document_files`
+  passed (37.39 s), including custom RGB/gray/CMYK output. The document-color test
+  deliberately induces a GPU validation panic and verifies recovery.
+- `export-preview-production-check.log`: GTK and shared FFI check passed (1.48 s).
+  This is not qualification of another platform host.
+
+Exact GPU executable `export-preview-gpu-qualified-tests` SHA-256:
+`4a4bb8a1d96635f15fdf25bfcbd2a034107ba53e60684b776195422952a88d11`.
+Exact GTK executable `export-preview-gtk-checked-tests` SHA-256:
+`2472e349622e73e250ec4e24e176afbf70d8099c635c4b3cffb65054f51028ce`.
+Both `-sources.json` files match all final changed/new Rust sources. The CMYK
+fixture is `/usr/share/color/icc/krita/cmyk.icm` (961644 bytes), SHA-256
+`156e7c14f244cfc4ed83a755ca4803d80e15dd249b40fae82cb127d3902e15c7`.
+`export-preview-provenance.json` hashes the build/run logs and source manifests.
+PNG/JPEG screenshots under `export-resize-native/2136767/` were visually inspected:
+Master/Output and resolved dimensions fit the dialog, and the JPEG disclosure is
+visible. This is not calibrated-display or external-editor qualification.
+
+Reproduce with the local JPEG headers in `PKG_CONFIG_PATH`, `cargo test --offline
+-p layer-render-wgpu --no-run` and `cargo test --offline -p layer-linux --no-run`.
+Run the GPU executable with `--exact snapshot::tests::resized::output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_matte
+--test-threads=1 --nocapture`. Set `LAYER_TEST_CMYK_PROFILE` to the fixture above.
+Run the GTK executable through `tools/performance/gtk-raster.sh` with full name
+`workspace::tests::export_resize::native_export_sizes_preserve_master_and_release_cancelled_dialogs`,
+then repeat with `LAYER_TEST_VIEW_SRGB=1`. The saved `*-exact` wrappers add
+`--exact`. Regression suffixes/full names are captured in their log filenames.
+
+The first GPU attempt failed in the independent reference: floating-point ceil
+produced a row beyond the image boundary. Clamping its loop to source dimensions
+fixed the oracle; production integer-grid area taps were unchanged. The first
+native test build had test-only signed/unsigned dimension mismatches, corrected
+before execution. These failed logs remain; neither is counted as passing.
+
+Remaining delivery work is reusable named/remembered recipes, resolution metadata
+and TIFF/HDR-input policies. Aggregate scheduling/cancellation/resource budgets,
+coarse-first source/display and zoom quality, the full brush/filter/precision
+matrix and large documents, monitor/profile/alternate GTK renderer qualification,
+and the two previously recorded native workspace/toolbar harness gaps remain.
+Fresh frame-creation baseline comparisons, memory/latency measurements and any
+necessary optimization remain last. Other platform host work requires approval
+only after GTK completion and qualification.

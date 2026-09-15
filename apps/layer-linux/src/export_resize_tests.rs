@@ -138,6 +138,57 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
                 .revision,
             revision
         );
+        let after = find_named(dialog.upcast_ref(), "color-preview-after")
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        let status = find_named(dialog.upcast_ref(), "color-preview-status")
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while after.paintable().is_none() {
+            assert!(Instant::now() < deadline, "preview: {}", status.text());
+            pump(20);
+        }
+        assert!(status.text().starts_with("Output preview"));
+        let texture = after
+            .paintable()
+            .unwrap()
+            .downcast::<gdk::Texture>()
+            .unwrap();
+        let preview_extent = if format == 2 { [220, 147] } else { expected };
+        assert_eq!(
+            [texture.width() as u32, texture.height() as u32],
+            preview_extent
+        );
+        let mut downloader = gdk::TextureDownloader::new(&texture);
+        downloader.set_color_state(&w.view_color().state());
+        downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+        let (preview_bytes, preview_stride) = downloader.download_bytes();
+        assert_eq!(
+            find_named(dialog.upcast_ref(), "export-preview-compression")
+                .unwrap()
+                .is_visible(),
+            format == 2
+        );
+        if format == 2 {
+            find_named(dialog.upcast_ref(), "export-jpeg-quality")
+                .unwrap()
+                .downcast::<adw::SpinRow>()
+                .unwrap()
+                .set_value(55.);
+            pump(50);
+            assert_eq!(
+                after
+                    .paintable()
+                    .unwrap()
+                    .downcast::<gdk::Texture>()
+                    .unwrap(),
+                texture,
+                "excluded JPEG compression cannot invalidate the color preview"
+            );
+        }
         pump(100);
         capture_ui(&w, &output, &format!("{extension}-sizing.png"));
         response(&w, "export");
@@ -156,6 +207,44 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         )
         .unwrap();
         assert_eq!(result.extent, expected);
+        if format != 2 {
+            // Both lossless copies fit the preview without further reduction.
+            // Interpret actual file samples and independently composite the
+            // native checker; allow two view codes for ICC/texture rounding.
+            let decoder = layer_color::WorkingDecoder::new(
+                &result.interpretation,
+                w.view_color().space(),
+                Default::default(),
+            )
+            .unwrap();
+            let mut rows = result.rows();
+            let mut row = vec![0; result.row_bytes()];
+            let mut pixels = vec![[0.; 4]; result.extent[0] as usize];
+            for y in 0..result.extent[1] {
+                rows.read(y, &mut row).unwrap();
+                decoder.decode_pixels(&row, &mut pixels).unwrap();
+                for (x, pixel) in pixels.iter().enumerate() {
+                    let checker = if (x / 8 + y as usize / 8) % 2 == 0 {
+                        0.94
+                    } else {
+                        0.80
+                    };
+                    let actual = &preview_bytes[y as usize * preview_stride + x * 4..][..4];
+                    assert_eq!(actual[3], 255);
+                    for c in 0..3 {
+                        let linear = f64::from(pixel[c]) * f64::from(pixel[3])
+                            + checker * (1. - f64::from(pixel[3]));
+                        let expected = (w.view_color().space().encode(linear).clamp(0., 1.) * 255.)
+                            .round() as u8;
+                        assert!(
+                            actual[c].abs_diff(expected) <= 2,
+                            "{extension} ({x},{y}) c{c}: {} vs {expected}",
+                            actual[c]
+                        );
+                    }
+                }
+            }
+        }
         assert_eq!(
             result.interpretation.depth,
             if format == 2 {

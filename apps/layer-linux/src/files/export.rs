@@ -1,7 +1,7 @@
 //! GTK output choices and a cancellable, immutable document worker.
 use super::*;
 use layer_core::color::{
-    ConversionOptions, DocumentColor, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels,
+    ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels,
     RenderingIntent, RgbSpace,
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
@@ -140,11 +140,12 @@ fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
     row
 }
 
-async fn choose_recipe(
-    w: &Workspace,
-    document: DocumentColor,
-    extent: [u32; 2],
-) -> Option<ExportRecipe> {
+async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Option<ExportRecipe> {
+    let document = snapshot.project.document.color;
+    let extent = [
+        snapshot.project.document.width,
+        snapshot.project.document.height,
+    ];
     let dialog = adw::AlertDialog::builder()
         .heading("Export image")
         .body("Create a profiled copy. Your editable drawing keeps its color space and bit depth.")
@@ -515,6 +516,144 @@ async fn choose_recipe(
             depth.notify("selected");
         }
     ));
+    let read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>> = Rc::new(glib::clone!(
+        #[weak]
+        format,
+        #[weak]
+        space,
+        #[weak]
+        depth,
+        #[weak]
+        background,
+        #[weak]
+        quality,
+        #[weak]
+        intent,
+        #[weak]
+        bpc,
+        #[weak]
+        dither,
+        #[strong]
+        selected_profile,
+        #[strong]
+        output_size,
+        #[upgrade_or]
+        Err("Export options closed".into()),
+        move || {
+            let recipe = ExportRecipe {
+                size: output_size(),
+                format: match format.selected() {
+                    1 => ExportFormat::Tiff,
+                    2 => ExportFormat::Jpeg,
+                    _ => ExportFormat::Png,
+                },
+                profile: selected_profile(space.selected())?,
+                depth: if depth.selected() == 0 {
+                    IntegerDepth::U8
+                } else {
+                    IntegerDepth::U16
+                },
+                background: match background.selected() {
+                    1 => ExportBackground::White,
+                    2 => ExportBackground::Black,
+                    _ => ExportBackground::Preserve,
+                },
+                jpeg_quality: quality.value() as u8,
+                encoding: OutputEncoding {
+                    conversion: ConversionOptions {
+                        intent: match intent.selected() {
+                            1 => RenderingIntent::Perceptual,
+                            2 => RenderingIntent::Saturation,
+                            3 => RenderingIntent::AbsoluteColorimetric,
+                            _ => RenderingIntent::RelativeColorimetric,
+                        },
+                        black_point_compensation: bpc.is_active() && intent.selected() != 3,
+                    },
+                    dither: if depth.selected() == 0 && dither.is_active() {
+                        OutputDither::Stochastic8
+                    } else {
+                        OutputDither::None
+                    },
+                },
+            };
+            recipe.validate()?;
+            Ok(recipe)
+        }
+    ));
+    let comparison =
+        super::preview::Comparison::for_output(snapshot.project.clone(), w.view_color());
+    let compression_note = gtk::Label::builder()
+        .label(
+            "JPEG preview includes size, color and background. Compression artifacts are excluded.",
+        )
+        .wrap(true)
+        .xalign(0.)
+        .visible(false)
+        .build();
+    compression_note.set_widget_name("export-preview-compression");
+    compression_note.add_css_class("dim-label");
+    format.connect_selected_notify(glib::clone!(
+        #[weak]
+        compression_note,
+        move |row| {
+            compression_note.set_visible(row.selected() == 2);
+        }
+    ));
+    let refresh_preview: Rc<dyn Fn()> = Rc::new({
+        let snapshot = DocumentExport::clone(snapshot);
+        glib::clone!(
+            #[weak]
+            comparison,
+            #[strong]
+            read_recipe,
+            #[strong]
+            updating,
+            move || {
+                if updating.get() {
+                    return;
+                }
+                match read_recipe() {
+                    Ok(recipe) => comparison.request_output(&snapshot, recipe),
+                    Err(error) => comparison.invalidate(&error),
+                }
+            }
+        )
+    });
+    for row in [
+        &preset,
+        &size,
+        &format,
+        &space,
+        &depth,
+        &background,
+        &intent,
+    ] {
+        row.connect_selected_notify({
+            let refresh = refresh_preview.clone();
+            move |_| refresh()
+        });
+    }
+    for row in [&bpc, &dither, &enlarge] {
+        row.connect_active_notify({
+            let refresh = refresh_preview.clone();
+            move |_| refresh()
+        });
+    }
+    // Quality affects excluded JPEG compression, so it cannot change these pixels.
+    for row in &dimensions {
+        row.connect_value_notify({
+            let refresh = refresh_preview.clone();
+            move |_| refresh()
+        });
+    }
+    dialog.connect_response(
+        None,
+        glib::clone!(
+            #[weak]
+            comparison,
+            move |_, _| comparison.close()
+        ),
+    );
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&group);
     content.append(&jpeg_hint);
@@ -526,11 +665,13 @@ async fn choose_recipe(
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .propagate_natural_height(true)
-        .max_content_height(540)
+        .max_content_height(430)
         .child(&content)
         .build();
     scroll.set_widget_name("export-scroll");
     let extra = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    extra.append(&comparison.widget);
+    extra.append(&compression_note);
     extra.append(&scroll);
     extra.append(&size_note);
     dialog.set_extra_child(Some(&extra));
@@ -538,59 +679,26 @@ async fn choose_recipe(
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("export"));
     dialog.set_response_appearance("export", adw::ResponseAppearance::Suggested);
-    if crate::alert::choose(dialog, &w.window).await != "export" {
+    refresh_preview();
+    let response = crate::alert::choose(dialog, &w.window).await;
+    comparison.close();
+    comparison.finish().await;
+    if response != "export" {
         return None;
     }
-    let recipe = ExportRecipe {
-        size: output_size(),
-        format: match format.selected() {
-            1 => ExportFormat::Tiff,
-            2 => ExportFormat::Jpeg,
-            _ => ExportFormat::Png,
-        },
-        profile: selected_profile(space.selected()).ok()?,
-        depth: if depth.selected() == 0 {
-            IntegerDepth::U8
-        } else {
-            IntegerDepth::U16
-        },
-        background: match background.selected() {
-            1 => ExportBackground::White,
-            2 => ExportBackground::Black,
-            _ => ExportBackground::Preserve,
-        },
-        jpeg_quality: quality.value() as u8,
-        encoding: OutputEncoding {
-            conversion: ConversionOptions {
-                intent: match intent.selected() {
-                    1 => RenderingIntent::Perceptual,
-                    2 => RenderingIntent::Saturation,
-                    3 => RenderingIntent::AbsoluteColorimetric,
-                    _ => RenderingIntent::RelativeColorimetric,
-                },
-                black_point_compensation: bpc.is_active() && intent.selected() != 3,
-            },
-            dither: if depth.selected() == 0 && dither.is_active() {
-                OutputDither::Stochastic8
-            } else {
-                OutputDither::None
-            },
-        },
-    };
-    Some(recipe)
+    read_recipe().ok()
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
-    let (color, extent) = w
+    // The preview and final file share one immutable artwork revision and time.
+    let snapshot = w
         .gpu
         .borrow()
         .as_ref()
-        .map(|g| {
-            let document = g.session.engine().document();
-            (document.color, [document.width, document.height])
-        })
-        .ok_or("Canvas unavailable")?;
-    let Some(recipe) = choose_recipe(w, color, extent).await else {
+        .ok_or("Canvas unavailable")?
+        .session
+        .capture_project_export(id)?;
+    let Some(recipe) = choose_recipe(w, &snapshot).await else {
         return Ok(false);
     };
     recipe.validate()?;
@@ -650,13 +758,6 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
             recipe.format.extension()
         ));
     }
-    let snapshot = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .ok_or("Canvas unavailable")?
-        .session
-        .capture_project_export(id)?;
     let height = recipe.size.extent([
         snapshot.project.document.width,
         snapshot.project.document.height,

@@ -77,7 +77,7 @@ impl SnapshotRenderer {
             && source.interpretation.profile == target.profile)
             .then(|| source.clone())
     }
-    fn write_rows(
+    pub(super) fn write_rows(
         &mut self,
         target: &SourceInterpretation,
         options: layer_core::color::OutputEncoding,
@@ -117,12 +117,7 @@ impl SnapshotRenderer {
             Vec::new()
         };
         let control = self.control.clone();
-        let mut source = Rows {
-            renderer: self,
-            band: Vec::new(),
-            first: 0,
-            end: 0,
-        };
+        let mut source = Rows::new(self);
         let mut stats = layer_color::OutputStatistics::default();
         write(extent, encoder.interpretation(), &mut |y, row| {
             control.check().map_err(|e| e.to_string())?;
@@ -147,14 +142,22 @@ impl SnapshotRenderer {
 
 /// Small source bands amortize GPU mappings while the resampler retains only
 /// four filtered rows. No output size requires a full document readback.
-struct Rows<'a> {
+pub(super) struct Rows<'a> {
     renderer: &'a mut SnapshotRenderer,
     band: Vec<[f32; 4]>,
     first: u32,
     end: u32,
 }
-impl Rows<'_> {
-    fn read(&mut self, y: u32) -> Result<&[[f32; 4]], String> {
+impl<'a> Rows<'a> {
+    pub(super) fn new(renderer: &'a mut SnapshotRenderer) -> Self {
+        Self {
+            renderer,
+            band: Vec::new(),
+            first: 0,
+            end: 0,
+        }
+    }
+    pub(super) fn read(&mut self, y: u32) -> Result<&[[f32; 4]], String> {
         self.renderer.check_cancelled().map_err(|e| e.to_string())?;
         let [width, height] = self.renderer.extent;
         if y >= height {

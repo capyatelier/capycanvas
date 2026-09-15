@@ -1,16 +1,13 @@
 //! Full-stack color comparison, reduced only after native linear composition.
 //! All GPU/readback work stays on the worker; this image never feeds artwork.
 use super::*;
-use layer_core::color::{
-    ColorProfile, IntegerDepth,
-    source::{SourceChannels, SourceInterpretation},
-};
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
 use std::cell::{Cell, RefCell};
 
 struct Image {
     extent: [u32; 2],
     bytes: Vec<u8>,
+    clipped: Option<u64>,
 }
 fn thumbnail(
     project: Project,
@@ -18,80 +15,43 @@ fn thumbnail(
     time: f32,
     control: CaptureControl,
     view: crate::display_color::ViewColor,
+    output: Option<ExportRecipe>,
 ) -> Result<Image, String> {
-    let source = [project.document.width, project.document.height];
-    let scale = (220. / source[0] as f64)
-        .min(160. / source[1] as f64)
-        .min(1.);
-    let extent = source.map(|v| (v as f64 * scale).round().max(1.) as u32);
-    let space = project.document.color.space;
-    let mut renderer = SnapshotRenderer::with_control(
-        project,
-        background,
-        time,
-        Default::default(),
-        control.clone(),
-    )
-    .map_err(|e| e.to_string())?;
-    let mut sums = vec![[0f64; 4]; (extent[0] * extent[1]) as usize];
-    // Area weights are integral in this common grid, avoiding fractional edge
-    // drift. Include every source pixel; no selected-pixel shortcut can miss
-    // a thin stroke, clipping, mask or adjustment.
-    for first in (0..source[1]).step_by(16) {
-        if control.is_cancelled() {
-            return Err("Preview cancelled".into());
-        }
-        let height = 16.min(source[1] - first);
-        let pixels = renderer
-            .read_region([0, first, source[0], height])
+    let mut renderer =
+        SnapshotRenderer::with_control(project, background, time, Default::default(), control)
             .map_err(|e| e.to_string())?;
-        accumulate(source, extent, first, &pixels, &mut sums);
-    }
-    drop(renderer);
-    let area = f64::from(source[0]) * f64::from(source[1]);
-    let linear: Vec<_> = sums
-        .into_iter()
-        .map(|p| p.map(|v| (v / area) as f32))
-        .collect();
-    let target = SourceInterpretation {
-        channels: SourceChannels::Rgba,
-        depth: IntegerDepth::U8,
-        profile: ColorProfile::Builtin(view.space()),
-        profile_assumed: false,
+    let (preview, clipped) = if let Some(recipe) = output {
+        recipe.validate()?;
+        renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
+        let (preview, statistics) = renderer.preview_output(
+            [220, 160],
+            view.space(),
+            &recipe.interpretation(),
+            recipe.encoding,
+            recipe.background.matte(),
+        )?;
+        (preview, Some(statistics.clipped_channels))
+    } else {
+        (renderer.preview_document([220, 160], view.space())?, None)
     };
-    let encoder = layer_color::WorkingEncoder::new(space, &target, Default::default())?;
-    let mut bytes = vec![0; linear.len() * 4];
-    // The GTK texture carries the same negotiated view space as the canvas.
-    encoder.encode_premultiplied(&linear, &mut bytes, None, [0, 0])?;
-    Ok(Image { extent, bytes })
-}
-
-fn accumulate(
-    source: [u32; 2],
-    extent: [u32; 2],
-    first: u32,
-    pixels: &[[f32; 4]],
-    sums: &mut [[f64; 4]],
-) {
-    for (i, pixel) in pixels.iter().enumerate() {
-        let x = i as u32 % source[0];
-        let y = first + i as u32 / source[0];
-        let x0 = x * extent[0];
-        let x1 = (x + 1) * extent[0];
-        let y0 = y * extent[1];
-        let y1 = (y + 1) * extent[1];
-        for dy in y0 / source[1]..=(y1 - 1) / source[1] {
-            let wy = y1.min((dy + 1) * source[1]) - y0.max(dy * source[1]);
-            for dx in x0 / source[0]..=(x1 - 1) / source[0] {
-                let wx = x1.min((dx + 1) * source[0]) - x0.max(dx * source[0]);
-                let weight = f64::from(wx) * f64::from(wy);
-                let target = &mut sums[(dy * extent[0] + dx) as usize];
-                for c in 0..4 {
-                    target[c] += f64::from(pixel[c]) * weight;
-                }
-            }
+    let mut bytes = Vec::with_capacity(preview.pixels.len() * 4);
+    // Match the canvas's linear alpha-over-checker. Opaque, tagged bytes keep
+    // GTK/theme composition from changing the artwork's translucent edges.
+    for (i, pixel) in preview.pixels.iter().enumerate() {
+        let x = i as u32 % preview.extent[0];
+        let y = i as u32 / preview.extent[0];
+        let checker = if (x / 8 + y / 8) % 2 == 0 { 0.94 } else { 0.80 };
+        for c in &pixel[..3] {
+            let linear = f64::from(*c) + checker * (1. - f64::from(pixel[3]));
+            bytes.push((preview.space.encode(linear).clamp(0., 1.) * 255.).round() as u8);
         }
+        bytes.push(255);
     }
+    Ok(Image {
+        extent: preview.extent,
+        bytes,
+        clipped,
+    })
 }
 
 struct Pending {
@@ -99,6 +59,7 @@ struct Pending {
     background: [f32; 4],
     time: f32,
     serial: u64,
+    output: Option<ExportRecipe>,
 }
 /// One worker plus one replaceable request. Cancellation is acknowledged before
 /// starting its successor, so rapid profile changes cannot accumulate GPU jobs.
@@ -119,6 +80,16 @@ pub(super) struct Comparison {
 }
 impl Comparison {
     pub fn new(original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
+        Self::with_labels(original, view, ["Before", "After"])
+    }
+    pub fn for_output(original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
+        Self::with_labels(original, view, ["Master", "Output"])
+    }
+    fn with_labels(
+        original: Project,
+        view: crate::display_color::ViewColor,
+        labels: [&str; 2],
+    ) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pictures.set_homogeneous(true);
@@ -126,6 +97,7 @@ impl Comparison {
             let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
             let picture = gtk::Picture::new();
             picture.set_widget_name(name);
+            picture.set_alternative_text(Some(label));
             picture.set_can_shrink(true);
             picture.set_size_request(160, 100);
             column.append(&gtk::Label::new(Some(label)));
@@ -133,8 +105,8 @@ impl Comparison {
             pictures.append(&column);
             picture
         };
-        let before = make("Before", "color-preview-before");
-        let after = make("After", "color-preview-after");
+        let before = make(labels[0], "color-preview-before");
+        let after = make(labels[1], "color-preview-after");
         let status = gtk::Label::builder()
             .label("Choose a profile to preview the complete canvas.")
             .wrap(true)
@@ -185,12 +157,30 @@ impl Comparison {
         }
     }
     pub fn request(self: &Rc<Self>, project: Project, background: [f32; 4], time: f32) {
+        self.request_image(project, background, time, None);
+    }
+    pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
+        self.request_image(
+            snapshot.project.clone(),
+            snapshot.background,
+            snapshot.time,
+            Some(recipe),
+        );
+    }
+    fn request_image(
+        self: &Rc<Self>,
+        project: Project,
+        background: [f32; 4],
+        time: f32,
+        output: Option<ExportRecipe>,
+    ) {
         self.invalidate("Rendering the complete canvas…");
         *self.pending.borrow_mut() = Some(Pending {
             project,
             background,
             time,
             serial: self.serial.get(),
+            output,
         });
         if self.running.replace(true) {
             return;
@@ -212,10 +202,24 @@ impl Comparison {
                 let result = gio::spawn_blocking(move || {
                     let before = original
                         .map(|project| {
-                            thumbnail(project, next.background, next.time, control.clone(), view)
+                            thumbnail(
+                                project,
+                                next.background,
+                                next.time,
+                                control.clone(),
+                                view,
+                                None,
+                            )
                         })
                         .transpose()?;
-                    let after = thumbnail(next.project, next.background, next.time, control, view)?;
+                    let after = thumbnail(
+                        next.project,
+                        next.background,
+                        next.time,
+                        control,
+                        view,
+                        next.output,
+                    )?;
                     Ok::<_, String>((before, after))
                 })
                 .await
@@ -234,8 +238,14 @@ impl Comparison {
                             set(&this.before, before);
                             this.original.borrow_mut().take();
                         }
+                        let description = match after.clipped {
+                            Some(0) => "Output preview",
+                            Some(_) => "Output preview · some colors exceed the output gamut",
+                            None => "Complete canvas",
+                        };
                         set(&this.after, after);
-                        this.status.set_label(&format!("Complete canvas · {} preview", view.space().name()));
+                        this.status
+                            .set_label(&format!("{description} · {} view", view.space().name()));
                         this.mark_ready(true);
                     }
                     Err(error) => {
@@ -246,44 +256,5 @@ impl Comparison {
             }
             this.running.set(false);
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn area_reduction_keeps_fractional_edges_and_premultiplied_coverage() {
-        let pixels: Vec<_> = (0..6)
-            .map(|v| [v as f32, -(v as f32), 2. * v as f32, 1.])
-            .collect();
-        let mut all = [[0.; 4]; 2];
-        accumulate([3, 2], [2, 1], 0, &pixels, &mut all);
-        assert_eq!(all, [[11., -11., 22., 6.], [19., -19., 38., 6.]]);
-        let mut bands = [[0.; 4]; 2];
-        accumulate([3, 2], [2, 1], 0, &pixels[..3], &mut bands);
-        accumulate([3, 2], [2, 1], 1, &pixels[3..], &mut bands);
-        assert_eq!(all, bands, "strip boundaries cannot change reduction");
-        let mut average = [[0.; 4]];
-        accumulate(
-            [2, 1],
-            [1, 1],
-            0,
-            &[[0., 0., 0., 0.], [1., 0.2, 0., 1.]],
-            &mut average,
-        );
-        let value = average[0].map(|v| v / 2.);
-        assert_eq!(value[3], 0.5);
-        assert_eq!(
-            value[0] / value[3],
-            1.,
-            "transparent pixels do not darken straight color"
-        );
-        assert!((value[1] / value[3] - 0.2).abs() < 1e-8);
-        let mut identity = [[0.; 4]; 6];
-        accumulate([3, 2], [3, 2], 0, &pixels, &mut identity);
-        for (sum, source) in identity.iter().zip(pixels) {
-            assert_eq!(sum.map(|v| v / 6.), source.map(f64::from));
-        }
     }
 }
