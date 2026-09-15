@@ -1,10 +1,11 @@
 //! Retained file/clipboard image import. Transfer uses a bounded buffer and a
 //! private temporary file; decode/CMM work runs outside the GTK owner.
 use crate::workspace::Workspace;
+use super::reader::CancelRead;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use std::{
-    io::{BufReader, Read, Seek},
+    io::BufReader,
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -71,33 +72,6 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(temporary)
-}
-
-struct CancelRead {
-    input: std::fs::File,
-    cancelled: Arc<AtomicBool>,
-}
-impl CancelRead {
-    fn check(&self) -> std::io::Result<()> {
-        if self.cancelled.load(Ordering::Acquire) {
-            // Interrupted would make read_exact retry indefinitely.
-            Err(std::io::Error::other("Image import cancelled"))
-        } else {
-            Ok(())
-        }
-    }
-}
-impl Read for CancelRead {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        self.check()?;
-        self.input.read(output)
-    }
-}
-impl Seek for CancelRead {
-    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.check()?;
-        self.input.seek(position)
-    }
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> {
@@ -198,10 +172,7 @@ pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> 
         // Keep the request reserved until this worker acknowledges cancellation;
         // repeated Cancel/Import cannot leave an unbounded set of decode workers.
         let source = gio::spawn_blocking(move || {
-            let reader = CancelRead {
-                input: std::fs::File::open(path).map_err(|e| e.to_string())?,
-                cancelled,
-            };
+            let reader = CancelRead::new(&path, cancelled).map_err(|e| e.to_string())?;
             layer_color::photo::read_photo(BufReader::new(reader), Default::default())
         })
         .await

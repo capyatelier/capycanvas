@@ -6,9 +6,44 @@ use layer_core::{Document, Project, ProjectLimits, color::RgbSpace};
 use layer_ui::DocumentLocation;
 use std::{
     io::{BufRead, BufReader},
-    path::Path,
-    sync::Arc,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
 };
+
+pub(super) async fn run(
+    w: &Rc<crate::workspace::Workspace>,
+    path: PathBuf,
+    location: DocumentLocation,
+    policy: layer_ui::PhotoOpenPolicy,
+) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Opening image or project…")
+        .body("Reading the file and its color information.")
+        .build();
+    dialog.set_widget_name("document-open-progress");
+    dialog.add_response("cancel", "Cancel");
+    dialog.set_close_response("cancel");
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let signal = dialog.connect_response(Some("cancel"), {
+        let cancelled = cancelled.clone();
+        move |_, _| cancelled.store(true, Ordering::Release)
+    });
+    dialog.present(Some(&w.window));
+    let control = cancelled.clone();
+    // Await acknowledgement even after Cancel. A successor cannot overlap a
+    // detached decoder, and a cancelled candidate never reaches a new window.
+    let result = gio::spawn_blocking(move || read(&path, location, policy, control))
+        .await
+        .map_err(|_| "Project reader failed".to_string())
+        .and_then(|result| result);
+    dialog.disconnect(signal);
+    if cancelled.load(Ordering::Acquire) {
+        return Ok(None);
+    }
+    dialog.close();
+    result.map(Some)
+}
 
 /// Shared by Open, Place and Paste. Choosing an interpretation changes no source
 /// samples; cancellation occurs before publishing any candidate into a window.
@@ -95,8 +130,10 @@ pub(crate) fn read(
     path: &Path,
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(Project, Option<DocumentLocation>), String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
+    let file = super::reader::CancelRead::new(path, cancelled)
+        .map_err(|e| format!("Cannot open file: {e}"))?;
     let mut reader = BufReader::new(file);
     if reader
         .fill_buf()
@@ -187,6 +224,7 @@ mod tests {
                         name: "Photo.png".into(),
                     },
                     Default::default(),
+                    Default::default(),
                 )
                 .unwrap();
                 assert!(location.is_none());
@@ -205,6 +243,7 @@ mod tests {
                         name: "Photo.png".into(),
                     },
                     policy,
+                    Default::default(),
                 )
                 .unwrap();
                 assert_eq!(promoted.document.color.depth, IntegerDepth::U16);
@@ -227,6 +266,7 @@ mod tests {
                         name: "master.capy".into(),
                     },
                     policy,
+                    Default::default(),
                 )
                 .unwrap();
                 assert!(location.is_some());
@@ -271,6 +311,7 @@ mod tests {
                 uri: "source".into(),
                 name: "Ordinary.jpg".into(),
             },
+            Default::default(),
             Default::default(),
         )
         .unwrap();

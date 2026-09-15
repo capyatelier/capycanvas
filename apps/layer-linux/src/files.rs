@@ -15,6 +15,7 @@ pub(crate) mod profile;
 mod source;
 mod preview;
 mod rasterize;
+mod reader;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
@@ -222,9 +223,9 @@ async fn document_request(
     match request {
         DocumentRequest::Open => {
             let policy = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.state().settings.photo_open;
-            let (mut project, location) = gio::spawn_blocking(move || open::read(&path, location, policy))
-            .await
-            .map_err(|_| "Project reader failed")??;
+            let Some((mut project, location)) = open::run(w, path, location, policy).await? else {
+                return Ok(false);
+            };
             if location.is_none() {
                 let source = std::sync::Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
                 let Some(source) = open::interpret(w, source, policy).await? else { return Ok(false); };

@@ -5,42 +5,31 @@ this report is not a declaration that the new modes are qualified. Scope is
 shared implementation and GTK integration. Other host integration requires the
 user's approval after GTK qualification.
 
-Current delivery status: retained source/ICC/output and native tile precision
-primitives are implemented, but the complete GTK SDR/photo workflows are **not
-enabled or qualified**. Native document edit publication is now connected and
-qualified in the headless paint/history fixtures below. Native photo-adjustment
-and material references pass, and document-to-view color conversion is explicit.
-Document-coordinate region capture and chunked filter-preview sources now have
-connected correctness coverage, including spatial support and cancellation.
-Standalone native snapshots now restore window dependencies and stream profiled
-PNG/TIFF rows, with exact untouched-source delivery. GTK export now uses that
-worker with explicit profile, depth and transparency choices and cancellation;
-profiled JPEG output adds quality and an explicit opaque background. Advanced
-export choices expose intent, black point compensation and optional 8-bit
-dithering without changing the master. Custom ICC selection now connects
-RGB/grayscale/CMYK delivery with worker validation and retained profile bytes.
-CPU brush dynamics now retain document RGB through previews, corrections and
-recovery; exact native GPU publication/save/reopen checks include color jitter.
-Native live physical filters now use bounded windows above a provisional image
-allocation ceiling, with complete halos and preflight rejection of oversized
-document-wide dependencies. Completed native color can now leave its mutable GPU
-cache and feed viewing, queries and later edits through lossless backing. This
-does not yet bound active edits or scalar planes.
-Exact composite picking and connected selections now capture artwork in bounded
-regions, independently of display pixels; filter previews capture their declared
-insertion scope. Remaining tool/effect precision,
-bounded active-edit and composite residency, source mips, global-job scheduling/cancellation, managed GTK
-viewing, color/photo controls and interchange are still required.
-Large-photo transforms fail the latency gate. Existing drawing, project files,
-diagnostics and GPU recovery continue to receive regression checks; these do not
-substitute for qualification of the new workflows. The implementation sections
-below distinguish each measured primitive from an integrated user journey.
+Current delivery status (2026-09-15): the GTK development build implements
+integer8/integer16 SDR editing in sRGB, Display P3, Adobe RGB and ProPhoto;
+retained sources and native masters; revisable photo corrections and masks;
+exact artwork sampling and histograms; tagged color entry, palettes and managed
+viewing; Assign/Convert/precision changes; and profiled PNG/JPEG/TIFF delivery
+with preview, resizing, reusable recipes and physical resolution. Display mips,
+bounded composite/filter windows and losslessly backed paint caches are present.
+The later checkpoint sections record implementation and reproducible evidence.
+
+**GTK is not yet qualified as complete.** The closing work is the affected
+correctness/recovery matrix and any failures it exposes, managed-display and
+supported-renderer coverage, followed by fresh fixed/parent/current frame-creation
+comparisons, combined peak/steady CPU/GPU budgets and large-document interaction
+latency. Active edit pins and simultaneous workers are not covered by the
+individual cache ceilings alone. Earlier measured failures remain open until
+new measurements resolve them. Coarse-first work or additional scheduling is
+required where those measured gates fail, rather than as an independent feature
+checklist. The recorded toolbar/workspace native harness failures also remain
+unqualified. Other platform hosts still require approval after GTK qualification.
 
 **Current work order (user instruction, 2026-09-14):** finish functional milestone 2
 implementation and correctness/recovery validation first. Further benchmarking,
 regression investigation and optimization are deferred to the final qualification
 phase. The earlier measured failures remain open and must be resolved before GTK
-mode enablement; this sequencing does not waive any performance or memory gate.
+release qualification; this sequencing does not waive any performance or memory gate.
 
 **Filter accuracy (user instruction, 2026-09-14):** edited filters need perceptually
 equivalent results, not exact historical pixel parity. Use practical numerical
@@ -6236,3 +6225,41 @@ latency measurements remain last. Coarse-first source/display work and further
 zoom-performance optimization belong to that final measured phase where needed;
 missing measurements cannot be counted as passing budgets. Other platform work
 still requires approval after GTK completion and qualification.
+
+## 2026-09-15 — Open cancellation and closing correctness audit
+
+After `5018090c`, Open now offers Cancel during photo/native-project decoding.
+It shares Place/Paste's cancellable file reader and awaits worker acknowledgement
+before releasing the document request. Cancellation discards the candidate before
+window publication. This does not promise instantaneous interruption of an
+already-running codec/CMM call; large-file cancellation latency remains measured
+qualification work.
+
+`open-cancel-checked-gtk-tests` SHA-256
+`ac45564bfe28e5cc09a97c45c796ca1f6c114120da4d73fac2039587ba478086` passes all
+14 default tests and four isolated native cases: repeated Open cancellation and
+successful reopening (4.78 s), New/photo/master/export (12.16 s), retained
+Place/Paste/history/cancellation (4.89 s), and wide-color GPU failure/recovery
+(5.24 s). Cancellation preserves exact serialized current-document bytes and
+publishes no new window. The GTK/shared-FFI production check passes (0.95 s).
+The first native-test build had three test-only API/name errors, corrected before
+capture. Logs, exact wrapper and five matching source hashes are recorded in
+`artifacts/color-m2/open-cancel-provenance.json`.
+
+The closing audit also runs the existing affected suites from exact binaries at
+`5018090c`, not newly invented operation tolerances. Core (70), color (53), UI
+(395), engine (58), and renderer contracts (3) pass; four color performance tests
+remain ignored. The shared diagnostic ABI run passes ten cases but fails exact
+stroke-cancellation restoration for destination-brush preset 11. Its explicit
+readback can precede a deferred raster-restoration frame; this failure is being
+investigated and is not accepted as passing or relaxed to a visual tolerance.
+The corresponding `sdr-qualification-*` build, executable and run records remain.
+
+These are correctness runs. Some independent suites overlapped on the reference
+GPU; their wall times establish no latency or memory budget. The resource audit
+confirms one file request and replaceable preview/histogram workers per owner,
+512 MiB additional-history admission, bounded capture staging and component
+source/paint/display/filter limits. Active edits pin pages beyond the paint-cache
+target, and independent windows/workers add allocations. Combined pressure,
+scalar-plane residency and workload admission still require final measurement;
+component limits alone do not pass the common memory gate.

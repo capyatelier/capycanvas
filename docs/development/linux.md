@@ -170,8 +170,10 @@ layouts are rejected. TIFF delivery is single-image uncompressed classic TIFF;
 an output exceeding its 32-bit offset limit fails before requesting pixels.
 See the [variant and input-policy validation](../history/color-management-gtk-m2-validation.md#2026-09-15--explicit-sdr-input-and-tiff-variant-policy).
 
-Paste prefers TIFF, then PNG, then JPEG; transfer and worker decoding can be
-cancelled. Clear removes retained content, and Undo restores it exactly. The native
+Open offers Cancel while reading a photo or native project. Open, Place and
+Paste keep their request reserved until the reader acknowledges cancellation,
+then discard the candidate before publication. Paste prefers TIFF, then PNG,
+then JPEG; transfer and worker decoding can be cancelled. Clear removes retained content, and Undo restores it exactly. The native
 `workspace::tests::place_source::native_profiled_place_paste_and_source_history`
 check covers import, clipboard format preference, history, reopen and cancellation.
 

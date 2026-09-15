@@ -85,6 +85,71 @@ pub(super) fn capture_ui(w: &Rc<Workspace>, directory: &std::path::Path, name: &
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 #[allow(deprecated)]
+fn native_open_cancellation_releases_request_and_preserves_current_document() {
+    let app = native_test_app("art.capycanvas.CancelOpen");
+    let w = Workspace::with_project(&app, Some((new_drawing(128, 128).unwrap(), None)));
+    let created = Rc::new(RefCell::new(None));
+    let result = created.clone();
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
+        result.replace(Some((project, location)));
+    }));
+    w.window.present();
+    ready(&w);
+    let original = super::place_source::snapshot(&w);
+    let directory = std::env::temp_dir().join(format!("capy-cancel-open-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let photo = directory.join("photo.png");
+    layer_color::photo::write_png(std::fs::File::create(&photo).unwrap(), &super::place_source::source()).unwrap();
+    let native = directory.join("master.capy");
+    std::fs::write(&native, &original).unwrap();
+    let cancelled = Rc::new(Cell::new(0));
+    let count = cancelled.clone();
+    let signal = w.window.connect_notify_local(Some("visible-dialog"), move |window, _| {
+        let Some(dialog) = window.visible_dialog()
+            .filter(|dialog| dialog.widget_name() == "document-open-progress")
+            .and_downcast::<adw::AlertDialog>() else { return; };
+        let count = count.clone();
+        // Cancel on the next owner iteration, before accepting the worker's
+        // completion. This exercises the final cancellation/publication boundary
+        // deterministically even when this small fixture decodes immediately.
+        glib::idle_add_local_full(glib::Priority::HIGH, move || {
+            count.set(count.get() + 1);
+            find_button(dialog.upcast_ref(), "Cancel").unwrap().emit_clicked();
+            glib::ControlFlow::Break
+        });
+    });
+    for path in [&photo, &native, &photo] {
+        invoke(&w, CommandId::OpenDocument);
+        let file = chooser();
+        file.set_file(&gtk::gio::File::for_path(path)).unwrap();
+        pump(150);
+        file.response(gtk::ResponseType::Accept);
+        finish(&w);
+        assert!(created.borrow().is_none(), "cancelled Open published a window");
+        assert_eq!(super::place_source::snapshot(&w), original);
+        assert!(!w.servicing.get(), "reader has not acknowledged cancellation");
+    }
+    assert_eq!(cancelled.get(), 3);
+    w.window.disconnect(signal);
+    // The same request path remains usable after repeated cancellation.
+    invoke(&w, CommandId::OpenDocument);
+    let file = chooser();
+    file.set_file(&gtk::gio::File::for_path(&photo)).unwrap();
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    finish(&w);
+    let (project, location) = created.borrow_mut().take().unwrap();
+    assert!(location.is_none());
+    assert_eq!(project.document.layers[0].source.as_deref(), Some(&super::place_source::source()));
+    assert_eq!(super::place_source::snapshot(&w), original);
+    w.window.destroy();
+    pump(100);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
 fn native_new_presets_and_profiled_photo_master() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.NewPhoto");
