@@ -10,6 +10,45 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current UIKit canvas-input milestone
+
+UIKit canvas contacts omitted event modifier flags. A supplied Shift-mouse
+contact reproduces an unconstrained saved ruler before the fix. Contacts and
+hover now use the existing shared key route, as Mac does; each new contact
+refreshes every flag because other editor controls can update shared input
+without updating the canvas cache. A separate regression reproduces that stale
+cache case. Interrupted touch identities also remained ignored on a new began
+phase; a new contact now retires that stale entry before ordinary palm rejection.
+Constraint and history behavior remain in Rust; no workaround or retry is added.
+
+`tests/canvas-modifiers.swift` passes sixty groups on both the existing simulator
+and the connected physical iPad GPU. Supplied mouse/Pencil contacts cover Shift
+at start/movement/release, stale control flags, interruption/identity reuse, saved
+ruler geometry, and palm rejection in both arrival orders. Artwork checks cover
+all seven figure shape/paint combinations with and without Shift, all four
+gradients, cancellation, constrained/free painting with all three ruler types,
+and exact decoded PNG Undo/Redo. These exercise production UIKit callbacks,
+the serial Rust owner and Metal; physical sensors/key delivery, visible editor
+hit targets, and full visual parity remain separate acceptance work.
+
+Evidence is under `artifacts/apple-contact-modifiers-v1/`: `before-v4`,
+`focus-before` and `interruption-before` reproduce the product failures;
+`artwork-scene-final` and `device-run-v2` pass all sixty groups. The final simulator
+check takes about fifty seconds including compilation; the physical suite takes
+about eighteen seconds to run. Neither uses XCTest or Files. The initial device
+fixture terminated before testing because it lacked the scene lifecycle required
+by UIKit. Its crash report identifies that cause; the fixture now uses a normal
+UIKit scene. The shipping app already did. Earlier local fixture setup errors
+and standalone SDK link warnings remain recorded, not treated as product bugs.
+
+Both final Release builds pass with zero compiler warnings; metadata is under
+`release/`. The physical run uses a separate callback app, not the Release editor.
+The disposable apps are removed and the original stopped iPad test runner is
+restored, with both artist app descriptors unchanged. Main is fetched before
+publication; the preceding published milestone is `ece8cd3`. Full feature/visual,
+physical input/provider/lifecycle and sustained Mac 90 Hz/iPad 120 Hz acceptance
+remain open. The goal is incomplete.
+
 ## Current image-import milestone
 
 An image chosen for one drawing could be inserted into its replacement when

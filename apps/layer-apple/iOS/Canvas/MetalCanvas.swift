@@ -22,6 +22,7 @@ final class CanvasView: UIView {
     var nextContact: UInt64 = 0
     var ignoredContacts: Set<ObjectIdentifier> = []
     var estimates = EstimatedInput()
+    var modifiers: UIKeyModifierFlags = []
 
     init(store: EditorStore) {
         self.store = store

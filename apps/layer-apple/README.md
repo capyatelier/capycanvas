@@ -230,6 +230,16 @@ Both shared Apple configurations run on Mac; these checks do not establish
 external OS event posting, OS menu navigation or UIKit/Pencil/tablet delivery.
 Group full-application UI runs at milestone boundaries.
 
+`tests/canvas-modifiers.swift` is a standalone UIKit scene application built
+with the production Shared/iOS sources, Rust bridge and bundled filters. Its
+sixty groups cover mouse/Pencil modifier flags, stale control flags, interruption,
+touch identity reuse and palm rejection; saved ruler geometry; all figure and
+gradient variants; and constrained/free painting with all three ruler types.
+Cancellation and Undo/Redo compare every decoded PNG pixel. The same suite passes
+on simulator and the physical iPad GPU without XCTest, using temporary storage
+and supplied event values. Physical sensors/key delivery, visible editor hit
+targets and OS interruption delivery remain separate acceptance checks.
+
 Numeric labels truncate within compact panels, leaving values readable. Spin
 fields keep the shared unit suffix when idle, with the value and both step buttons
 in one input surface. Sliders use the shared panel/text fill color and straight

@@ -51,9 +51,12 @@ extension CanvasView {
         wake()
     }
     func route(_ touches: Set<UITouch>, event: UIEvent?, phase: Double) {
+        if let event { updateModifiers(event.modifierFlags, force: phase == 1) }
         let ordered = touches.sorted { $0.timestamp < $1.timestamp }
         for touch in ordered {
             let key = ObjectIdentifier(touch)
+            // A fresh contact may reuse an interrupted touch's identity.
+            if phase == 1 { ignoredContacts.remove(key) }
             if ignoredContacts.contains(key) {
                 if phase >= 3 { ignoredContacts.remove(key) }
                 continue
@@ -157,6 +160,7 @@ extension CanvasView {
         finishEstimates()
         ignoredContacts.formUnion(contacts.keys)
         contacts.removeAll()
+        modifiers = []
     }
     private func send(_ contact: PencilContact, records: [Double], predicted: Bool) {
         store.native?.pointer(id: contact.id, tool: contact.tool, button: contact.button, records: records,
@@ -164,6 +168,7 @@ extension CanvasView {
     }
     @objc func hovered(_ recognizer: UIHoverGestureRecognizer) {
         guard contacts.values.allSatisfy({ $0.tool != 0 }) else { return }
+        updateModifiers(recognizer.modifierFlags)
         let point = recognizer.location(in: self)
         let altitude = recognizer.altitudeAngle
         let azimuth = recognizer.azimuthAngle(in: self)
@@ -178,10 +183,25 @@ extension CanvasView {
     func routeKeys(_ presses: Set<UIPress>, pressed: Bool) {
         for press in presses {
             guard let key = press.key else { continue }
-            let flags = key.modifierFlags
-            store.input(["type": "key", "key": AppleKeyName.name(key), "pressed": pressed,
-                "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty, "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
+            modifiers = key.modifierFlags
+            sendKey(AppleKeyName.name(key), pressed: pressed, flags: modifiers)
         }
+    }
+    private func updateModifiers(_ next: UIKeyModifierFlags, force: Bool = false) {
+        // A modifier may change while another native control owns key focus.
+        // Refresh every flag at contact start: other controls can forward keys
+        // directly to shared input without updating this canvas's cached flags.
+        for (flag, name): (UIKeyModifierFlags, String) in [(.shift, "Shift"), (.control, "Control"), (.alternate, "Alt"), (.command, "Meta")] {
+            if force || next.contains(flag) != modifiers.contains(flag) {
+                sendKey(name, pressed: next.contains(flag), flags: next)
+            }
+        }
+        modifiers = next
+    }
+    private func sendKey(_ key: String, pressed: Bool, flags: UIKeyModifierFlags) {
+        store.input(["type": "key", "key": key, "pressed": pressed,
+            "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty,
+                "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
     }
 }
 
