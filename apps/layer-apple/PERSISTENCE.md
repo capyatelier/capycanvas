@@ -145,6 +145,16 @@ export is completed by the native picker. Source/sample allocations are shared
 with the snapshot, but large-document capture cost, GPU preparation, memory peaks
 and storage latency still require measurement.
 
+Image layer imports use that same coordinated reader, including its substituted
+URL, throughout ImageIO decoding. This follows Apple's
+[external-document access requirements](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller).
+The layer name comes from the selected URL. The picker captures the drawing's
+epoch, and the Rust bridge rejects a late result after document replacement;
+ordinary edits in the same drawing remain allowed. The local owner fixture
+holds a coordinated image write, verifies that decoding waits for completed
+bytes, and covers read/decode errors, document replacement, retry and history.
+That check does not establish cloud-provider delivery or native picker behavior.
+
 Restoring a provider URL across launches, provider conflicts/file presenters,
 interruption during provider access, iPad multi-window lifecycle, and physical
 background-task expiration remain open. Recovery uses a private copy and does

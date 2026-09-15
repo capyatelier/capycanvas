@@ -455,6 +455,7 @@ pub unsafe extern "C" fn capy_apple_test_gpu_fault(app: *mut CapyApple, validati
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_import_layer(
     app: *mut CapyApple,
+    epoch: u64,
     name: *const c_char,
     width: u32,
     height: u32,
@@ -465,6 +466,9 @@ pub unsafe extern "C" fn capy_apple_import_layer(
         return -1;
     };
     app.perform(|a| {
+        if a.host.session.state().document_file.epoch != epoch {
+            return Err("The drawing changed before the image finished importing. Import it again.".into());
+        }
         if name.is_null()
             || rgba.is_null()
             || width == 0

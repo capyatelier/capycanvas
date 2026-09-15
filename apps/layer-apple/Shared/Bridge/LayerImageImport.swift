@@ -3,14 +3,11 @@ import ImageIO
 import CoreGraphics
 
 struct LayerImagePixels: Sendable {
-    let name: String
     let width: UInt32
     let height: UInt32
     let rgba: Data
 
     static func decode(_ url: URL) throws -> Self {
-        let access = url.startAccessingSecurityScopedResource()
-        defer { if access { url.stopAccessingSecurityScopedResource() } }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
             let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
             let width = properties[kCGImagePropertyPixelWidth] as? Int,
@@ -49,6 +46,6 @@ struct LayerImagePixels: Sendable {
                 }
             }
         }
-        return Self(name: url.lastPathComponent, width: UInt32(w), height: UInt32(h), rgba: bytes)
+        return Self(width: UInt32(w), height: UInt32(h), rgba: bytes)
     }
 }

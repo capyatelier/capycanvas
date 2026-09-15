@@ -1,8 +1,64 @@
 import XCTest
 import ImageIO
+import UniformTypeIdentifiers
 
 #if os(macOS)
 extension XCTestCase {
+    @MainActor func checkNativeImageImport(in app: XCUIApplication) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Image " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("Imported blue.png")
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let title = app.staticTexts["document-title"]
+        let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
+        let size = extent.components(separatedBy: " × ").compactMap(Int.init)
+        XCTAssertEqual(size.count, 2)
+        let context = try XCTUnwrap(CGContext(data: nil, width: size[0], height: size[1], bitsPerComponent: 8,
+            bytesPerRow: size[0] * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: size[0], height: size[1]))
+        let output = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(output, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(output))
+        let source = try Data(contentsOf: url)
+        let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let importImage = app.buttons["layer-Import image as layer"]
+        let open = app.windows.buttons["OKButton"].firstMatch
+        let paper = editorPixels(in: app)
+        workspaceActivate(importImage)
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(open.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(layers.count, 2)
+        XCTAssertEqual(editorPixels(in: app), paper, "Cancelling image selection must preserve the drawing")
+        workspaceActivate(importImage)
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
+        workspaceActivate(open)
+        XCTAssertTrue(open.waitForNonExistence(timeout: 15))
+        expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
+        expectation(for: NSPredicate { _, _ in
+            let pixels = self.editorPixels(in: app); return Int(pixels[2]) > Int(pixels[0]) + 100
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
+        XCTAssertTrue(app.staticTexts[url.lastPathComponent].firstMatch.exists, "Use the selected image's filename for its layer")
+        let imported = editorPixels(in: app)
+        attachEditor(in: app, name: "native-image-imported")
+        for (command, count, expected) in [("Undo", 2, paper), ("Redo", 3, imported)] {
+            editorHistory(command, in: app)
+            expectation(for: NSPredicate { _, _ in
+                layers.count == count && self.editorPixels(in: app) == expected
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), source)
+        XCTAssertFalse(app.alerts.firstMatch.exists); XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "native-image-redone")
+    }
+
     @MainActor func checkNativeProjectRoundTrip(in app: XCUIApplication) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Files " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

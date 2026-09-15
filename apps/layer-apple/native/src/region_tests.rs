@@ -29,6 +29,7 @@ fn region_app(platform: u32, gap: bool) -> App {
         unsafe {
             capy_apple_import_layer(
                 app.0,
+                app.state()["document_file"]["epoch"].as_u64().unwrap(),
                 c"Outline".as_ptr(),
                 64,
                 64,

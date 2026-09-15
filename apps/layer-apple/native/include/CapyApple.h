@@ -86,8 +86,8 @@ int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
                          const char *cache_directory);
 int32_t capy_apple_finish_startup_cache(CapyApple *app);
-/* Straight-alpha RGBA8 sRGB, tightly packed top-to-bottom rows. */
-int32_t capy_apple_import_layer(CapyApple *app, const char *name, uint32_t width,
+/* Import into the captured document epoch; straight-alpha RGBA8 sRGB rows. */
+int32_t capy_apple_import_layer(CapyApple *app, uint64_t epoch, const char *name, uint32_t width,
                                uint32_t height, const uint8_t *rgba, size_t count);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_redraw(CapyApple *app);

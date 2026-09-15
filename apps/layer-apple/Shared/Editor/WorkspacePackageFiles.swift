@@ -16,8 +16,7 @@ enum WorkspacePackageFiles {
         try await withCheckedThrowingContinuation { continuation in
             io.async {
                 do {
-                    var text = ""
-                    try ProjectFileIO.coordinate(url, writing: false) { source in
+                    let text = try ProjectFileIO.coordinate(url, writing: false) { source in
                         let file = try FileHandle(forReadingFrom: source)
                         defer { try? file.close() }
                         let maximum = 128 * 1024 * 1024
@@ -26,7 +25,7 @@ enum WorkspacePackageFiles {
                         guard let decoded = String(data: data, encoding: .utf8) else {
                             throw HostFailure(message: "The workspace package is not valid UTF-8")
                         }
-                        text = decoded
+                        return decoded
                     }
                     continuation.resume(returning: text)
                 } catch { continuation.resume(throwing: error) }

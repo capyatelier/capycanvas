@@ -44,13 +44,14 @@ final class NativeProjectTask: @unchecked Sendable {
 enum ProjectFileIO {
     /// File providers can substitute the coordinated URL. Scope and coordination
     /// enclose the entire read/write, including Rust validation/compression.
-    static func coordinate(_ url: URL, writing: Bool, work: @escaping (URL) throws -> Void) throws {
+    static func coordinate<Value>(_ url: URL, writing: Bool, work: @escaping (URL) throws -> Value) throws -> Value {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         let coordinator = NSFileCoordinator()
-        var coordinationError: NSError?, operationError: Error?
+        var coordinationError: NSError?
+        var result: Result<Value, Error>?
         let operation: (URL) -> Void = { location in
-            do { try work(location) } catch { operationError = error }
+            result = Result { try work(location) }
         }
         if writing {
             coordinator.coordinate(writingItemAt: url, options: .forReplacing,
@@ -59,8 +60,10 @@ enum ProjectFileIO {
             coordinator.coordinate(readingItemAt: url, options: [],
                 error: &coordinationError, byAccessor: operation)
         }
-        if let operationError { throw operationError }
+        guard let result else { throw coordinationError ?? HostFailure(message: "Could not access the selected file") }
+        let value = try result.get()
         if let coordinationError { throw coordinationError }
+        return value
     }
     /// Stream into a private sibling file. The destination is unchanged until
     /// validation/compression/write and fsync all succeed. No Data-sized copy.

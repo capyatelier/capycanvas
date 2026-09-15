@@ -10,6 +10,46 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current image-import milestone
+
+An image chosen for one drawing could be inserted into its replacement when
+background decoding finished late. The picker now captures the existing document
+epoch, dismisses on replacement and passes that epoch through decode to the Rust
+bridge, which rejects stale results before changing layers. Ordinary edits in
+the same drawing remain allowed; no revision lock or retry path is added.
+
+Image decoding also bypassed file coordination and could read incomplete bytes
+while a coordinated writer updated the file. It now uses the existing scoped,
+coordinated reader shared with projects and workspace packages. That helper
+returns its operation's value; packages no longer need a mutable result variable,
+and the pixel decoder no longer owns file access or duplicates the layer name.
+The layer uses the originally selected filename even if coordination supplies a
+different read URL. Decoding stays off both the UI and render-owner queues.
+
+Both local regressions reproduce their failures before the fixes. The final
+owner suite passes on both Apple policies: writer exclusion, stale-document
+rejection, missing/invalid files, fresh import after ordinary edits, one-step
+Undo/Redo and unchanged source bytes. The complete affected project-file and
+workspace-manager/package suites also pass on both policies. The standalone
+orientation/sRGB/alpha/size decoder and existing Metal import/thumbnail/exact-pixel
+history checks pass. Evidence is under `artifacts/apple-image-import-ownership-v1/`:
+`before-v2.log`, `coordination-before.log`, `coordination-after-v2.log`,
+`project-files.log`, `workspace-manager.log` and `native-image-import.log`.
+The initial `before.log` omitted offscreen GPU preparation and is not product
+failure evidence; its correction is retained. Final local checks have no compiler
+warnings; the earlier coordination fixture's semaphore warning is corrected.
+
+Two native Mac workflows pass without failures or skips: actual image selection,
+cancellation, filename, sampled artwork and Undo/Redo; plus Layout History
+restoration using the corrected capture helper. Reviewed captures show the blue
+imported artwork, its layer/thumbnail and the restored full editor window without
+unrelated desktop content. These do not establish UIKit picker behavior or full
+visual parity. Final Mac/iPad Release builds pass without compiler warnings;
+current metadata is in `release-final/`. No simulator or physical run is repeated.
+Owned Mac apps are stopped. Main was fetched before publication; the preceding
+published milestone is `cbfc58e`. Full feature/visual, physical input/provider/
+lifecycle and sustained-performance acceptance remain open. The goal is incomplete.
+
 ## Current workspace-storage simplification milestone
 
 Both shipping apps use the shared SQLite workspace library. The unused Apple
@@ -32,11 +72,16 @@ existing iPad simulator: four workflows, no failures or skips. Both final Releas
 builds pass without compiler warnings; current metadata is under this evidence
 root's `release/`. All owned test apps are verified stopped. Main was fetched
 and current. No artist storage or physical iPad app is changed.
-Mac captures show restored layout and retained workspace pins. UIKit captures
-show the expected workspace state but have a black upper area and right-edge
-clipping; they do not establish full-editor visual fit. This capture/viewport
-issue needs a bounded follow-up before broader visual acceptance, without
-assuming it is caused by the storage cleanup. The preceding published runtime
+Mac captures show restored layout and retained workspace pins. Two UIKit captures
+use `app.screenshot()` and have a black upper area and right-edge clipping.
+The same run's `workspace-history-selected` image uses the existing
+`attachEditor` helper and shows the full landscape editor. Other fixture comments
+already document the application screenshot API's landscape crop. Workspace
+and recovery attachments now reuse that helper, which also excludes unrelated
+desktop windows on Mac; no product-layout change or new capture machinery is
+needed. The current image-import batch verifies the corrected Mac History
+capture. UIKit and recovery replacement call sites still need capture review
+with their next relevant grouped workflow. The preceding published runtime
 is `60204ed`; full feature/visual, physical input/provider/lifecycle and sustained
 performance acceptance remain open. The overall goal remains incomplete.
 

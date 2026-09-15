@@ -6,6 +6,7 @@ struct LayerPanel: View {
     let panel: JSON
     @StateObject private var interaction = LayerRowInteraction()
     @State private var importing = false
+    @State private var importEpoch: UInt64 = 0
     @State private var popupID = UUID()
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var view: JSON { store.state["layer_tools"] }
@@ -49,11 +50,13 @@ struct LayerPanel: View {
                 interaction.validate(); store.layerThumbnails.refresh()
             }
             .onChange(of: store.state["layer_tools"]["rename_layer"].uint) { _, _ in interaction.validate() }
-            .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in interaction.cancel() }
+            .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in
+                interaction.cancel(); importing = false
+            }
             .onDisappear { interaction.cancel(); store.workspace.popover(popupID, open: false) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.image]) { result in
                 switch result {
-                case .success(let url): store.importLayer(url)
+                case .success(let url): store.importLayer(url, epoch: importEpoch)
                 case .failure(let error): store.failure = error.localizedDescription
                 }
             }
@@ -100,7 +103,10 @@ struct LayerPanel: View {
             LayerButton(icon: "mask", label: "Add layer mask", enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
             }
-            LayerButton(icon: "image", label: "Import image as layer", enabled: store.snapshot["canvas_ready"].bool) { importing = true }
+            LayerButton(icon: "image", label: "Import image as layer", enabled: store.snapshot["canvas_ready"].bool) {
+                importEpoch = store.state["document_file"]["epoch"].uint
+                importing = true
+            }
             LayerButton(icon: "delete", label: "Delete selected layers", enabled: view["can_delete"].bool) { store.layer(["op": "delete_selected"]) }
             Spacer(minLength: 0)
             LayerButton(icon: "more", label: "Layer actions", enabled: !current.isNull) {

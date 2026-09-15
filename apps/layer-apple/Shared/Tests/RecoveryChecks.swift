@@ -17,8 +17,7 @@ extension XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: 20), "An unclosed drawing must be offered after process restart")
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: open)
         waitForExpectations(timeout: 30)
-        let picker = XCTAttachment(screenshot: app.screenshot())
-        picker.name = "recovered-drawings-picker"; picker.lifetime = .keepAlways; add(picker)
+        attachEditor(in: app, name: "recovered-drawings-picker")
         #if os(macOS)
         open.click()
         let rows = app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
@@ -33,8 +32,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 30)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         XCTAssertFalse(app.alerts.firstMatch.exists)
-        let restored = XCTAttachment(screenshot: app.screenshot())
-        restored.name = "recovered-drawing-editor"; restored.lifetime = .keepAlways; add(restored)
+        attachEditor(in: app, name: "recovered-drawing-editor")
         app.terminate()
     }
 }

@@ -29,8 +29,6 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.buttons["panel-tab-navigator"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "workspace-history-restored"; attachment.lifetime = .keepAlways
-        add(attachment)
+        attachEditor(in: app, name: "workspace-history-restored")
     }
 }

@@ -1115,7 +1115,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
             .collect();
         assert_eq!(
             unsafe {
-                capy_apple_import_layer(app.0, name.as_ptr(), 64, 64, pixels.as_ptr(), pixels.len())
+                capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), name.as_ptr(), 64, 64, pixels.as_ptr(), pixels.len())
             },
             0
         );
@@ -1485,7 +1485,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
         let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 128, 0, 0, 0, 0];
         let before = app.state();
         assert_eq!(
-            unsafe { capy_apple_import_layer(app.0, name.as_ptr(), 2, 2, rgba.as_ptr(), 15) },
+            unsafe { capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), name.as_ptr(), 2, 2, rgba.as_ptr(), 15) },
             -1
         );
         assert_eq!(
@@ -1495,7 +1495,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
         );
         assert_eq!(
             unsafe {
-                capy_apple_import_layer(app.0, name.as_ptr(), 2, 2, rgba.as_ptr(), rgba.len())
+                capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), name.as_ptr(), 2, 2, rgba.as_ptr(), rgba.len())
             },
             0
         );

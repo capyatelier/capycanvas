@@ -469,15 +469,15 @@ final class NativeOwner: @unchecked Sendable {
         }
         #endif
     }
-    func importLayer(_ url: URL) {
+    func importLayer(_ url: URL, epoch: UInt64) {
         // File I/O and decode must not stall the UI or the render/input owner.
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             do {
-                let image = try LayerImagePixels.decode(url)
+                let image = try ProjectFileIO.coordinate(url, writing: false) { try LayerImagePixels.decode($0) }
                 perform { [self] in
-                    try image.name.withCString { name in
+                    try url.lastPathComponent.withCString { name in
                         try image.rgba.withUnsafeBytes { bytes in
-                            try check(capy_apple_import_layer(handle, name, image.width, image.height,
+                            try check(capy_apple_import_layer(handle, epoch, name, image.width, image.height,
                                 bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count))
                         }
                     }

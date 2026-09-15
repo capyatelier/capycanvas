@@ -251,7 +251,7 @@ import SwiftUI
     }
     func invoke(_ command: String) { dispatch(["type": "invoke", "command": command]) }
     func layer(_ action: [String: Any]) { dispatch(["type": "layer", "action": action]) }
-    func importLayer(_ url: URL) { native?.importLayer(url); wake?() }
+    func importLayer(_ url: URL, epoch: UInt64) { native?.importLayer(url, epoch: epoch); wake?() }
     func customize(_ action: [String: Any]) { dispatch(["type": "customize", "action": action]) }
     func doubleClickHandle(_ item: JSON) {
         query(["type": "panel_handle_target", "item": item.raw]) { [weak self] group in

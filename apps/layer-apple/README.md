@@ -656,7 +656,26 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
 
 Synthetic images check EXIF orientation, sRGB channels, straight alpha, row order
 and rejection of dimensions beyond the shared import limit. File decoding runs
-off the UI and render-owner queues; document import runs on the serial owner.
+off the UI and render-owner queues inside the same security-scoped, coordinated
+reader used for projects and workspace packages. The decoder returns owned
+pixels before releasing file access; the layer retains the selected filename.
+Document import runs on the serial owner.
+The picker captures its drawing's identity. The native bridge rejects a late
+decode after New/Open replaces that drawing, while ordinary edits in the same
+drawing remain allowed. Document replacement also dismisses its old image picker.
+Run the ordered replacement/import regression without simulator automation:
+
+```sh
+CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/CompactColorMac/Build/Products/Debug/CapyCanvas-Mac.app \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/image-import-owner.swift
+```
+
+This uses temporary images/documents and both Apple policies. It verifies waiting
+for a coordinated writer, stale import rejection, missing/invalid files, fresh
+import after an intervening edit, one-step Undo/Redo and unchanged source bytes.
+It does not exercise the native file picker or a cloud provider. The Mac UI
+workflow `testNativeImageImport` covers the actual picker, cancellation, the
+imported layer name, sampled artwork and Undo/Redo.
 
 The shared JSON transport uses direct Foundation container lookup to avoid
 bridging a complete dictionary for each field read by the editor. Check native
