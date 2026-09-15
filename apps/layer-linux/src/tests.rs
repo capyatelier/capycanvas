@@ -14912,3 +14912,6 @@ mod source_repair;
 
 #[path = "source_rasterize_tests.rs"]
 mod source_rasterize;
+
+#[path = "document_color_tests.rs"]
+mod document_color;

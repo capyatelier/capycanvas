@@ -1,5 +1,48 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
+    use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace}};
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let definition = RgbColor::new(RgbSpace::DisplayP3, [0.8, 0.3, 0.1, 1.]).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::Definition { color: definition } }).unwrap();
+    s.frame(1, 1).unwrap();
+    let before = s.engine.document().clone();
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let prepare = |s: &UiSession<Recorder>| s.prepare_document_color_transition(ColorTransition::Apply {
+        color, layers: s.engine.document().layers.clone(),
+    }).unwrap().0;
+    let prepared = prepare(&s);
+    assert!(s.commit_document_color_transition(prepared).unwrap_err().contains("not ready"));
+    assert_eq!(s.engine.document(), &before);
+    assert_eq!(s.state.colors.rgb_space(), before.color.space);
+    s.renderer_mut().prepared_color = Some(color);
+    s.commit_document_color_transition(prepare(&s)).unwrap();
+    assert_eq!(s.state.colors.rgb_space(), color.space);
+    assert_eq!(s.state.colors.definition(), definition);
+    for (a, b) in s.engine.configured_brush().color_rgba_linear.into_iter().zip(definition.linear_in(color.space).unwrap()) {
+        assert!((a - b).abs() < 2e-7);
+    }
+    let after = s.engine.document().clone();
+    for (redo, expected) in [(false, &before), (true, &after)] {
+        s.dispatch(UiAction::Invoke { command: if redo { CommandId::Redo } else { CommandId::Undo } }).unwrap();
+        let request = s.state.requests.first().unwrap();
+        let id = request.id;
+        assert!(matches!(request.kind, HostRequestKind::Document { request: DocumentRequest::ColorHistory { redo: value } } if value == redo));
+        let (prepared, project) = s.prepare_document_color_transition(if redo { ColorTransition::Redo } else { ColorTransition::Undo }).unwrap();
+        assert_eq!(project.document.color, expected.color);
+        s.renderer_mut().prepared_color = Some(expected.color);
+        s.commit_document_color_transition(prepared).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert_eq!(s.engine.document().layers, expected.layers);
+        assert_eq!(s.engine.document().color, expected.color);
+        assert_eq!(s.state.colors.rgb_space(), expected.color.space);
+        assert_eq!(s.state.colors.definition(), definition);
+        assert!(!s.state.document_file.busy);
+    }
+}
+
+#[test]
 fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
     use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
     use layer_render::{ColorSample, ColorSampleSource};

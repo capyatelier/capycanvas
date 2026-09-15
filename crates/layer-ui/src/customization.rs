@@ -931,6 +931,9 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             command.label().into(),
             match command {
                 CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
+                CommandId::AssignProfile => "Change profile interpretation while keeping RGB numbers",
+                CommandId::ConvertColorSpace => "Convert editable layers or create a flattened color copy",
+                CommandId::ChangeBitDepth => "Change editing precision with exact Undo",
                 CommandId::ImportImage => "Place a photo while retaining its original profile and depth",
                 CommandId::RasterizeSource => "Convert a retained original to document pixels",
                 CommandId::RepairSourceProfile => "Correct a retained image’s source profile while preserving baked edits",

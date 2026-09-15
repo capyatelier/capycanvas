@@ -5094,3 +5094,98 @@ The reviewed engine check follows the full suite's final tool-coordinate
 validation and extra failure test. No performance workloads were run. GTK
 functional completion still precedes fresh benchmarks and optimization, and
 other platform hosts remain approval-gated.
+
+## GTK document profile, conversion and precision workflows (2026-09-15)
+
+GTK now exposes Edit → Assign Profile, Convert Color Space and Change Bit Depth.
+Each prepares the actual candidate and a complete-stack Before/After comparison.
+Assignment preserves canonical RGB numbers; conversion transforms editable backing
+with intent/BPC; precision changes optionally dither 8-bit RGB. Retained originals
+keep their own profiles and samples. Conversion can instead create a separate
+flattened raster drawing, leaving the original layered document untouched.
+Editable-layer conversion can change blending and adjustments; the dialog explains
+that distinction before Apply. The preview remains explicitly sRGB while managed
+wide viewing is unfinished.
+
+The GTK file-operation reservation covers CPU conversion, comparison, GPU
+preparation, publication and cancellation acknowledgement. Settings changes retain
+one active conversion plus one replaceable pending choice. The GPU owner prepares
+one complete destination renderer on its existing device, keeping the old renderer
+until adoption. A reply marker excludes interpretation-dependent responses from
+the previous renderer. Undo/Redo follows the same prepared transition when the
+working mode changes. Publication also updates picker coordinates while retaining
+portable color definitions. A cancelled candidate is destroyed before releasing
+the document reservation.
+
+The flattened path streams complete Float32 composition in 16-row strips into a
+new document-space raster source. This avoids a full CPU Float32 canvas. Its source
+and snapshot limits, and the conversion worker's 512 MiB limit, remain component
+limits: combined old/new renderer, source/history/cache/staging and concurrent-job
+peak memory has not been qualified. Renderer setup currently prepares complete
+resources; its cost and any redundant work belong in the final benchmark phase.
+
+Evidence under `artifacts/color-m2/gtk-color-*`, using the reference NVIDIA/GTK
+configuration recorded above and private Mutter at 1600×1000, 120 Hz:
+
+- `final-shared-tests.log`: 390 shared UI and 86 native-workspace tests pass
+  (18.53/2.87 s). The added shared test verifies failed-adoption isolation,
+  portable picker/brush coordinates, host history routing and exact restoration.
+- `visible-production-check.log`: GTK and shared FFI check cleanly (0.86 s).
+- `visible-workflow.log`: the complete native document-color journey passes
+  (31.19 s), process 1906302. A P3 16-bit fixture includes a retained profiled
+  original, real paint, a painted mask and revisable Exposure. It exercises
+  Assign → Adobe RGB16, Convert → ProPhoto16, reduction → ProPhoto8, exact
+  backing/history and checkpoint restoration, cancellation, save/reopen, a
+  separately dirty sRGB flattened copy, and continued painting. Flattened copy
+  display agrees within one sRGB code on this fixture. A deliberately failed GPU
+  stroke suspends the canvas; restart restores the last recoverable image, and
+  prior color Undo/Redo still works. The intentional validation panic in the log
+  is part of that assertion.
+- `document-color-ui/1906302/` contains the four final dialog captures. Visual
+  inspection confirms complete Before/After images, visible profile/result/intent
+  choices, separate depth control and the Create Copy action.
+- `visible-files.log`: the existing native file journey passes (36.04 s), process
+  1907660, covering save/open/export, cancellation/failure and profiled delivery.
+  `visible-external-handoff.log` verifies exported 16-bit PNG/TIFF independently
+  with ImageMagick/LittleCMS: all 983,040 checked channel codes match exactly.
+
+The initial native workflow passed before adding recovery/picker/visible-label
+checks (`workflow.log`, 31.20 s). Review found and fixed picker coordinates left
+in the previous working space. The first recovery assertion expected the failed
+contact's allocator ID to be reused; it now correctly accounts for that consumed
+ID while requiring exact surviving document/history and pixels
+(`recovery-reviewed-workflow.log`, 31.27 s). The final control review found blank
+selected subtitles when enabling subtitle mode after setting the model. Configure
+subtitle mode and the string expression before the model. The failed
+`controls-workflow.log` also used the ActionRow subtitle getter; the final test
+asserts mapped label text instead, consistent with libadwaita's
+[ComboRow subtitle contract](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/property.ComboRow.use-subtitle.html).
+
+The final captured test binary `gtk-color-visible-tests` has SHA-256
+`9832bb75ead6b5ed7ac0df5e3f110f358502fbe1902bcf52648e4f959270a3e1`.
+`visible-build.{json,log}` and `visible-sources.json` identify its inputs.
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-ui -p layer-workspace --features native --offline
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/gtk-color-visible-exact" \
+  workspace::tests::document_color::native_document_color_assignment_conversion_depth_history_and_copy \
+  "$PWD/artifacts/color-m2/gtk-color-visible-workflow"
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/gtk-color-visible-exact" \
+  workspace::tests::native_document_files \
+  "$PWD/artifacts/color-m2/gtk-color-visible-files"
+python3 tools/validation/icc_export_handoff.py artifacts/familiar-workspace/files 1907660
+```
+
+`gtk-color-provenance.json` records the parent and source/build/output hashes.
+These are correctness checks, not performance measurements. Whole-stack advanced
+intent coverage, managed-wide canvas/widget/monitor agreement, inspection/Color
+preferences, remaining output controls, and combined resource/job limits remain
+open. Fresh frame-creation baselines, regression investigation, optimization and
+final memory/input-latency qualification remain last. Other platform hosts remain
+unintegrated and require approval after GTK completion.

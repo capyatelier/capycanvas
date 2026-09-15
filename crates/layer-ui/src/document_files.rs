@@ -47,9 +47,15 @@ impl DocumentFileState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentColorOperation { Assign, Convert, Depth }
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentRequest {
+    ChangeColor { operation: DocumentColorOperation },
+    ColorHistory { redo: bool },
     Place,
     Paste,
     Properties,
@@ -71,6 +77,11 @@ pub enum DocumentRequest {
 impl DocumentRequest {
     pub fn title(&self) -> &str {
         match self {
+            Self::ChangeColor { operation: DocumentColorOperation::Assign } => "Assign Profile",
+            Self::ChangeColor { operation: DocumentColorOperation::Convert } => "Convert Color Space",
+            Self::ChangeColor { operation: DocumentColorOperation::Depth } => "Change Bit Depth",
+            Self::ColorHistory { redo: false } => "Undo Color Change",
+            Self::ColorHistory { redo: true } => "Redo Color Change",
             Self::Place => "Import image as layer",
             Self::Paste => "Paste image as layer",
             Self::Properties => "Document Properties",
@@ -85,6 +96,7 @@ impl DocumentRequest {
     }
     pub fn accept_label(&self) -> &'static str {
         match self {
+            Self::ChangeColor { .. } | Self::ColorHistory { .. } => "Apply",
             Self::Place => "Import",
             Self::Paste => "Paste",
             Self::Properties => "Done",

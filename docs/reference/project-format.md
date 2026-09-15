@@ -34,6 +34,15 @@ placement. The rasterized image is no longer offered as an original for profile
 repair. Its original survives only through retained undo history; history is not
 saved in the project. Rasterized-image interpretation must match the document.
 
+GTK document color changes publish completed backing, mode and history atomically
+after preparing the matching GPU configuration. Assign changes the interpretation
+of committed RGB numbers; Convert transforms editable backing, including full
+rasterized image extents. Retained originals preserve their independent samples
+and profiles. Bit depth changes rescale scalar coverage without gamma or dithering;
+optional 8-bit dithering applies only to RGB. Undo/Redo restores exact backing and
+the previous mode. A flattened conversion creates a separate one-layer drawing;
+the layered original stays open. These operations do not add serialized history.
+
 Each layer or mask owns an immutable sparse raster revision. Tile size is 256².
 Changed physical pages are captured at a completed contact or raster-operation
 boundary. Unchanged tile backing is shared across revisions, history and saves.

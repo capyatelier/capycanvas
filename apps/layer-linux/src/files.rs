@@ -9,6 +9,7 @@ use std::rc::Rc;
 pub(crate) mod export;
 pub(crate) mod open;
 mod properties;
+mod color;
 mod place;
 mod profile;
 mod source;
@@ -173,6 +174,12 @@ async fn document_request(
     id: u32,
     request: &DocumentRequest,
 ) -> Result<bool, String> {
+    if let DocumentRequest::ChangeColor { operation } = request {
+        return color::run(w, *operation).await;
+    }
+    if let DocumentRequest::ColorHistory { redo } = request {
+        return color::history(w, *redo).await;
+    }
     if matches!(request, DocumentRequest::Place | DocumentRequest::Paste) {
         return place::run(w, matches!(request, DocumentRequest::Paste)).await;
     }

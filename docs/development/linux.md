@@ -92,6 +92,18 @@ the native project saves the rasterized role and pixels. The native
 `workspace::tests::source_rasterize::native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen`
 check covers these boundaries, reopen and continued painting.
 
+Edit → Assign Profile, Convert Color Space and Change Bit Depth prepare a complete
+Before/After comparison before changing the drawing. Assign retains committed RGB
+numbers; Convert transforms editable backing with the selected intent and black
+point compensation, or creates a separate flattened copy. Retained originals keep
+their independent profiles. Depth changes offer optional dithering for 8-bit RGB.
+The GPU prepares the destination configuration before the document and history
+change together. Cancel discards pending work; Undo/Redo restores exact backing and
+the matching renderer and picker space. The native
+`workspace::tests::document_color::native_document_color_assignment_conversion_depth_history_and_copy`
+check covers these controls, save/reopen, continued drawing and GPU recovery.
+Comparison and canvas currently use the explicit sRGB display fallback.
+
 File → Document Properties shows working color/depth and each retained source's
 profile or assumption. New/Open preserve the current drawing in its own window
 while the incoming document is validated. An opened photo has no native Save

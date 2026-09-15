@@ -10,6 +10,8 @@ use layer_render::CanvasRenderer;
 mod art_layers;
 #[path = "source_edit.rs"]
 mod source_edit;
+#[path = "document_color_edit.rs"]
+mod document_color_edit;
 #[path = "figures.rs"]
 pub(crate) mod figures;
 #[path = "operation.rs"]
@@ -1754,7 +1756,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.engine.document().active_mask
                     && self.can_edit_original(self.engine.document().active_layer)
             }
-            CommandId::ImportImage | CommandId::PasteImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
+            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
@@ -3393,6 +3395,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth => {
+                let operation = match command {
+                    CommandId::AssignProfile => DocumentColorOperation::Assign,
+                    CommandId::ConvertColorSpace => DocumentColorOperation::Convert,
+                    _ => DocumentColorOperation::Depth,
+                };
+                self.request_document(DocumentRequest::ChangeColor { operation })?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::RasterizeSource => {
                 self.request_source_rasterize(self.engine.document().active_layer)?;
                 Ok((DOCUMENT | HOST, false))
@@ -3519,10 +3530,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((BRUSH, false))
             }
             CommandId::Undo => {
+                if self.engine.history_color(false) != self.engine.document().color {
+                    self.request_document(DocumentRequest::ColorHistory { redo: false })?;
+                    return Ok((DOCUMENT | HOST, false));
+                }
                 self.engine.undo().map_err(error)?;
                 Ok((0, true))
             }
             CommandId::Redo => {
+                if self.engine.history_color(true) != self.engine.document().color {
+                    self.request_document(DocumentRequest::ColorHistory { redo: true })?;
+                    return Ok((DOCUMENT | HOST, false));
+                }
                 self.engine.redo().map_err(error)?;
                 Ok((0, true))
             }
@@ -4182,6 +4201,7 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         color: layer_core::color::DocumentColor,
+        prepared_color: Option<layer_core::color::DocumentColor>,
         tiled_sources: bool,
         telemetry_enabled: bool,
         pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
@@ -4202,6 +4222,12 @@ mod tests {
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
         fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
+        fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
+            if self.prepared_color != Some(color) { return Ok(false); }
+            self.prepared_color = None;
+            self.color = color;
+            Ok(true)
+        }
         fn supports_tiled_sources(&self) -> bool { self.tiled_sources }
         fn set_telemetry_enabled(&mut self, enabled: bool) {
             self.telemetry_enabled = enabled;

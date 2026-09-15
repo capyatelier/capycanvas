@@ -18,6 +18,7 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
+mod color;
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -66,6 +67,9 @@ impl Frame {
     }
 }
 enum Command {
+    PrepareColor(Box<color::Request>),
+    AdoptColor(u64),
+    DiscardColor(u64, mpsc::Sender<()>),
     TransformPreview(Option<layer_render::TransformPreview>),
     Startup(
         u64,
@@ -89,6 +93,7 @@ enum Command {
     FailNextFrame,
 }
 enum Reply {
+    ColorAdopted(u64, HashMap<AssetId, TipOutline>),
     Initialized,
     Startup(
         u64,
@@ -124,6 +129,9 @@ pub struct RenderWorker {
     in_flight: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
     color: layer_core::color::DocumentColor,
+    next_color_request: u64,
+    pending_color: Option<color::Pending>,
+    awaiting_color_adoption: Option<u64>,
     outlines: HashMap<AssetId, TipOutline>,
     readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
@@ -220,6 +228,9 @@ impl RenderWorker {
             in_flight,
             thread: Some(thread),
             color,
+            next_color_request: 0,
+            pending_color: None,
+            awaiting_color_adoption: None,
             outlines: HashMap::new(),
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
@@ -288,7 +299,19 @@ impl RenderWorker {
     }
     pub(super) fn ready(&mut self) -> Result<bool, String> {
         while let Ok(reply) = self.replies.try_recv() {
+            if let Some(id) = self.awaiting_color_adoption {
+                match reply {
+                    Reply::ColorAdopted(current, outlines) if current == id => {
+                        self.awaiting_color_adoption = None;
+                        self.outlines = outlines;
+                    }
+                    Reply::Error(error) => return Err(error),
+                    _ => (),
+                }
+                continue;
+            }
             match reply {
+                Reply::ColorAdopted(..) => (),
                 Reply::Initialized => self.initialized = true,
                 Reply::Startup(generation, progress, outlines) => {
                     if generation == self.startup_generation {
@@ -325,6 +348,7 @@ impl RenderWorker {
             && self.in_flight.load(Ordering::Acquire) < 2)
     }
     pub(super) fn stop(&mut self) {
+        let _ = self.discard_prepared_color();
         if let Some(thread) = self.thread.take() {
             let _ = self.send(Command::Stop);
             // Wayland children must die before GTK releases their parent.
@@ -339,6 +363,7 @@ impl Drop for RenderWorker {
 }
 impl CanvasRenderer for RenderWorker {
     fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
+    fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> { self.adopt_color(color) }
     fn supports_tiled_sources(&self) -> bool { true }
     fn supports_raster_damage(&self) -> bool { true }
     fn can_submit(&self) -> bool {
@@ -549,6 +574,7 @@ struct Worker {
     child: Child,
     renderer: WgpuRasterizer,
     presenter: ViewportPresenter,
+    prepared_color: Option<color::Prepared>,
     config: wgpu::SurfaceConfiguration,
     last_view: Option<(ViewState, [f32; 4])>,
     area: gtk::glib::SendWeakRef<gtk::Picture>,
@@ -750,6 +776,18 @@ impl Worker {
                 continue;
             }
             match command {
+                Command::PrepareColor(request) => self.prepare_color(*request, !pending_frames.is_empty()),
+                Command::AdoptColor(id) => {
+                    self.adopt_color(id, telemetry_enabled)?;
+                    startup_input = None;
+                    startup_progress = color::complete();
+                    document_drawn = true;
+                    reply.send(Reply::ColorAdopted(id, self.renderer.cursor_outlines())).map_err(error)?;
+                }
+                Command::DiscardColor(id, reply) => {
+                    self.discard_color(id);
+                    let _ = reply.send(());
+                }
                 #[cfg(test)]
                 Command::FailNextFrame => fail_next_frame = true,
                 Command::TransformPreview(preview) => self
@@ -965,6 +1003,7 @@ impl Worker {
             child,
             renderer,
             presenter,
+            prepared_color: None,
             config,
             last_view: None,
             area,

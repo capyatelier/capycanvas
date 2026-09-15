@@ -58,7 +58,7 @@ mod stats;
 pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, CloseDecision,
     DEFAULT_DOCUMENT_EXTENT, DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL,
-    DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    DocumentColorOperation, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
     MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, UNSAVED_DESCRIPTION, new_drawing,
 };
@@ -185,6 +185,7 @@ pub const EDIT_MENU: MenuSpec = MenuSpec {
         &[CommandId::PasteImage],
         &[CommandId::RasterizeSource, CommandId::ClearLayer, CommandId::FillSelection],
         &[CommandId::ScaleRotate],
+        &[CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth],
         &[CommandId::Settings],
     ],
 };
@@ -436,6 +437,9 @@ pub enum CommandId {
     ImportImage,
     PasteImage,
     DocumentProperties,
+    AssignProfile,
+    ConvertColorSpace,
+    ChangeBitDepth,
     RepairSourceProfile,
     RasterizeSource,
     NewDocument,
@@ -507,7 +511,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::RasterizeSource | Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
+            Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::RasterizeSource | Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
                 Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac
@@ -571,7 +575,7 @@ impl CommandId {
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
             Self::ImportImage | Self::PasteImage | Self::RasterizeSource => "image",
-            Self::DocumentProperties | Self::RepairSourceProfile => "info",
+            Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties | Self::RepairSourceProfile => "info",
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
             Self::SaveDocument => "save-document",
@@ -633,10 +637,13 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 68] = [
+    pub const ALL: [Self; 71] = [
         Self::ImportImage,
         Self::PasteImage,
         Self::DocumentProperties,
+        Self::AssignProfile,
+        Self::ConvertColorSpace,
+        Self::ChangeBitDepth,
         Self::RepairSourceProfile,
         Self::RasterizeSource,
         Self::NewDocument,
@@ -734,6 +741,9 @@ impl CommandId {
             Self::ImportImage => "Import Image as Layer…",
             Self::PasteImage => "Paste Image as Layer",
             Self::DocumentProperties => "Document Properties…",
+            Self::AssignProfile => "Assign Profile…",
+            Self::ConvertColorSpace => "Convert Color Space…",
+            Self::ChangeBitDepth => "Change Bit Depth…",
             Self::RepairSourceProfile => "Repair Source Profile…",
             Self::RasterizeSource => "Rasterize Source…",
             Self::NewDocument => "New…",
