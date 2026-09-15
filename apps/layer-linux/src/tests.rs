@@ -4784,6 +4784,36 @@ fn native_adjustment_panels_review() {
         });
         pump(200);
         assert!(!w.status.is_visible(), "{}", w.status.text());
+        if kind.id() == "levels" {
+            for (key, label) in [("clamp_input", "Clamp input"), ("clamp_output", "Clamp output")] {
+                let mut child = w.effects.properties.last_child().unwrap().first_child();
+                let mut input = None;
+                while let Some(widget) = child {
+                    if widget.first_child().and_downcast::<gtk::Label>()
+                        .is_some_and(|title| title.text() == label) {
+                        input = widget.last_child().and_downcast::<gtk::Switch>();
+                        break;
+                    }
+                    child = widget.next_sibling();
+                }
+                let input = input.expect("Levels clipping switch");
+                assert!(!input.is_active());
+                for active in [true, false] {
+                    input.set_active(active);
+                    pump(30);
+                    assert_eq!(state(&w).layer_properties.controls.iter()
+                        .find(|c| c.key == key).unwrap().value, EffectValue::Toggle(active));
+                }
+            }
+            let scroll = w.effects.properties.ancestor(gtk::ScrolledWindow::static_type())
+                .unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+            let adjustment = scroll.vadjustment();
+            adjustment.set_value(adjustment.upper() - adjustment.page_size());
+            pump(80);
+            crate::capture(&w, &format!("{dir}/03-levels-clipping.png"));
+            adjustment.set_value(0.);
+            pump(40);
+        }
         if kind.id() == "gradient_map" {
             let bar = find_named(w.effects.properties.upcast_ref(), "effect-gradient").unwrap();
             let controllers = bar.observe_controllers();

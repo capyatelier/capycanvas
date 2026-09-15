@@ -348,12 +348,6 @@ fn scalar_stored_srgb_byte(linear: f64) -> u8 {
 /// from spatial sampling and masks in the full fixture.
 #[test]
 fn pointwise_tone_filters_match_scalar_color_oracles() {
-    fn lookup(data: &[[f32; 4]], offset: usize, v: f64) -> f64 {
-        let x = v.clamp(0., 1.) * 255.;
-        let i = x.floor() as usize;
-        f64::from(data[1 + offset + i][0]) * (1. - x.fract())
-            + f64::from(data[1 + offset + (i + 1).min(255)][0]) * x.fract()
-    }
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let alphas = [255, 192, 127, 64, 1, 0];
     let extent = [256, alphas.len() as u32];
@@ -377,7 +371,15 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
     base.asset = Some(asset);
     for id in ["curves", "exposure"] {
         let effect = filter(fixtures().iter().find(|p| p.id() == id).unwrap());
-        let values = effect.effect.as_ref().unwrap().gpu_parameters();
+        let instance = effect.effect.as_ref().unwrap().clone();
+        let values = instance.gpu_parameters();
+        let curve = |channel: usize, x: f64| {
+            let EffectValue::Curve(points) = instance.value(&format!("curve_{channel}")).unwrap()
+            else {
+                panic!("Expected curve controls")
+            };
+            super::curve_reference::evaluate(points, x.clamp(0., 1.))
+        };
         submit(
             &mut r,
             extent,
@@ -398,8 +400,8 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
             for channel in 0..3 {
                 // This oracle starts from the encoded input and does not use
                 // the renderer output or WGSL implementation to make expected
-                // pixels. Rust's curve table is public application data; the
-                // scalar transfer functions/interpolation use f64 arithmetic.
+                // pixels. Curve controls are evaluated independently in f64,
+                // without interpreting GPU parameter records.
                 let code = scalar_srgb_encode(
                     scalar_srgb_decode(f64::from(source[channel]) / 255.) * alpha,
                 ) * 255.;
@@ -408,9 +410,8 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                     let stored = scalar_srgb_decode(input / 255.);
                     let linear = if alpha == 0. { 0. } else { stored / alpha };
                     let adjusted = if id == "curves" {
-                        let channel_value =
-                            lookup(&values, 256 * (channel + 1), scalar_srgb_encode(linear));
-                        scalar_srgb_decode(lookup(&values, 0, channel_value))
+                        let channel_value = curve(channel + 1, scalar_srgb_encode(linear));
+                        scalar_srgb_decode(curve(0, channel_value))
                     } else {
                         ((linear * 2_f64.powf(f64::from(values[1][0])) + f64::from(values[2][0]))
                             .clamp(0., 1.))

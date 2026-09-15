@@ -163,7 +163,7 @@ impl Effects {
         let pipeline_layout = r
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("WGSL effects ABI 2"),
+                label: Some("WGSL effects ABI 3"),
                 bind_group_layouts: &[Some(uniforms), Some(sources), Some(&layout), Some(&masks)],
                 immediate_size: 0,
             });
@@ -291,7 +291,7 @@ impl Effects {
                     value,
                     layer_core::EffectValue::Curve(_) | layer_core::EffectValue::Gradient(_)
                 ) {
-                    layer_core::EFFECT_LUT_SAMPLES as u32
+                    layer_core::EFFECT_TABLE_VECTORS as u32
                 } else {
                     1
                 };
@@ -544,10 +544,6 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
     if FX_EXTENDED {return working_sample_float(back,point);}
     return textureSampleLevel(back,sampling,point/fx_extent(),0.);
 }
-fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
-    let x=clamp(value,0.,1.)*255.; let i=u32(x);
-    return mix(effect_data[base+1u+offset+i],effect_data[base+1u+offset+min(i+1u,255u)],fract(x));
-}
 @fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
     // sRGB attachments encode RGB at physical pass boundaries. Fused effects
     // retain Float32 values; linear8 prequantization would destroy shadow detail.
@@ -556,6 +552,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
 
 "#,
     );
+    source.push_str(include_str!("effect_tables.wgsl"));
     let mut included = Vec::<&str>::new();
     for program in programs {
         for part in program

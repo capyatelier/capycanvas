@@ -6887,6 +6887,7 @@ mod tests {
     }
     mod adjustments;
     mod image_windows;
+    mod curve_reference;
     mod filter_library;
     mod material;
     #[cfg(not(target_arch = "wasm32"))]

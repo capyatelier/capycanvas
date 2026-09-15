@@ -30,6 +30,11 @@ regression investigation and optimization are deferred to the final qualificatio
 phase. The earlier measured failures remain open and must be resolved before GTK
 mode enablement; this sequencing does not waive any performance or memory gate.
 
+**Filter accuracy (user instruction, 2026-09-14):** edited filters need perceptually
+equivalent results, not exact historical pixel parity. Use practical numerical
+tolerances and visual review. Lossless persistence, exact undo and unchanged
+integer16 identity remain separate guarantees.
+
 ## Independently checked prerequisites
 
 The milestone 1 archive/replay replacement is present: immutable compressed
@@ -2908,3 +2913,104 @@ was used; it did not enter the test workflow. The proper driver’s Cargo execut
 matches the retained GTK test executable. `brush-space-provenance.json` records
 source, binary and log hashes, the parent/committed revisions and successful
 build mapping. Final `git diff --check` passes.
+
+
+## Analytic filter controls and native SDR tone semantics (2026-09-14)
+
+User clarification: edited filters require perceptually equivalent results, not
+bit-for-bit parity with earlier implementations. Small arithmetic differences
+alone do not justify further accuracy work. Exact committed samples, unchanged
+integer16 identity, save/undo and profile persistence remain separate guarantees.
+This supersedes strict historical pixel-parity expectations for edited filters.
+
+The old curve/gradient parameter representation resampled up to 32 authored
+controls into 256 values. Current code now prepares Hermite segment coefficients
+or exact gradient stops; the GPU evaluates them directly after a bounded binary
+search. Curve tangents retain the existing secant endpoint/weighted harmonic
+interior policy, using interval-scaled coefficients to avoid storing enormous
+slopes. Gradient RGBA interpolation and narrowly separated stops no longer pass
+through an intermediate sampled table. Parameter records are 65 vec4 values per
+curve/gradient. Shader helper offsets, generic preparation dependencies, bundled
+programs and the Tent Blur example all use **ABI 3**. The sampled ABI is deleted;
+ABI 2 packages and embedded programs are rejected, without an adapter.
+
+Native identity curves and neutral Levels, hue/saturation, Color Balance,
+Brightness/Contrast and Vibrance bypass nonlinear round trips. A zero-strength
+Gradient Map is also neutral. Curves continue linearly beyond their endpoint
+controls. Gradient Map retains its explicit endpoint-color mapping. Levels now
+has separate **Clamp input** and **Clamp output** controls, both initially off.
+Unclamped levels apply signed gamma between declared input/output anchors;
+input clipping precedes gamma and output clipping follows the output mapping.
+These controls are supported by the existing shared schema and GTK properties.
+The distinction is consistent with the independently checked
+[GIMP Levels API](https://developer.gimp.org/api/3.0/libgimp/method.Drawable.levels.html);
+our defaults and signed continuation are explicit application policy.
+
+Hue/saturation and vibrance use encoded document coordinates, with the same
+extended HSL interval policy as brush dynamics. Color Balance preserves weighted
+encoded-domain luminosity without a hidden native RGB clamp. These are artistic
+tone operations, distinct from scene-linear exposure and linear luminance.
+
+Validation exercises twenty-four neutral controls over all four spaces and both
+depths, fused and physical passes, at zero, tiny, one-code, partial and opaque
+alpha; neutral output matches the unfiltered Float32 result exactly. Levels
+covers all input/output-clipping combinations, gamma 1/1.7 and all four transfer
+curves against the scalar reference. Extended hue rotation, desaturation and
+color balance have independent expected values. Native project round trips now
+include non-default Levels, Curves and Color Balance together with the existing
+exposure, white balance, hue correction and masks.
+
+The direct table tests evaluate every integer16 input code against Float64
+references, including narrow knots and a 32-control alternating curve. Acceptance
+allows one integer16 code and absolute 1/65535 in the normalized result. The
+initial test's 2e-6 threshold failed at 2.17e-6 on a steep curve because of shader
+input arithmetic; that is less than one code and does not warrant a precision
+fix under the user's clarified criterion. The original failure remains in
+`tone-controls-focused.log`. Profiled Curves additionally exercises the actual
+encoded/linear boundaries at one-code alpha in every working space and both
+pass types. These checks establish practical numerical bounds; they do not
+claim exact historical edited pixels or calibrated-monitor qualification.
+
+Native GTK activation, photo/import/export jobs, numeric colors and profiled
+swatches, histogram/clipping inspection, managed display/picker behavior, live
+residency/mips/global scheduling and the remaining interchange matrix are still
+open. Benchmarking and optimization remain deferred to final qualification.
+
+Validation results and reproduction:
+
+- `cargo test --offline --release -p layer-core -p layer-ui` passes **58 core
+  and 370 UI tests** (`tone-controls-final-core-ui.log`). The production GPU/GTK
+  build is `cargo test --offline --release -p layer-render-wgpu -p layer-linux
+  --no-run --message-format=json`, recorded in `tone-controls-verified-build`.
+- The saved `tone-controls-verified-tests --test-threads=1` run passes **189 GPU
+  tests**, including all five new native tone tests, and leaves 26 performance
+  tests ignored. Its one failure was an obsolete eight-bit CPU oracle reading
+  analytic parameter records as the removed 256-sample table. The shader's
+  identity output was correct. The oracle now uses the same independent Float64
+  reference as the native test, reading authored controls instead of GPU records.
+  The final build and focused `pointwise_tone_filters_match_scalar_color_oracles
+  --test-threads=1` pass are `tone-controls-oracle-build.{json,log}` and
+  `tone-controls-oracle.log` (3.29 s). Production code did not change between
+  these runs. Together these cover all **190 nonignored GPU tests**; this is
+  not represented as a second full-suite run.
+- The saved project integration executable passes **4 tests**
+  (`tone-controls-project.log`, 9.31 s). GTK `native_runtime_filter_packages`,
+  `native_adjustment_panels_review`, `native_document_files`, and
+  `native_diagnostics_and_gpu_failure_recovery` pass, using
+  `bash tools/performance/gtk-raster.sh ABSOLUTE_TEST_BINARY TEST_FILTER
+  ABSOLUTE_REPORT_PREFIX` with physical GPU access. The log prefixes are
+  `tone-controls-filters`, `tone-controls-panels`, `tone-controls-files` and
+  `tone-controls-recovery`. This preserves saving and recovery coverage.
+- The final GTK test additionally checks both Levels clipping switches, their
+  off defaults, on/off publication to shared parameters, and the scrolled view.
+  It passes in 32.24 s (`tone-controls-clipping-panels-session.log`, binary
+  `tone-controls-clipping-gtk-tests`). All forty filters are exercised by the
+  native panel fixture. Curves, Levels, hue/saturation, Color Balance and the
+  clipping controls were visually inspected; no obvious artifacts were seen
+  in these sRGB fixture captures. This is scoped UI review, not a calibrated
+  wide-gamut or exhaustive perceptual comparison.
+
+Retained captures are in `artifacts/color-m2/tone-controls-ui/`.
+`tone-controls-provenance.json` records source, binary, log and capture hashes
+and the parent/committed revisions. Some correctness jobs overlapped; none of
+these elapsed times are latency measurements. `git diff --check` passes.

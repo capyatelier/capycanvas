@@ -2,8 +2,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub const EFFECT_ABI: u32 = 2;
-pub const EFFECT_LUT_SAMPLES: usize = 256;
+pub const EFFECT_ABI: u32 = 3;
+/// Header plus two records for at most 32 control points/stops. Curves store
+/// analytic Hermite segments; gradients store exact stops, never sampled LUTs.
+pub const EFFECT_TABLE_VECTORS: usize = 65;
 
 /// Inline WGSL or manifest-local module names. Catalog loading resolves module
 /// lists into shared code; the renderer never performs I/O or source resolution.
@@ -442,8 +444,8 @@ impl EffectInstance {
         self.values[i] = value;
         Ok(())
     }
-    /// Small parameter upload, never image processing. Curves/gradients become
-    /// lookup data once per edit; shaders do constant-time interpolation.
+    /// Small parameter upload, never image processing. Curves/gradients retain
+    /// exact control data; shaders find the segment with a bounded binary search.
     pub fn gpu_parameters(&self) -> Vec<[f32; 4]> {
         let mut data = vec![[0.; 4]];
         for value in &self.values {
@@ -452,18 +454,8 @@ impl EffectInstance {
                 EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
                 EffectValue::Choice(v) => data.push([*v as f32, 0., 0., 0.]),
                 EffectValue::Color(v) => data.push(*v),
-                EffectValue::Curve(points) => data.extend((0..EFFECT_LUT_SAMPLES).map(|i| {
-                    [
-                        curve_value(points, i as f32 / (EFFECT_LUT_SAMPLES - 1) as f32),
-                        0.,
-                        0.,
-                        0.,
-                    ]
-                })),
-                EffectValue::Gradient(stops) => data
-                    .extend((0..EFFECT_LUT_SAMPLES).map(|i| {
-                        gradient_value(stops, i as f32 / (EFFECT_LUT_SAMPLES - 1) as f32)
-                    })),
+                EffectValue::Curve(points) => data.extend(curve_parameters(points)),
+                EffectValue::Gradient(stops) => data.extend(gradient_parameters(stops)),
             }
         }
         let directory = data.len();
@@ -551,42 +543,92 @@ fn valid_color(c: &[f32; 4]) -> bool {
     c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
 }
 
-/// Shape-preserving cubic Hermite interpolation: smooth curves without the
-/// overshoot/ringing of an unconstrained cubic spline.
+fn curve_tangent(points: &[[f32; 2]], j: usize) -> f64 {
+    let slope = |i: usize| {
+        (f64::from(points[i + 1][1]) - f64::from(points[i][1]))
+            / (f64::from(points[i + 1][0]) - f64::from(points[i][0]))
+    };
+    if j == 0 {
+        return slope(0);
+    }
+    if j == points.len() - 1 {
+        return slope(j - 1);
+    }
+    let a = slope(j - 1);
+    let b = slope(j);
+    if a * b <= 0. {
+        return 0.;
+    }
+    let h0 = f64::from(points[j][0]) - f64::from(points[j - 1][0]);
+    let h1 = f64::from(points[j + 1][0]) - f64::from(points[j][0]);
+    let w0 = 2. * h1 + h0;
+    let w1 = h1 + 2. * h0;
+    (w0 + w1) / (w0 / a + w1 / b)
+}
+fn curve_segment(points: &[[f32; 2]], i: usize) -> [[f32; 4]; 2] {
+    let h = f64::from(points[i + 1][0]) - f64::from(points[i][0]);
+    let delta = f64::from(points[i + 1][1]) - f64::from(points[i][1]);
+    let d0 = h * curve_tangent(points, i);
+    let d1 = h * curve_tangent(points, i + 1);
+    [
+        [points[i][0], points[i + 1][0], points[i + 1][1], d1 as f32],
+        [
+            points[i][1],
+            d0 as f32,
+            (3. * delta - 2. * d0 - d1) as f32,
+            (-2. * delta + d0 + d1) as f32,
+        ],
+    ]
+}
+fn curve_parameters(points: &[[f32; 2]]) -> [[f32; 4]; EFFECT_TABLE_VECTORS] {
+    let mut data = [[0.; 4]; EFFECT_TABLE_VECTORS];
+    data[0] = [
+        (points.len() - 1) as f32,
+        f32::from(points.iter().all(|p| p[0] == p[1])),
+        1.,
+        0.,
+    ];
+    for i in 0..points.len() - 1 {
+        data[1 + i * 2..3 + i * 2].copy_from_slice(&curve_segment(points, i));
+    }
+    data
+}
+fn gradient_parameters(stops: &[GradientStop]) -> [[f32; 4]; EFFECT_TABLE_VECTORS] {
+    let mut data = [[0.; 4]; EFFECT_TABLE_VECTORS];
+    data[0] = [stops.len() as f32, 0., 2., 0.];
+    for (i, stop) in stops.iter().enumerate() {
+        data[1 + i * 2] = [stop.position, stop.color[0], stop.color[1], stop.color[2]];
+        data[2 + i * 2] = [stop.color[3], 0., 0., 0.];
+    }
+    data
+}
+
+/// Shape-preserving cubic Hermite interpolation in [0,1], with linear endpoint
+/// continuation outside it. RGB identity curves preserve extended input exactly.
 pub fn curve_value(points: &[[f32; 2]], x: f32) -> f32 {
+    if points.iter().all(|p| p[0] == p[1]) {
+        return x;
+    }
     let i = points
         .partition_point(|p| p[0] < x)
         .saturating_sub(1)
         .min(points.len() - 2);
-    let slope = |j: usize| (points[j + 1][1] - points[j][1]) / (points[j + 1][0] - points[j][0]);
-    let tangent = |j: usize| {
-        if j == 0 {
-            return slope(0);
-        }
-        if j == points.len() - 1 {
-            return slope(j - 1);
-        }
-        let a = slope(j - 1);
-        let b = slope(j);
-        if a * b <= 0. {
-            0.
-        } else {
-            let h0 = points[j][0] - points[j - 1][0];
-            let h1 = points[j + 1][0] - points[j][0];
-            let w0 = 2. * h1 + h0;
-            let w1 = h1 + 2. * h0;
-            (w0 + w1) / (w0 / a + w1 / b)
-        }
-    };
-    let h = points[i + 1][0] - points[i][0];
-    let t = ((x - points[i][0]) / h).clamp(0., 1.);
-    let t2 = t * t;
-    let t3 = t2 * t;
-    ((2. * t3 - 3. * t2 + 1.) * points[i][1]
-        + (t3 - 2. * t2 + t) * h * tangent(i)
-        + (-2. * t3 + 3. * t2) * points[i + 1][1]
-        + (t3 - t2) * h * tangent(i + 1))
-    .clamp(0., 1.)
+    let [bounds, coefficient] = curve_segment(points, i);
+    let t = (x - bounds[0]) / (bounds[1] - bounds[0]);
+    if t < 0. {
+        return coefficient[0] + t * coefficient[1];
+    }
+    if t > 1. {
+        return bounds[2] + (t - 1.) * bounds[3];
+    }
+    if t == 0. {
+        return coefficient[0];
+    }
+    if t == 1. {
+        return bounds[2];
+    }
+    (((coefficient[3] * t + coefficient[2]) * t + coefficient[1]) * t + coefficient[0])
+        .clamp(coefficient[0].min(bounds[2]), coefficient[0].max(bounds[2]))
 }
 pub fn gradient_value(stops: &[GradientStop], x: f32) -> [f32; 4] {
     let i = stops
@@ -738,5 +780,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn analytic_parameter_tables_preserve_knots_and_reject_the_sampled_abi() {
+        let points = vec![[0., 0.], [0.40003, 0.1], [0.40007, 0.9], [1., 1.]];
+        let mut fx = EffectInstance::new(fixture("curves").program());
+        fx.set("curve_0", EffectValue::Curve(points.clone()))
+            .unwrap();
+        let data = fx.gpu_parameters();
+        assert_eq!(data.len(), 1 + 4 * EFFECT_TABLE_VECTORS);
+        assert_eq!(data[1], [3., 0., 1., 0.]);
+        for p in &points {
+            assert_eq!(curve_value(&points, p[0]), p[1]);
+        }
+        for v in [-2., -0.125, 0., 0.37, 1., 1.5] {
+            assert_eq!(curve_value(&[[0., 0.], [0.25, 0.25], [1., 1.]], v), v);
+        }
+        Arc::make_mut(&mut fx.program).abi = 2;
+        assert!(
+            fx.validate().is_err(),
+            "sampled ABI must not be interpreted as analytic controls"
+        );
+        let mut levels = EffectInstance::new(fixture("levels").program());
+        assert_eq!(
+            levels.value("clamp_input"),
+            Some(&EffectValue::Toggle(false))
+        );
+        assert_eq!(
+            levels.value("clamp_output"),
+            Some(&EffectValue::Toggle(false))
+        );
+        levels
+            .set("clamp_input", EffectValue::Toggle(true))
+            .unwrap();
+        levels
+            .set("clamp_output", EffectValue::Toggle(true))
+            .unwrap();
+        levels.validate().unwrap();
     }
 }

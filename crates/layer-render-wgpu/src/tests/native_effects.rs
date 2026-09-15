@@ -2,6 +2,9 @@ use super::*;
 use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
 use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, EffectValue};
 
+#[path = "native_effects/tone.rs"]
+mod tone;
+
 fn effect(id: u64, name: &str, image: bool) -> Layer {
     let mut program = (*fixture(name).program()).clone();
     if image {
@@ -225,6 +228,22 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
                 }
                 if name == "hue_saturation" {
                     set(&mut layer, "hue", EffectValue::Number(10.));
+                }
+                if name == "levels" {
+                    set(&mut layer, "black", EffectValue::Number(0.03));
+                    set(&mut layer, "gamma", EffectValue::Number(0.9));
+                    set(&mut layer, "clamp_input", EffectValue::Toggle(true));
+                }
+                if name == "curves" {
+                    set(
+                        &mut layer,
+                        "curve_0",
+                        EffectValue::Curve(vec![[0., 0.], [0.213, 0.13], [0.79, 0.9], [1., 1.]]),
+                    );
+                }
+                if name == "color_balance" {
+                    set(&mut layer, "midtones_red", EffectValue::Number(12.));
+                    set(&mut layer, "shadows_blue", EffectValue::Number(-5.));
                 }
                 let mut mask = layer_core::LayerMask::reveal_all(
                     document.allocate_layer_id(),

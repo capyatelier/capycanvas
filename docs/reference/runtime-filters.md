@@ -4,8 +4,9 @@
 
 Implemented and validated on 2026-09-10. All forty built-ins and custom filters use
 one runtime JSON/WGSL format and shared renderer. **Curves and Gradient Map are
-the agreed exceptions:** their custom controls, interpolation and LUT generation
-remain in Rust. Generic preparation, including Gaussian coefficients, is WGSL.
+the agreed exceptions:** their custom controls and parameter preparation remain
+in Rust; GPU shaders evaluate the prepared segments/stops. Generic preparation,
+including Gaussian coefficients, is WGSL.
 No shader-editor UI or general node graph was added.
 
 ## Definitions and ownership
@@ -30,6 +31,31 @@ A package has `format: 1`, `categories` and `filters`. Each filter contains a
 WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
 shared source chunks, so fused filters include common helpers once. Serialized
 document programs contain resolved code and do not need their original package.
+
+The current filter ABI is **3**. Curves and gradients each occupy 65 vec4
+parameter records: one header plus up to 32 pairs. Curves store Hermite segments
+with interval-scaled tangents; gradients store exact positions and RGBA stops.
+`fx_lut(base, offset, value)` locates a segment with at most five binary-search
+steps and evaluates it directly. The former 256-sample parameter representation
+is removed. ABI 2 programs are rejected, including embedded document programs;
+there is no compatibility adapter. Native photo editing must not inherit a
+sampled LUT's error around closely spaced controls.
+
+Native curves continue linearly beyond their endpoint controls. Identity curves
+preserve the input directly, including extended RGB. Gradient endpoints remain
+constant beyond their range, as an explicit color-mapping operation. Levels
+provides **Clamp input** and **Clamp output**, both initially off; input/output
+points are anchors and gamma has a signed continuation when unclamped. A user
+can enable clipping before gamma or after output mapping independently. These
+are declared editing semantics, not pixel-for-pixel parity with an earlier
+filter implementation.
+
+Native hue/saturation and vibrance use encoded document RGB. For extended
+values, their HSL interval contains both the input and [0,1], matching the
+document-aware brush policy. Color Balance preserves weighted encoded-domain
+luminosity without silently clipping native RGB. Neutral native tone controls
+bypass their nonlinear round trips. CPU/GPU arithmetic remains independent of
+integer storage depth; output/export quantization is a separate boundary.
 
 Installation modes are explicit:
 
