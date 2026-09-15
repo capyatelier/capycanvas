@@ -20,7 +20,7 @@ Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
 checks without a relevant change. Commit only major milestones. All eleven
 recovery stashes remain.
 
-The current milestone matches the latest Web toolset and open-drawer styling,
+Published milestone `be1f27d` matches the latest Web toolset and open-drawer styling,
 qualifies native region/ruler workflows, and simplifies shared renderer page
 preparation. Grouped Mac app acceptance passes painting controls/artwork,
 figures/gradients and title-bar tool drawers. Simulator painting controls and
@@ -43,6 +43,76 @@ the affected workflow. Broader UI runs belong at major milestones, with physical
 checks reserved for the evidence they alone provide. Do not repeat rejected
 input/profile experiments without a concrete new hypothesis. Shared/component
 results do not close native and physical acceptance gates.
+
+The user's latest direction is to minimize simulator dependence in the critical
+development loop. Implement one concrete parity gap at a time using existing
+shared/bridge checks and native component captures. Batch UIKit-only callback
+checks, reuse compiled apps where sources permit, and reserve full-editor
+automation for a specific unresolved native behavior or a completed milestone.
+After an automation failure, separate fixture/setup faults from product faults;
+do not repeat a broad sweep or add product workarounds without new evidence.
+Hardware setup and profiler troubleshooting have consumed too much time relative
+to closing visible gaps. The input batch below now passes grouped acceptance;
+return to the remaining native menu/control and perceptible visual gaps before
+another performance batch.
+
+Milestone `be1f27d` is published and verified on main. The following input milestone
+fixes UIKit key cancellation: the canvas handled press/release but omitted
+cancelled presses, leaving Space-to-pan active for the next contact. A four-line
+override reuses the existing release route and forwards to UIKit. A focused
+UIKit callback check fails before the fix and passes afterward; normal release
+also passes. It uses supplied key/press values, the real canvas and serial Apple
+owner, and shared contact-routing replies, without a GPU workload or XCTest
+editor sweep. The final build/run takes 32 seconds. This is callback/routing
+evidence, not physical keyboard or rendered-artwork acceptance. The disposable
+fixture and logs are under `artifacts/apple-key-cancellation-v1/`. This fix is
+grouped with the pointer/navigation changes below; broader physical gates remain.
+
+The same input batch fixes indirect-pointer buttons on iPad. All contacts
+previously reached Rust as primary, so a supplied right-button drag failed to pan.
+The existing contact now retains UIKit's press button through movement and release;
+Rust keeps its primary-paint, right/middle-pan and ignored-other-button policy.
+Eight focused UIKit callback cases pass for those four buttons with release and
+cancellation, including a cleared terminal button mask. Shared routing replies
+distinguish paint from ignored input, and exact camera deltas verify pan. The
+final build/run takes 32 seconds. These are supplied native-value/owner checks,
+not physical mouse/trackpad or rendered-artwork acceptance. The disposable app is
+removed; fixture, initial failure and results are retained under
+`artifacts/apple-pointer-buttons-v1/`. Both fixes are grouped with indirect navigation.
+Main is integrated through `de623a9` (Web favicon packaging and public profile
+artwork only); Apple/shared sources, all four local paths and eleven stashes are preserved.
+
+The input milestone also adds standard UIKit indirect scroll, pinch and
+rotation recognizers, retaining the existing finger/Pencil contact route. Focused
+callbacks verify direction, density, modifiers, anchored transforms, cancellation
+and active-contact exclusion in 42 seconds including build/run. Shared camera
+gestures now ignore input while painting is pending, matching scroll behavior;
+the new regression fails before the fix and passes afterward. All 400 shared UI
+tests pass in 1.45 seconds of test execution. The Metal camera bridge check passes
+for both Apple configurations with exact artwork and Undo/Redo preservation;
+both Release builds pass. Evidence is under
+`artifacts/apple-indirect-gestures-v1/`. These supplied-event checks do not prove
+physical trackpad/keyboard delivery. Grouped navigation and keyboard editor checks
+pass on Mac (two tests, 176 seconds) and simulator (two tests, 124 seconds), with
+no failures or skips. Both verify Hand pan/Fit, flip state and keyboard focus after
+controls/Settings; Mac also verifies visible/layer eyedropper colors. Representative
+captures are reviewed, both Debug test builds pass, and the command audit passes
+against the retained inventory (reference validation, not a fresh GPU inventory).
+The source remains unchanged through these editor runs. Their base is `de623a9`;
+all eleven stashes remain. Evidence is under
+`artifacts/apple-indirect-gestures-v1/app-qualification-v1/`. No physical device
+test accompanies this batch; full input, provider/lifecycle, feature/visual and
+sustained performance gates remain open.
+
+Final integration includes `1b04c9c`'s larger, raised capy mark and shared Zen icon
+size. Apple resources are refreshed from the shared SVG; its header uses the same
+tile-relative icon proportions as Web and Android. All 400 shared UI tests and
+both Release builds pass after integration. Twelve focused shared header captures
+verify native/shared allocation at three sizes in both themes and Apple presets;
+representative captures are reviewed. These are AppKit-hosted shared components,
+not new UIKit pixels. The input sources remain identical to the grouped editor
+tests, so those workflows are not repeated for this icon-only integration.
+Evidence is under `artifacts/apple-indirect-gestures-v1/main-integration-v1/`.
 
 The previously published mask/layer/lifecycle milestone `1e41766` fixes activation ordering with the
 existing suspension state, qualifies mask and layer-content workflows on Mac

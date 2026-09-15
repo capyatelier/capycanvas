@@ -7,6 +7,23 @@ nanoseconds and phase. The original camera revision travels with each batch.
 Ordinary Mac mouse/tablet input continues through this path; no native event
 object, device serial or vendor identifier crosses the queue.
 
+On iPad, the contact retains the mouse button selected at press time. Primary
+contacts paint, right/middle contacts pan, and other buttons follow the shared
+ignore policy. Normal and cancelled keyboard releases both end held shortcuts,
+including Space-to-pan.
+
+Trackpad and mouse-wheel navigation uses standard UIKit pan, pinch and rotation
+recognizers with the app's existing indirect-input opt-in. They accept scroll
+and transform events; finger and Pencil contacts keep their existing routing.
+Scrolling pans, Shift-scroll pans horizontally and Control-scroll zooms. Pinch
+and rotation can combine around the pointer anchor. Native deltas are consumed
+once, including when cancellation or an active contact suppresses them. Rust
+owns camera scaling and document-idle checks; a gesture arriving during paint
+leaves the camera unchanged without reporting a canvas error. See Apple's
+[trackpad input guidance](https://developer.apple.com/videos/play/wwdc2020/10094/).
+Focused callback and Metal checks cover routing, camera transforms and exact
+artwork/history preservation; physical trackpad/keyboard delivery remains open.
+
 UIKit coalesced observations are real input. Predictions remain visual-only.
 `touchesEstimatedPropertiesUpdated` now updates previously delivered Pencil
 location, pressure, altitude/azimuth and roll estimates. Apple documents these

@@ -41,6 +41,7 @@ final class CanvasView: UIView {
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         addGestureRecognizer(hover)
+        installIndirectGestures()
         store.wake = { [weak self] in self?.wake() }
         store.focusCanvas = { [weak self] in
             guard let self, self.window?.isKeyWindow == true,
@@ -157,5 +158,9 @@ final class CanvasView: UIView {
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         routeKeys(presses, pressed: false)
         super.pressesEnded(presses, with: event)
+    }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        routeKeys(presses, pressed: false)
+        super.pressesCancelled(presses, with: event)
     }
 }

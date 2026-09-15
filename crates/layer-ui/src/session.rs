@@ -3064,7 +3064,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         scale: f32,
         rotation: f32,
     ) -> Result<UiChange, String> {
-        self.require_idle()?;
+        if self.require_idle().is_err() {
+            return Ok(self.changed(0, false));
+        }
         self.state.camera.gesture(from, to, scale, rotation)?;
         self.initial_fit = false;
         self.sync_camera();
@@ -13309,6 +13311,25 @@ mod tests {
         assert_eq!(s.state.camera.rotation, before.rotation);
     }
     #[test]
+    fn camera_gestures_wait_for_paint_to_finish_without_reporting_an_error() {
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut s = session();
+            s.set_platform(platform);
+            let before = s.state.camera.clone();
+            s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+            let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
+            assert!(!change.canvas_wake);
+            assert_eq!(s.state.camera, before);
+            s.pen(event(&s, 2, PenPhase::Up, 0.)).unwrap();
+            s.frame(1, 1).unwrap();
+            let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
+            assert!(change.canvas_wake);
+            assert!((s.state.camera.zoom - before.zoom * 1.25).abs() < 0.0001);
+            assert!((s.state.camera.rotation - before.rotation - 0.2).abs() < 0.0001);
+            assert!(s.state.host_error.is_none());
+        }
+    }
+    #[test]
     fn zen_does_not_move_camera_layout_or_request_canvas_work() {
         let mut s = session();
         s.set_viewport([1000.0; 2], [1000; 2]).unwrap();
@@ -16036,7 +16057,13 @@ mod tests {
             app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
             assert!(!app.command(CommandId::AddLayer).enabled);
             assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
-            assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
+            let camera = app.state.camera.clone();
+            assert!(
+                !app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0)
+                    .unwrap()
+                    .canvas_wake
+            );
+            assert_eq!(app.state.camera, camera);
             let change = app.frame(10_000_000, 18_000_000).unwrap();
             assert_eq!(
                 change.regions & regions::COMMANDS,
