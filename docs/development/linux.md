@@ -129,11 +129,25 @@ themes, all three shapes and their two readouts (shape units or RGB), retaining
 screenshots and geometry. The entire control occupies one
 square and compresses in short docks; `native_default_workspace` covers that
 shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
-is the design minimum. Values are read-only; tap the model label to toggle between
+is the design minimum. The compact values are read-only; tap the model label to toggle between
 the shape's units and RGB. Two bare shape
 buttons follow the upper-right arc; the swap button sits beside the overlapping
 paints. Right-click or hold either paint swatch (or use Shift+F10 while focused)
-also opens the swap action. The readout has no tooltip or hover decoration.
+opens **Edit Color…**, **Color Swatches…** and the swap action. Edit Color provides
+document RGB, explicitly sRGB hex, HSV/HLS and OKLCH input, independent alpha,
+preview, validation and cancel. An unchanged entry/model switch preserves the
+original color definition exactly, including colors that its 8-bit hex preview
+cannot represent. Numeric RGB uses normalized channels and names the document
+space. The readout tooltip identifies that space and preview/document gamut limits.
+
+Color Swatches manages named workspace palettes and saved colors. Swatches retain
+their defining RGB space and convert when used in a different document. Rename,
+remove and save controls have keyboard access; removing a palette asks before
+removing its contained swatches. Selecting a swatch changes the foreground or
+background whose menu opened the sheet. Palette changes do not alter artwork or
+brush opacity. `native_numeric_colors_and_saved_palettes` validates the dialogs,
+exact definitions, cancelled edits, name validation, palette management and
+cross-document workspace reuse through the native renderer.
 Picker coordinates are retained per paint so hue changes, drags through black,
 alpha edits, swaps and saved-state reloads do not lose powerless components.
 The circle uses a smooth elliptical projection of the full Okhsv square, with

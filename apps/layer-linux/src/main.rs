@@ -1,6 +1,8 @@
 mod canvas;
 mod effects;
 mod files;
+mod color_editor;
+mod color_library;
 #[cfg(test)]
 mod fullscreen_tests;
 mod icons;

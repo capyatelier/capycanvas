@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 mod document_tests;
 mod gamut;
 mod okhsv;
+mod editor;
+pub use editor::{ColorEditor, ColorInputModel};
+mod library;
+pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +69,8 @@ pub enum ColorWheelPart {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ColorAction {
+    SetSlot { slot: ColorSlot, color: RgbColor },
+    Library { action: ColorLibraryAction },
     /// The definition is retained even when outside the document/display gamut.
     Definition {
         color: RgbColor,
@@ -106,6 +112,7 @@ pub enum ColorAction {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorState {
+    pub library: ColorLibrary,
     pub foreground: RgbColor,
     pub background: RgbColor,
     /// Coordinate system of the picker, independent of each paint definition.
@@ -188,6 +195,7 @@ pub struct ColorSwatchView {
 impl Default for ColorState {
     fn default() -> Self {
         Self {
+            library: ColorLibrary::default(),
             foreground: RgbColor {
                 space: RgbSpace::Srgb,
                 rgba: [0.075, 0.075, 0.07, 1.],
@@ -206,6 +214,7 @@ impl Default for ColorState {
 }
 impl ColorState {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.library.validate()?;
         for color in [self.foreground, self.background] {
             Self::validate_definition(color)?;
         }
@@ -585,6 +594,15 @@ impl ColorState {
     }
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
         match action {
+            ColorAction::SetSlot { slot, color } => {
+                if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }
+                Self::validate_definition(color)?;
+                self.paint_slot = slot;
+                self.set_color(color)?;
+            }
+            ColorAction::Library { action } => {
+                if let Some(color) = self.library.apply(action)? { self.set_color(color)?; }
+            }
             ColorAction::Definition { color } => self.set_color(color)?,
             ColorAction::ToggleReadout => self.readout = self.readout.next(),
             ColorAction::ToggleShape => self.apply(ColorAction::Shape {

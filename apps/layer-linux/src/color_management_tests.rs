@@ -164,6 +164,300 @@ fn pixels(w: &Rc<Workspace>, id: u32) -> Vec<u8> {
 
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
+fn native_numeric_colors_and_saved_palettes() {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
+    use layer_ui::{ColorAction, ColorInputModel, ColorSlot};
+    let app = native_test_app("art.capycanvas.NumericColors");
+    let output = std::path::Path::new("../../artifacts/color-m2/numeric-palette-ui");
+    std::fs::create_dir_all(output).unwrap();
+    let mut project = new_drawing(256, 256).unwrap();
+    project.document.color = DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: IntegerDepth::U16,
+    };
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.present();
+    sdr_ready(&w);
+    let original = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0.1234567, 123. / 65535.]).unwrap();
+    w.dispatch(UiAction::Color {
+        action: ColorAction::Definition { color: original },
+    });
+    w.dispatch(UiAction::SetBrushOpacity { value: 0.37 });
+    let revision = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .revision;
+    let click_named = |w: &Rc<Workspace>, name: &str| {
+        let button = find_named(w.window.upcast_ref(), name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .downcast::<gtk::Button>()
+            .unwrap();
+        button.emit_clicked();
+        pump(100);
+    };
+    let respond = |w: &Rc<Workspace>, label: &str| {
+        let dialog = w.window.visible_dialog().unwrap();
+        click(&find_button(dialog.upcast_ref(), label).unwrap());
+        pump(100);
+    };
+    click_named(&w, "color-edit-menu");
+    capture_reference(
+        &w,
+        output.join("numeric-document-rgb.png").to_str().unwrap(),
+        1.,
+    );
+    let dialog = w.window.visible_dialog().unwrap();
+    let model = find_named(dialog.upcast_ref(), "edit-color-model")
+        .unwrap()
+        .downcast::<adw::ComboRow>()
+        .unwrap();
+    for selected in 0..ColorInputModel::ALL.len() {
+        model.set_selected(selected as u32);
+        pump(10);
+    }
+    capture_reference(&w, output.join("numeric-oklch.png").to_str().unwrap(), 1.);
+    respond(&w, "Use Color");
+    assert_eq!(
+        state(&w).colors.definition(),
+        original,
+        "unchanged models never quantize RGB/alpha"
+    );
+    click_named(&w, "color-edit-menu");
+    let dialog = w.window.visible_dialog().unwrap();
+    let entry = find_named(dialog.upcast_ref(), "edit-color-value-0")
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap();
+    entry.set_text("NaN");
+    pump(10);
+    assert!(
+        !find_button(dialog.upcast_ref(), "Use Color")
+            .unwrap()
+            .is_sensitive()
+    );
+    respond(&w, "Cancel");
+    assert_eq!(state(&w).colors.definition(), original);
+    click_named(&w, "color-edit-menu");
+    let dialog = w.window.visible_dialog().unwrap();
+    let model = find_named(dialog.upcast_ref(), "edit-color-model")
+        .unwrap()
+        .downcast::<adw::ComboRow>()
+        .unwrap();
+    model.set_selected(1);
+    pump(10);
+    let entry = find_named(dialog.upcast_ref(), "edit-color-value-0")
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap();
+    entry.set_text("#12A5E3");
+    respond(&w, "Use Color");
+    let hex = state(&w).colors.definition();
+    assert_eq!(hex.space, RgbSpace::Srgb);
+    assert_eq!(
+        hex.rgba,
+        [18. / 255., 165. / 255., 227. / 255., original.rgba[3]]
+    );
+    assert_eq!(state(&w).brush.opacity, 0.37);
+    w.dispatch(UiAction::Color {
+        action: ColorAction::Definition { color: original },
+    });
+    click_named(&w, "color-library-menu");
+    click_named(&w, "color-library-create");
+    let dialog = w.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-name")
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap()
+        .set_text("Photo colors");
+    respond(&w, "Save");
+    click_named(&w, "color-library-store");
+    let dialog = w.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-name")
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap()
+        .set_text("Wide red");
+    respond(&w, "Save");
+    let palette = state(&w).colors.library.palettes.last().unwrap().clone();
+    assert_eq!(palette.name, "Photo colors");
+    assert_eq!(palette.swatches.len(), 1);
+    assert_eq!(palette.swatches[0].color, original);
+    capture_reference(
+        &w,
+        output.join("saved-wide-swatch.png").to_str().unwrap(),
+        1.,
+    );
+    click_named(&w, "color-library-create");
+    let dialog = w.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-name")
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap()
+        .set_text("PHOTO COLORS");
+    pump(10);
+    assert!(
+        !find_button(dialog.upcast_ref(), "Save")
+            .unwrap()
+            .is_sensitive()
+    );
+    respond(&w, "Cancel");
+    assert_eq!(state(&w).colors.library.palettes.len(), 2);
+    click_named(
+        &w,
+        &format!("saved-color-{}-Rename", palette.swatches[0].id),
+    );
+    let dialog = w.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-name")
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap()
+        .set_text("P3 low-alpha red");
+    respond(&w, "Save");
+    assert_eq!(
+        state(&w)
+            .colors
+            .library
+            .swatch(palette.swatches[0].id)
+            .unwrap()
+            .name,
+        "P3 low-alpha red"
+    );
+    respond(&w, "Close");
+    w.dispatch(UiAction::Color {
+        action: ColorAction::Definition {
+            color: RgbColor::WHITE,
+        },
+    });
+    click_named(&w, "color-library-menu");
+    let dialog = w.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-palette")
+        .unwrap()
+        .downcast::<adw::ComboRow>()
+        .unwrap()
+        .set_selected(1);
+    pump(50);
+    let row = find_named(
+        dialog.upcast_ref(),
+        &format!("saved-color-{}", palette.swatches[0].id),
+    )
+    .unwrap()
+    .downcast::<adw::ActionRow>()
+    .unwrap();
+    adw::prelude::ActionRowExt::activate(&row);
+    pump(100);
+    assert_eq!(state(&w).colors.definition(), original);
+    assert!(w.window.visible_dialog().is_none());
+    // Workspace serialization carries the actual wide definition. Restore it in
+    // another native document and use the swatch in the other paint slot.
+    let capture = w
+        .gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .capture_workspace()
+        .unwrap();
+    let bytes = serde_json::to_vec(&capture).unwrap();
+    let next = Workspace::with_project(&app, Some((new_drawing(128, 128).unwrap(), None)));
+    next.window.present();
+    sdr_ready(&next);
+    let prepared =
+        layer_ui::PreparedWorkspace::new(serde_json::from_slice(&bytes).unwrap()).unwrap();
+    let change = next
+        .gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .adopt_workspace(prepared);
+    next.changed(change);
+    crate::color_library::show(&next, ColorSlot::Background);
+    pump(100);
+    let dialog = next.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-palette")
+        .unwrap()
+        .downcast::<adw::ComboRow>()
+        .unwrap()
+        .set_selected(1);
+    pump(50);
+    adw::prelude::ActionRowExt::activate(
+        &find_named(
+            dialog.upcast_ref(),
+            &format!("saved-color-{}", palette.swatches[0].id),
+        )
+        .unwrap()
+        .downcast::<adw::ActionRow>()
+        .unwrap(),
+    );
+    pump(100);
+    assert_eq!(state(&next).colors.background, original);
+    assert_eq!(state(&next).colors.rgb_space(), RgbSpace::Srgb);
+    assert_eq!(
+        next.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .configured_brush()
+            .color_rgba_linear,
+        original.linear_in(RgbSpace::Srgb).unwrap()
+    );
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .revision,
+        revision
+    );
+    crate::color_library::show(&next, ColorSlot::Background);
+    pump(100);
+    let dialog = next.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(), "color-library-palette")
+        .unwrap()
+        .downcast::<adw::ComboRow>()
+        .unwrap()
+        .set_selected(1);
+    pump(50);
+    click_named(
+        &next,
+        &format!("saved-color-{}-Remove", palette.swatches[0].id),
+    );
+    assert!(
+        state(&next)
+            .colors
+            .library
+            .swatch(palette.swatches[0].id)
+            .is_none()
+    );
+    let dialog = next.window.visible_dialog().unwrap();
+    click(&find_button(dialog.upcast_ref(), "Remove Palette…").unwrap());
+    pump(100);
+    respond(&next, "Cancel");
+    assert_eq!(state(&next).colors.library.palettes.len(), 2);
+    let dialog = next.window.visible_dialog().unwrap();
+    click(&find_button(dialog.upcast_ref(), "Remove Palette…").unwrap());
+    pump(100);
+    respond(&next, "Remove");
+    assert_eq!(state(&next).colors.library.palettes.len(), 1);
+    assert_eq!(state(&next).colors.background, original);
+    respond(&next, "Close");
+    next.window.destroy();
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
 fn native_sdr_portable_paint_and_sampling() {
     use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
     let app = native_test_app("art.capycanvas.PortablePaint");

@@ -4248,3 +4248,82 @@ memory/scheduling gates and the final hardware workload matrix remain open. Fres
 frame-creation baselines, regression investigation, optimization and performance
 acceptance remain last. The milestone 1 cleanup/prerequisite gaps recorded above
 still apply. Other platform hosts require the user's approval before integration.
+
+
+## Numeric Edit Color and named palettes (GTK, 2026-09-15)
+
+The color-chip context menu now opens Edit Color and Color Swatches. Numeric
+entry supports normalized document RGB, explicitly sRGB hex, document HSV/HLS,
+and absolute OKLCH. Switching models and accepting an untouched dialog preserves
+the original portable definition and alpha exactly, including colors outside the
+preview gamut. Alpha-only edits retain RGB; invalid/nonfinite input disables
+acceptance, and cancellation never changes paint. Brush opacity stays independent.
+The dialog previews the complete color through the current sRGB widget fallback
+and names its definition and document spaces. This does not qualify managed wide
+monitor presentation.
+
+Named workspace palettes retain portable color definitions, survive workspace
+serialization/database resume, and can be reused in foreground or background in
+a different document space. Creation, renaming, deletion and selection validate
+before mutation. At least one palette remains; duplicate palette names are rejected
+without changing state. Palette rows use ordinary activation and explicit rename/
+remove buttons; they do not reorder. Limits of 64 palettes and 4,096 total swatches
+are input guards, not measured memory or latency acceptance.
+
+Validation artifacts use `artifacts/color-m2/numeric-palette-` unless stated:
+
+- `shared-suite.log`: 383 shared UI and 86 native workspace checks pass. After the
+  final alpha-percent formatting polish, `editor-final.log` reruns both exact
+  numeric-model/extended-color checks successfully.
+- `reviewed-production.log`: production GTK checks cleanly, without warnings.
+- `final-checks.json`: the expanded numeric/palette native journey (7.73 s),
+  workspace database resume and independent windows (3.46 s), and real Mutter
+  mouse/touch color controls (30.59 s) all pass. The input run retains 88 screenshots
+  in `numeric-palette-panel/`.
+- `reviewed-build.{json,log}`, `reviewed-sources.json`: final reviewed executable
+  `numeric-palette-reviewed-gtk-tests`, SHA-256
+  `c09e46fcc3440047cd98c4808fd04ec25e2d986ea79edbc68b92a6b68bf87c8f`.
+  `reviewed-dialogs.log` repeats the full dialog journey after the final presentation
+  polish: 1 passed in 7.75 s. Durations here describe correctness runs, not latency
+  or performance budgets.
+
+The native journey is
+`workspace::tests::color_management::native_numeric_colors_and_saved_palettes`.
+It uses a ProPhoto U16 document and an exact P3 definition with alpha 123/65535,
+cycles all five entry models, checks invalid/cancelled edits and explicit sRGB
+hex, creates/renames/deletes palettes and swatches, rejects duplicate names, and
+reuses the serialized P3 swatch in another sRGB8 window. It checks document-linear
+pigment, exact retained definition, independent brush opacity and unchanged document
+revision. The current numeric RGB and saved-swatch screenshots in
+`numeric-palette-ui/` were visually reviewed for readable fields, gamut labels and
+row actions. The earlier cramped row capture is retained for comparison.
+
+Initial native testing found a real GTK lifetime defect: synchronously rebuilding
+a ComboRow model inside its selection notification first caused repeated rebuilds,
+then a segmentation fault after adding only a same-selection guard. The final code
+replaces models only when palette names/IDs change and coalesces widget refreshes
+onto the next owner-loop idle turn. Activating a swatch closes without rebuilding
+its active row. The stalled stacks, owner stack, crash information and failed logs
+are retained (`stalled-stacks.log`, `stalled-owner.log`, `crash-info.log`,
+`native-reviewed-dialogs-harness.log`). Both the expanded and final native journeys
+pass after the deferred-refresh fix. Nonfatal portal/secret-service messages in the
+private compositor harness do not establish a product defect or a display match.
+
+Reproduce the shared suites and production build using the JPEG pkg-config setup
+above, then build/capture the GTK executable and run the fully qualified dialog
+test with `gtk-raster.sh` and an exact-test wrapper. Run the existing database-resume
+test similarly. The real-input command is:
+
+```sh
+LAYER_NATIVE_TEST_EXECUTABLE="$PWD/artifacts/color-m2/numeric-palette-final-gtk-tests" \
+LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-m2/numeric-palette-panel" \
+  bash tools/performance/workspace-motion.sh gtk --color-panel
+```
+
+`numeric-palette-provenance.json` records source and artifact hashes. No renderer,
+codec, stored sample or export transform changed in this step; the preceding exact
+external-editor handoff evidence still applies. New/Open Photo is the next functional
+stage. Managed viewing, photo workflows, combined residency/scheduling, delivery
+controls and the full correctness/memory/latency matrix remain incomplete.
+Benchmarking and optimization remain last. Other platform host integration still
+requires user approval after GTK qualification.

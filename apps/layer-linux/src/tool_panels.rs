@@ -423,6 +423,7 @@ mod wheel {
         // Background precedes foreground so their deliberate overlap also picks correctly.
         pub corners: RefCell<Vec<WheelButton>>,
         pub menu: RefCell<Option<gtk::Popover>>,
+        pub menu_slot: Cell<ColorSlot>,
         pub disc: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, cairo::ImageSurface)>>,
     }
     #[glib::object_subclass]
@@ -598,6 +599,8 @@ pub struct ColorPanel {
     readout_drawing: gtk::DrawingArea,
     swap: WheelButton,
     menu_swap: gtk::Button,
+    menu_edit: gtk::Button,
+    menu_library: gtk::Button,
 }
 impl ColorPanel {
     pub fn new() -> Self {
@@ -620,9 +623,9 @@ impl ColorPanel {
             button.set_tooltip_text(Some(if slot == ColorSlot::Transparent {
                 label
             } else if slot == ColorSlot::Foreground {
-                "Foreground color · Right-click or hold to swap"
+                "Foreground color · Right-click or hold for Edit Color and swap"
             } else {
-                "Background color · Right-click or hold to swap"
+                "Background color · Right-click or hold for Edit Color and swap"
             }));
             button.update_property(&[gtk::accessible::Property::Label(label)]);
             button.set_widget_name(&format!("color-{slot:?}"));
@@ -726,7 +729,17 @@ impl ColorPanel {
         menu_swap.update_property(&[gtk::accessible::Property::Label(
             "Swap foreground and background",
         )]);
-        menu.set_child(Some(&menu_swap));
+        let menu_edit = gtk::Button::with_label("Edit Color…");
+        menu_edit.add_css_class("flat");
+        menu_edit.set_widget_name("color-edit-menu");
+        let actions = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        actions.append(&menu_edit);
+        let menu_library = gtk::Button::with_label("Color Swatches…");
+        menu_library.add_css_class("flat");
+        menu_library.set_widget_name("color-library-menu");
+        actions.append(&menu_library);
+        actions.append(&menu_swap);
+        menu.set_child(Some(&actions));
         *wheel.imp().menu.borrow_mut() = Some(menu);
         Self {
             root,
@@ -738,6 +751,8 @@ impl ColorPanel {
             readout_drawing,
             swap,
             menu_swap,
+            menu_edit,
+            menu_library,
         }
     }
     pub fn bind(&self, workspace: &Rc<Workspace>) {
@@ -763,6 +778,7 @@ impl ColorPanel {
                 #[weak]
                 button,
                 move || {
+                    wheel.imp().menu_slot.set(slot);
                     let b = button.compute_bounds(&wheel).unwrap();
                     let menu = wheel.imp().menu.borrow();
                     let menu = menu.as_ref().unwrap();
@@ -852,6 +868,24 @@ impl ColorPanel {
             move |_| swap()
         });
         self.menu_swap.connect_clicked(move |_| swap());
+        self.menu_edit.connect_clicked(glib::clone!(
+            #[weak] workspace,
+            #[weak(rename_to = wheel)] self.wheel,
+            move |_| {
+                let slot = wheel.imp().menu_slot.get();
+                wheel.imp().menu.borrow().as_ref().unwrap().popdown();
+                crate::color_editor::show(&workspace, slot);
+            }
+        ));
+        self.menu_library.connect_clicked(glib::clone!(
+            #[weak] workspace,
+            #[weak(rename_to = wheel)] self.wheel,
+            move |_| {
+                let slot = wheel.imp().menu_slot.get();
+                wheel.imp().menu.borrow().as_ref().unwrap().popdown();
+                crate::color_library::show(&workspace, slot);
+            }
+        ));
         let part = Rc::new(Cell::new(None));
         let drag = gtk::GestureDrag::new();
         drag.set_button(1);
