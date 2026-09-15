@@ -316,7 +316,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                             note.set_text(result.as_ref().err().map_or("", String::as_str));
                         }
                     ));
-                    if dialog.choose_future(Some(&w.window)).await == "save" {
+                    if crate::alert::choose(dialog, &w.window).await == "save" {
                         let mut settings = w
                             .gpu
                             .borrow()
@@ -379,7 +379,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
             ));
         }
     ));
-    if dialog.choose_future(Some(&w.window)).await != "create" {
+    if crate::alert::choose(dialog, &w.window).await != "create" {
         return Ok(None);
     }
     let options = form.options();

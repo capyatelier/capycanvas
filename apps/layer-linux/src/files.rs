@@ -97,7 +97,7 @@ impl Workspace {
                                     "discard",
                                     adw::ResponseAppearance::Destructive,
                                 );
-                                let response = dialog.choose_future(Some(&w.window)).await;
+                                let response = crate::alert::choose(dialog, &w.window).await;
                                 let decision = match response.as_str() {
                                     "save" => CloseDecision::Save,
                                     "discard" => CloseDecision::Discard,

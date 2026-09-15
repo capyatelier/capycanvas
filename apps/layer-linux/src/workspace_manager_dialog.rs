@@ -821,7 +821,7 @@ pub(crate) async fn confirm(
             adw::ResponseAppearance::Suggested
         },
     );
-    dialog.choose_future(Some(&w.window)).await == "confirm"
+    crate::alert::choose(dialog, &w.window).await == "confirm"
 }
 
 pub(crate) struct NamedValues {
@@ -907,7 +907,7 @@ pub(crate) async fn name_dialog(
         "confirm",
         layer_workspace::validate_name(name.trim()).is_ok(),
     );
-    if dialog.choose_future(Some(&w.window)).await != "confirm" {
+    if crate::alert::choose(dialog, &w.window).await != "confirm" {
         return None;
     }
     Some(NamedValues {
@@ -940,7 +940,7 @@ pub(crate) async fn choice_dialog(
     let select = gtk::DropDown::from_strings(&strings);
     select.set_widget_name("workspace-item-choice");
     dialog.set_extra_child(Some(&select));
-    if dialog.choose_future(Some(&w.window)).await == "confirm" {
+    if crate::alert::choose(dialog, &w.window).await == "confirm" {
         choices
             .get(select.selected() as usize)
             .map(|(id, _)| id.clone())

@@ -95,6 +95,6 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
     dialog.add_response("done", "Done");
     dialog.set_close_response("done");
     dialog.set_default_response(Some("done"));
-    dialog.choose_future(Some(&w.window)).await;
+    crate::alert::choose(dialog, &w.window).await;
     Ok(true)
 }

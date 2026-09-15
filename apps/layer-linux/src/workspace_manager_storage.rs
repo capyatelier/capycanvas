@@ -48,7 +48,7 @@ impl NativeWorkspaces {
                 prompt.set_close_response("cancel");
                 prompt.set_default_response(Some("cancel"));
                 prompt.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-                let response = prompt.choose_future(Some(&w.window)).await;
+                let response = crate::alert::choose(prompt, &w.window).await;
                 w.workspaces.close_prompt.set(false);
                 if response != "discard" {
                     if let Some(gpu) = w.gpu.borrow_mut().as_mut() {

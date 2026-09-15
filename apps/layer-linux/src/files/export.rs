@@ -69,6 +69,10 @@ pub(crate) fn write_snapshot(
 ) -> Result<u64, String> {
     let result = (|| {
         recipe.validate()?;
+        let extent = recipe.size.extent([
+            snapshot.project.document.width,
+            snapshot.project.document.height,
+        ])?;
         let mut renderer = SnapshotRenderer::with_control(
             snapshot.project,
             snapshot.background,
@@ -77,6 +81,7 @@ pub(crate) fn write_snapshot(
             job.control.clone(),
         )
         .map_err(|e| e.to_string())?;
+        renderer.set_output_extent(extent)?;
         let target = recipe.interpretation();
         let mut clipped = 0;
         layer_core::atomic_write_checked(
@@ -135,7 +140,11 @@ fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
     row
 }
 
-async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportRecipe> {
+async fn choose_recipe(
+    w: &Workspace,
+    document: DocumentColor,
+    extent: [u32; 2],
+) -> Option<ExportRecipe> {
     let dialog = adw::AlertDialog::builder()
         .heading("Export image")
         .body("Create a profiled copy. Your editable drawing keeps its color space and bit depth.")
@@ -154,6 +163,89 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             "Custom",
         ],
     );
+    let size = combo(
+        &group,
+        "Size",
+        "export-size",
+        &["Original size", "Fit within"],
+    );
+    let dimensions: [adw::SpinRow; 2] = std::array::from_fn(|i| {
+        let row = adw::SpinRow::with_range(1., 32768., 1.);
+        row.set_title(["Maximum width (px)", "Maximum height (px)"][i]);
+        row.set_widget_name(["export-width", "export-height"][i]);
+        row.set_value(f64::from(extent[i]));
+        row.set_snap_to_ticks(true);
+        row.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+        row.set_visible(false);
+        group.add(&row);
+        row
+    });
+    let enlarge = adw::SwitchRow::builder()
+        .title("Allow enlargement")
+        .visible(false)
+        .build();
+    enlarge.set_widget_name("export-enlarge");
+    group.add(&enlarge);
+    let size_note = gtk::Label::builder().wrap(true).xalign(0.).build();
+    size_note.set_widget_name("export-size-description");
+    size_note.add_css_class("dim-label");
+    let output_size: Rc<dyn Fn() -> layer_ui::ExportSize> = Rc::new({
+        let size = size.downgrade();
+        let dimensions = dimensions.each_ref().map(|row| row.downgrade());
+        let enlarge = enlarge.downgrade();
+        move || {
+            if size.upgrade().is_none_or(|size| size.selected() == 0) {
+                layer_ui::ExportSize::Original
+            } else {
+                layer_ui::ExportSize::Fit {
+                    bounds: dimensions
+                        .each_ref()
+                        .map(|row| row.upgrade().map_or(1, |r| r.value() as u32)),
+                    enlarge: enlarge.upgrade().is_some_and(|row| row.is_active()),
+                }
+            }
+        }
+    });
+    let refresh_size: Rc<dyn Fn()> = Rc::new({
+        let size_note = size_note.downgrade();
+        let output_size = output_size.clone();
+        let dimensions = dimensions.each_ref().map(|row| row.downgrade());
+        let enlarge = enlarge.downgrade();
+        move || {
+            let Some(size_note) = size_note.upgrade() else {
+                return;
+            };
+            let choice = output_size();
+            let fitted = matches!(choice, layer_ui::ExportSize::Fit { .. });
+            for row in dimensions.iter().filter_map(|row| row.upgrade()) {
+                row.set_visible(fitted);
+            }
+            if let Some(enlarge) = enlarge.upgrade() {
+                enlarge.set_visible(fitted);
+            }
+            match choice.extent(extent) {
+                Ok([width, height]) => {
+                    size_note.set_label(&format!("Output: {width} × {height} px"))
+                }
+                Err(error) => size_note.set_label(&error),
+            }
+        }
+    });
+    size.connect_selected_notify({
+        let refresh = refresh_size.clone();
+        move |_| refresh()
+    });
+    for row in &dimensions {
+        row.connect_value_notify({
+            let refresh = refresh_size.clone();
+            move |_| refresh()
+        });
+    }
+    enlarge.connect_active_notify({
+        let refresh = refresh_size.clone();
+        move |_| refresh()
+    });
+    refresh_size();
     let format = combo(&group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
     let space = combo(
         &group,
@@ -329,6 +421,8 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
         #[weak]
         format,
         #[weak]
+        size,
+        #[weak]
         space,
         #[weak]
         depth,
@@ -350,6 +444,7 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
                 _ => return,
             };
             updating.set(true);
+            size.set_selected(0);
             format.set_selected(u32::from(recipe.format == ExportFormat::Tiff));
             space.set_selected(
                 RgbSpace::ALL
@@ -367,7 +462,7 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             updating.set(false);
         }
     ));
-    for row in [&format, &space, &depth, &background, &intent] {
+    for row in [&format, &space, &depth, &background, &intent, &size] {
         row.connect_selected_notify(glib::clone!(
             #[weak]
             preset,
@@ -396,9 +491,11 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
     let note = gtk::Label::builder().wrap(true).xalign(0.).build();
     note.add_css_class("dim-label");
     let update_note =
-        {
-            let note = note.clone();
-            let space = space.clone();
+        glib::clone!(
+            #[weak]
+            note,
+            #[weak]
+            space,
             move |depth: &adw::ComboRow| {
                 note.set_label(if depth.selected() == 0 && document.depth == IntegerDepth::U16 {
                 "This copy reduces 16-bit artwork to 8-bit. The master retains its precision."
@@ -408,7 +505,7 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
                 "The matching color profile is embedded in the image."
             });
             }
-        };
+        );
     update_note(&depth);
     depth.connect_selected_notify(update_note);
     space.connect_selected_notify(glib::clone!(
@@ -433,15 +530,19 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
         .child(&content)
         .build();
     scroll.set_widget_name("export-scroll");
-    dialog.set_extra_child(Some(&scroll));
+    let extra = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    extra.append(&scroll);
+    extra.append(&size_note);
+    dialog.set_extra_child(Some(&extra));
     dialog.add_responses(&[("cancel", "Cancel"), ("export", "Choose file…")]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("export"));
     dialog.set_response_appearance("export", adw::ResponseAppearance::Suggested);
-    if dialog.choose_future(Some(&w.window)).await != "export" {
+    if crate::alert::choose(dialog, &w.window).await != "export" {
         return None;
     }
     let recipe = ExportRecipe {
+        size: output_size(),
         format: match format.selected() {
             1 => ExportFormat::Tiff,
             2 => ExportFormat::Jpeg,
@@ -480,16 +581,16 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
-    let color = w
+    let (color, extent) = w
         .gpu
         .borrow()
         .as_ref()
-        .ok_or("Canvas unavailable")?
-        .session
-        .engine()
-        .document()
-        .color;
-    let Some(recipe) = choose_recipe(w, color).await else {
+        .map(|g| {
+            let document = g.session.engine().document();
+            (document.color, [document.width, document.height])
+        })
+        .ok_or("Canvas unavailable")?;
+    let Some(recipe) = choose_recipe(w, color, extent).await else {
         return Ok(false);
     };
     recipe.validate()?;
@@ -556,7 +657,10 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         .ok_or("Canvas unavailable")?
         .session
         .capture_project_export(id)?;
-    let height = snapshot.project.document.height;
+    let height = recipe.size.extent([
+        snapshot.project.document.width,
+        snapshot.project.document.height,
+    ])?[1];
     let job = ExportJob::default();
     let progress = gtk::ProgressBar::builder()
         .show_text(true)

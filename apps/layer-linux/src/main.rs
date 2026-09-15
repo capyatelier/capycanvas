@@ -1,3 +1,4 @@
+mod alert;
 mod canvas;
 mod display_color;
 mod effects;

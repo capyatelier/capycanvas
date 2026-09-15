@@ -3,6 +3,8 @@
 mod icc;
 pub use icc::*;
 pub mod photo;
+mod resize;
+pub use resize::RowResampler;
 
 mod rasterize;
 pub use rasterize::rasterize_source;

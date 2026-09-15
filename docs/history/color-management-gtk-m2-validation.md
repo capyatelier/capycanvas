@@ -5676,3 +5676,191 @@ validation. Fresh frame-creation baselines, regression investigation and all
 benchmarking/optimization remain last. Other host color controls and their JSON
 color projections have not been integrated or built for this checkpoint; shared
 Rust/FFI checks do not qualify them. They require approval after GTK completion.
+
+## 2026-09-15 — Resized SDR delivery and GTK alert ownership
+
+Implementation starts from `6f24d143`. This is a GTK functionality/correctness
+checkpoint, not completion of milestone 2. Benchmarking and optimization remain
+last, as requested; elapsed test durations below are correctness-run durations.
+Other platform hosts have not been integrated or built.
+
+### Output contract and independent checks
+
+The renderer now distinguishes native snapshot geometry from delivery dimensions.
+GTK Export offers Original size or Fit within a maximum width/height, preserving
+proportions with explicit enlargement. The resolved dimensions remain outside the
+scrolling options, above the action buttons. The master keeps its dimensions,
+backing, color mode, location and dirty state. These choices are shared serialized
+`ExportSize` data; they do not yet constitute a named-preset library.
+
+Resizing takes the full native linear premultiplied composition, then applies the
+selected output conversion, matte, depth and output-coordinate dithering. Axis
+reductions integrate exact pixel-area overlaps; enlargement evaluates the
+Catmull–Rom cubic with replicated edge pixels. The cubic's parameters are B=0,
+C=1/2 in the [Mitchell–Netravali family described by PBRT](https://www.pbr-book.org/3ed-2018/Sampling_and_Reconstruction/Image_Reconstruction#MitchellFilter).
+This choice is a reconstruction policy, not a claim of ideal reconstruction or
+photographic quality qualification. The mathematical checks use independently
+written rectangle integration and cubic Hermite interpolation, including mixed
+axis scaling; they do not use production taps as their oracle.
+
+Float32 associated samples use Float64 filter weights and accumulation. Cubic
+coverage is clamped to [0,1] with associated RGB renormalized by the same factor;
+extended RGB survives until output conversion. Transparent samples cannot add
+hidden RGB or dark fringes during resizing. Unchanged-size identity exports still
+bypass composition/resampling and preserve native integer samples, including
+hidden straight RGB, exactly. Returning a renderer to original delivery size
+restores that route. PNG/TIFF/JPEG share one profiled row pipeline; the old inline
+snapshot output implementation was moved and replaced, without a second codec
+path or compatibility adapter.
+
+The resampler retains at most four filtered rows, one raw source row, one output
+accumulator and fixed-size horizontal tap descriptions. Area support is computed
+without allocating a vector proportional to image height. Snapshot capture uses
+16-row source bands and the existing dependency planner. A 32,768-row scalar
+fixture checks cache bounds and reads every source row exactly once. These are
+structural bounds, not a measured process/GPU memory qualification: codec buffers,
+ICC state, retained sources, history, active jobs and driver allocations still
+need the final aggregate budgets and measurements.
+
+Cancellation reaches source-row capture and each output row. Output progress uses
+delivery height. Existing atomic publication arbitration is preserved; failures
+cannot publish partial output. The resized GPU test also exercises capture-budget
+failure and cancellation, while the existing export regression tests cover exact
+identity, profile conversion, matte and deterministic dithering.
+
+### Native dialog finding
+
+A repeated-cancel test found that the installed libadwaita-rs 0.9.2 async alert
+wrapper leaves an owned dialog reference alive after dismissal. Its local
+`src/alert_dialog.rs` passes `self.upcast().into_glib_ptr()` to a borrowed C
+parameter. [libadwaita 1.9.3's implementation](https://raw.githubusercontent.com/GNOME/libadwaita/1.9.3/src/adw-alert-dialog.c)
+creates and releases its own GTask reference; it does not consume this caller
+reference. The diagnostic retained-object walk reaches an unrooted AlertDialog.
+This is separate from the initially introduced sizing callback cycle, which was
+removed by making widget captures weak.
+
+`alert::choose` now owns a native response connection and its Rust dialog handle
+explicitly. Completion disconnects the handler; dropping an unfinished future
+closes the dialog. All GTK async AlertDialog callers use this helper, including
+color/photo dialogs and existing file/recovery/workspace confirmations. No unsafe
+manual unref, dependency fork or timer-polling production wait was introduced.
+The precision-note callback also uses weak widget references.
+
+### Validation record
+
+All paths below are under `artifacts/color-m2/`. Production GTK/FFI checks are
+read-only shared integration checks, not qualification of another host. Hardware
+runs use the local RTX PRO 6000 Blackwell Max-Q, NVIDIA 610.57.04, GTK 4.22.4,
+libadwaita 1.9.3, and the private Mutter 1600×1000@120 harness with GSK Vulkan.
+
+- `export-resize-color-tests.log`: 5 scalar tests passed (0.15 s), reference
+  tolerance 2e-7 in linear associated channels. Includes fractional edges, thin
+  features, constants, low alpha, extended RGB, anisotropy, bounded cache,
+  invalid geometry/sequence/nonfinite input and provider cancellation.
+- `export-resize-ui-tests.log`: 2 shared recipe tests passed, covering fit,
+  orientation, enlargement, dimensional limits, serialization and channel/depth
+  policy. Profile and depth are independent of size.
+- `export-resize-gpu-final-tests.log`: 2 resized GPU tests passed (12.01 s),
+  including a full independent render with masks, transformed selections,
+  compositing and effects. PNG/TIFF output matches an independent area reference
+  within one code at both depths for P3 RGBA and grayscale with matte. Enlarged
+  quality-100 JPEG differs from the matching PNG by at most four 8-bit codes.
+- `export-resize-regression-snapshot_*.log`: existing exact identity (18.51 s),
+  profiled composition/budget/cancel (8.95 s), JPEG (1.06 s) and deterministic
+  dithering/identity (2.21 s) tests each passed without changing their tolerance.
+  GPU executable `export-resize-gpu-final-tests` SHA-256:
+  `871c82cbb08aec15575003fd85141836cee1655d40c91c183a99ef559c57cdc9`.
+  Subsequent renderer-source change only removed blank lines at the module split.
+
+The final GTK executable is `export-resize-gtk-accepted-tests`, SHA-256
+`800ae4f85ebeab9fc55ef486a4e5513eb17d6b339b9a0d4f4ef533643690364e`.
+Its `-sources.json` records 28 changed/new Rust source hashes; all match the final
+implementation. Each native log below has prefix `export-resize-accepted-` and
+suffix `.log`, with separate `-session.log` / `-mutter.log` diagnostics:
+
+| Native check (test-name suffix) | Result |
+| --- | --- |
+| `native_alert_wait_releases_responses_and_abandoned_futures` | 1 passed, 1.86 s |
+| `native_export_sizes_preserve_master_and_release_cancelled_dialogs` | 1 passed, 13.20 s |
+| `native_document_color_assignment_conversion_depth_history_and_copy` | 1 passed, 32.46 s; includes intentional GPU panic and successful recovery |
+| `native_numeric_colors_and_saved_palettes` | 1 passed, 7.69 s |
+| `native_new_presets_and_profiled_photo_master` | 1 passed, 12.68 s |
+| `native_document_files` | 1 passed, 36.62 s; custom RGB, gray and CMYK output |
+| `native_color_preferences_profiles_and_untagged_photo_policy` | 1 passed, 10.04 s |
+| `native_source_profile_repair_preserves_originals_and_baked_edits` | 1 passed, 15.04 s |
+| `native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen` | 1 passed, 8.45 s |
+| `native_named_workspace_manager_library_and_history` | Fails before completion, 8.19 s; parent fails identically, see below |
+
+`export-resize-accepted-production-check.log`: GTK and shared FFI check passed.
+The native sizing test exports a ProPhoto16 master as 75×50 PNG16, 192×128 TIFF16
+(no enlargement requested), and 300×200 JPEG8 (explicit enlargement and matte).
+It checks decoded extent/depth/profile and exact serialized master equality with
+unsaved state retained, and repeats three cancelled sheets with weak-reference
+retirement assertions. Screenshots `export-resize-native/2113622/{png,jpg}-sizing.png`
+were visually inspected; output dimensions remain readable above the buttons.
+
+ImageMagick 7.1.2-27 Q16-HDRI independently reports those dimensions/depths and
+embedded ProPhoto RGB ICC descriptions in `export-resize-external-identify.log`.
+Its generic `colorspace=sRGB` classification describes nonlinear RGB here; the
+embedded profile description and the native byte-equality checks identify the
+actual ProPhoto interpretation. This is external decoder inspection, not a new
+manual external-editor handoff or calibrated-monitor qualification.
+
+Reproduction (from the repository root, with local JPEG development headers):
+
+```sh
+export PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig"
+cargo test -p layer-color --offline resize:: -- --test-threads=1
+cargo test -p layer-ui --offline export:: -- --test-threads=1
+cargo test -p layer-render-wgpu --offline --no-run
+cargo test -p layer-linux --offline --no-run
+cargo check -p layer-linux -p layer-ffi --offline
+```
+
+Run Cargo's reported GPU executable with `snapshot::tests::resized::
+--test-threads=1`; the four existing regression names are recorded in the log
+filenames above and take `--exact snapshot::tests::<name> --test-threads=1`.
+Use the GTK executable with `tools/performance/gtk-raster.sh`, setting
+`LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm`. The new full names are
+`workspace::tests::export_resize::native_alert_wait_releases_responses_and_abandoned_futures`
+and `workspace::tests::export_resize::native_export_sizes_preserve_master_and_release_cancelled_dialogs`.
+Other full names and exact command arguments are captured in the validation
+session records. The `*-exact` wrappers add `--exact` to prevent accidental
+substring selection. `export-resize-provenance.json` records inputs and artifacts.
+
+### Failed attempts and remaining work
+
+The first GTK test build had test-only type/name errors. The initial GPU resized
+reference passed its numerical comparisons but its failure-path fixture looked
+for a source on the group's first layer; the corrected test constructs its target
+interpretation explicitly. An initial native invocation used a missing
+`workspace::` prefix and ran zero tests; it is not evidence. These logs remain.
+
+The `native-qualified`, `native-lifetime` and `native-release` attempts exposed
+the alert reference leak. `native-owned` first passed repeated export-sheet
+retirement and all three formats. The minimal alert fixture initially used an
+empty window: GTK released the dialog but retained an unrooted content subtree.
+Waiting for unmapping did not fix that variant and was removed. Giving the parent
+its normal focusable editor content makes acceptance, close/cancel and abandoned
+future checks pass. The blank, unfocusable parent variant is not qualified; it is
+not used as evidence that every GTK internal object retires in every host setup.
+The `delivery`, `checked`, `content` and `unmap` lifetime failures are retained.
+
+The workspace-manager library/history test stalls at “Workspace selection did
+not finish” before reaching its later confirmations. The saved parent executable
+from `6f24d143` fails at the same assertion in 8.22 s
+(`export-resize-parent-workspace.log`; SHA-256
+`ee2cca119b9154e48dcb0741cd50f7b314957bec7f33a9adaf8cb0a05874ec4f`). This is an
+existing native qualification gap, not accepted workspace coverage. Investigate
+it alongside the previously recorded toolbar-sizing harness gap before final
+broad qualification. The focused alert and affected color/photo workflows above
+pass; the failed workspace test is not silently counted as passing.
+
+Remaining delivery work is output preview/comparison, reusable named and remembered
+recipes, resolution metadata and the recorded TIFF/HDR-input policies. Remaining
+milestone-wide work includes aggregate job cancellation/scheduling and resource
+budgets, coarse-first source/display work and final zoom quality, complete
+brush/filter/precision/large-document qualification, monitor/profile and alternate
+GTK-renderer checks. Fresh frame-creation baselines, regression investigation,
+peak/steady memory, p95/p99 latency and optimization stay last. Other platform host
+integration still requires user approval after GTK completion and qualification.

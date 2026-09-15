@@ -649,3 +649,5 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
         .unwrap();
     assert_eq!(raw_rows(&decode(bytes)), raw_rows(&source));
 }
+
+mod resized;

@@ -174,7 +174,7 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
             dialog.add_responses(&[("later", "Later"), ("discard", "Discard Copy"), ("recover", "Recover")]);
             dialog.set_close_response("later");
             dialog.set_default_response(Some("recover"));
-            match dialog.choose_future(Some(&w.window)).await.as_str() {
+            match crate::alert::choose(dialog, &w.window).await.as_str() {
                 "recover" => {
                     let source = path.clone();
                     let result = gio::spawn_blocking(move || {

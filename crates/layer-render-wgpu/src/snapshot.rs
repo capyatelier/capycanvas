@@ -53,6 +53,7 @@ pub struct SnapshotRenderer {
     backing: HashMap<LayerId, Arc<RasterData>>,
     resident: HashMap<LayerId, RasterData>,
     extent: [u32; 2],
+    output_extent: [u32; 2],
     background: [f32; 4],
     time: f32,
     limits: CaptureLimits,
@@ -159,6 +160,7 @@ impl SnapshotRenderer {
             backing,
             resident: HashMap::new(),
             extent,
+            output_extent: extent,
             background,
             time,
             limits,
@@ -418,131 +420,9 @@ impl SnapshotRenderer {
         self.check_cancelled()?;
         Ok(pixels)
     }
-
-    /// Profiled output writes a copy. Callers publish their temporary file only
-    /// after success; cancellation, codec or capture failure may leave it partial.
-    pub fn write_png(
-        &mut self,
-        output: impl std::io::Write,
-        target: &SourceInterpretation,
-        options: layer_core::color::OutputEncoding,
-        matte: Option<[f32; 3]>,
-    ) -> Result<layer_color::OutputStatistics, String> {
-        self.write_rows(target, options, matte, |extent, target, row| {
-            layer_color::photo::write_png_rows(output, extent, target, row)
-        })
-    }
-    pub fn write_tiff(
-        &mut self,
-        output: impl std::io::Write + std::io::Seek,
-        target: &SourceInterpretation,
-        options: layer_core::color::OutputEncoding,
-        matte: Option<[f32; 3]>,
-    ) -> Result<layer_color::OutputStatistics, String> {
-        self.write_rows(target, options, matte, |extent, target, row| {
-            layer_color::photo::write_tiff_rows(output, extent, target, row)
-        })
-    }
-    pub fn write_jpeg(
-        &mut self,
-        output: impl std::io::Write,
-        target: &SourceInterpretation,
-        options: layer_core::color::OutputEncoding,
-        matte: [f32; 3],
-        quality: u8,
-    ) -> Result<layer_color::OutputStatistics, String> {
-        self.write_rows(target, options, Some(matte), |extent, target, row| {
-            layer_color::photo::write_jpeg_rows(output, extent, target, quality, row)
-        })
-    }
-    fn identity_source(
-        &self,
-        target: &SourceInterpretation,
-    ) -> Option<Arc<layer_core::color::source::SourceImage>> {
-        if self.background[3] != 0. {
-            return None;
-        }
-        let mut visible = self
-            .layers
-            .iter()
-            .filter(|l| l.visible && l.opacity > 0. && l.kind != LayerKind::Background);
-        let layer = visible.next()?;
-        if visible.next().is_some()
-            || layer.kind != LayerKind::Paint
-            || layer.opacity != 1.
-            || layer.properties.parent.is_some()
-            || layer.properties.offset != layer_core::Point::default()
-            || layer.properties.blend != layer_core::LayerBlend::Normal
-            || layer.properties.clipped
-            || layer.mask.as_ref().is_some_and(|m| m.enabled)
-            || layer.effect.is_some()
-            || !self.backing[&layer.id].tiles.is_empty()
-        {
-            return None;
-        }
-        let source = layer.source.as_ref()?;
-        (source.extent == self.extent
-            && source.interpretation.channels == target.channels
-            && source.interpretation.depth == target.depth
-            && source.interpretation.profile == target.profile)
-            .then(|| source.clone())
-    }
-    fn write_rows(
-        &mut self,
-        target: &SourceInterpretation,
-        options: layer_core::color::OutputEncoding,
-        matte: Option<[f32; 3]>,
-        write: impl FnOnce(
-            [u32; 2],
-            &SourceInterpretation,
-            &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>,
-        ) -> Result<(), String>,
-    ) -> Result<layer_color::OutputStatistics, String> {
-        self.check_cancelled().map_err(|e| e.to_string())?;
-        self.control.output_rows.store(0, Ordering::Relaxed);
-        let encoder = layer_color::WorkingEncoder::new(self.color().space, target, options)?;
-        let extent = self.extent;
-        if options.conversion == Default::default()
-            && matte.is_none()
-            && let Some(source) = self.identity_source(target)
-        {
-            // Preserve exact integer samples, including hidden straight RGB,
-            // when delivery does not require compositing or color conversion.
-            let mut rows = source.rows();
-            write(extent, encoder.interpretation(), &mut |y, row| {
-                self.check_cancelled().map_err(|e| e.to_string())?;
-                rows.read(y, row)?;
-                self.control.output_rows.store(y + 1, Ordering::Relaxed);
-                Ok(())
-            })?;
-            return Ok(Default::default());
-        }
-        let mut band = Vec::new();
-        let mut first = 0;
-        let mut end = 0;
-        let mut stats = layer_color::OutputStatistics::default();
-        write(extent, encoder.interpretation(), &mut |y, row| {
-            self.check_cancelled().map_err(|e| e.to_string())?;
-            if y >= end {
-                // A small strip bounds output and host mappings independently
-                // of photo height. Filter support determines the input window.
-                band = Vec::new();
-                first = y;
-                end = (y + 16).min(extent[1]);
-                band = self
-                    .read_region([0, y, extent[0], end - y])
-                    .map_err(|e| e.to_string())?;
-            }
-            let start = (y - first) as usize * extent[0] as usize;
-            stats.clipped_channels += encoder
-                .encode_premultiplied(&band[start..start + extent[0] as usize], row, matte, [0, y])?
-                .clipped_channels;
-            self.control.output_rows.store(y + 1, Ordering::Relaxed);
-            Ok(())
-        })?;
-        Ok(stats)
-    }
 }
+
+mod output;
 
 #[cfg(test)]
 mod tests;

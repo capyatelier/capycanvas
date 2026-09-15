@@ -216,10 +216,7 @@ pub fn choose(
         #[weak]
         workspace,
         async move {
-            if form
-                .dialog
-                .clone()
-                .choose_future(Some(&workspace.window))
+            if crate::alert::choose(form.dialog.clone(), &workspace.window)
                 .await
                 != "apply"
             {

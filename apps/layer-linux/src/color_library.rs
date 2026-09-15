@@ -244,7 +244,7 @@ impl Library {
         name.connect_changed(validate);
         let library = self.clone();
         glib::MainContext::default().spawn_local(async move {
-            if dialog.choose_future(Some(&library.dialog)).await == "save" {
+            if crate::alert::choose(dialog, &library.dialog).await == "save" {
                 library.apply(action(name.text().into()));
             }
         });
@@ -395,7 +395,7 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         confirm.set_close_response("cancel");
         confirm.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
         glib::MainContext::default().spawn_local(async move {
-            if confirm.choose_future(Some(&library.dialog)).await == "remove" {
+            if crate::alert::choose(confirm, &library.dialog).await == "remove" {
                 library.apply(Action::RemovePalette { id });
             }
         });
@@ -405,10 +405,7 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         #[weak]
         workspace,
         async move {
-            library
-                .dialog
-                .clone()
-                .choose_future(Some(&workspace.window))
+            crate::alert::choose(library.dialog.clone(), &workspace.window)
                 .await;
         }
     ));

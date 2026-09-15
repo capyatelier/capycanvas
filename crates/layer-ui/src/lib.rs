@@ -11,7 +11,7 @@ mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
 mod export;
-pub use export::{ExportBackground, ExportFormat, ExportProfile, ExportRecipe};
+pub use export::{ExportBackground, ExportFormat, ExportProfile, ExportRecipe, ExportSize};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;

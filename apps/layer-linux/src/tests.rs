@@ -7,6 +7,8 @@ mod color_panel;
 mod color_management;
 #[path = "effect_color_tests.rs"]
 mod effect_color;
+#[path = "export_resize_tests.rs"]
+mod export_resize;
 #[path = "new_photo_tests.rs"]
 mod new_photo;
 #[path = "place_source_tests.rs"]

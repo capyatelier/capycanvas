@@ -232,7 +232,7 @@ pub(super) async fn select(parent: &adw::ApplicationWindow, entries: &[Entry]) -
         dialog,
         move |_, row| dialog.set_response_enabled("use", row.is_some())
     ));
-    match dialog.choose_future(Some(parent)).await.as_str() {
+    match crate::alert::choose(dialog, parent).await.as_str() {
         "browse" => Selection::Browse,
         "use" => list
             .selected_row()
@@ -382,7 +382,7 @@ pub(crate) async fn manage(w: &Rc<Workspace>) -> Result<(), String> {
             }
         ));
     }
-    dialog.choose_future(Some(&w.window)).await;
+    crate::alert::choose(dialog, &w.window).await;
     while busy.get() {
         glib::timeout_future(std::time::Duration::from_millis(5)).await;
     }

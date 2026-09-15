@@ -76,7 +76,7 @@ pub(super) async fn interpret(
             dialog.set_response_enabled("use", select(space.selected()).is_ok());
         }
     ));
-    if dialog.choose_future(Some(&w.window)).await != "use" {
+    if crate::alert::choose(dialog, &w.window).await != "use" {
         return Ok(None);
     }
     source.interpretation.profile = (chooser.selected)(space.selected())?.profile;

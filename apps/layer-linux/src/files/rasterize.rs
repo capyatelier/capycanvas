@@ -82,7 +82,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
             if let Err(error) = result { comparison.invalidate(&error); }
         }
     ));
-    let response = dialog.choose_future(Some(&w.window)).await;
+    let response = crate::alert::choose(dialog, &w.window).await;
     control.cancel();
     comparison.close();
     let _ = task.await;

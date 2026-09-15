@@ -63,6 +63,47 @@ impl ExportProfile {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportSize {
+    Original,
+    /// Preserve proportions inside a pixel box; never crop or stretch the copy.
+    Fit {
+        bounds: [u32; 2],
+        enlarge: bool,
+    },
+}
+impl ExportSize {
+    pub fn extent(&self, source: [u32; 2]) -> Result<[u32; 2], String> {
+        let validate = |size: [u32; 2]| {
+            if size.into_iter().all(|v| (1..=32768).contains(&v)) {
+                Ok(())
+            } else {
+                Err("Image dimensions must be between 1 and 32768 pixels".to_string())
+            }
+        };
+        validate(source)?;
+        let Self::Fit { bounds, enlarge } = self else {
+            return Ok(source);
+        };
+        validate(*bounds)?;
+        let axis = usize::from(
+            u64::from(bounds[0]) * u64::from(source[1])
+                > u64::from(bounds[1]) * u64::from(source[0]),
+        );
+        let numerator = if *enlarge {
+            bounds[axis]
+        } else {
+            bounds[axis].min(source[axis])
+        };
+        let denominator = source[axis];
+        Ok(source.map(|value| {
+            ((u64::from(value) * u64::from(numerator) + u64::from(denominator) / 2)
+                / u64::from(denominator))
+            .max(1) as u32
+        }))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportRecipe {
     pub format: ExportFormat,
     pub profile: ExportProfile,
@@ -70,6 +111,7 @@ pub struct ExportRecipe {
     pub background: ExportBackground,
     pub jpeg_quality: u8,
     pub encoding: OutputEncoding,
+    pub size: ExportSize,
 }
 impl ExportRecipe {
     pub fn web_share() -> Self {
@@ -80,6 +122,7 @@ impl ExportRecipe {
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
             encoding: Default::default(),
+            size: ExportSize::Original,
         }
     }
     pub fn wide_color() -> Self {
@@ -96,6 +139,7 @@ impl ExportRecipe {
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
             encoding: Default::default(),
+            size: ExportSize::Original,
         }
     }
     pub fn interpretation(&self) -> SourceInterpretation {
@@ -116,6 +160,7 @@ impl ExportRecipe {
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.size.extent([1, 1])?;
         self.encoding.validate(self.depth)?;
         if self.profile.channels == ProfileChannels::Cmyk {
             if self.format == ExportFormat::Png {
@@ -149,6 +194,45 @@ impl ExportRecipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_size_fits_orientation_without_distorting_or_changing_the_master() {
+        for (source, bounds, enlarge, expected) in [
+            ([6000, 4000], [2048, 2048], false, [2048, 1365]),
+            ([4000, 6000], [2048, 2048], false, [1365, 2048]),
+            ([33, 17], [100, 100], false, [33, 17]),
+            ([33, 17], [100, 100], true, [100, 52]),
+            ([32768, 1], [1, 32768], false, [1, 1]),
+            ([1, 32768], [32768, 1], true, [1, 1]),
+            ([1, 1], [32768, 32768], true, [32768, 32768]),
+        ] {
+            let size = ExportSize::Fit { bounds, enlarge };
+            assert_eq!(size.extent(source).unwrap(), expected);
+            assert_eq!(ExportSize::Original.extent(source).unwrap(), source);
+            let mut recipe = ExportRecipe::further_editing(DocumentColor {
+                space: RgbSpace::ProPhoto,
+                depth: IntegerDepth::U16,
+            });
+            recipe.size = size;
+            recipe.validate().unwrap();
+            assert_eq!(
+                serde_json::from_slice::<ExportRecipe>(&serde_json::to_vec(&recipe).unwrap())
+                    .unwrap(),
+                recipe
+            );
+            assert_eq!(recipe.depth, IntegerDepth::U16);
+            assert_eq!(recipe.profile, ExportProfile::builtin(RgbSpace::ProPhoto));
+        }
+        for size in [[0, 1], [1, 32769]] {
+            assert!(ExportSize::Original.extent(size).is_err());
+            let mut recipe = ExportRecipe::web_share();
+            recipe.size = ExportSize::Fit {
+                bounds: size,
+                enlarge: false,
+            };
+            assert!(recipe.validate().is_err());
+        }
+    }
+
     #[test]
     fn destination_channels_depth_and_transparency_follow_the_delivery_recipe() {
         for (model, format, depth, background, expected_channels, valid) in [

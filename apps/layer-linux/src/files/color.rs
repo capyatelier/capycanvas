@@ -313,7 +313,7 @@ pub(super) async fn run(
         });
     }
     refresh();
-    let response = dialog.choose_future(Some(&w.window)).await;
+    let response = crate::alert::choose(dialog, &w.window).await;
     state.finish().await;
     if response != "apply" {
         return Ok(false);

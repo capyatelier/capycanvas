@@ -152,7 +152,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
     };
     space.set_selected(index);
     space.notify("selected");
-    let response = dialog.choose_future(Some(&w.window)).await;
+    let response = crate::alert::choose(dialog, &w.window).await;
     comparison.close();
     comparison.finish().await;
     if response != "apply" {

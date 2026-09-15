@@ -117,6 +117,22 @@ original icon geometry with tagged artwork fills. None of these display textures
 feeds edits, sampling or export. The saved color and GPU-coordinate contracts are
 specified in [Runtime filters](../reference/runtime-filters.md).
 
+File → Export offers original dimensions or a proportion-preserving fit inside
+maximum pixel dimensions, with explicit enlargement. The resolved output size
+stays visible above the action buttons. Resampling operates on the full linear
+premultiplied composition before output profile conversion, matte application and
+integer quantization. Reductions integrate covered source pixels; enlargements
+use Catmull–Rom interpolation. PNG/TIFF/JPEG share the bounded row pipeline, and
+an unchanged-size identity export retains exact integer samples. Resizing never
+changes the editable master or its dirty state. Output preview, named recipes and
+resolution metadata remain under implementation.
+
+GTK alert waits use `alert::choose`, which disconnects its response handler on
+completion and closes the dialog if its future is abandoned. The installed
+libadwaita-rs 0.9.2 `choose_future` wrapper leaks an owned dialog reference across
+a borrowed C argument; it is no longer called by the application. Native checks
+cover response/cancellation, abandoned waits and repeated export-sheet disposal.
+
 File → Import Image as Layer and Edit → Paste Image as Layer retain original
 PNG/JPEG/TIFF source data while keeping the destination document's working mode.
 Paste prefers TIFF, then PNG, then JPEG; transfer and worker decoding can be
@@ -154,9 +170,7 @@ the matching renderer and picker space. The native
 check covers these controls, save/reopen, continued drawing and GPU recovery.
 Canvas, comparisons, picker fields, paint/palette samples, layer thumbnails and
 filter thumbnails use the negotiated display space. View-only encoding never
-feeds document edits, exact sampling or profiled export. Generic effect/gradient
-color editors still need the managed numeric-color route; monitor/profile and
-complete preview-matrix qualification remain open.
+feeds document edits, exact sampling or profiled export. Monitor/profile and complete preview-matrix qualification remain open.
 
 View → Histogram opens a separate window that stays available while editing.
 It counts the full-resolution committed composite, including visible paper and

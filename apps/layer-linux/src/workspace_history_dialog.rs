@@ -197,7 +197,7 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
             .as_ref(),
     );
     w.workspaces.ui.close();
-    let response = dialog.choose_future(Some(&w.window)).await;
+    let response = crate::alert::choose(dialog, &w.window).await;
     let _operation = preview.finish();
     if response == "restore" {
         let selected = selected.borrow().clone();
