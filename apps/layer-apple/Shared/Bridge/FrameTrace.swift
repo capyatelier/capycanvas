@@ -9,6 +9,7 @@ struct FrameTraceEvent {
         case tick, frame, input, drawable, presented, memory, display, gpu, gpuStatus, state, activity, workload
         // 12 remains reserved for the recorded Metal display-link experiment.
         case frameRetry = 13
+        case gpuClock = 14
     }
     let kind: Kind
     var a: UInt64 = 0, b: UInt64 = 0, c: UInt64 = 0, d: UInt64 = 0, e: UInt64 = 0

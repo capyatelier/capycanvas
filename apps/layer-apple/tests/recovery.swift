@@ -24,16 +24,21 @@ import QuartzCore
     @MainActor static func attach(_ store: EditorStore) async throws -> CAMetalLayer {
         let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
         store.native!.attach(layer, width: 128, height: 128, scale: 1)
-        _ = await withCheckedContinuation { continuation in
-            store.native!.submit(2, JSON(["type":"catalog"])) { continuation.resume(returning: $0) }
+        // Complete offscreen startup. Recovery below still
+        // has no display link or frame after pen-up, preserving that regression.
+        let deadline = Date().addingTimeInterval(45)
+        while !store.snapshot["shaders_ready"].bool || store.workspaceLibrary?.ready != true {
+            precondition(Date() < deadline && store.failure == nil, store.failure ?? "Native startup timed out")
+            let ready = await withCheckedContinuation { continuation in
+                store.native!.flushPersistence { continuation.resume(returning: $0) }
+            }
+            precondition(ready, "Offscreen renderer preparation failed")
+            let now = FrameTrace.now()
+            await withCheckedContinuation { continuation in
+                store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in continuation.resume() }
+            }
+            try await Task.sleep(for: .milliseconds(10))
         }
-        // This owner has no display link. Prepare the same committed boundary
-        // used by lifecycle recovery so shared workspace startup can finish.
-        let ready = await withCheckedContinuation { continuation in
-            store.native!.flushPersistence { continuation.resume(returning: $0) }
-        }
-        precondition(ready, "Offscreen renderer preparation failed")
-        try await wait("Workspace startup did not finish") { store.workspaceLibrary?.ready == true }
         precondition(store.failure == nil, store.failure ?? "")
         return layer
     }

@@ -10,6 +10,74 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current OS file-launch milestone
+
+Cold OS file delivery reproduced an iPad failure: the drawing was rejected with
+"Finish the current canvas operation first" while the blank editor remained.
+Metal attachment had enabled Open before first-frame bundled-filter validation
+started. External Open now waits for the existing full startup-ready flag and
+workspace readiness before submitting its reserved request. The fix changes two
+guards; it adds no timer, retry loop or second file-opening path.
+
+The ordered local regression fails before the fix. Complete project-file and
+recovery suites pass afterward on both Apple configurations, including existing
+overlap, cancellation, save-before-replacement and retry cases. Offscreen fixtures
+now drive first-frame catalog completion, and the optional test bundle includes
+the app's filter resources. Both Release builds pass without compiler warnings.
+
+Actual cold and warm OS URL delivery passes on Mac and the physical iPad with
+two synthetic painted documents. Final captures show the expected artwork;
+warm delivery retains the process on each host. Mac opens a second independent
+document window and retains the first. Source files remain byte-identical,
+including iPad container readback. The device uses `devicectl --payload-url` and
+native screenshot capture; no Files authentication, XCTest or simulator is needed.
+Evidence is under ignored `artifacts/apple-os-file-launch-v1/`, with current
+Release metadata and final captures in `after/`. All owned processes are closed;
+the disposable iPad app is removed and its original stopped test runner restored,
+with both artist editor descriptors unchanged. Main was fetched and was current.
+
+Full provider/lifecycle coverage, remaining feature/visual/keyboard/window gaps,
+physical input and sustained Mac 90 Hz/iPad 120 Hz acceptance remain open. OS URL
+delivery does not prove the complete provider matrix or fix physical XCTest
+startup. Close concrete parity gaps with local checks first; reserve grouped
+native runs for questions those checks cannot answer. Do not repeat passing
+workflows or failed performance experiments without a relevant change or new
+actionable hypothesis. The overall goal remains incomplete.
+
+## GPU timing investigation included in this milestone
+
+The bounded timing investigation is complete. Optional GPU recording now retains
+raw endpoints and paired Metal clocks; the analyzer interpolates only within
+recorded samples and reports missing coverage and sampling uncertainty. Both
+Release builds, the actual hardware timer test, native bridge check, Swift
+recorder fixture and seventeen analyzer tests pass. Ordinary drawing and frame
+scheduling are unchanged. These changes are grouped with the OS file-launch fix
+above as one milestone.
+
+One 45-second GPU-timing-on/off pair completes on each physical host. Both cadence
+gates still fail. All 54 Mac long intervals and 26 of 31 iPad long intervals in
+the timing-enabled runs have GPU completion before their presentation target.
+The other five iPad frames were admitted only 1–3 ms before target. This narrows
+the timing question but does not establish a scheduling fix or calibrated total
+recorder overhead. All measured workloads have complete presentation callbacks
+and no zero-time presentations, rejected input, renderer errors or overflow.
+One measured iPad GPU observation is skipped and remains explicitly missing.
+Setup zero-time presentation callbacks are retained separately. See
+[performance observations](../../apps/layer-apple/PERFORMANCE.md#gpu-endpoint-correlation--2026-09-15)
+for the full comparison and limits.
+
+That investigation's Release metadata, logs, traces, scripts and source hashes
+are under `artifacts/performance/gpu-clock-correlation-v1/`. The current on-disk
+apps were rebuilt for the OS file-launch fix above; no performance run is
+repeated for that admission-only change. All four
+workload processes are closed; the disposable iPad app is removed and its
+original stopped test runner restored, with both artist editor descriptors
+unchanged. Main was fetched and was current before the runs. No simulator,
+XCTest, broad profiler or ten-minute workload is repeated. Return to remaining
+feature/state acceptance; do not repeat cadence experiments without a new,
+actionable hypothesis. The workspace-command coverage entry also no longer
+incorrectly describes its complete manager fixture as unfinished.
+
 ## Current workspace-manager cleanup milestone
 
 The current native catalog exposes workspaces, this workspace's toolbars and the
@@ -31,7 +99,7 @@ actions, permanent deletion, package import and scene teardown. These are
 owner/service checks with temporary storage, not physical input/provider proof.
 Both existing Mac and UIKit Workspace Switcher and Layout History workflows
 pass: four native workflows, no failures or skips. Both Release builds pass
-without compiler warnings. Current on-disk Release metadata is under
+without compiler warnings. That milestone's Release metadata is under
 `artifacts/apple-workspace-manager-cleanup-v1/release/`; the preceding document
 milestone's build metadata is historical. All owned app/runner processes are
 verified stopped. The renderer is unchanged and no physical/performance run is

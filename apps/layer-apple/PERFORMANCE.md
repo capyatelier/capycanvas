@@ -17,6 +17,58 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## GPU endpoint correlation — 2026-09-15
+
+The optional recorder now retains the existing GPU marker endpoints and samples
+paired Metal clocks. This is an observation change only; rendering, admission
+and presentation scheduling are unchanged. Both Release builds pass without
+compiler warnings, as do the actual Metal timer test, native timing bridge
+check, Swift recorder fixture and seventeen analyzer tests. The analyzer keeps
+sampling uncertainty, missing observations and the existing cadence criteria.
+
+One 45-second `layered-4k` run with GPU timing enabled and one with it disabled
+complete on each physical host, serially after builds. All four measured
+intervals and postludes complete with nominal thermal state, no rejected input,
+renderer errors, recorder overflow or missing/zero-time measured presentations.
+The complete traces retain setup zero-time callbacks: one per run except two
+in the iPad timing-disabled run. Both Mac artwork/Navigator captures are reviewed.
+
+| Measurement | Mac timing on / off | iPad timing on / off |
+| --- | ---: | ---: |
+| Actual measured presentations | 3,798 / 3,752 | 5,029 / 5,041 |
+| CPU owner median, ms | 2.377 / 2.207 | 1.830 / 1.575 |
+| CPU owner p99, ms | 4.115 / 4.077 | 9.092 / 9.131 |
+| Long continuous intervals / total, timing on | 54 / 3,769 | 31 / 5,000 |
+| Long continuous intervals / total, timing off | 70 / 3,723 | 43 / 5,012 |
+| Calibrated measured GPU frames, timing on | 3,798 / 3,798 | 5,028 / 5,029 |
+
+All 54 Mac long intervals have a right-hand frame whose GPU end marker precedes
+its presentation target, by at least 1.85 ms. On iPad, 26 of 31 do; the other five
+end 0.080–0.918 ms after target and were admitted only 1.027–3.059 ms before it.
+Their CPU owner work is 1.393–1.990 ms. All long-interval endpoints are calibrated;
+the one skipped iPad GPU observation remains missing elsewhere in measurement.
+Recorded clocks are monotonic, and no calibrated GPU start precedes its frame's
+admission. Maximum measured sampling-window uncertainty is 0.011 ms on Mac and
+0.026 ms on iPad. Unknown clock drift is not included in those bounds.
+
+Late GPU completion does not explain most observed gaps in these instrumented
+runs. A presentation target is still not a Metal commit deadline, so this does
+not establish a compositor or scheduling root cause. The single on/off pair
+per host does not calibrate total recording overhead or prove a cadence benefit;
+both cadence gates still fail. No renderer/scheduler workaround or ten-minute
+rerun follows. Resume feature/state acceptance rather than repeating these
+measurements without a new, actionable hypothesis.
+
+Evidence, source hashes, comparison reports, reproduction scripts and that
+investigation's Release metadata are under ignored
+`artifacts/performance/gpu-clock-correlation-v1/`. All workload processes are
+closed. The disposable iPad app is removed, its original stopped test runner is
+restored, and both artist editor descriptors are unchanged.
+The subsequent OS file-launch startup fix rebuilt both apps; current Release
+metadata is under `artifacts/apple-os-file-launch-v1/after/`. That fix changes
+Open admission only, so no drawing workload is repeated and no new performance
+claim is made.
+
 ## Coverage preparation cleanup and physical validation — 2026-09-15
 
 Review of the retained command-encoding profile identifies redundant coverage
@@ -65,10 +117,10 @@ Grouped native evidence and that milestone's Release metadata are under
 `artifacts/apple-brush-state-milestone-v1/` (`physical/`, `release/`). Both owned
 processes are stopped; the physical diagnostic is removed and its prior test
 runner restored, with the artist's editor descriptors unchanged.
-Later native changes rebuild both Release apps; current metadata is under
+The subsequent workspace-manager cleanup rebuilt both Release apps; its metadata is under
 `artifacts/apple-workspace-manager-cleanup-v1/release/`.
-These changes do not affect the renderer, and add no physical drawing run or
-performance claim.
+That milestone did not affect the renderer or add a physical drawing run.
+The newer diagnostic builds and recordings are described above.
 
 ## Hardware tile hashing, short physical comparison — 2026-09-15
 
@@ -1516,10 +1568,10 @@ records for two seconds; missing completions at that boundary stay unverified.
 ## JSONL schema 1
 
 The first line is metadata. Each remaining line is `[kind, a, b, ..., j]` with
-unsigned integer fields; unused fields are zero. Times and durations use
-nanoseconds in the CACurrentMediaTime monotonic clock domain. Frame IDs are
-the admission timestamp. GPU timestamp differences are converted using the
-queue's timestamp period, not compared as absolute CPU clock values.
+unsigned integer fields; unused fields are zero. Host times use nanoseconds in
+the CACurrentMediaTime monotonic clock domain. Frame IDs are the admission
+timestamp. GPU queue durations use the queue's timestamp period. Raw GPU
+endpoints and paired Metal clock samples retain their separate clock domains.
 
 | Kind | Fields in order, excluding trailing zeros |
 | --- | --- |
@@ -1530,12 +1582,25 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | 4 presented | frame ID, actual presentation time, callback observation time, drawable ID |
 | 5 memory | observation time, physical footprint bytes, resident bytes, thermal state, Mach status |
 | 6 display | observation time, pixel width/height, scale multiplied by 1000, maximum refresh rate |
-| 7 GPU | frame ID, GPU queue span, status (1 valid, 2 readback failure, 3 invalid timestamps) |
+| 7 GPU | frame ID, GPU queue span, status (1 valid, 2 readback failure, 3 invalid timestamps), raw GPU start/end ticks |
 | 8 GPU status | observation time, support (0 uninitialized, 1 supported, 2 unavailable), requested/skipped/invalid/pending counts, poll-error flag |
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
 | 13 presentation retry | attempt time, original display target, admitted flag, denial reason using kind 0 values |
+| 14 GPU clock | recorder time before sampling, Metal CPU nanoseconds, Metal GPU ticks, recorder time after sampling |
+
+Optional GPU recording samples paired clocks at most ten times per second.
+The analyzer follows Apple's [GPU-to-CPU timestamp conversion](https://developer.apple.com/documentation/metal/converting-gpu-timestamps-into-cpu-time),
+interpolating only between recorded samples. Recorder times surrounding each
+call bound the translation from Metal CPU time to the recorder clock. Reported
+uncertainty covers that sampling window, not unknown clock drift. Invalid or
+nonmonotonic clock samples disable calibration; absent or unbracketed endpoints
+remain missing. These observations are available for both the whole trace and
+its measured workload interval. The GPU end marker follows the frame's queued
+work and includes submission/polling gaps; it is not isolated GPU busy time.
+The display target is not a recorded Metal commit deadline, so completion before
+that target alone does not establish the cause of a missed presentation.
 
 The analyzer also retains local scheduling experiment records: kind 12 contains
 frame ID, CPU commit deadline, presentation target and drawable admission status

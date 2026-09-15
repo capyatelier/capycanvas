@@ -10,8 +10,8 @@
       "name": "Document transport",
       "commands": ["new_document", "open_document", "save_document", "save_document_as", "export_document", "close_document"],
       "checks": ["tests/project-files.swift", "tests/recovery.swift", "Shared/Tests/DocumentControlChecks.swift", "iOS/Tests/EditorLaunchTests.swift"],
-      "ios": "partial: direct transport and simulator workflows; full physical provider/lifecycle matrix remains; local owner/file checks cover startup delivery before the first snapshot and Metal attachment, overlapping external URLs/recovery/close, queued rejection and subsequent retry on both Apple configurations",
-      "mac": "partial: native File menu, Save As/Save, process restart/Open with three layers and sampled artwork, complete decoded PNG equality before/after reopen, unchanged project bytes after export, native cancellation and direct transport; full provider/lifecycle matrix remains; local owner/file checks cover startup delivery before the first snapshot and Metal attachment, overlapping external URLs/recovery/close, queued rejection and subsequent retry on both Apple configurations"
+      "ios": "partial: direct transport and simulator workflows; actual physical iPad cold/warm OS URL delivery shows the expected painted documents in the same process, with unchanged source bytes; full provider/lifecycle matrix remains; local owner/file checks cover startup delivery before the first snapshot, Metal attachment and first-frame catalog validation, overlapping external URLs/recovery/close, queued rejection and subsequent retry on both Apple configurations",
+      "mac": "partial: native File menu, Save As/Save, process restart/Open with three layers and sampled artwork, complete decoded PNG equality before/after reopen, unchanged project bytes after export, native cancellation and direct transport; actual cold/warm OS URL delivery shows the expected painted documents, preserving the first window and source bytes; full provider/lifecycle matrix remains; local owner/file checks cover startup delivery before the first snapshot, Metal attachment and first-frame catalog validation, overlapping external URLs/recovery/close, queued rejection and subsequent retry on both Apple configurations"
     },
     {
       "name": "Drawing tools",
@@ -130,8 +130,8 @@
       "tests/workspace-menu-actions.swift",
       "Shared/Tests/WorkspaceLibraryChecks.swift"
     ],
-    "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; native Layout History selection/accessibility and restoration pass; the broader manager component run is unfinished after captures, and complete native UI validation remains",
-    "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; native Layout History selection/accessibility and restoration pass; the broader manager component run is unfinished after captures, and complete native UI validation remains"
+    "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete local manager checks pass for forms/validation, preview/history, live-window copying, toolbar actions, permanent deletion, external toolbar imports and scene teardown; native Workspace Switcher and Layout History workflows pass; complete native UI and physical lifecycle validation remains",
+    "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete local manager checks pass for forms/validation, preview/history, live-window copying, toolbar actions, permanent deletion, external toolbar imports and scene teardown; native Workspace Switcher and Layout History workflows pass; complete native UI and display/lifecycle validation remains"
   },
   "panel_controls": {
     "brush_size": "Shared/Editor/PanelControls.swift",

@@ -16,6 +16,9 @@ pub struct GpuFrameSample {
     pub elapsed_ns: u64,
     /// 1: valid, 2: map/read failure, 3: invalid timestamp order/range.
     pub status: u64,
+    /// Raw device-clock endpoints; native hosts can calibrate them to CPU time.
+    pub start_tick: u64,
+    pub end_tick: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -223,8 +226,8 @@ impl GpuFrameTimer {
             slot.read.map_async(wgpu::MapMode::Read, .., move |result| {
                 let mut sample = GpuFrameSample {
                     frame,
-                    elapsed_ns: 0,
                     status: 2,
+                    ..Default::default()
                 };
                 if result.is_ok() {
                     if let Ok(bytes) = buffer.get_mapped_range(..) {
@@ -237,6 +240,8 @@ impl GpuFrameTimer {
                             && elapsed < u64::MAX as f64
                         {
                             sample.elapsed_ns = elapsed.round() as u64;
+                            sample.start_tick = start;
+                            sample.end_tick = end;
                             sample.status = 1;
                         } else {
                             sample.status = 3;
@@ -353,6 +358,7 @@ mod tests {
                     sample.elapsed_ns > 0,
                     "Empty marker passes must not yield false zero timings"
                 );
+                assert!(sample.start_tick > 0 && sample.end_tick > sample.start_tick);
                 observed.push(sample.frame);
             }
             assert_eq!(timer.stats().pending, 0);

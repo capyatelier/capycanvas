@@ -95,11 +95,20 @@ External Open and recovery reserve their pending URL before shared busy state
 arrives; another Open, recovery or window close cannot overtake that reservation.
 If a queued command makes Open unavailable, the document service reports the
 rejection and releases the URL so the next request remains usable.
-File delivery during launch waits for the first editor state, Metal attachment
-and workspace restoration. The same pending URL resumes from existing state
+File delivery during launch waits for the first editor state, full native startup
+and workspace restoration. Metal attachment alone is insufficient: first-frame
+bundled-filter validation can still begin afterward and temporarily block Open.
+The existing `shaders_ready` flag covers that startup interval.
+The same pending URL resumes from existing state
 publications and workspace initialization, without a startup timer or another
 picker. Local checks cover delivery before the first snapshot and before Metal
-attachment with temporary managed workspaces on both Apple configurations.
+attachment with temporary managed workspaces on both Apple configurations,
+including the interval before first-frame catalog validation. Actual cold and
+warm OS URL delivery also passes on Mac and the physical iPad with synthetic
+painted documents and unchanged source bytes. Mac retains the first document in
+its own window when warm delivery creates another. These checks do not establish
+the full file-provider or lifecycle matrix; evidence and current scope are in
+the [Apple handoff](../../docs/development/apple-handoff.md).
 
 macOS uses NSOpenPanel/NSSavePanel. iPad uses UIDocumentPickerViewController:
 Save As prepares an archive in a private temporary directory before presenting

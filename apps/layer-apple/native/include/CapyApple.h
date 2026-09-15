@@ -122,7 +122,8 @@ uint64_t capy_apple_camera_revision(const CapyApple *app);
    presentation latency). No timestamp submissions when disabled (default).
    Sample status: 1 valid, 2 map/read failure, 3 invalid timestamps.
    Support: 0 not initialized, 1 available, 2 unavailable. */
-typedef struct { uint64_t frame, elapsed_ns, status; } CapyGpuFrameSample;
+/* Raw timestamp endpoints need native clock calibration before CPU comparison. */
+typedef struct { uint64_t frame, elapsed_ns, status, start_tick, end_tick; } CapyGpuFrameSample;
 typedef struct { uint64_t support, requested, skipped, invalid, pending; } CapyGpuFrameTimingStats;
 int32_t capy_apple_gpu_timing(CapyApple *app, uint32_t enabled);
 /* Nonblocking poll and bounded drain: returns count or -1. Capacity <= 256;

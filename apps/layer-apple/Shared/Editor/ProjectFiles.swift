@@ -90,7 +90,7 @@ import UIKit
         // Keep the first destination reserved during that interval as well.
         guard !busy, externalOpen == nil else { error = "Finish the current document operation first"; return }
         guard let store else { error = "The canvas session is unavailable"; return }
-        if store.snapshot["gpu_ready"].bool && store.workspaceLibrary?.ready != false
+        if store.snapshot["shaders_ready"].bool && store.workspaceLibrary?.ready != false
             && !store.command("open_document")["enabled"].bool {
             error = "Finish the canvas interaction before opening a drawing"; return
         }
@@ -99,9 +99,11 @@ import UIKit
     }
     func submitExternalOpen() {
         // File launch can precede the first snapshot, workspace restoration and
-        // Metal attachment. Publications resume this one pending request.
+        // Metal attachment. First-frame catalog validation can still start after
+        // attachment, so wait for full startup before submitting the request.
+        // Publications resume this one pending request.
         guard externalOpen?.submitted == false, let store,
-            store.workspaceLibrary?.ready != false, store.snapshot["gpu_ready"].bool,
+            store.workspaceLibrary?.ready != false, store.snapshot["shaders_ready"].bool,
             store.command("open_document")["enabled"].bool else { return }
         externalOpen?.submitted = true
         store.edit(["type": "invoke", "command": "open_document"]) { [weak self] error in

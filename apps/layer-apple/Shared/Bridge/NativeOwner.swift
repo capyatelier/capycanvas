@@ -1,5 +1,6 @@
 import Foundation
 import QuartzCore
+import Metal
 
 /// ARC lease crossing the queue boundary. UIKit/AppKit owns view geometry;
 /// only the render owner uses the layer's Metal surface and drawable APIs.
@@ -42,6 +43,7 @@ final class NativeOwner: @unchecked Sendable {
     private var latestTracedInput: UInt64 = 0
     private var gpuTimingEnabled = false
     private var gpuPollScheduled = false
+    private var lastGpuClockSample: UInt64 = 0
     private var gpuSamples = [CapyGpuFrameSample](repeating: CapyGpuFrameSample(), count: 8)
     private var lastTraceState: UInt64?
     private let persistence: EditorPersistence
@@ -591,12 +593,14 @@ final class NativeOwner: @unchecked Sendable {
     /// allowing the last GPU readback to complete after the display link sleeps.
     private func collectGpuTiming(_ observation: FrameTrace) {
         guard observation.recordsGpuTiming, observation.acceptsCompletions else { return }
+        sampleGpuClock(observation)
         var status = CapyGpuFrameTimingStats()
         let capacity = gpuSamples.count
         let count = capy_apple_take_gpu_timing(handle, &gpuSamples, capacity, &status)
         if count >= 0 {
             for sample in gpuSamples.prefix(Int(count)) {
-                observation.record(FrameTraceEvent(kind: .gpu, a: sample.frame, b: sample.elapsed_ns, c: sample.status))
+                observation.record(FrameTraceEvent(kind: .gpu, a: sample.frame, b: sample.elapsed_ns, c: sample.status,
+                    d: sample.start_tick, e: sample.end_tick))
             }
         }
         observation.record(FrameTraceEvent(kind: .gpuStatus, a: FrameTrace.now(), b: status.support,
@@ -607,6 +611,17 @@ final class NativeOwner: @unchecked Sendable {
             gpuPollScheduled = false
             collectGpuTiming(observation)
         }
+    }
+    private func sampleGpuClock(_ observation: FrameTrace) {
+        guard let device = layer?.device else { return }
+        let before = FrameTrace.now()
+        // Clock sampling can enter the kernel. Keep it out of ordinary drawing
+        // and limit the optional recorder to ten samples per second.
+        guard before &- lastGpuClockSample >= 100_000_000 else { return }
+        let clocks = device.sampleTimestamps()
+        observation.record(FrameTraceEvent(kind: .gpuClock, a: before, b: clocks.cpu,
+            c: clocks.gpu, d: FrameTrace.now()))
+        lastGpuClockSample = before
     }
     /// One frame may be outstanding. Completion never means drawable presentation.
     func frame(now: UInt64, target: UInt64, completion: @escaping @Sendable (Bool, UInt64, [UInt64]) -> Void) {
@@ -629,6 +644,7 @@ final class NativeOwner: @unchecked Sendable {
                     try check(capy_apple_gpu_timing(handle, wantsGpuTiming ? 1 : 0))
                     gpuTimingEnabled = wantsGpuTiming
                 }
+                if wantsGpuTiming, let observation { sampleGpuClock(observation) }
                 let result = capy_apple_frame(handle, now, max(now, target), &costs)
                 submitted = result >= 0 && costs[2] > 0
                 try check(result)
