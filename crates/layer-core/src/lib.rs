@@ -7,7 +7,7 @@
 #[cfg(unix)]
 mod atomic_file;
 #[cfg(unix)]
-pub use atomic_file::atomic_write;
+pub use atomic_file::{atomic_write, atomic_write_checked};
 
 pub mod color;
 mod effect_catalog;

@@ -103,7 +103,7 @@ fn native_diagnostics_and_gpu_failure_recovery() {
     w.wake();
     until(|| saved_root.host_backed());
     let before = glib::MainContext::default()
-        .block_on(crate::files::export_pixels(&w, 8001))
+        .block_on(read_canvas_pixels(&w, 8001))
         .unwrap();
     let checkpoint = w
         .gpu
@@ -155,7 +155,7 @@ fn native_diagnostics_and_gpu_failure_recovery() {
         })
     });
     let after = glib::MainContext::default()
-        .block_on(crate::files::export_pixels(&w, 8002))
+        .block_on(read_canvas_pixels(&w, 8002))
         .unwrap();
     assert_eq!(
         after.bytes, before.bytes,
@@ -181,7 +181,7 @@ fn native_diagnostics_and_gpu_failure_recovery() {
     });
     pump(100);
     let redone = glib::MainContext::default()
-        .block_on(crate::files::export_pixels(&w, 8003))
+        .block_on(read_canvas_pixels(&w, 8003))
         .unwrap();
     assert_eq!(
         redone.bytes, before.bytes,

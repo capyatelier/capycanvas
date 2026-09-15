@@ -112,6 +112,7 @@ fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
                 }
                 .unwrap();
                 assert_eq!(stats.clipped_channels, 0);
+                assert_eq!(reader.control().output_rows(), 256);
                 let decoded = decode(output.into_inner());
                 assert_eq!(decoded.interpretation.depth, depth);
                 assert_eq!(
@@ -502,7 +503,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
     reader.limits.planned_pixel_bytes = 1;
     assert!(reader.read_region([0, 0, 17, 17]).is_err());
     assert!(reader.renderer.composite_texture.is_none());
-    reader.cancellation().store(true, Ordering::Relaxed);
+    reader.control().cancel();
     let mut out = Vec::new();
     assert!(
         reader
@@ -520,4 +521,19 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
             .is_err()
     );
     assert!(out.is_empty());
+}
+
+#[test]
+fn cancelled_snapshot_does_not_initialize_a_device_or_resolve_backing() {
+    let control = CaptureControl::default();
+    control.cancel();
+    let result = SnapshotRenderer::with_control(
+        source_project(DocumentColor::default(), [8, 8]),
+        [0.; 4],
+        0.,
+        Default::default(),
+        control.clone(),
+    );
+    assert!(matches!(result, Err(GpuRasterError::Color(e)) if e.contains("cancelled")));
+    assert_eq!(control.output_rows(), 0);
 }

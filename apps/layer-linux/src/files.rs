@@ -3,12 +3,10 @@ use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use layer_core::{Project, ProjectLimits};
-use layer_render::CanvasRenderer;
 use layer_ui::*;
-use std::{
-    io::{BufReader, Write},
-    rc::Rc,
-};
+use std::{io::BufReader, rc::Rc};
+
+pub(crate) mod export;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
@@ -202,6 +200,9 @@ async fn document_request(
             .ok_or("New drawing window is unavailable")?(project, None, None);
         return Ok(true);
     }
+    if let DocumentRequest::Export { name } = request {
+        return export::run(w, id, name).await;
+    }
     let Some(file) = choose_file(w, request).await? else {
         return Ok(false);
     };
@@ -245,12 +246,6 @@ async fn document_request(
             .await
             .map_err(|_| "Project writer failed")??;
         }
-        DocumentRequest::Export { .. } => {
-            let image = export_pixels(w, id).await?;
-            gio::spawn_blocking(move || atomic_write(&path, |file| write_png(file, image)))
-                .await
-                .map_err(|_| "PNG writer failed")??;
-        }
         _ => unreachable!(),
     }
     Ok(true)
@@ -291,7 +286,7 @@ async fn choose_file(
     dialog.set_default_filter(Some(&filter));
     let result = match request {
         DocumentRequest::Open => dialog.open_future(Some(&w.window)).await,
-        DocumentRequest::Save { name, .. } | DocumentRequest::Export { name } => {
+        DocumentRequest::Save { name, .. } => {
             dialog.set_initial_name(Some(name));
             dialog.save_future(Some(&w.window)).await
         }
@@ -309,71 +304,12 @@ async fn choose_file(
     }
 }
 
-pub(crate) async fn export_pixels(
-    w: &Rc<Workspace>,
-    id: u32,
-) -> Result<layer_render::ReadbackImage, String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    // The ordered worker queue must receive the final document frame before
-    // its readback. Merely changing the model does not update GPU pixels.
-    loop {
-        let pending = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .ok_or("Canvas unavailable")?
-            .session
-            .engine()
-            .has_pending_document_edits();
-        if !pending {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err("The canvas is not ready to export".into());
-        }
-        w.wake();
-        glib::timeout_future(std::time::Duration::from_millis(16)).await;
-    }
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .ok_or("Canvas unavailable")?
-        .session
-        .renderer_mut()
-        .request_readback(id as u64)
-        .map_err(|e| e.to_string())?;
-    loop {
-        {
-            let mut gpu = w.gpu.borrow_mut();
-            let renderer = gpu
-                .as_mut()
-                .ok_or("Canvas unavailable")?
-                .session
-                .renderer_mut();
-            renderer.ready()?;
-            while let Some(image) = renderer.take_readback() {
-                let image = image.map_err(|e| e.to_string())?;
-                if image.request_id == id as u64 {
-                    return Ok(image);
-                }
-            }
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err("The canvas could not be exported".into());
-        }
-        glib::timeout_future(std::time::Duration::from_millis(16)).await;
-    }
-}
-
-fn write_png(output: &mut dyn Write, image: layer_render::ReadbackImage) -> Result<(), String> {
-    image.write_png(output)
-}
-
 pub(crate) use layer_core::atomic_write;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     #[test]
     fn atomic_writes_preserve_the_original_on_failure_and_png_preserves_alpha() {
         let directory = std::env::temp_dir().join(format!("capy-file-test-{}", std::process::id()));
@@ -398,16 +334,14 @@ mod tests {
         );
         let rgba = vec![0, 0, 0, 0, 255, 80, 30, 128, 25, 90, 240, 255];
         let mut png = Vec::new();
-        write_png(
-            &mut png,
-            layer_render::ReadbackImage {
-                request_id: 1,
-                width: 3,
-                height: 1,
-                stride: 12,
-                bytes: rgba.clone(),
-            },
-        )
+        layer_render::ReadbackImage {
+            request_id: 1,
+            width: 3,
+            height: 1,
+            stride: 12,
+            bytes: rgba.clone(),
+        }
+        .write_png(&mut png)
         .unwrap();
         let mut decoder = png::Decoder::new(std::io::Cursor::new(png))
             .read_info()

@@ -8,6 +8,8 @@ mod camera;
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
+mod export;
+pub use export::{ExportBackground, ExportFormat, ExportRecipe};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
@@ -52,7 +54,7 @@ mod stats;
 pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, CloseDecision,
     DEFAULT_DOCUMENT_EXTENT, DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL,
-    DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
     MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, UNSAVED_DESCRIPTION, new_drawing,
 };
@@ -714,7 +716,7 @@ impl CommandId {
             Self::OpenDocument => "Open…",
             Self::SaveDocument => "Save",
             Self::SaveDocumentAs => "Save As…",
-            Self::ExportDocument => "Export PNG…",
+            Self::ExportDocument => "Export…",
             Self::CloseDocument => "Close",
             Self::Pen => "Pen",
             Self::Pencil => "Pencil",

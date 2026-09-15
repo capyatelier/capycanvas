@@ -5,7 +5,7 @@ use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretat
 use layer_core::raster::{RasterData, RasterPlane};
 use layer_core::{Project, ProjectAssetFormat, ProjectLimits};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Conservative request planning ceiling, separate from codec/output buffers,
 /// retained compressed sources and driver/pipeline memory. This is not a device
@@ -22,6 +22,31 @@ impl Default for CaptureLimits {
     }
 }
 
+/// Share before worker initialization so cancellation also applies to setup.
+#[derive(Clone, Default)]
+pub struct CaptureControl {
+    cancelled: Arc<AtomicBool>,
+    output_rows: Arc<AtomicU32>,
+}
+impl CaptureControl {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+    pub fn output_rows(&self) -> u32 {
+        self.output_rows.load(Ordering::Relaxed)
+    }
+    fn check(&self) -> Result<(), GpuRasterError> {
+        if self.is_cancelled() {
+            Err(GpuRasterError::Color("Snapshot capture cancelled".into()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 pub struct SnapshotRenderer {
     renderer: WgpuRasterizer,
     layers: Vec<Layer>,
@@ -31,7 +56,7 @@ pub struct SnapshotRenderer {
     background: [f32; 4],
     time: f32,
     limits: CaptureLimits,
-    cancelled: Arc<AtomicBool>,
+    control: CaptureControl,
 }
 impl SnapshotRenderer {
     /// Run on a worker: resolves pending immutable raster backing and prepares a
@@ -42,6 +67,17 @@ impl SnapshotRenderer {
         time: f32,
         limits: CaptureLimits,
     ) -> Result<Self, GpuRasterError> {
+        Self::with_control(project, background, time, limits, CaptureControl::default())
+    }
+
+    pub fn with_control(
+        project: Project,
+        background: [f32; 4],
+        time: f32,
+        limits: CaptureLimits,
+        control: CaptureControl,
+    ) -> Result<Self, GpuRasterError> {
+        control.check()?;
         project
             .validate(ProjectLimits::default())
             .map_err(GpuRasterError::Color)?;
@@ -64,6 +100,7 @@ impl SnapshotRenderer {
         // Retire packed legacy image upload for this consumer. Both retained
         // originals and legacy project images use the same tiled source decoder.
         for layer in &mut layers {
+            control.check()?;
             if layer.source.is_some() {
                 continue;
             }
@@ -90,6 +127,7 @@ impl SnapshotRenderer {
                 )
                 .map_err(GpuRasterError::Color)?;
                 for row in asset.bytes.chunks_exact(asset.extent[0] as usize * 4) {
+                    control.check()?;
                     builder.push_row(row).map_err(GpuRasterError::Color)?;
                 }
                 sources.insert(
@@ -104,9 +142,11 @@ impl SnapshotRenderer {
             for (id, raster) in std::iter::once((layer.id, &layer.raster))
                 .chain(layer.masks().map(|m| (m.id, &m.raster)))
             {
+                control.check()?;
                 backing.insert(id, raster.wait_data().map_err(GpuRasterError::Color)?);
             }
         }
+        control.check()?;
         let mut renderer = WgpuRasterizer::new_native_headless(project.document.color)?;
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
@@ -122,7 +162,7 @@ impl SnapshotRenderer {
             background,
             time,
             limits,
-            cancelled: Arc::new(AtomicBool::new(false)),
+            control,
         })
     }
 
@@ -132,15 +172,11 @@ impl SnapshotRenderer {
     pub fn color(&self) -> layer_core::color::DocumentColor {
         self.renderer.document_color()
     }
-    pub fn cancellation(&self) -> Arc<AtomicBool> {
-        self.cancelled.clone()
+    pub fn control(&self) -> CaptureControl {
+        self.control.clone()
     }
     fn check_cancelled(&self) -> Result<(), GpuRasterError> {
-        if self.cancelled.load(Ordering::Relaxed) {
-            Err(GpuRasterError::Color("Snapshot capture cancelled".into()))
-        } else {
-            Ok(())
-        }
+        self.control.check()
     }
 
     /// Exact linear-premultiplied document RGB. No display conversion, proof,
@@ -262,7 +298,7 @@ impl SnapshotRenderer {
         // Mask pages retain their pixels independently of this staging buffer.
         r.selection_clip.reset();
         for (id, data) in &selected {
-            if self.cancelled.load(Ordering::Relaxed) {
+            if self.control.is_cancelled() {
                 return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
             }
             if self
@@ -439,6 +475,7 @@ impl SnapshotRenderer {
         ) -> Result<(), String>,
     ) -> Result<layer_color::OutputStatistics, String> {
         self.check_cancelled().map_err(|e| e.to_string())?;
+        self.control.output_rows.store(0, Ordering::Relaxed);
         let encoder = layer_color::WorkingEncoder::new(self.color().space, target, options)?;
         let extent = self.extent;
         if options == Default::default()
@@ -450,7 +487,9 @@ impl SnapshotRenderer {
             let mut rows = source.rows();
             write(extent, encoder.interpretation(), &mut |y, row| {
                 self.check_cancelled().map_err(|e| e.to_string())?;
-                rows.read(y, row)
+                rows.read(y, row)?;
+                self.control.output_rows.store(y + 1, Ordering::Relaxed);
+                Ok(())
             })?;
             return Ok(Default::default());
         }
@@ -474,6 +513,7 @@ impl SnapshotRenderer {
             stats.clipped_channels += encoder
                 .encode_premultiplied(&band[start..start + extent[0] as usize], row, matte)?
                 .clipped_channels;
+            self.control.output_rows.store(y + 1, Ordering::Relaxed);
             Ok(())
         })?;
         Ok(stats)

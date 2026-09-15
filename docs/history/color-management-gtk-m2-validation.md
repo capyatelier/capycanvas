@@ -13,8 +13,8 @@ and material references pass, and document-to-view color conversion is explicit.
 Document-coordinate region capture and chunked filter-preview sources now have
 connected correctness coverage, including spatial support and cancellation.
 Standalone native snapshots now restore window dependencies and stream profiled
-PNG/TIFF rows, with exact untouched-source delivery; GTK file jobs are not yet
-connected to that API.
+PNG/TIFF rows, with exact untouched-source delivery. GTK export now uses that
+worker with explicit profile, depth and transparency choices and cancellation.
 CPU brush dynamics now retain document RGB through previews, corrections and
 recovery; exact native GPU publication/save/reopen checks include color jitter.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
@@ -3014,3 +3014,95 @@ Retained captures are in `artifacts/color-m2/tone-controls-ui/`.
 `tone-controls-provenance.json` records source, binary, log and capture hashes
 and the parent/committed revisions. Some correctness jobs overlapped; none of
 these elapsed times are latency measurements. `git diff --check` passes.
+
+
+## GTK profiled snapshot export (2026-09-14)
+
+GTK **Export…** now opens color/output choices before the file picker. The
+shared recipe model provides Web / Share (sRGB8 PNG), Wide-color image (P3 8-bit
+PNG), Further editing (document-space integer16 TIFF), and custom choices.
+PNG/TIFF, all four built-in RGB profiles, both integer depths, and preserved
+transparency or white/black mattes are connected. Choosing a different space
+converts the rendered copy and embeds matching metadata. The sheet identifies
+8-bit reduction and recommends integer16 for ProPhoto. A file extension that
+disagrees with the chosen format is rejected, as is the editable master's own
+location. The complete export journey remains unfinished: JPEG, dimensions,
+output previews/comparison, dithering, custom ICC/intent/BPC UI and remembered
+named recipes are still required.
+
+The GTK file path no longer requests a full live RGBA8 readback. Shared export
+capture freezes the immutable master, paper/view background and last successfully
+submitted animation time without reserving a save checkpoint. A GTK file worker
+owns `SnapshotRenderer`, prepares bounded dependencies and streams the profiled
+rows. The old readback helper now belongs to the native lifecycle tests; those
+checks deliberately still compare the actual interactive renderer's pixels.
+This does not activate the native GTK painting/source-document mode.
+
+Cancellation control is shared before worker initialization and checked during
+source preparation, capture and row output. Completed-row progress distinguishes
+preparation, writing and file finalization. The seekable atomic writer supports
+TIFF without staging a second complete output in memory. It calls the job's
+publication decision after flushing/syncing the temporary file and before rename.
+Accepted cancellation and publication use one lock: an accepted cancellation
+preserves the original destination; once publication begins, completion wins.
+Failed or cancelled output does not acknowledge the master as saved.
+
+Correctness validation:
+
+- **59 core and 55 engine tests** pass (`export-worker-core-ui.log`), including
+  seekable output, rejection at the publication boundary, original-file
+  preservation and the frozen/reset animation clock. **371 UI tests** pass in
+  `export-worker-final-ui.log`; the new export test confirms unchanged master,
+  checkpoint, dirty state and destination through completion and cancellation.
+  The initial new test omitted its GTK platform selection; the corrected focused
+  run is also retained in `export-worker-ui-snapshot.log`.
+- **6 snapshot GPU tests** pass (`export-worker-snapshot.log`, 25.95 s), covering
+  exact untouched source codes/hidden RGB, profiled composite output, masks,
+  selections, legacy image conversion, explicit mattes, planning limits,
+  cancellation before device initialization and completed-row progress.
+- GTK `native_document_files` passes (`export-worker-files-session.log`, 18.25 s).
+  It drives the real sheet and chooser, exports PNG matching the existing
+  interactive fixture exactly, and reopens a **16-bit ProPhoto TIFF** with the
+  expected ICC bytes and dimensions. Save/reopen and renderer replacement remain
+  covered. The two file-policy tests pass in `export-worker-file-policy.log`.
+- GTK `native_diagnostics_and_gpu_failure_recovery` passes
+  (`export-worker-recovery-session.log`, 1.98 s), preserving drawing and manual
+  save/recovery through device failure and replacement.
+
+The primary release artifact mapping is `export-worker-final-build.{json,log}`;
+retained executables are `export-worker-gpu-tests` and `export-worker-gtk-tests`.
+Reproduce GPU tests with `snapshot::tests:: --test-threads=1`, file policy with
+`files:: --test-threads=1`, and GTK tests with the existing
+`bash tools/performance/gtk-raster.sh ABSOLUTE_BINARY TEST_FILTER REPORT_PREFIX`
+harness. Physical GPU access is required for the native/snapshot checks. Some
+correctness jobs overlapped; their durations are not performance evidence.
+
+The initial sheet review found truncated selected values. The alert dialog
+controls its own width; the final sheet uses native ComboRow subtitle values
+and the alert's wide button-layout preference so selections remain readable.
+This follows the installed libadwaita 1.9 introspection/API definitions. Final
+layout validation, capture and binary hashes are recorded in
+`export-worker-provenance.json`.
+The existing 512 MiB snapshot planning ceiling still excludes retained source,
+codec, pipeline and driver memory. Live residency, complete photo workflows,
+managed viewing, and measured memory/latency qualification remain open; no
+benchmarking or optimization was performed for this stage.
+
+The final snapshot implementation also checks cancellation between legacy asset
+rows during setup. Rebuilt `export-worker-reviewed-gpu-tests` passes all six
+snapshot tests again (24.90 s, `export-worker-reviewed-snapshot.log`), and the
+matching GTK file workflow passes (18.14 s). These executables are mapped by
+`export-worker-reviewed-build.{json,log}`. The final subtitle-layout-only GTK
+build is `export-worker-sheet-build.{json,log}` and its saved binary is
+`export-worker-sheet-gtk-tests`; no additional snapshot/GPU changes followed.
+
+Final GTK acceptance uses `export-worker-values-build.{json,log}` and retained
+`export-worker-values-gtk-tests`. `native_document_files` passes in **15.34 s**
+(`export-worker-values-files-session.log`), now asserting all five initial
+selected labels as well as the format/depth preset transitions and PNG/TIFF
+outputs. The ComboRows explicitly define their string expression and subtitle
+mode before installing the model; the earlier initial-label failure remains in
+`export-worker-visible-files-session.log`. Final sRGB and ProPhoto choices were
+visually reviewed and retained in `export-worker-ui/`, together with the produced
+sRGB8 PNG and ProPhoto16 TIFF. Source/binary/log hashes and revision mapping are
+in `export-worker-provenance.json`. Final `git diff --check` passes.

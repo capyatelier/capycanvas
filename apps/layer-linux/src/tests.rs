@@ -501,7 +501,7 @@ fn native_document_files() {
         layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
     assert_eq!(project.assets.len(), 1);
     let before = glib::MainContext::default()
-        .block_on(crate::files::export_pixels(&w, 900))
+        .block_on(read_canvas_pixels(&w, 900))
         .unwrap();
     assert_eq!([before.width, before.height], [384, 256]);
     // A native surface/device replacement retains saved identity, exact raster
@@ -524,7 +524,7 @@ fn native_document_files() {
     w.area.set_visible(true);
     ready(&w);
     let restored = glib::MainContext::default()
-        .block_on(crate::files::export_pixels(&w, 901))
+        .block_on(read_canvas_pixels(&w, 901))
         .unwrap();
     assert_eq!(restored.bytes, before.bytes);
     assert_eq!(
@@ -622,11 +622,38 @@ fn native_document_files() {
     assert!(w.status.is_visible());
     let save_path = output.join(format!("copy-{}.capy", std::process::id()));
     let png_path = output.join(format!("export-{}.png", std::process::id()));
+    let tiff_path = output.join(format!("export-{}.tif", std::process::id()));
     for (command, path) in [
         (CommandId::SaveDocumentAs, &save_path),
         (CommandId::ExportDocument, &png_path),
+        (CommandId::ExportDocument, &tiff_path),
     ] {
         w.dispatch(UiAction::Invoke { command });
+        if command == CommandId::ExportDocument {
+            pump(200);
+            let options = w.window.visible_dialog().unwrap();
+            for (name, selected) in [
+                ("export-preset", "Web / Share"), ("export-format", "PNG"),
+                ("export-space", "sRGB"), ("export-depth", "8-bit SDR"),
+                ("export-background", "Keep transparency"),
+            ] {
+                let row = find_named(options.upcast_ref(), name).unwrap()
+                    .downcast::<adw::ComboRow>().unwrap();
+                assert_eq!(row.subtitle().as_deref(), Some(selected), "{name}");
+            }
+            if path == &tiff_path {
+                find_named(options.upcast_ref(), "export-preset").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap().set_selected(2);
+                assert_eq!(find_named(options.upcast_ref(), "export-format").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap().selected(), 1);
+                assert_eq!(find_named(options.upcast_ref(), "export-depth").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap().selected(), 1);
+                find_named(options.upcast_ref(), "export-space").unwrap()
+                    .downcast::<adw::ComboRow>().unwrap().set_selected(3);
+            }
+            capture_reference(&w, output.join(if path == &tiff_path { "export-tiff-options.png" } else { "export-options.png" }).to_str().unwrap(), 1.);
+            click(&find_button(options.upcast_ref(), "Choose file…").unwrap());
+        }
         let save = chooser();
         assert_eq!(
             save.current_folder().unwrap().uri(),
@@ -639,6 +666,11 @@ fn native_document_files() {
         assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
         assert!(path.is_file());
     }
+    let tiff = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&tiff_path).unwrap()), Default::default()).unwrap();
+    assert_eq!(tiff.extent, [384, 256]);
+    assert_eq!(tiff.interpretation.depth, layer_core::color::IntegerDepth::U16);
+    assert_eq!(layer_color::profile_bytes(&tiff.interpretation.profile).unwrap(),
+        layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)).unwrap());
     let mut png = png::Decoder::new(std::fs::File::open(png_path).unwrap())
         .read_info()
         .unwrap();
@@ -692,7 +724,7 @@ fn native_document_files() {
     });
     ready(&reopened);
     let after = glib::MainContext::default()
-        .block_on(crate::files::export_pixels(&reopened, 901))
+        .block_on(read_canvas_pixels(&reopened, 901))
         .unwrap();
     assert_eq!(before.bytes, after.bytes);
     assert!(!state(&reopened).document_file.modified);
@@ -14605,4 +14637,61 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     second.window.close();
     pump(500);
     assert!(!first.window.is_visible() && !second.window.is_visible());
+}
+
+async fn read_canvas_pixels(
+    w: &Rc<Workspace>,
+    id: u32,
+) -> Result<layer_render::ReadbackImage, String> {
+    use layer_render::CanvasRenderer;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // The ordered worker queue must receive the final document frame before
+    // its readback. Merely changing the model does not update GPU pixels.
+    loop {
+        let pending = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .ok_or("Canvas unavailable")?
+            .session
+            .engine()
+            .has_pending_document_edits();
+        if !pending {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("The canvas is not ready to export".into());
+        }
+        w.wake();
+        glib::timeout_future(std::time::Duration::from_millis(16)).await;
+    }
+    w.gpu
+        .borrow_mut()
+        .as_mut()
+        .ok_or("Canvas unavailable")?
+        .session
+        .renderer_mut()
+        .request_readback(id as u64)
+        .map_err(|e| e.to_string())?;
+    loop {
+        {
+            let mut gpu = w.gpu.borrow_mut();
+            let renderer = gpu
+                .as_mut()
+                .ok_or("Canvas unavailable")?
+                .session
+                .renderer_mut();
+            renderer.ready()?;
+            while let Some(image) = renderer.take_readback() {
+                let image = image.map_err(|e| e.to_string())?;
+                if image.request_id == id as u64 {
+                    return Ok(image);
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("The canvas could not be exported".into());
+        }
+        glib::timeout_future(std::time::Duration::from_millis(16)).await;
+    }
 }

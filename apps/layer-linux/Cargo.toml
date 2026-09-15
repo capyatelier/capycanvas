@@ -23,3 +23,6 @@ wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 raw-window-handle = "0.6"
 glib-unix = "0.22"
+
+[dev-dependencies]
+layer-color = { path = "../../crates/layer-color" }

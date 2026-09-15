@@ -122,6 +122,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     composite_all: bool,
     raster_dirty: bool,
     animation_origin_ns: Option<u64>,
+    animation_time: f32,
     metrics: EngineMetrics,
 }
 
@@ -197,9 +198,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             composite_all: true,
             raster_dirty: false,
             animation_origin_ns: None,
+            animation_time: 0.,
             document_view_revision: 0,
             metrics: EngineMetrics::default(),
         })
+    }
+
+    /// Time of the last successfully submitted document frame, frozen when
+    /// capturing an export so animated filters match that revision's view.
+    pub fn animation_time(&self) -> f32 {
+        self.animation_time
     }
 
     pub fn document(&self) -> &Document {
@@ -621,6 +629,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.estimates.clear();
         self.document_view_revision = input_transform.revision;
         self.animation_origin_ns = None;
+        self.animation_time = 0.;
         self.set_view(view, input_transform);
     }
 
@@ -932,6 +941,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if result.is_err() {
             self.rebuild_all = true;
         } else {
+            self.animation_time = time_seconds;
             self.composite_all = false;
             self.raster_dirty = false;
             self.editor.finish_raster_submission();
@@ -2264,6 +2274,7 @@ mod tests {
         );
         canvas.render_frame_at(901_000_000_000).unwrap();
         assert_eq!(canvas.backend().time_seconds, 1.);
+        assert_eq!(canvas.animation_time(), 1.);
     }
 
     #[test]

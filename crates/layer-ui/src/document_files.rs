@@ -66,7 +66,7 @@ impl DocumentRequest {
             Self::New => "New drawing",
             Self::Open => "Open drawing",
             Self::Save { .. } => "Save drawing",
-            Self::Export { .. } => "Export PNG",
+            Self::Export { .. } => "Export image",
             Self::ConfirmClose { title } => title,
         }
     }
@@ -143,6 +143,13 @@ pub fn new_drawing(width: u32, height: u32) -> Result<Project, String> {
         document: Document::new("untitled", width, height),
         assets: BTreeMap::new(),
     })
+}
+
+#[derive(Clone)]
+pub struct DocumentExport {
+    pub project: Project,
+    pub background: [f32; 4],
+    pub time: f32,
 }
 
 #[derive(Default)]
@@ -308,6 +315,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(Project {
             document: self.engine.document().clone(),
             assets: self.files.assets.clone(),
+        })
+    }
+
+    /// Freeze the committed master and its rendering coordinates for an output
+    /// worker. This never reserves or acknowledges a saved-project checkpoint.
+    pub fn capture_project_export(&self, id: u32) -> Result<DocumentExport, String> {
+        if !matches!(self.document_request(id)?, DocumentRequest::Export { .. }) {
+            return Err("This is not an export request".into());
+        }
+        self.require_document_idle()?;
+        Ok(DocumentExport {
+            project: self.capture_project_recovery()?,
+            background: self.state.camera.view().background_rgba_linear,
+            time: self.engine.animation_time(),
         })
     }
 

@@ -5692,6 +5692,33 @@ mod tests {
     }
 
     #[test]
+    fn export_snapshot_freezes_the_master_without_acknowledging_save() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        s.engine.render_frame_at(0).unwrap();
+        s.engine.render_frame_at(1_500_000_000).unwrap();
+        let checkpoint = s.engine.checkpoint();
+        assert!(s.capture_project_export(123).is_err());
+        invoke(&mut s, CommandId::ExportDocument);
+        let id = s.state.requests.last().unwrap().id;
+        let export = s.capture_project_export(id).unwrap();
+        assert_eq!(export.project.document, *s.engine.document());
+        assert_eq!(export.time, 1.5);
+        assert_eq!(export.background, s.state.camera.view().background_rgba_linear);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.state.document_file.modified);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert!(s.state.document_file.location.is_none());
+        invoke(&mut s, CommandId::ExportDocument);
+        let id = s.state.requests.last().unwrap().id;
+        s.complete_document_request(id, Ok(false)).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(s.state.host_error.is_none());
+        assert_eq!(s.engine.document(), &export.project.document);
+    }
+
+    #[test]
     fn file_requests_are_single_flight_and_new_open_do_not_replace_artwork() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
