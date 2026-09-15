@@ -6,12 +6,7 @@ use lcms2::{
 
 pub use layer_core::color::source::MAX_PROFILE_BYTES as MAX_ICC_BYTES;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProfileChannels {
-    Rgb,
-    Gray,
-    Cmyk,
-}
+pub use layer_core::color::ProfileChannels;
 
 type FloatTransform<const N: usize> = Transform<[f32; N], [f32; 4], ThreadContext, DisallowCache>;
 mod working;

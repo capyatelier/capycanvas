@@ -17,7 +17,8 @@ PNG/TIFF rows, with exact untouched-source delivery. GTK export now uses that
 worker with explicit profile, depth and transparency choices and cancellation;
 profiled JPEG output adds quality and an explicit opaque background. Advanced
 export choices expose intent, black point compensation and optional 8-bit
-dithering without changing the master.
+dithering without changing the master. Custom ICC selection now connects
+RGB/grayscale/CMYK delivery with worker validation and retained profile bytes.
 CPU brush dynamics now retain document RGB through previews, corrections and
 recovery; exact native GPU publication/save/reopen checks include color jitter.
 Remaining tool/effect precision, bounded mutable/composite/filter residency and
@@ -3300,3 +3301,88 @@ settle; `output-encoding-layout-build.{json,log}` maps that test-only build.
 Its GTK workflow passes in **18.23 s** (`output-encoding-layout-files-session.log`).
 The final expanded and collapsed sheets were visually reviewed and retained in
 `output-encoding-ui/`. Final `git diff --check` passes.
+
+
+## GTK custom ICC and scoped grayscale/CMYK delivery (2026-09-14)
+
+The export recipe now carries an explicit profile definition, profile channel
+model, descriptive name and independent integer depth. The RGB-only
+`DocumentColor` output assumption is removed. ICC channels have one shared core
+type, reused by the CMM and recipe model. Original profile bytes, not filenames
+or display labels, define the output and survive recipe serialization.
+
+GTK **Color space → Custom ICC → Choose…** accepts local RGB, grayscale and CMYK
+profiles. Reading is bounded at 16 MiB and runs on a file worker. Header/source
+validation and an actual Float32 output transform with a finite sample probe
+must succeed before adoption; an input profile is not automatically treated as
+a usable delivery profile. The selected bytes are retained independently of
+subsequent file changes. Cancelling or failing another selection retains the
+previous one. With no valid selection, export remains unavailable; malformed
+metadata is not silently replaced by sRGB.
+
+The file's color model follows the selected profile. RGB/gray can preserve alpha;
+CMYK requires an explicit matte and TIFF or JPEG. Choosing a CMYK profile from
+PNG selects TIFF and a white background visibly. Subsequent incompatible manual
+choices disable continuation with a short explanation, and the shared recipe
+validates them again before worker setup. Bit depth and the existing advanced
+conversion options remain independent. No proof profile is selected implicitly,
+and this does not introduce native CMYK painting or print-proof simulation.
+
+Validation:
+
+- **59 core, 372 UI and 32 non-external color tests** pass in
+  `custom-profile-core-ui.log`; the three external color fixtures remain covered
+  by the preceding stages. The final explicit recipe cases pass in
+  `custom-profile-recipe.log`, covering RGB/gray/CMYK channel mapping,
+  transparency/depth/format constraints and retained payload serialization.
+- The worker loader test passes (`custom-profile-loader.log`), preserving actual
+  RGB and gray ICC bytes and rejecting corrupt and oversized files.
+  Production GTK `cargo check --offline --release -p layer-linux` passes in
+  `custom-profile-production-check.log`. `layer-color` is now a regular GTK
+  dependency instead of a test-only dependency; no new native library is added
+  beyond the existing color/snapshot dependencies.
+- Real GTK `native_document_files` passes in **34.20 s**, then the final
+  frozen-profile/cancellation/handoff fixture passes in **33.31 s**
+  (`custom-profile-reviewed-files-session.log`). It tests cancellation before
+  and after a valid selection, malformed ICC, disabled incompatible choices,
+  and changing the selected RGB profile file before exporting. The resulting
+  file still embeds the previously selected bytes. The workflow exports
+  **16-bit Adobe RGB ICC TIFF with alpha, 16-bit profiled grayscale PNG with
+  alpha, and 16-bit CMYK TIFF with an explicit white matte**, in addition to the
+  existing PNG, ProPhoto TIFF and P3 JPEG cases. Native save/reopen and renderer
+  replacement remain covered. The RGB/gray/CMYK option sheets were reviewed.
+- Independent ImageMagick 7.1.2-27 decoding exactly matches **983,040 integer16
+  samples** across the three custom outputs; ICC payloads match exactly
+  (`custom-profile-handoff.log`). It uses ImageMagick/libtiff and PNG decoding
+  without a requested color conversion and compares little-endian raw channels
+  plus the extracted ICC bytes. This is numerical file handoff, not an
+  external-editor UI session or calibrated print comparison. The GTK master in
+  this fixture still uses the existing sRGB8 interactive renderer; these outputs
+  do not qualify native 16-bit GTK editing.
+
+Build mappings are `custom-profile-build.{json,log}` and the final
+`custom-profile-reviewed-build.{json,log}`. Saved executables are
+`custom-profile-{ui,gtk}-tests` and `custom-profile-reviewed-gtk-tests`.
+`custom-profile-provenance.json` records source/binary/log/fixture/capture hashes.
+Reproduce with the prior libjpeg pkg-config environment and:
+
+```sh
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_document_files ABSOLUTE_REPORT_PREFIX
+python3 tools/validation/icc_export_handoff.py \
+  artifacts/familiar-workspace/files GTK_TEST_PROCESS_ID
+```
+
+The CMYK native branch requires that environment variable; omitting it exercises
+RGB/gray and the existing formats only. The native fixture retains `.raw` and
+`.icc` siblings of its custom outputs for independent checking. This run used
+CMYK profile SHA-256
+`156e7c14f244cfc4ed83a755ca4803d80e15dd249b40fae82cb127d3902e15c7`.
+Final captures and outputs are retained in `custom-profile-ui/`.
+
+Output resizing, previews/comparison, reusable named recipes and photo metadata/
+DPI retention remain unfinished. Native GTK photo editing, managed viewing,
+bounded live residency/mips and final measured memory/latency gates also remain
+open. Other hosts have not been integrated or qualified. No benchmarking or
+performance optimization was performed during this stage.

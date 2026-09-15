@@ -1,11 +1,13 @@
 //! GTK output choices and a cancellable, immutable document worker.
 use super::*;
 use layer_core::color::{
-    ConversionOptions, DocumentColor, IntegerDepth, OutputDither, OutputEncoding, RenderingIntent,
-    RgbSpace,
+    ConversionOptions, DocumentColor, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels,
+    RenderingIntent, RgbSpace,
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotRenderer};
 use std::sync::{Arc, Mutex};
+
+mod profile;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -157,8 +159,17 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
         &group,
         "Color space",
         "export-space",
-        &RgbSpace::ALL.map(RgbSpace::name),
+        &[
+            "sRGB",
+            "Display P3",
+            "Adobe RGB (1998)",
+            "ProPhoto RGB",
+            "Custom ICC",
+        ],
     );
+    let profile = profile::ProfileChooser::new(&w.window, &space, document.space);
+    group.add(&profile.row);
+    let selected_profile = profile.selected.clone();
     let depth = combo(
         &group,
         "Bit depth",
@@ -251,16 +262,59 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             }
         }
     ));
+    let validation = gtk::Label::builder()
+        .wrap(true)
+        .xalign(0.)
+        .visible(false)
+        .build();
+    validation.add_css_class("error");
+    validation.set_widget_name("export-validation");
     background.connect_selected_notify(glib::clone!(
         #[weak]
         format,
         #[weak]
+        space,
+        #[weak]
+        validation,
+        #[weak]
         dialog,
+        #[strong]
+        selected_profile,
         move |background| {
-            dialog.set_response_enabled(
-                "export",
-                format.selected() != 2 || background.selected() != 0,
-            );
+            let result = selected_profile(space.selected()).and_then(|profile| {
+                if format.selected() == 0 && profile.channels == ProfileChannels::Cmyk {
+                    Err("Choose TIFF or JPEG for a CMYK profile".into())
+                } else if background.selected() == 0
+                    && (format.selected() == 2 || profile.channels == ProfileChannels::Cmyk)
+                {
+                    Err("Choose a background for this output".into())
+                } else {
+                    Ok(())
+                }
+            });
+            dialog.set_response_enabled("export", result.is_ok());
+            validation.set_label(result.as_ref().err().map_or("", String::as_str));
+            validation.set_visible(result.is_err());
+        }
+    ));
+    space.connect_selected_notify(glib::clone!(
+        #[weak]
+        background,
+        #[weak]
+        format,
+        #[strong]
+        selected_profile,
+        move |space| {
+            if selected_profile(space.selected()).is_ok_and(|p| p.channels == ProfileChannels::Cmyk)
+            {
+                if format.selected() == 0 {
+                    format.set_selected(1);
+                }
+                if background.selected() == 0 {
+                    background.set_selected(1);
+                }
+            }
+            background.notify("selected");
         }
     ));
     format.connect_selected_notify(glib::clone!(
@@ -300,10 +354,12 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             space.set_selected(
                 RgbSpace::ALL
                     .iter()
-                    .position(|s| *s == recipe.color.space)
+                    .position(|s| {
+                        recipe.profile.profile == layer_core::color::ColorProfile::Builtin(*s)
+                    })
                     .unwrap() as u32,
             );
-            depth.set_selected(u32::from(recipe.color.depth == IntegerDepth::U16));
+            depth.set_selected(u32::from(recipe.depth == IntegerDepth::U16));
             background.set_selected(0);
             intent.set_selected(0);
             bpc.set_active(true);
@@ -365,6 +421,8 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&group);
     content.append(&jpeg_hint);
+    content.append(&profile.error);
+    content.append(&validation);
     content.append(&note);
     content.append(&advanced_group);
     let scroll = gtk::ScrolledWindow::builder()
@@ -389,13 +447,11 @@ async fn choose_recipe(w: &Workspace, document: DocumentColor) -> Option<ExportR
             2 => ExportFormat::Jpeg,
             _ => ExportFormat::Png,
         },
-        color: DocumentColor {
-            space: RgbSpace::ALL[space.selected() as usize],
-            depth: if depth.selected() == 0 {
-                IntegerDepth::U8
-            } else {
-                IntegerDepth::U16
-            },
+        profile: selected_profile(space.selected()).ok()?,
+        depth: if depth.selected() == 0 {
+            IntegerDepth::U8
+        } else {
+            IntegerDepth::U16
         },
         background: match background.selected() {
             1 => ExportBackground::White,

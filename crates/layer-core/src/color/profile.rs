@@ -2,6 +2,13 @@ use super::RgbSpace;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ProfileChannels {
+    Rgb,
+    Gray,
+    Cmyk,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IntegerDepth {
     #[default]

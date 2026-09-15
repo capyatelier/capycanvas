@@ -624,12 +624,31 @@ fn native_document_files() {
     let png_path = output.join(format!("export-{}.png", std::process::id()));
     let tiff_path = output.join(format!("export-{}.tif", std::process::id()));
     let jpeg_path = output.join(format!("export-{}.jpg", std::process::id()));
-    for (command, path) in [
+    let mut custom_exports = Vec::new();
+    for (name, extension, profile, channels) in [
+        ("rgb", "tif", layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::AdobeRgb), layer_core::color::source::SourceChannels::Rgba),
+        ("gray", "png", layer_color::gray_profile(layer_core::color::RgbSpace::ProPhoto).unwrap(), layer_core::color::source::SourceChannels::GrayAlpha),
+    ] {
+        let profile_path = output.join(format!("delivery-{name}.icc"));
+        let bytes = layer_color::profile_bytes(&profile).unwrap();
+        std::fs::write(&profile_path, &bytes).unwrap();
+        custom_exports.push((output.join(format!("custom-{name}-{}.{}", std::process::id(), extension)), profile_path, bytes, channels));
+    }
+    if let Some(path) = std::env::var_os("LAYER_TEST_CMYK_PROFILE") {
+        let path = std::path::PathBuf::from(path);
+        let bytes = std::fs::read(&path).unwrap();
+        custom_exports.push((output.join(format!("custom-cmyk-{}.tif", std::process::id())), path, bytes, layer_core::color::source::SourceChannels::Cmyk));
+    }
+    let bad_profile = output.join("invalid-profile.icc");
+    std::fs::write(&bad_profile, b"invalid ICC profile").unwrap();
+    let mut deliveries = vec![
         (CommandId::SaveDocumentAs, &save_path),
         (CommandId::ExportDocument, &png_path),
         (CommandId::ExportDocument, &tiff_path),
         (CommandId::ExportDocument, &jpeg_path),
-    ] {
+    ];
+    deliveries.extend(custom_exports.iter().map(|(path, _, _, _)| (CommandId::ExportDocument, path)));
+    for (command, path) in deliveries {
         w.dispatch(UiAction::Invoke { command });
         if command == CommandId::ExportDocument {
             pump(200);
@@ -705,6 +724,66 @@ fn native_document_files() {
                 pump(350); // Capture the settled native expander, not its animation.
                 adjustment.set_value(0.);
             }
+            if let Some((_, profile_path, _, channels)) = custom_exports.iter().find(|(p, _, _, _)| p == path) {
+                let space = find_named(options.upcast_ref(), "export-space").unwrap().downcast::<adw::ComboRow>().unwrap();
+                space.set_selected(4);
+                let alert = options.clone().downcast::<adw::AlertDialog>().unwrap();
+                assert!(!alert.is_response_enabled("export"));
+                let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::Button>().unwrap();
+                let wait_profile = || {
+                    let deadline = Instant::now() + Duration::from_secs(15);
+                    while Instant::now() < deadline && !button.is_sensitive() { pump(5); }
+                    assert!(button.is_sensitive(), "ICC file worker did not finish");
+                };
+                // Cancellation and invalid metadata retain the sheet and do not
+                // enable delivery with a silently assumed profile.
+                button.emit_clicked();
+                chooser().response(gtk::ResponseType::Cancel);
+                wait_profile();
+                assert!(!alert.is_response_enabled("export"));
+                button.emit_clicked();
+                let file = chooser();
+                file.set_file(&gtk::gio::File::for_path(&bad_profile)).unwrap();
+                pump(250);
+                file.response(gtk::ResponseType::Accept);
+                wait_profile();
+                assert!(find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
+                assert!(!alert.is_response_enabled("export"));
+                button.emit_clicked();
+                let file = chooser();
+                file.set_file(&gtk::gio::File::for_path(profile_path)).unwrap();
+                pump(250);
+                file.response(gtk::ResponseType::Accept);
+                wait_profile();
+                assert!(!find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
+                button.emit_clicked();
+                chooser().response(gtk::ResponseType::Cancel);
+                wait_profile();
+                assert!(alert.is_response_enabled("export"));
+                let format = find_named(options.upcast_ref(), "export-format").unwrap().downcast::<adw::ComboRow>().unwrap();
+                let background = find_named(options.upcast_ref(), "export-background").unwrap().downcast::<adw::ComboRow>().unwrap();
+                if *channels == layer_core::color::source::SourceChannels::Cmyk {
+                    assert_eq!(format.selected(), 1);
+                    assert_eq!(background.selected(), 1);
+                    format.set_selected(0);
+                    assert!(!alert.is_response_enabled("export"));
+                    format.set_selected(1);
+                    background.set_selected(0);
+                    assert!(!alert.is_response_enabled("export"));
+                    background.set_selected(1);
+                } else {
+                    format.set_selected(u32::from(path.extension().unwrap() == "tif"));
+                }
+                find_named(options.upcast_ref(), "export-depth").unwrap().downcast::<adw::ComboRow>().unwrap().set_selected(1);
+                assert!(alert.is_response_enabled("export"));
+                if *channels == layer_core::color::source::SourceChannels::Rgba {
+                    // Selected bytes are frozen; changing the file afterwards
+                    // cannot retag or change the output at publication time.
+                    std::fs::write(profile_path, b"profile changed after selection").unwrap();
+                }
+                pump(250);
+                capture_reference(&w, output.join(format!("export-custom-{:?}-options.png", channels)).to_str().unwrap(), 1.);
+            }
             pump(80);
             capture_reference(&w, output.join(if path == &tiff_path { "export-tiff-options.png" } else if path == &jpeg_path { "export-jpeg-options.png" } else { "export-options.png" }).to_str().unwrap(), 1.);
             click(&find_button(options.upcast_ref(), "Choose file…").unwrap());
@@ -720,6 +799,21 @@ fn native_document_files() {
         finish();
         assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
         assert!(path.is_file());
+    }
+    for (path, _, profile, channels) in &custom_exports {
+        let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()), Default::default()).unwrap();
+        assert_eq!(decoded.extent, [384, 256]);
+        assert_eq!(decoded.interpretation.channels, *channels);
+        assert_eq!(decoded.interpretation.depth, layer_core::color::IntegerDepth::U16);
+        assert_eq!(layer_color::profile_bytes(&decoded.interpretation.profile).unwrap(), *profile);
+        std::fs::write(path.with_extension("icc"), profile).unwrap();
+        let mut raw = std::fs::File::create(path.with_extension("raw")).unwrap();
+        let mut rows = decoded.rows();
+        let mut row = vec![0; decoded.row_bytes()];
+        for y in 0..decoded.extent[1] {
+            rows.read(y, &mut row).unwrap();
+            std::io::Write::write_all(&mut raw, &row).unwrap();
+        }
     }
     let tiff = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&tiff_path).unwrap()), Default::default()).unwrap();
     assert_eq!(tiff.extent, [384, 256]);
