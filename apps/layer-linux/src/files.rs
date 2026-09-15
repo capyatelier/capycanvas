@@ -121,6 +121,10 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::Histogram => {
+                                    crate::histogram::show(&w);
+                                    Ok(())
+                                }
                                 HostRequestKind::SetFullscreen { fullscreen } => {
                                     if fullscreen {
                                         w.window.fullscreen();

@@ -5189,3 +5189,81 @@ preferences, remaining output controls, and combined resource/job limits remain
 open. Fresh frame-creation baselines, regression investigation, optimization and
 final memory/input-latency qualification remain last. Other platform hosts remain
 unintegrated and require approval after GTK completion.
+
+## GTK full-resolution histogram and SDR clipping inspection (2026-09-15)
+
+View → Histogram now opens a nonmodal inspector for the complete committed
+composite. It offers combined/individual RGB channels, linear relative luminance
+Y and logarithmic count scaling. RGB bins use the document's transfer function;
+Y uses its primaries and reference white. Neither changes with the display or an
+export profile. All source pixels contribute at full resolution; no thumbnail
+averaging feeds the distribution. Fully transparent pixels are excluded. Partial
+coverage is unassociated and each remaining pixel counts once. Visible paper and
+masks participate; checkerboards, mask-area tint and other display overlays do not.
+
+The inspector distinguishes endpoint counts (≤0 / ≥1) from values outside the
+SDR range (<0 / >1). Endpoint occupancy does not establish that detail was lost.
+Out-of-range values remain in the endpoint bins and in separately reported counts;
+inspection never clamps the artwork. This channel/distribution presentation was
+checked against Adobe's [histogram documentation](https://helpx.adobe.com/photoshop/using/viewing-histograms-pixel-values.html);
+the alpha policy, linear Y coordinates and full-resolution choice above are
+explicit application contracts, not claims of matching another editor's bins.
+
+The shared accumulator uses four fixed 256-bin distributions with u64 counts.
+The existing snapshot worker supplies 16-row Float32 strips. One inspector and
+one cancellable worker are retained per drawing, including across close/reopen.
+Automatic updates wait 300 ms for the committed revision to settle; a 150 ms
+native timer coalesces further changes. Stale/cancelled results are not published.
+The graph can be paused while editing continues. Animated effects are sampled at
+a stated time; pause/resume requests another sample. Inspection does not reserve
+file operations or change dirty state, history, samples or profiles.
+
+Evidence under `artifacts/color-m2/histogram-*`:
+
+- `core-reviewed-tests.log`: both accumulator tests pass (0.13 s), covering every
+  U8/U16 code in all four spaces, strip-partition identity, exact endpoint counts,
+  partial/zero alpha, extended range, invalid data and space-specific luminance.
+- `shared-tests.log`: all 67 core tests pass (1.51 s); 389 UI tests pass and the
+  expected serialized View-menu fixture initially fails because it predates the
+  new command (18.47 s). After updating that expectation,
+  `menu-reviewed-test.log` passes the affected test. No production shared code
+  changed after this suite. `workspace-tests.log` passes all 86 native-workspace
+  tests (2.80 s).
+- `native-workflow.log`: the first native histogram journey passes (10.22 s).
+  Visual review found that the generic screenshot helper omitted a toplevel's
+  own background; capture now includes it. The inspector uses a scrollable native
+  window with enough initial height for the channel counts and interpretation.
+- `reviewed-workflow.log`: the final native journey passes (8.17 s), process
+  1927296. A P3 U16 source has known opaque, partially covered and transparent
+  regions under a half-coverage mask with its inspection tint enabled. All RGB
+  bins and endpoint/out-of-range counts match the expected full-resolution data.
+  Exposure edits update the counts without baking source pixels. Checks cover
+  pause/resume, rapid edits, closing during a real capture, reopening the same
+  inspector, RGB/luminance controls and unchanged drawing data during inspection.
+- `histogram-ui/1927296/{rgb,luminance}.png` are visually reviewed native captures.
+  `reviewed-production-check.log` checks GTK/shared FFI cleanly (1.02 s).
+
+The final captured `histogram-reviewed-tests` binary has SHA-256
+`5fa2e8cc0f778e58d050e1dd21b091cd72ff1640088f6f796a32c680b1be7468`;
+`reviewed-build.{json,log}` and `reviewed-sources.json` identify its inputs.
+Reproduce using the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-core --offline color::histogram
+cargo test -p layer-core -p layer-ui -p layer-workspace --features native --offline
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/histogram-reviewed-exact" \
+  workspace::tests::histogram::native_composite_histogram_updates_without_changing_the_drawing \
+  "$PWD/artifacts/color-m2/histogram-reviewed-workflow"
+```
+
+`histogram-provenance.json` records source/build/output hashes. This closes the
+basic GTK composite-inspection journey, not large-photo/job qualification. The
+snapshot component ceiling remains 512 MiB, separate from retained source, driver
+and other jobs. Full-frame histogram cost, cancellation latency, simultaneous
+inspector/export/conversion memory, and revision-based over-invalidation still
+need the final workload matrix and optimization. Color preferences, managed wide
+viewing, remaining output controls and the other documented gaps stay open.
+No performance workloads or other host integration were performed in this stage.

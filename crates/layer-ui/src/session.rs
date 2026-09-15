@@ -3395,6 +3395,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Histogram => {
+                self.request(HostRequestKind::Histogram)?;
+                Ok((HOST, false))
+            }
             CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth => {
                 let operation = match command {
                     CommandId::AssignProfile => DocumentColorOperation::Assign,
@@ -13513,6 +13517,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
+                ["histogram"],
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],

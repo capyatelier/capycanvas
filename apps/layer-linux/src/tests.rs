@@ -14915,3 +14915,6 @@ mod source_rasterize;
 
 #[path = "document_color_tests.rs"]
 mod document_color;
+
+#[path = "histogram_tests.rs"]
+mod histogram;

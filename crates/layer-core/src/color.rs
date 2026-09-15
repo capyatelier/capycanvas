@@ -9,6 +9,7 @@ pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, ProfileChannels
 mod output;
 pub use output::{OutputDither, OutputEncoding};
 pub mod source;
+pub mod histogram;
 
 /// Native SDR coordinates and committed integer precision. Working math and
 /// per-operation blend domains are independent of these storage choices.

@@ -104,6 +104,18 @@ the matching renderer and picker space. The native
 check covers these controls, save/reopen, continued drawing and GPU recovery.
 Comparison and canvas currently use the explicit sRGB display fallback.
 
+View → Histogram opens a separate window that stays available while editing.
+It counts the full-resolution committed composite, including visible paper and
+masks, before display/output conversion. RGB uses the document profile's encoded
+coordinates; luminance uses linear relative Y. Fully transparent pixels are
+excluded; partial coverage is unassociated and counted once. Endpoint counts and
+values outside SDR are shown separately. The graph offers RGB, individual channels,
+luminance and logarithmic scaling. Automatic updates wait for committed changes
+to settle, can be paused, and cancel when the window closes. Animated effects are
+sampled at the stated time. `workspace::tests::histogram::native_composite_histogram_updates_without_changing_the_drawing`
+checks numerical counts, transparency/mask-overlay exclusion, live exposure edits,
+pause/resume, cancellation and reopening without changing document data.
+
 File → Document Properties shows working color/depth and each retained source's
 profile or assumption. New/Open preserve the current drawing in its own window
 while the incoming document is validated. An opened photo has no native Save

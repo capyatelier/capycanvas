@@ -1,6 +1,7 @@
 mod canvas;
 mod effects;
 mod files;
+mod histogram;
 mod color_editor;
 mod new_document;
 mod color_library;
@@ -210,7 +211,9 @@ fn with_canvas_snapshot<T>(workspace: &workspace::Workspace, capture: impl FnOnc
     result
 }
 
-fn snapshot_window(window: &adw::ApplicationWindow, scale: f32) -> gtk::gdk::Texture {
+#[allow(deprecated)]
+fn snapshot_window(window: &impl IsA<gtk::Window>, scale: f32) -> gtk::gdk::Texture {
+    let window = window.as_ref();
     // Capture the current native scene, including pending allocations.
     for _ in 0..60 {
         // Explicit capture may run while Wayland has stopped frame callbacks
@@ -219,6 +222,9 @@ fn snapshot_window(window: &adw::ApplicationWindow, scale: f32) -> gtk::gdk::Tex
         window.allocate(window.width(), window.height(), -1, None);
         let snapshot = gtk::Snapshot::new();
         snapshot.scale(scale, scale);
+        // The toplevel paints its own background outside its child snapshot.
+        // Include it for opaque inspector windows as well as canvas underlays.
+        snapshot.render_background(&window.style_context(), 0., 0., window.width() as f64, window.height() as f64);
         // Snapshot the actual dialog host, including its modal sheets. A
         // WidgetPaintable of the toplevel can have an empty cached scene while
         // the compositor has occluded it; that is not an empty application.

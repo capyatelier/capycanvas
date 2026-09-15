@@ -192,6 +192,7 @@ pub const EDIT_MENU: MenuSpec = MenuSpec {
 pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
+        &[CommandId::Histogram],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
@@ -434,6 +435,7 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    Histogram,
     ImportImage,
     PasteImage,
     DocumentProperties,
@@ -511,6 +513,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::Histogram => platform == Platform::Gtk,
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::RasterizeSource | Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
@@ -574,6 +577,7 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::Histogram => "stats",
             Self::ImportImage | Self::PasteImage | Self::RasterizeSource => "image",
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties | Self::RepairSourceProfile => "info",
             Self::NewDocument => "new-document",
@@ -637,7 +641,8 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 72] = [
+        Self::Histogram,
         Self::ImportImage,
         Self::PasteImage,
         Self::DocumentProperties,
@@ -738,6 +743,7 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Histogram => "Histogram…",
             Self::ImportImage => "Import Image as Layer…",
             Self::PasteImage => "Paste Image as Layer",
             Self::DocumentProperties => "Document Properties…",

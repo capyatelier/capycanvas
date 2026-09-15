@@ -175,6 +175,19 @@ impl SnapshotRenderer {
     pub fn control(&self) -> CaptureControl {
         self.control.clone()
     }
+    /// Full-resolution committed composite, including visible paper but never
+    /// checkerboard, proof, monitor conversion, selection or warning overlays.
+    pub fn histogram(&mut self) -> Result<layer_core::color::histogram::Histogram, GpuRasterError> {
+        let mut result = layer_core::color::histogram::Histogram::new(self.color());
+        for y in (0..self.extent[1]).step_by(16) {
+            self.check_cancelled()?;
+            let height = 16.min(self.extent[1] - y);
+            let pixels = self.read_region([0, y, self.extent[0], height])?;
+            result.add(&pixels).map_err(|e| GpuRasterError::Color(e.into()))?;
+        }
+        self.check_cancelled()?;
+        Ok(result)
+    }
     fn check_cancelled(&self) -> Result<(), GpuRasterError> {
         self.control.check()
     }
