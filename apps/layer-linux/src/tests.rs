@@ -6105,13 +6105,10 @@ fn native_toolbar_sizing() {
                     panel: Panel::Toolbar
                 }))
             ));
-            let controllers = w.surface.observe_controllers();
-            let double_click = (0..controllers.n_items())
-                .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
-                .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
-                .unwrap();
-            double_click
-                .emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
+            // This fixture checks size/layout/history. Actual GTK double-click
+            // recognition is covered by native_floating_click_input; emitting
+            // pressed without a GDK event cannot identify its pointer device.
+            w.dispatch(UiAction::DoubleClickPanelHandle { group: g.id, viewport });
             pump(250);
             assert_eq!(placement().bounds, natural.bounds);
             capture_reference(
@@ -6127,10 +6124,8 @@ fn native_toolbar_sizing() {
                 let g = placement();
                 let grip = g.tiles.unwrap().grip.unwrap();
                 let point = [g.bounds.x + grip.x + 3.0, g.bounds.y + grip.y + 3.0];
-                double_click.emit_by_name::<()>(
-                    "pressed",
-                    &[&2i32, &(point[0] as f64), &(point[1] as f64)],
-                );
+                assert!(matches!(w.drag_target_at(point), Some(DragTarget::Dock(_))));
+                w.dispatch(UiAction::DoubleClickPanelHandle { group: g.id, viewport });
                 pump(250);
                 assert_eq!(state(&w).workspace.layout.floating[0].toolbar_layout, mode);
                 let g = placement();
@@ -12588,7 +12583,9 @@ fn native_floating_click_input() {
                 .find(|g| g.panels.contains(&panel))
                 .unwrap()
         };
-        let natural = placement().bounds;
+        let natural_placement = placement();
+        let natural = natural_placement.bounds;
+        let natural_tabs = natural_placement.tabs_visible;
         let corner = [
             natural.x + natural.width + 2.0,
             natural.y + natural.height + 2.0,
@@ -12630,7 +12627,11 @@ fn native_floating_click_input() {
                     ][cycle - 1]
                 );
             } else {
-                assert_eq!(actual.tabs_visible, cycle % 2 == 1, "panel toggle {cycle}");
+                assert_eq!(
+                    actual.tabs_visible,
+                    natural_tabs ^ (cycle % 2 == 1),
+                    "panel toggle {cycle}"
+                );
             }
         }
     }
@@ -14430,7 +14431,7 @@ fn native_named_workspace_manager_library_and_history() {
     for commit in [false, true] {
         w.workspaces.ui.show(&w, ManagerPage::Workspaces);
         pump(200);
-        let apply = find_button(w.window.upcast_ref(), "Switch to Workspace").unwrap();
+        let apply = find_button(w.workspaces.ui.dialog.upcast_ref(), "Switch to Workspace").unwrap();
         assert!(!apply.is_sensitive());
         select_item("Inking");
         pump(150);
@@ -14470,7 +14471,7 @@ fn native_named_workspace_manager_library_and_history() {
             search.set_text("");
             pump(300);
             select_item("Inking");
-            find_button(w.window.upcast_ref(), "Cancel")
+            find_button(w.workspaces.ui.dialog.upcast_ref(), "Cancel")
                 .unwrap()
                 .emit_clicked();
         }

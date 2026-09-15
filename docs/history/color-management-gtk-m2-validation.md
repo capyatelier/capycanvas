@@ -14,16 +14,17 @@ with preview, resizing, reusable recipes and physical resolution. Display mips,
 bounded composite/filter windows and losslessly backed paint caches are present.
 The later checkpoint sections record implementation and reproducible evidence.
 
-**GTK is not yet qualified as complete.** The closing work is the affected
-correctness/recovery matrix and any failures it exposes, managed-display and
-supported-renderer coverage, followed by fresh fixed/parent/current frame-creation
-comparisons, combined peak/steady CPU/GPU budgets and large-document interaction
-latency. Active edit pins and simultaneous workers are not covered by the
+**GTK is not yet qualified as complete.** The affected correctness matrix and
+focused recovery/native checks pass at the checkpoints below. Vulkan/GL wide-color
+and Cairo sRGB snapshot checks pass; physical-display limits remain explicit.
+Closing work is fresh fixed/parent/current frame-creation comparisons, combined
+peak/steady CPU/GPU budgets and large-document interaction latency. Active edit
+pins and simultaneous workers are not covered by the
 individual cache ceilings alone. Earlier measured failures remain open until
 new measurements resolve them. Coarse-first work or additional scheduling is
 required where those measured gates fail, rather than as an independent feature
-checklist. The recorded toolbar/workspace native harness failures also remain
-unqualified. Other platform hosts still require approval after GTK qualification.
+checklist. The toolbar/workspace fixture failures are resolved in the final
+display checkpoint. Other platform hosts still require approval after GTK qualification.
 
 **Current work order (user instruction, 2026-09-14):** finish functional milestone 2
 implementation and correctness/recovery validation first. Further benchmarking,
@@ -6324,3 +6325,70 @@ pressure, 24/45/60 MP and simultaneous-document jobs remain required. Further
 scheduling/coarse-first work follows demonstrated gate failures. Physical-display
 and unavailable-device limits must remain explicit. No other host integration
 is authorized until the user approves it after GTK qualification.
+
+## 2026-09-15 — Close GTK renderer and workspace fixture checks
+
+The native artwork check now uses Display P3 `[1, 0.1, 0.02]`, outside sRGB,
+and asserts the actual GSK renderer selected by the harness. Vulkan and GL
+preserve the tagged P3 patch and agree with canvas capture within the existing
+two-code U8 tolerance. The exact project remains unchanged. The private Mutter
+harness accepts an explicit `GSK_RENDERER` while retaining Vulkan as its default.
+
+The first Cairo comparison failed because GTK 4.22.4's
+[`render_texture` implementation](https://github.com/GNOME/gtk/blob/4.22.4/gsk/gskcairorenderer.c)
+always renders snapshots into sRGB ARGB32. Its on-screen implementation instead
+uses the surface color state; the installed version's
+[Wayland Cairo context](https://github.com/GNOME/gtk/blob/4.22.4/gdk/wayland/gdkcairocontext-wayland.c)
+supplies that state. This is not evidence requiring a production P3 fallback.
+The test now asserts Cairo's sRGB snapshot tag and compares it with explicit
+sRGB canvas capture. The separate forced-sRGB-view run also passes. Neither
+Cairo run qualifies on-screen P3. Physical calibrated displays, moving/spanning
+windows between unlike monitors, and open-modal behavior during a device
+replacement that changes the selected fallback remain unmeasured.
+
+Two existing workspace fixtures also needed correction. The manager now scopes
+Switch/Cancel lookup to its own dialog, excluding retained buttons elsewhere in
+the editor. The toolbar sizing test invokes the shared double-click action for
+layout/history checks; a synthetic signal without a GDK event cannot exercise
+the production device-aware gesture handler. The existing remote-input test
+independently exercises actual pointer resizing, reset, tab toggling and all
+three toolbar layouts. Its tab assertion now toggles relative to the fixture's
+initial visibility. Before correction, screenshots showed the expected toggle
+while the assertion assumed the opposite initial state. No production input or
+drag behavior, pixel tolerance, or rendering policy changed in this checkpoint.
+
+Validation on the reference GTK 4.22.4/Mutter 50.4/NVIDIA 610.57.04 setup:
+
+| Exact binary | Native check | Result |
+| --- | --- | --- |
+| `gtk-closing-checks-tests` | Named workspace manager/library/history | Pass, 17.42 s |
+| `gtk-closing-checks-tests` | Toolbar sizing/layout/theme/history | Pass, 20.71 s |
+| `gtk-display-final-tests` | Managed canvas/artwork, Vulkan | Pass, 3.07 s |
+| `gtk-display-final-tests` | Managed canvas/artwork, GL | Pass, 4.77 s |
+| `gtk-display-final-tests` | Cairo sRGB snapshot of P3 artwork | Pass, 2.68 s |
+| `gtk-display-final-tests` | Cairo with forced sRGB view | Pass, 2.60 s |
+| `gtk-display-final-tests` | Real floating-panel/toolbar pointer double-clicks | Pass, 9.58 s |
+
+The first two checks precede the final, unrelated display-test and remote-input
+assertion corrections; their functions are unchanged in the final capture.
+Exact executable hashes are
+`4b829f407cec24ddf67eb896c62267e6b0b35a97fe3fb50eefc14582f2185abe`
+and `e08496b33eaef156ba685683b1adaeef461d461348477e5d82406ed031a65e52`.
+Sources, harnesses, build and run records are hashed in
+`artifacts/color-m2/gtk-display-final-provenance.json`; failed initial runs remain.
+Independent correctness checks overlapped, so these durations are not latency
+or memory benchmarks.
+
+Reproduce the display cases with `GSK_RENDERER=vulkan` (or `gl`, `cairo`) and
+`tools/performance/gtk-raster.sh`, the exact wrapper and full test name
+`workspace::tests::managed_view::native_managed_canvas_and_gtk_artwork_agree`.
+For the explicit sRGB case also set `LAYER_TEST_VIEW_SRGB=1`. The real-input run
+uses `GDK_DEBUG=color-mgmt LAYER_NATIVE_TEST_EXECUTABLE=/absolute/path/to/gtk-display-final-tests
+bash tools/performance/workspace-motion.sh gtk --native-test=native_floating_click_input`.
+All sessions use private compositor/input state.
+
+The remaining implementation decisions now belong to final measured resource
+and performance qualification: native Float32/integer-backed benchmark coverage,
+fresh fixed/parent/current comparisons, combined memory/admission limits and
+the named photo/multiple-document/background-job matrix. Display/device limits
+above must stay explicit. Other platform hosts still require user approval.

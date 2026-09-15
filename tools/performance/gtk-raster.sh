@@ -19,7 +19,7 @@ mkdir -p "$(dirname "$raster_report")"
 export XDG_RUNTIME_DIR="$raster_run_dir/runtime"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 export WAYLAND_DISPLAY=capy-raster-validation
-export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=none
+export GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-vulkan}" GTK_A11Y=none
 # Native file tests drive the in-process GTK chooser. Portal dialogs live in a
 # different process and cannot be exercised by those widget signal assertions.
 # Match production's GTK color-management opt-in and preserve diagnostic flags.

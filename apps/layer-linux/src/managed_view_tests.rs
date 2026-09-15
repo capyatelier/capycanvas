@@ -48,7 +48,8 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
             }
         }
     }
-    let color = RgbColor::new(RgbSpace::DisplayP3, [0.85, 0.35, 0.2, 1.]).unwrap();
+    // An in-sRGB patch cannot detect an accidental sRGB8 intermediate in GSK.
+    let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0.1, 0.02, 1.]).unwrap();
     let mut project = new_drawing(64, 64).unwrap();
     project.document.color = DocumentColor {
         space: color.space,
@@ -76,6 +77,15 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
+    let renderer = w.window.renderer().unwrap().type_().name().to_string();
+    eprintln!("GTK artwork renderer: {renderer}");
+    let expected_renderer = match std::env::var("GSK_RENDERER").as_deref() {
+        Ok("vulkan") => Some("GskVulkanRenderer"),
+        Ok("gl" | "ngl") => Some("GskGLRenderer"),
+        Ok("cairo") => Some("GskCairoRenderer"),
+        _ => None,
+    };
+    if let Some(expected) = expected_renderer { assert_eq!(renderer, expected); }
     let view = w.view_color();
     assert_eq!(
         view,
@@ -86,6 +96,16 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
         }
     );
     let original = super::place_source::snapshot(&w);
+    // GTK 4.22.4's Cairo render_texture() always draws into sRGB ARGB32;
+    // its on-screen renderer instead uses the surface's color state. Compare
+    // this snapshot in its actual domain, without claiming a P3 screen check.
+    // https://github.com/GNOME/gtk/blob/4.22.4/gsk/gskcairorenderer.c
+    let capture_view = if renderer == "GskCairoRenderer" {
+        eprintln!("Cairo snapshot checks sRGB only; on-screen P3 remains unqualified");
+        ViewColor::Srgb
+    } else {
+        view
+    };
     w.dispatch(UiAction::Color {
         action: ColorAction::SetSlot {
             slot: ColorSlot::Foreground,
@@ -101,14 +121,14 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
         .session
         .engine()
         .backend()
-        .capture_in(view)
+        .capture_in(capture_view)
         .unwrap();
     let m = state(&w).camera.document_to_surface();
     let x = (m[0] * 32. + m[2] * 32. + m[4]).round() as usize;
     let y = (m[1] * 32. + m[3] * 32. + m[5]).round() as usize;
     let canvas = &capture.bytes[y * capture.stride as usize + x * 4..][..4];
     let expected = color
-        .encoded_in(view.space())
+        .encoded_in(capture_view.space())
         .unwrap()
         .map(|v| v.clamp(0., 1.));
     for c in 0..4 {
@@ -118,8 +138,8 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
         );
     }
 
-    // Render a real GTK artwork widget through GSK, then request explicit P3
-    // floats instead of interpreting an untagged screenshot as wide color.
+    // Render a real GTK artwork widget through GSK, then download in the
+    // explicit capture state instead of interpreting untagged screenshot bytes.
     let patch = ColorPatch::new(false);
     patch.set_size_request(40, 40);
     patch.set_color(color, view);
@@ -136,7 +156,10 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
         .renderer()
         .unwrap()
         .render_texture(&node, Some(&gtk::graphene::Rect::new(0., 0., 40., 40.)));
-    let pixels = download(&texture, &view.state());
+    if renderer == "GskCairoRenderer" {
+        assert_eq!(texture.color_state(), gdk::ColorState::srgb());
+    }
+    let pixels = download(&texture, &capture_view.state());
     for c in 0..4 {
         assert!(
             (pixels[20 * 40 + 20][c] - canvas[c] as f32 / 255.).abs() <= 2. / 255.,
