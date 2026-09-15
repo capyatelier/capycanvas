@@ -487,6 +487,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         name: &str,
         source: layer_core::color::source::SourceImage,
     ) -> Result<(), String> {
+        self.import_layer_source_with_limits(name, source, Default::default())
+    }
+    pub(super) fn import_layer_source_with_limits(
+        &mut self,
+        name: &str,
+        source: layer_core::color::source::SourceImage,
+        limits: layer_core::ProjectLimits,
+    ) -> Result<(), String> {
         self.require_document_idle()?;
         if !self.engine.backend().supports_tiled_sources() {
             return Err("This renderer does not support tiled photo layers".into());
@@ -503,14 +511,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("This group is locked".into());
         }
         let index = doc.layers.iter().position(|l| l.id == current.id).unwrap();
-        let id = self.engine.allocate_layer_id();
+        let id = doc.next_layer_id();
         let mut layer = Layer::paint(id, name);
         layer.properties.parent = parent;
         layer.source = Some(std::sync::Arc::new(source));
-        self.layer_edit(Edit::Batch(vec![
+        let edit = Edit::Batch(vec![
             Edit::InsertLayer { index, layer },
             Edit::SetActiveLayer { id },
-        ]))?;
+        ]);
+        self.source_edit_candidate(&edit, Some(id), limits)?;
+        let allocated = self.engine.allocate_layer_id();
+        debug_assert_eq!(allocated, id);
+        self.layer_edit(edit)?;
         self.refresh_document();
         self.refresh_commands();
         self.layer_interaction.changed = true;

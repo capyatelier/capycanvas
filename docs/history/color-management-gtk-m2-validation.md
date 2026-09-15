@@ -4789,7 +4789,7 @@ Reproduce with the JPEG pkg-config setup above:
 cargo test -p layer-core -p layer-color --offline -- --test-threads=1
 cargo test -p layer-ui --offline rasterizing_an_image_preserves_full_extent_edits_masks_and_history
 cargo test -p layer-ui --offline settings_copy_is_short_on_every_platform
-cargo test -p layer-workspace --offline -- --test-threads=1
+cargo test -p layer-workspace --features native --offline -- --test-threads=1
 cargo check -p layer-linux -p layer-ffi --offline
 cargo test -p layer-linux --offline --no-run --message-format=json
 bash tools/performance/gtk-raster.sh \
@@ -4814,3 +4814,88 @@ remaining export controls and full precision/job qualification also remain open.
 These correctness durations are not benchmark acceptance. Fresh baselines,
 frame-creation regressions, optimization and the memory/latency matrix remain last;
 other host integration requires approval after GTK completion and qualification.
+
+## Admission for retained-source edits (2026-09-15)
+
+The source/history boundary identified above now rejects source edits that cannot
+retain their newest Undo and Redo states within the existing 512 MiB history
+allowance. Admission builds an immutable candidate, its inverse and the canonical
+Redo before changing the live document, checkpoint or history. Older history may
+still be evicted normally. The same ownership accounting serves admission and
+trimming; current-document mask ownership now includes pending operation masks.
+Equal bytes in independent allocations are charged independently; shared source
+images, tile backing and ICC profiles are counted by ownership.
+
+Import/Place/Paste, source-profile repair and rasterization validate candidate
+projects against aggregate retained-source limits before publication. Profile
+repair and rasterization use this same admitted candidate for complete previews.
+New layer IDs are provisional until admission succeeds, so rejected imports or
+corrected-source insertions do not consume allocator state. These checks cover
+source ownership and the existing project validator. They do not replace the
+remaining combined raster/index/capture/process budget work.
+
+The first attempt applied strict admission to all edits. The existing linked-mask
+transform test correctly rejected that change: two pending roots were each
+reserved at a full 256 MiB before their producer supplied shared tile identities.
+Strict publication admission now applies to retained-source ownership changes;
+ordinary drawing and linked-mask transforms retain their existing capture path.
+General pending-capture admission, history residency across all navigation states,
+active-operation pins and combined CPU/GPU accounting remain open. This is a
+source-workflow correctness fix, not a claim that every memory gate is closed.
+
+Artifacts use `artifacts/color-m2/source-admission-*`:
+
+- `core-suite.log` passes the initial 65 core tests (2.66 s).
+  `shared-suite.log` preserves the linked-mask failure described above.
+  `reviewed-shared-suite.log` passes 65 core, 55 engine and 389 shared UI tests
+  (2.43/0.85/30.30 s), including the existing linked-mask transform journey.
+- New core tests use small explicit budgets to reject adding/removing an
+  independently owned source or ICC profile while preserving exact document,
+  allocator/checkpoint state, Undo/Redo availability and original tile ownership.
+  A shared test rejects a second independently allocated image before mutation,
+  accepts a second layer sharing its tile backing, and rejects a profile change
+  that exceeds the aggregate source allowance. These are admission correctness
+  tests; they do not measure large-photo peak memory.
+- `native-workspace.log` passes 86 tests (9.00 s) for the GTK-used native workspace feature. The initial
+  `workspace.log` without that feature runs only the portable migration test;
+  reproduction commands now explicitly enable `--features native`.
+- `repair.log` passes complete native source repair (16.81 s), and `rasterize.log`
+  passes full-extent native rasterization (8.52 s). Both retain complete previews,
+  exact cancellation/history, original/baked ownership and native reopening.
+  `place.log` passes profiled file import and rich clipboard paste with admission
+  (5.33 s).
+  Captures and file fixtures remain process-specific, preserving prior evidence.
+- `production.log` checks production GTK and shared FFI without warnings (4.52 s).
+
+The captured native binary is `native-gtk-tests`, SHA-256
+`4eecbee8ddb0e436bbcece8999a2b7f3d875dbede84d14abc253e8d8baaea57d`;
+`native-build.{json,log}` and `native-sources.json` record its inputs. A subsequent
+core comment clarification does not change the binary's behavior.
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-core -p layer-engine -p layer-ui --offline -- --test-threads=1
+cargo test -p layer-workspace --features native --offline -- --test-threads=1
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/source-admission-native-gtk-exact" \
+  workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits \
+  "$PWD/artifacts/color-m2/source-admission-repair"
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/source-admission-native-gtk-exact" \
+  workspace::tests::source_rasterize::native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen \
+  "$PWD/artifacts/color-m2/source-admission-rasterize"
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/source-admission-native-gtk-exact" \
+  workspace::tests::place_source::native_profiled_place_paste_and_source_history \
+  "$PWD/artifacts/color-m2/source-admission-place"
+```
+
+`source-admission-provenance.json` records code/build/output hashes. No benchmark
+workloads were run. Document Assign/Convert/depth, remaining inspection/settings/
+output UI, managed wide viewing and the remaining precision/memory/job gates are
+still unfinished. Fresh baselines, frame-creation regression investigation,
+optimization and memory/latency qualification remain last. Other platform hosts
+remain approval-gated after GTK completion.

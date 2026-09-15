@@ -39,6 +39,27 @@ fn repair_edit(
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    /// Validate total source ownership against the same limits as native Save,
+    /// and ensure both directions fit history, before allocating a live ID.
+    pub(super) fn source_edit_candidate(
+        &self,
+        edit: &Edit,
+        allocated: Option<LayerId>,
+        limits: layer_core::ProjectLimits,
+    ) -> Result<Project, String> {
+        let mut project = self.capture_project_recovery()?;
+        if let Some(id) = allocated {
+            if project.document.allocate_layer_id() != id {
+                return Err("The layer allocation changed; try again".into());
+            }
+        }
+        project.document.apply(edit.clone()).map_err(error)?;
+        let project = project.pruned()?;
+        project.validate(limits)?;
+        self.engine.validate_edit(edit).map_err(error)?;
+        Ok(project)
+    }
+
     pub(super) fn can_edit_original(&self, id: LayerId) -> bool {
         let document = self.engine.document();
         !document.is_locked(id)
@@ -93,25 +114,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         corrected: SourceImage,
     ) -> Result<Project, String> {
         let layer = self.validate_source_repair(id, original, &corrected)?;
-        let mut project = self.capture_project_recovery()?;
         if corrected != **original {
-            let index = project
-                .document
+            let index = self
+                .engine
+                .document()
                 .layers
                 .iter()
                 .position(|l| l.id == id)
                 .unwrap();
-            let next = if baked(&layer) {
-                project.document.allocate_layer_id()
+            let allocated = baked(&layer);
+            let next = if allocated {
+                self.engine.document().next_layer_id()
             } else {
                 id
             };
-            project
-                .document
-                .apply(repair_edit(layer, corrected, index, next).0)
-                .map_err(error)?;
+            let edit = repair_edit(layer, corrected, index, next).0;
+            return self.source_edit_candidate(
+                &edit,
+                allocated.then_some(next),
+                Default::default(),
+            );
         }
-        Ok(project)
+        self.capture_project_recovery()
     }
     /// The host validates interpretation with its source CMM before publishing.
     /// Original sample tiles remain shared with the captured source.
@@ -132,12 +156,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             .iter()
             .position(|l| l.id == id)
             .unwrap();
-        let next = if baked(&layer) {
-            self.engine.allocate_layer_id()
+        let allocated = baked(&layer);
+        let next = if allocated {
+            self.engine.document().next_layer_id()
         } else {
             id
         };
         let (edit, result) = repair_edit(layer, corrected, index, next);
+        self.source_edit_candidate(&edit, allocated.then_some(next), Default::default())?;
+        if allocated {
+            let allocated = self.engine.allocate_layer_id();
+            debug_assert_eq!(allocated, next);
+        }
         self.engine.apply_edit(edit).map_err(error)?;
         self.refresh_document();
         self.refresh_commands();
@@ -190,12 +220,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         converted: Arc<SourceImage>,
     ) -> Result<Project, String> {
         let layer = self.rasterized_layer(id, original, converted)?;
-        let mut project = self.capture_project_recovery()?;
-        project
-            .document
-            .apply(Edit::ReplaceLayer(Box::new(layer)))
-            .map_err(error)?;
-        Ok(project)
+        self.source_edit_candidate(
+            &Edit::ReplaceLayer(Box::new(layer)),
+            None,
+            Default::default(),
+        )
     }
     pub fn apply_rasterized_source(
         &mut self,
@@ -204,9 +233,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         converted: Arc<SourceImage>,
     ) -> Result<(), String> {
         let layer = self.rasterized_layer(id, original, converted)?;
-        self.engine
-            .apply_edit(Edit::ReplaceLayer(Box::new(layer)))
-            .map_err(error)?;
+        let edit = Edit::ReplaceLayer(Box::new(layer));
+        self.source_edit_candidate(&edit, None, Default::default())?;
+        self.engine.apply_edit(edit).map_err(error)?;
         self.refresh_document();
         self.refresh_commands();
         self.layer_interaction.changed = true;

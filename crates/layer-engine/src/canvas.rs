@@ -668,6 +668,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(changed)
     }
 
+    pub fn validate_edit(&self, edit: &Edit) -> Result<(), DocumentError> {
+        self.editor.validate_edit(edit)
+    }
+
     pub fn apply_edit(&mut self, mut edit: Edit) -> Result<(), DocumentError> {
         fn discard_submitted(edit: &mut Edit, document: &Document) {
             match edit {

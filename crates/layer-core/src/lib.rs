@@ -26,6 +26,7 @@ mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
 mod project;
 mod project_storage;
+mod history_budget;
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
@@ -1303,6 +1304,11 @@ impl Document {
         id
     }
 
+    /// Read-only identity for planning an insertion before admission.
+    pub fn next_layer_id(&self) -> LayerId {
+        LayerId(self.next_layer_id)
+    }
+
     /// Read-only identity for a provisional next-contact cursor.
     pub fn next_stroke_id(&self) -> StrokeId {
         StrokeId(self.next_stroke_id)
@@ -1577,6 +1583,22 @@ pub enum Edit {
 }
 
 impl Edit {
+    fn changes_retained_sources(&self, document: &Document) -> bool {
+        match self {
+            Self::Batch(edits) => edits.iter().any(|e| e.changes_retained_sources(document)),
+            Self::InsertLayer { layer, .. } => layer.source.is_some(),
+            Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some()),
+            Self::ReplaceLayer(layer) => {
+                match (document.layer(layer.id).and_then(|l| l.source.as_ref()), &layer.source) {
+                    (None, None) => false,
+                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                    _ => true,
+                }
+            }
+            _ => false,
+        }
+    }
+
     fn only_raster_updates(&self) -> bool {
         match self {
             Self::SetRaster { .. } => true,
@@ -1737,15 +1759,51 @@ impl Editor {
     }
 
     pub fn perform(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.perform_with_history_budget(edit, history_budget::BYTE_BUDGET)
+    }
+
+    /// Admit a worker-prepared edit without changing document or history.
+    pub fn validate_edit(&self, edit: &Edit) -> Result<(), DocumentError> {
+        self.prepare_history_edit(edit.clone(), history_budget::BYTE_BUDGET).map(|_| ())
+    }
+
+    fn prepare_history_edit(&self, edit: Edit, budget: usize) -> Result<(Document, HistoryEntry), DocumentError> {
+        let mut candidate = self.document.clone();
+        let inverse = HistoryEntry::new(candidate.apply(edit)?, self.checkpoint);
+        // The actual inverse can restore targets/references in addition to the
+        // requested edit. Account the canonical Redo produced by Undo, too.
+        let mut restored = candidate.clone();
+        let forward = HistoryEntry::new(restored.apply(inverse.edit.clone())?, self.checkpoint);
+        if history_budget::Accounting::new(&self.document).charge(&forward) > budget
+            || history_budget::Accounting::new(&candidate).charge(&inverse) > budget
+        {
+            return Err(DocumentError::InvalidLayerOperation(
+                "This edit exceeds the Undo/Redo memory limit",
+            ));
+        }
+        Ok((candidate, inverse))
+    }
+
+    fn perform_with_history_budget(&mut self, edit: Edit, budget: usize) -> Result<(), DocumentError> {
         // Selecting the drawing target is navigation. It must neither consume
         // an undo step nor discard redoable painting work.
-        let selection_only = matches!(&edit, Edit::SetActiveLayer { .. } | Edit::SetMaskTarget(_));
-        let changes_project = edit.changes_project();
-        let inverse = self.document.apply(edit)?;
-        if !selection_only {
-            self.undo.push(HistoryEntry::new(inverse, self.checkpoint));
-            self.redo.clear();
+        if matches!(&edit, Edit::SetActiveLayer { .. } | Edit::SetMaskTarget(_)) {
+            self.document.apply(edit)?;
+            return Ok(());
         }
+        let changes_project = edit.changes_project();
+        // Source jobs publish completed ownership. Check both directions before
+        // publication. Live raster transactions retain the existing capture
+        // reservation path: their pending roots do not yet identify shared tiles.
+        let inverse = if edit.changes_retained_sources(&self.document) {
+            let (candidate, inverse) = self.prepare_history_edit(edit, budget)?;
+            self.document = candidate;
+            inverse
+        } else {
+            HistoryEntry::new(self.document.apply(edit)?, self.checkpoint)
+        };
+        self.undo.push(inverse);
+        self.redo.clear();
         if changes_project {
             self.checkpoint = self.next_checkpoint;
             self.next_checkpoint = self
@@ -1753,77 +1811,18 @@ impl Editor {
                 .checked_add(1)
                 .expect("document history exhausted");
         }
-        self.trim_history();
+        self.trim_history(budget);
         Ok(())
     }
 
-    fn trim_history(&mut self) {
-        const BYTE_BUDGET: usize = 512 * 1024 * 1024;
-        const ENTRY_BUDGET: usize = 256;
-        fn layer_roots<'a>(layer: &'a Layer, roots: &mut Vec<&'a raster::RasterRevision>) {
-            roots.push(&layer.raster);
-            roots.extend(layer.mask.iter().map(|m| &m.raster));
-        }
-        let mut seen_roots = std::collections::HashSet::new();
-        let mut seen_tiles = std::collections::HashSet::new();
-        let mut sources = color::source::SourceAccounting::default();
-        let mut current = Vec::new();
-        for layer in &self.document.layers {
-            layer_roots(layer, &mut current);
-            if let Some(source) = &layer.source {
-                sources.charge(source);
-            }
-        }
-        for revision in current {
-            seen_roots.insert(revision.identity());
-            if let Some(Ok(data)) = revision.try_data() {
-                seen_tiles.extend(data.tiles.values().map(|t| t.identity()));
-            }
-        }
+    fn trim_history(&mut self, budget: usize) {
+        let mut accounting = history_budget::Accounting::new(&self.document);
         let mut bytes = 0usize;
         for history in [&mut self.undo, &mut self.redo] {
             let mut keep = 0;
-            for entry in history.iter().rev().take(ENTRY_BUDGET) {
-                bytes = bytes.saturating_add(entry.metadata_bytes);
-                let mut referenced_sources = Vec::new();
-                entry.edit.source_roots(&mut referenced_sources);
-                for source in referenced_sources {
-                    bytes = bytes.saturating_add(sources.charge(source));
-                }
-                let mut referenced = Vec::new();
-                entry.edit.raster_roots(&mut referenced);
-                for revision in referenced {
-                    if !seen_roots.insert(revision.identity()) {
-                        continue;
-                    }
-                    match revision.try_data() {
-                        Some(Ok(data)) => {
-                            bytes = bytes.saturating_add(data.tiles.len().saturating_mul(96));
-                            for tile in data.tiles.values() {
-                                if seen_tiles.insert(tile.identity()) {
-                                    bytes = bytes.saturating_add(match tile.try_backing() {
-                                        Some(Ok(blob)) => blob.resident_bytes(),
-                                        _ => {
-                                            tile.descriptor()
-                                                .byte_len([raster::TILE_SIZE; 2])
-                                                // An invalid pending descriptor is
-                                                // rejected before adoption. Charge
-                                                // the largest supported tile until
-                                                // then instead of panicking here.
-                                                .unwrap_or(raster::MAX_TILE_BYTES)
-                                                + 1024
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                        // Reserve the entire permitted capture while the GPU
-                        // owner has not published its page index yet.
-                        None => bytes = bytes.saturating_add(raster::MAX_CAPTURE_BYTES as usize),
-                        Some(Err(_)) => (),
-                    }
-                }
-                if bytes > BYTE_BUDGET {
+            for entry in history.iter().rev().take(history_budget::ENTRY_BUDGET) {
+                bytes = bytes.saturating_add(accounting.charge(entry));
+                if bytes > budget {
                     break;
                 }
                 keep += 1;

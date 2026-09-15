@@ -93,6 +93,12 @@ chunks. Capture pressure defers pen-up/correction/operation boundaries; ordinary
 move frames continue. The separate native frame mailbox stays bounded to two.
 History retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
 excluding current document ownership. No precision is reduced to fit a budget.
+Changes to retained sources are admitted in both Undo and Redo directions before
+publication. An oversized source edit fails without changing the document or
+existing history. Import, source repair and rasterization also validate aggregate
+retained-source ownership before publishing; provisional layer IDs are allocated
+only after validation. Pending raster transactions still use the existing capture
+reservations; combined source/raster/history accounting remains under qualification.
 
 Contact reconstruction is limited to the active contact and the most recently
 completed contact's two-second correction window. Starting a new contact,
