@@ -16,6 +16,30 @@ fn profile_dialog(w: &Rc<Workspace>) {
         assert!(Instant::now() < deadline, "source profile dialog");
     }
 }
+fn preview_ready(w: &Rc<Workspace>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        pump(20);
+        let dialog = w
+            .window
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        if dialog.is_response_enabled("apply") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{}",
+            find_named(dialog.upcast_ref(), "color-preview-status")
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap()
+                .label()
+        );
+    }
+}
 fn layer(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
     w.gpu
         .borrow()
@@ -48,8 +72,8 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
-    let directory = std::path::Path::new("../../artifacts/color-m2/source-repair-ui");
-    std::fs::create_dir_all(directory).unwrap();
+    let directory = std::path::Path::new("../../artifacts/color-m2/color-preview-ui").join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
     let directory = directory.canonicalize().unwrap();
     let gray =
         layer_color::profile_bytes(&layer_color::gray_profile(RgbSpace::Srgb).unwrap()).unwrap();
@@ -68,8 +92,29 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     });
     profile_dialog(&w);
     combo(&w, "source-profile-space").set_selected(0);
+    preview_ready(&w);
     pump(200);
     capture_ui(&w, &directory, "untouched-source.png");
+    response(&w, "cancel");
+    finish(&w);
+    assert_eq!(snapshot(&w), clean);
+    // Cancel an active preview and replace queued choices rapidly. Completion
+    // must acknowledge cancellation without publishing any artwork or stale UI.
+    invoke(&w, CommandId::RepairSourceProfile);
+    profile_dialog(&w);
+    let space = combo(&w, "source-profile-space");
+    space.set_selected(0);
+    pump(1);
+    for index in [1, 2, 0, 3] {
+        space.set_selected(index);
+    }
+    let dialog = w
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(!dialog.is_response_enabled("apply"));
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), clean);
@@ -116,7 +161,9 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     pump(200);
     capture_ui(&w, &directory, "mismatched-source-profile.png");
     choose_profile(&adobe_path);
+    preview_ready(&w);
     assert!(dialog.is_response_enabled("apply"));
+    preview_ready(&w);
     response(&w, "apply");
     finish(&w);
     ready(&w);
@@ -161,6 +208,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     invoke(&w, CommandId::RepairSourceProfile);
     profile_dialog(&w);
     combo(&w, "source-profile-space").set_selected(3);
+    preview_ready(&w);
     pump(200);
     capture_ui(&w, &directory, "baked-source-choice.png");
     response(&w, "cancel");
@@ -169,6 +217,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     invoke(&w, CommandId::RepairSourceProfile);
     profile_dialog(&w);
     combo(&w, "source-profile-space").set_selected(3);
+    preview_ready(&w);
     response(&w, "apply");
     finish(&w);
     ready(&w);

@@ -12,6 +12,7 @@ mod properties;
 mod place;
 mod profile;
 mod source;
+mod preview;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;

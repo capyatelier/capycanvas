@@ -4625,3 +4625,83 @@ Managed wide viewing, complete tool precision and combined memory/job budgets al
 remain open. These correctness durations are not benchmark acceptance. Fresh
 baselines, frame-creation regressions, optimization and the memory/latency matrix
 remain last; other host integration remains approval-gated after GTK completion.
+
+## Complete-stack Before/After for source repair (2026-09-15)
+
+Source repair now previews the complete original and candidate canvases before
+Apply. The shared preview builder uses the same layer edit as publication,
+including insertion of a corrected original above a baked layer. Preview owns a
+cloned document and provisional IDs; it changes neither live history nor allocator
+state. This closes the source-repair Before/After gap recorded immediately above.
+The complete conversion/depth workflows remain separate unfinished work.
+
+The GTK comparison component renders immutable snapshots on a worker through the
+existing exact Float32 capture path. It includes every composed source pixel,
+then performs area reduction in linear premultiplied working RGB. Fractional
+edges use integral area weights; transparency is averaged with coverage rather
+than darkening straight colors. The final at-most-220×160 images use an explicit
+sRGB display encoding matching the current GTK fallback. They never feed document
+edits, exact sampling or export. Managed wide preview encoding remains outstanding.
+
+Capture consumes 16-row strips and the existing explicit snapshot dependency
+ceiling. The thumbnail itself needs at most 35,200 accumulation pixels; there is
+no full-resolution host preview bitmap. The component holds one active worker and
+one replaceable request. A changed choice cancels stale work; its successor starts
+only after the worker returns. Cancelling the dialog waits for that acknowledgement
+before releasing the document request. Apply is enabled only for a successful
+preview of the current choice. This bounds this component's queue; cross-window
+job scheduling, capture cancellation while awaiting other raster publications,
+combined CPU/GPU budgets and large-photo preview latency still need qualification.
+
+Artifacts use `artifacts/color-m2/color-preview-*` on the setup recorded above:
+
+- `shared-plan.log` passes the source-policy check with new assertions that preview
+  leaves the live document/counters untouched and exactly matches Apply for both
+  untouched and baked sources, while preserving prior undo/archive checks.
+- `area.log` passes analytical checks for odd-size fractional reduction, strip
+  boundaries, identity and premultiplied transparency. Extended positive/negative
+  working values are retained until display encoding.
+- `production.log` checks production GTK and shared FFI without warnings.
+- `initial-journey.log` passes the full native repair journey with preview (14.01 s).
+  `reviewed-journey.log` additionally exercises rapid queued profile changes and
+  cancellation of an active preview (14.87 s). `final-journey.log` passes again
+  with per-process artifact directories (14.96 s, GTK process 1788906).
+  All preserve exact source/baked data, Undo/Redo, Cancel and native reopen/display
+  checks from the previous repair milestone.
+
+The final binary `final-gtk-tests` has SHA-256
+`4317a40808a7517bace01f7ea7e52d62570c5d0555ddd9889c602f07e374fab6`.
+`final-build.{json,log}` and `final-sources.json` identify its inputs. Final UI and
+ICC fixtures are in `ui/1788906/`; Before/After for a baked stroke visibly shows
+that the new corrected source covers it while the old edited layer remains
+intact. The layout and comparison captures were visually reviewed. These are
+sRGB fallback/layout checks, not calibrated physical display qualification.
+
+Early preview runs reused the preceding test's screenshot directory. Those new
+captures were copied to `color-preview-reviewed-ui/`, and the previous captured
+`source-repair-final-gtk-tests` binary regenerated its own sheets in a passing
+7.61 s run (`source-repair-restored-ui-journey.log`). Regenerated image hashes are
+recorded separately in `source-repair-restored-ui-provenance.json`; prior screenshot
+hashes describe the superseded original captures. Profile fixtures match their
+original hashes. New preview captures use a process-specific directory to avoid
+replacing earlier validation evidence.
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-ui --offline source_profile_repair_preserves_samples_and_baked_edits
+cargo test -p layer-linux --offline files::preview::tests::
+cargo check -p layer-linux -p layer-ffi --offline
+cargo test -p layer-linux --offline --no-run --message-format=json
+bash tools/performance/gtk-raster.sh \
+  "$PWD/artifacts/color-m2/color-preview-final-gtk-exact" \
+  workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits \
+  "$PWD/artifacts/color-m2/color-preview-final-journey"
+```
+
+`color-preview-provenance.json` records code/build/output hashes. No performance
+workloads were run: durations above only identify correctness runs. Explicit
+rasterization, document assignment/conversion/depth, histogram/clipping inspection,
+Color preferences, remaining output controls, managed wide viewing and the full
+precision/memory/job gates remain open. Fresh baselines, regression investigation
+and optimization remain last; other host integration remains approval-gated.

@@ -1,7 +1,42 @@
 //! Source repair never reconstructs or reinterprets committed raster edits.
 use super::*;
-use layer_core::{Edit, Layer, color::source::SourceImage};
+use layer_core::{Edit, Layer, Project, color::source::SourceImage};
 use std::sync::Arc;
+
+fn baked(layer: &Layer) -> bool {
+    !layer.raster.is_empty() || !layer.pending_operations.is_empty() || layer.asset.is_some()
+}
+fn repair_edit(
+    mut layer: Layer,
+    corrected: SourceImage,
+    index: usize,
+    next: LayerId,
+) -> (Edit, LayerId) {
+    if !baked(&layer) {
+        layer.source = Some(Arc::new(corrected));
+        let id = layer.id;
+        return (Edit::ReplaceLayer(Box::new(layer)), id);
+    }
+    // Baked paint/transform/mask application stays on the existing layer.
+    let name = format!(
+        "{} (corrected source)",
+        layer.name.chars().take(109).collect::<String>()
+    );
+    let mut replacement = Layer::paint(next, name.as_str());
+    replacement.properties.parent = layer.properties.parent;
+    replacement.properties.offset = layer.properties.offset;
+    replacement.source = Some(Arc::new(corrected));
+    (
+        Edit::Batch(vec![
+            Edit::InsertLayer {
+                layer: replacement,
+                index,
+            },
+            Edit::SetActiveLayer { id: next },
+        ]),
+        next,
+    )
+}
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn can_repair_source(&self, id: LayerId) -> bool {
@@ -11,7 +46,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .layer(id)
                 .is_some_and(|l| l.kind == LayerKind::Paint && l.source.is_some())
     }
-
     pub(super) fn request_source_repair(&mut self, id: LayerId) -> Result<(), String> {
         if self.state.platform != Platform::Gtk || !self.can_repair_source(id) {
             return Err("Select an unlocked retained image layer".into());
@@ -19,22 +53,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.request_document(DocumentRequest::RepairSourceProfile { layer: id.0 })?;
         Ok(())
     }
-
-    /// The host validates the replacement interpretation with its source CMM
-    /// before publishing. Only interpretation metadata may change: all original
-    /// sample tiles must still be shared with the captured source.
-    pub fn repair_layer_source(
-        &mut self,
+    fn validate_source_repair(
+        &self,
         id: LayerId,
         original: &Arc<SourceImage>,
-        corrected: SourceImage,
-    ) -> Result<LayerId, String> {
+        corrected: &SourceImage,
+    ) -> Result<Layer, String> {
         self.require_document_idle()?;
         if !self.can_repair_source(id) {
             return Err("Select an unlocked retained image layer".into());
         }
-        let doc = self.engine.document();
-        let layer = doc.layer(id).unwrap();
+        let layer = self.engine.document().layer(id).unwrap();
         if !Arc::ptr_eq(layer.source.as_ref().unwrap(), original) {
             return Err("The source changed while choosing its profile; try again".into());
         }
@@ -52,45 +81,66 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("Source profile repair must preserve the original image samples".into());
         }
+        Ok(layer.clone())
+    }
+    /// Prepare the complete candidate stack with the same edit used by Apply.
+    /// The cloned document owns provisional IDs; no live history/counter changes.
+    pub fn preview_layer_source(
+        &self,
+        id: LayerId,
+        original: &Arc<SourceImage>,
+        corrected: SourceImage,
+    ) -> Result<Project, String> {
+        let layer = self.validate_source_repair(id, original, &corrected)?;
+        let mut project = self.capture_project_recovery()?;
+        if corrected != **original {
+            let index = project
+                .document
+                .layers
+                .iter()
+                .position(|l| l.id == id)
+                .unwrap();
+            let next = if baked(&layer) {
+                project.document.allocate_layer_id()
+            } else {
+                id
+            };
+            project
+                .document
+                .apply(repair_edit(layer, corrected, index, next).0)
+                .map_err(error)?;
+        }
+        Ok(project)
+    }
+    /// The host validates interpretation with its source CMM before publishing.
+    /// Original sample tiles remain shared with the captured source.
+    pub fn repair_layer_source(
+        &mut self,
+        id: LayerId,
+        original: &Arc<SourceImage>,
+        corrected: SourceImage,
+    ) -> Result<LayerId, String> {
+        let layer = self.validate_source_repair(id, original, &corrected)?;
         if corrected == **original {
             return Ok(id);
         }
-        let mut layer = layer.clone();
-        let corrected = Arc::new(corrected);
-        let edit = if layer.raster.is_empty()
-            && layer.pending_operations.is_empty()
-            && layer.asset.is_none()
-        {
-            layer.source = Some(corrected);
-            Edit::ReplaceLayer(Box::new(layer))
+        let index = self
+            .engine
+            .document()
+            .layers
+            .iter()
+            .position(|l| l.id == id)
+            .unwrap();
+        let next = if baked(&layer) {
+            self.engine.allocate_layer_id()
         } else {
-            // Baked paint/transform/mask application remains in the existing
-            // layer. Offer a plain corrected original at the same placement.
-            let index = doc.layers.iter().position(|l| l.id == id).unwrap();
-            let name = format!(
-                "{} (corrected source)",
-                layer.name.chars().take(109).collect::<String>()
-            );
-            let next_id = self.engine.allocate_layer_id();
-            let mut next = Layer::paint(next_id, name.as_str());
-            next.properties.parent = layer.properties.parent;
-            next.properties.offset = layer.properties.offset;
-            next.source = Some(corrected);
-            self.engine
-                .apply_edit(Edit::Batch(vec![
-                    Edit::InsertLayer { layer: next, index },
-                    Edit::SetActiveLayer { id: next_id },
-                ]))
-                .map_err(error)?;
-            self.refresh_document();
-            self.refresh_commands();
-            self.layer_interaction.changed = true;
-            return Ok(next_id);
+            id
         };
+        let (edit, result) = repair_edit(layer, corrected, index, next);
         self.engine.apply_edit(edit).map_err(error)?;
         self.refresh_document();
         self.refresh_commands();
         self.layer_interaction.changed = true;
-        Ok(id)
+        Ok(result)
     }
 }

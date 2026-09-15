@@ -180,12 +180,15 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     invalid.extent[0] += 1;
     assert!(session.repair_layer_source(id, &original, invalid).is_err());
     assert_eq!(session.engine.document(), &before);
+    let preview = session.preview_layer_source(id, &original, corrected.clone()).unwrap();
+    assert_eq!(session.engine.document(), &before, "preview does not mutate live content or IDs");
     assert_eq!(
         session
             .repair_layer_source(id, &original, corrected.clone())
             .unwrap(),
         id
     );
+    assert_eq!(&preview.document, session.engine.document(), "preview and Apply use the same complete edit");
     let after = session
         .engine
         .document()
@@ -244,10 +247,14 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
         .engine
         .apply_edit(layer_core::Edit::ReplaceLayer(Box::new(layer.clone())))
         .unwrap();
+    let original_project = session.capture_project_recovery().unwrap();
+    let preview = session.preview_layer_source(id, &original, corrected.clone()).unwrap();
+    assert_eq!(session.engine.document(), &original_project.document);
     let next_id = session
         .repair_layer_source(id, &original, corrected.clone())
         .unwrap();
     assert_ne!(next_id, id);
+    assert_eq!(&preview.document, session.engine.document());
     let doc = session.engine.document();
     assert_eq!(
         doc.layer(id).unwrap(),

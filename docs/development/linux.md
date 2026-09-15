@@ -76,7 +76,9 @@ check covers import, clipboard format preference, history, reopen and cancellati
 
 File → Repair Source Profile and the layer context menu correct retained originals.
 The ICC chooser validates input profiles against the image channels and validates
-export profiles against the output transform. Repair preserves original sample
+export profiles against the output transform. Repair previews the complete Before/After
+canvas on a cancellable worker before Apply, using an explicit sRGB preview while
+managed wide viewing is unfinished. Repair preserves original sample
 bytes; a layer with baked edits gets a separate corrected source layer. The native
 `workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits`
 check covers correction, cancellation, mismatched profiles, history and reopening.
