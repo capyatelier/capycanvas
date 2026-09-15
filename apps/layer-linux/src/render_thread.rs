@@ -1055,9 +1055,15 @@ impl Worker {
         // Only this worker may wait in acquire. Always apply paint, even when
         // occluded; an idle retry presents the retained viewport without replay.
         let target = self.acquire()?;
+        let _presentation = self.renderer.prioritize_raster_presentation();
         #[cfg(test)]
         if target.is_some() {
             timing.acquired(&self.renderer);
+        }
+        #[cfg(test)]
+        if !paper && frame.layers.iter().any(|layer| layer.raster.try_data().is_none()
+            || layer.masks().any(|mask| mask.raster.try_data().is_none())) {
+            timing.raster_commit();
         }
         if paper {
             let layers: Vec<_> = frame
@@ -1134,6 +1140,7 @@ impl Worker {
         target: wgpu::SurfaceTexture,
         #[cfg(test)] timing: Option<&mut crate::timing::Timing>,
     ) -> Result<(), String> {
+        let _presentation = self.renderer.prioritize_raster_presentation();
         let (camera, surround) = self.last_view.expect("rendered document");
         let view = target.texture.create_view(&Default::default());
         let mut encoder = self

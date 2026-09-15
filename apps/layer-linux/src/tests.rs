@@ -1,6 +1,8 @@
 //! Native control/lifecycle integration on a hardware desktop. Control signals
 //! exercise GTK bindings; pen records exercise scheduling and GPU presentation.
 //! Physical tablet/touch delivery remains a human test (not faked here).
+#[path = "native_penup_tests.rs"]
+mod native_penup;
 #[path = "color_panel_tests.rs"]
 mod color_panel;
 #[path = "color_management_tests.rs"]

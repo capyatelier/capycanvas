@@ -23,6 +23,8 @@ pub struct Stats {
     pub gpu: Vec<[f64; 2]>,
     /// Frame id, presentation ns, refresh ns, presented=1/discarded=0.
     pub presented: Vec<[u64; 4]>,
+    /// Frame id and enqueue timestamp for a native raster publication.
+    pub raster_commits: Vec<[u64; 2]>,
     pub overview_revisions: Vec<u64>,
     pub overview_frames: usize,
 }
@@ -58,6 +60,9 @@ pub fn thread_cpu_ms() -> f64 {
     time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1_000_000.
 }
 impl Timing {
+    pub fn raster_commit(&self) {
+        self.stats.lock().unwrap().raster_commits.push([self.id, self.queued_ns]);
+    }
     pub fn overview(&self, revision: Option<u64>) {
         if let Some(revision) = revision {
             let mut stats = self.stats.lock().unwrap();

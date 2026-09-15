@@ -183,3 +183,25 @@ does not jump pigment directly across the configured radius.
 Generated review outputs stay under the requested ignored artifact directory.
 The [paint-state reference](../reference/painterly-paint-state.md) describes the
 behavior these cases exercise.
+
+### GTK native pen-up and following strokes
+
+The ignored `workspace::tests::native_penup::native_penup_and_following_strokes`
+benchmark uses a validated 4096² ProPhoto U16 project with 32 paint layers and a
+720 px palette knife. It warms and undoes one contact, then draws twelve 800 ms
+contacts by default (`LAYER_PENUP_STROKES=4..100`). Run a captured release test
+executable with `tools/performance/gtk-raster.sh` on its private 120 Hz compositor.
+Build separately from measurement and compare variants at one staged executable
+pathname. The fixture validates its project before opening, so autosave/recovery
+exercise a legal allocator and document.
+
+The JSON records pen-up event timestamps, corresponding native-publication frame
+IDs, worker elapsed/thread CPU and GPU timestamps, actual child-surface
+presentation feedback, and the first observation of each host-backed revision.
+Host backing is observed at approximately 2 ms event-loop intervals; this is an
+upper-bound observation of completion, not a precise compression service time.
+A missing/discarded presentation must remain visible in the report, rather than
+being silently excluded from the pen-up denominator. Subsequent strokes begin
+as soon as the preceding stroke is admitted and can overlap its backing work.
+Queued-frame-to-present timing for movement excludes input-to-queue delay;
+pen-up event-to-present includes that delay. Keep these boundaries distinct.

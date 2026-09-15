@@ -1,6 +1,6 @@
 //! Native commit ownership for the Float32 renderer. Each frame validates every
-//! changed page, then quantizes, promotes and copies batches through fixed scratch.
-//! Capture mapping and history publication start only after frame submission.
+//! changed page, then quantizes into immutable native outputs and promotes
+//! through fixed Float32 scratch. Readback follows canvas presentation.
 use super::*;
 use crate::native_tiles::{
     MAX_BATCH_TILES, NativeTileEncoder, NativeTileRequest, NativeTransfer,
@@ -10,14 +10,6 @@ use crate::native_tiles::{
 use layer_core::color::DocumentColor;
 mod validate;
 
-struct ColorSlot {
-    encoded: wgpu::Texture,
-    canonical: wgpu::Texture,
-}
-struct ScalarSlot {
-    encoded: wgpu::Buffer,
-    canonical: wgpu::Texture,
-}
 pub(crate) struct NativeEdit {
     pub(super) backing: BTreeMap<LayerId, Arc<RasterData>>,
     pub(crate) color_cache_bytes: u64,
@@ -32,13 +24,11 @@ pub(crate) struct NativeEdit {
     scalar: NativeScalarEncoder,
     promoter: NativePromoter,
     validator: validate::Validator,
-    status: NativeEncodeStatus,
-    colors: Vec<ColorSlot>,
-    scalars: Vec<ScalarSlot>,
+    colors: Vec<wgpu::Texture>,
+    scalars: Vec<wgpu::Texture>,
 }
 impl NativeEdit {
     fn new(r: &WgpuRasterizer, transfer: NativeTransfer) -> Self {
-        let color = r.document_color();
         let texture = |format| {
             r.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bounded native commit scratch"),
@@ -58,25 +48,10 @@ impl NativeEdit {
             })
         };
         let colors = (0..MAX_BATCH_TILES)
-            .map(|_| ColorSlot {
-                encoded: texture(if color.depth.bits() == 16 {
-                    wgpu::TextureFormat::Rgba16Uint
-                } else {
-                    wgpu::TextureFormat::Rgba8Uint
-                }),
-                canonical: texture(wgpu::TextureFormat::Rgba32Float),
-            })
+            .map(|_| texture(wgpu::TextureFormat::Rgba32Float))
             .collect();
         let scalars = (0..MAX_BATCH_TILES)
-            .map(|_| ScalarSlot {
-                encoded: r.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("bounded native coverage scratch"),
-                    size: 65536 * color.depth.bytes() as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: false,
-                }),
-                canonical: texture(wgpu::TextureFormat::R32Float),
-            })
+            .map(|_| texture(wgpu::TextureFormat::R32Float))
             .collect();
         Self {
             backing: BTreeMap::new(),
@@ -91,24 +66,14 @@ impl NativeEdit {
             scalar: NativeScalarEncoder::with_device(&r.device),
             promoter: NativePromoter::with_device(&r.device),
             validator: validate::Validator::new(&r.device),
-            status: NativeEncodeStatus::new(&r.device),
         }
     }
     pub fn storage_bytes(&self) -> u64 {
-        STATUS_BYTES
-            + self.promoter.storage_bytes()
+        self.promoter.storage_bytes()
             + self.color.storage_bytes()
             + self.scalar.storage_bytes()
-            + self
-                .colors
-                .iter()
-                .map(|s| texture_bytes(&s.encoded) + texture_bytes(&s.canonical))
-                .sum::<u64>()
-            + self
-                .scalars
-                .iter()
-                .map(|s| s.encoded.size() + texture_bytes(&s.canonical))
-                .sum::<u64>()
+            + self.colors.iter().map(texture_bytes).sum::<u64>()
+            + self.scalars.iter().map(texture_bytes).sum::<u64>()
         // Transfer storage is owned/accounted by the shared scene decoder cache.
     }
 }
@@ -119,7 +84,7 @@ struct Publication {
     data: RasterData,
 }
 pub(crate) struct NativeFrame {
-    captures: Vec<PreparedCapture>,
+    capture: Option<NativeCapture>,
     publications: Vec<Publication>,
 }
 impl Drop for NativeFrame {
@@ -187,7 +152,7 @@ impl WgpuRasterizer {
             return Ok(None);
         }
         let mut frame = NativeFrame {
-            captures: Vec::new(),
+            capture: None,
             publications: Vec::new(),
         };
         // Reserve the ordinary backing worker before borrowing live textures.
@@ -247,70 +212,79 @@ impl WgpuRasterizer {
         if frame.publications.is_empty() {
             return Ok(None);
         }
-        // Check actual chunk rounding and per-chunk status allocation, not just
-        // payload size, before recording writes or reserving readback memory.
-        let staging: u64 = inputs
-            .chunks(MAX_BATCH_TILES)
-            .map(|chunk| {
-                let bytes: u64 = chunk
-                    .iter()
-                    .map(|(_, tile)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
-                    .sum();
-                bytes.next_power_of_two() + STATUS_BYTES
-            })
-            .sum();
+        // Immutable native outputs replace frame-sized mapped staging. Admission
+        // reserves one separate bounded transfer in the backing worker.
+        let staging: u64 = STATUS_BYTES
+            + inputs
+                .iter()
+                .map(|(_, tile)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
+                .sum::<u64>();
         if staging > MAX_CAPTURE_BYTES {
             return Err(GpuRasterError::Effect(
-                "Raster frame exceeds the 256 MiB staging budget".into(),
+                "Raster frame exceeds the 256 MiB native output budget".into(),
             ));
         }
-        // Inputs have passed the capture ceiling. At most one view per input
-        // plus the fixed scratch textures lives until this recording completes.
+        // Full views live only through this publication's command recording;
+        // the view cache never pins working or encoded pixels between frames.
         let mut views = crate::native_tiles::PublicationViews::default();
         let native = self.native_edit.as_ref().unwrap();
-        native.status.reset(encoder);
+        frame.capture = Some(NativeCapture {
+            outputs: Vec::with_capacity(inputs.len()),
+            status: NativeEncodeStatus::new(&self.device),
+            pool: self.raster_buffers.clone(),
+            device: (*self.device).clone(),
+            queue: self.queue.clone(),
+        });
+        let capture = frame.capture.as_mut().unwrap();
+        let status = &capture.status;
+        status.reset(encoder);
         native
             .validator
-            .encode(self, encoder, &inputs, &native.status, &mut views)?;
-        // All validation passes precede every promotion, including mixed planes
-        // and targets. Scratch can then be reused without retaining dirty-photo
-        // sized canonical/encoded copies. A capture copy precedes each reuse.
+            .encode(self, encoder, &inputs, status, &mut views)?;
+        // Every input is validated before any promotion. Only canonical Float32
+        // scratch is reused; encoded samples belong to this publication.
         for chunk in inputs.chunks(MAX_BATCH_TILES) {
+            let first = capture.outputs.len();
+            capture.outputs.extend(chunk.iter().map(|(_, tile)| {
+                NativeOutput {
+                    resource: self
+                        .raster_buffers
+                        .take_native(&self.device, tile.descriptor()),
+                    tile: tile.clone(),
+                }
+            }));
             let mut color = Vec::new();
             let mut scalar = Vec::new();
             let mut promotions = Vec::new();
-            let mut copies = Vec::new();
-            for (texture, tile) in chunk {
+            for ((texture, tile), output) in chunk.iter().zip(&capture.outputs[first..]) {
                 let canonical = if tile.descriptor().channels == 4 {
-                    let slot = &native.colors[color.len()];
+                    let canonical = &native.colors[color.len()];
+                    let pool::Resource::Texture(encoded) = &output.resource else {
+                        unreachable!()
+                    };
                     color.push(NativeTileRequest {
                         working: texture,
-                        encoded: &slot.encoded,
-                        canonical: &slot.canonical,
+                        encoded,
+                        canonical,
                         transfer: &native.transfer,
                         depth: self.document_color().depth,
                         alpha: tile.descriptor().alpha,
                         region: [0, 0, 256, 256],
                     });
-                    copies.push(TileCapture {
-                        source: CaptureSource::Texture(&slot.encoded),
-                        tile: tile.clone(),
-                    });
-                    &slot.canonical
+                    canonical
                 } else {
-                    let slot = &native.scalars[scalar.len()];
+                    let canonical = &native.scalars[scalar.len()];
+                    let pool::Resource::Buffer(encoded) = &output.resource else {
+                        unreachable!()
+                    };
                     scalar.push(NativeScalarRequest {
                         working: texture,
-                        encoded: &slot.encoded,
-                        canonical: &slot.canonical,
+                        encoded,
+                        canonical,
                         depth: self.document_color().depth,
                         region: [0, 0, 256, 256],
                     });
-                    copies.push(TileCapture {
-                        source: CaptureSource::Packed(&slot.encoded),
-                        tile: tile.clone(),
-                    });
-                    &slot.canonical
+                    canonical
                 };
                 promotions.push(NativePromotion {
                     canonical,
@@ -318,22 +292,18 @@ impl WgpuRasterizer {
                     region: [0, 0, 256, 256],
                 });
             }
-            let color = native.color.prepare_with_views(
-                &self.device,
-                &color,
-                &native.status,
-                &mut views,
-            )?;
-            let scalar = native.scalar.prepare_with_views(
-                &self.device,
-                &scalar,
-                &native.status,
-                &mut views,
-            )?;
+            let color =
+                native
+                    .color
+                    .prepare_with_views(&self.device, &color, status, &mut views)?;
+            let scalar =
+                native
+                    .scalar
+                    .prepare_with_views(&self.device, &scalar, status, &mut views)?;
             let promotions = native.promoter.prepare_with_views(
                 &self.device,
                 &promotions,
-                &native.status,
+                status,
                 &mut views,
             )?;
             {
@@ -343,9 +313,6 @@ impl WgpuRasterizer {
             }
             encoder.reserve_passes(promotions.pass_count());
             native.promoter.encode(encoder, &promotions);
-            frame
-                .captures
-                .push(self.prepare_capture(encoder, &copies, Some(&native.status))?);
         }
         Ok(Some(frame))
     }
@@ -353,16 +320,17 @@ impl WgpuRasterizer {
     pub(crate) fn finish_native_rasters(
         &mut self,
         mut frame: NativeFrame,
-        submission: wgpu::SubmissionIndex,
+        _submission: wgpu::SubmissionIndex,
     ) -> Result<(), GpuRasterError> {
-        let captures: Vec<_> = frame
-            .captures
-            .drain(..)
-            .map(|capture| capture.submitted(self, submission.clone()))
-            .collect();
         let runtime = self.raster.as_mut().unwrap();
-        if !captures.is_empty() {
-            runtime.worker.as_ref().unwrap().submit(captures)?;
+        if let Some(capture) = frame.capture.take() {
+            if !capture.outputs.is_empty() {
+                runtime
+                    .worker
+                    .as_ref()
+                    .unwrap()
+                    .submit_batch(CaptureBatch::Native(capture))?;
+            }
         }
         for publication in &frame.publications {
             publication

@@ -817,3 +817,136 @@ individual samples, hardware/power records and commands. Exact release SHA-256:
 
 - Before: `d7e73cf7fb6e46288bf4929ebd3e458c58e96a84ab9b374d3ad20e8c35c8f51b`.
 - After: `13fe9db473334f44441ec98ecc970c8bfb659a40e5dcc37669a8792889a15c67`.
+
+## Encode into immutable native outputs; defer readback until after presentation
+
+Native publications now own their encoded integer texture/scalar-buffer outputs
+and status. Quantization writes those outputs directly; fixed Float32 canonical
+scratch and promotion retain the exact working samples. This removes the capture
+copy before scratch reuse, without the extra GPU snapshot copy of the earlier
+rejected prototype. A bounded worker transfers at most 16 MiB at a time after
+GTK's render/present scope releases. Only a transfer already submitted before a
+new scope can precede that frame. Mapping waits remain nonblocking wgpu polls.
+
+The outputs and readback buffers share one 64 MiB retention pool, matched by
+format/size/usage. Outputs return only after their readback completes. Every
+publication has its own 8-byte validation status. Admission reserves a transfer
+inside the 512 MiB pending-storage ceiling and retains the 256 MiB individual
+publication limit. CPU compression scratch is separately charged. Fixed native
+scratch drops by 10 MiB for U16; the benchmark's narrower canvas column excludes
+that scratch, which remains included in renderer telemetry.
+
+Eighteen capture/undo/save/recovery tests pass (79.13 s; one separate hardware
+benchmark ignored). New tests hold backing while three publications reuse the
+working/canonical surfaces, including a later invalid status; earlier exact U16
+versions remain independent. Another test starts save and undo while backing is
+held, then verifies the saved newer version and restored older version. Existing
+abandonment, late invalid color/mask, multi-chunk, device replacement and exact
+U8/U16 save/reopen tests pass. Exact test SHA-256:
+`55e5e75a7570dd5a571eb7d9539f2b43ddc2f788f662bbd16ab26433cc8fe63e`.
+
+Four serial nine-repeat offscreen arms each contain 1,278 moves and 36 pen-ups.
+They use the same staged executable pathname, with no build/test overlapping.
+
+| Arm | Pen-up CPU p50 / p95 / p99 ms | Completed pen-up p50 / p95 / p99 ms | Completed move p99 ms | Move / pen-up misses |
+| --- | --- | --- | ---: | --- |
+| Before | 4.085 / 6.568 / 6.842 | 9.396 / 13.357 / 13.846 | 6.784 | 3 / 29 |
+| After | 4.504 / 6.910 / 8.189 | 7.867 / 12.683 / 13.350 | 7.107 | 3 / 11 |
+| Before repeat | 4.228 / 6.119 / 6.518 | 9.389 / 13.374 / 13.653 | 7.038 | 1 / 31 |
+| After repeat | 4.553 / 6.649 / 7.441 | 7.989 / 11.422 / 12.586 | 7.168 | 1 / 11 |
+
+All four per-stroke completed medians improve in both rounds. CPU pen-up cost
+increases, reflecting the changed ownership/allocation work; the larger strokes
+still exceed the absolute gate. CPU move p99 changes 4.341 → 4.540 ms and
+4.358 → 4.521 ms; those and completed move changes stay within the declared
+relative investigation thresholds. Capture allocated/reserved peak changes
+177.0 → 203.5 MiB; canvas residency remains 571 MiB. Final exported PNG bytes are
+identical across all four arms (SHA-256
+`84984da09047d3aabe6a38a0b5c9622043c6302172307d58c19aa1c957af2722`).
+
+`run-native-direct-capture.py`, `analyze-native-direct-capture.py` and
+`native-direct-capture-*` retain raw frames, full source patch, hashes,
+hardware/power records and commands. Exact after release SHA-256:
+`a5adc15fe72264cd100dff0f9f2ca67959448b0bc25855e1c34b64a987ce396a`.
+Before release SHA-256:
+`13fe9db473334f44441ec98ecc970c8bfb659a40e5dcc37669a8792889a15c67`.
+
+A GTK benchmark now pairs each actual pen-up event with its publication frame
+and child-surface presentation feedback, while observing host-backed completion
+separately. It uses 32 paint layers, 4096² ProPhoto U16, a 720 px palette knife,
+a warm/undone first contact, and 24 measured 800 ms contacts per arm. Later
+contacts start as soon as their predecessor is admitted. Each corrected arm
+passes; all 24 pen-up frames have presentation feedback. No build or GPU test
+overlaps measurement. The compositor describes a P3 SDR output; this is protocol
+and renderer validation, not calibrated physical-monitor qualification.
+
+| GTK arm | Pen-up GPU median ms | Pen-up event-to-present p50 / p95 / p99 ms | Move queued-to-present p99 ms | Observed host backing p95 ms |
+| --- | ---: | --- | ---: | ---: |
+
+| before | 1.596 | 10.904 / 12.570 / 13.538 | 6.319 | 22.811 |
+| after | 1.269 | 11.147 / 11.849 / 13.386 | 6.315 | 22.901 |
+| before-repeat | 1.604 | 10.845 / 12.383 / 13.436 | 6.224 | 23.415 |
+| after-repeat | 1.289 | 10.912 / 13.035 / 13.399 | 8.481 | 23.958 |
+| before-confirm | 1.570 | 10.687 / 11.538 / 12.037 | 6.330 | 21.905 |
+| after-confirm | 1.294 | 10.820 / 11.594 / 12.753 | 6.330 | 22.529 |
+
+GPU pen-up medians decrease in all three pairs. Event-to-present latency does
+not improve consistently; it remains outside the declared 8.33 ms goal.
+Event-to-queue medians are about 5.4 ms. Current GTK `FrameClock::deadline` reserves
+three quarters of a refresh for rendering/composition, and `Workspace::wake`
+waits for its timer; this scheduling delay is separate from native readback.
+The worker's shorter GPU work therefore does not automatically produce an earlier
+compositor presentation. Host-backed observations are sampled at roughly 2 ms,
+so they bound completion rather than measuring exact worker service time.
+
+The after-repeat arm contains one long movement frame (ID 1567): 16.459 ms total
+worker elapsed, 9.626 ms thread CPU, with 16.287 ms elapsed in composition. GPU
+timestamps span 16.373 ms and include queue gaps. The preceding backing had been
+observed complete 635 ms earlier; the next pen-up is 153 ms later. This is not a
+pen-up/capture frame. Following frame IDs 1569–1672 show a roughly 2.4 ms
+presentation-phase shift, producing 106 move latency misses in that arm versus
+0–3 elsewhere. A further serial control pair does not repeat the long frame or
+phase shift. The exact trigger remains unproven and stays open for full-matrix
+qualification; it is not discarded from the evidence. The one-second display
+phase sampling in `wayland.rs` is a candidate for the sustained timing effect,
+not an established explanation for the original long frame.
+
+`rebuild-native-direct-gtk.py` restores the explicit parent production sources,
+then builds before/after with identical benchmark instrumentation and fresh file
+mtimes. `run-native-direct-gtk.py` runs the paired controls (optional `-confirm`);
+`analyze-native-direct-gtk.py` retains denominators, missed/discarded feedback,
+per-stroke timings and raw records. Initial fixture attempts are separately
+marked invalid: the first bypassed the ID allocator and the next preflight
+caught paint layers below Paper. The corrected fixture allocates IDs normally,
+inserts above Paper and validates before opening; its logs have no recovery
+checkpoint failure. Invalid fixture timings provide no acceptance evidence.
+
+Exact corrected GTK release test SHA-256:
+
+- Before: `cc0b868ce713dc790a106f01181c51792c00d18cc51a635f7ab0c226dd1a2167`.
+- After: `958338ca66932fcfbb94545f001ca8a66bfd30debc120d759b7e6f1440f04dd2`.
+
+The ownership/scheduling change is retained for exact version isolation and
+repeatable offscreen pen-up/GPU improvement. It does not qualify the complete
+latency goal, unchanged-movement tails, combined photo/window memory pressure,
+physical monitor behavior or other platform hosts. GTK pacing and the larger
+native publication costs remain separate open work.
+
+
+A further device-loss test passes (10.69 s): destroy the GPU after the native
+canvas submission completes while readback is deliberately held, then verify
+all pending tiles fail and the last host-backed checkpoint restores on a new
+device. Final test executable SHA-256:
+`9a649c0e31e752a7da216a4ff42f31229b664db82e07d817697e21f360def28e`.
+The source changes after the measured renderer build are comments/formatting and
+this additional test; they do not change its execution path.
+
+GTK diagnostics/recovery passes, as does the separate wide-color recovery test
+(5.97 s), using the corrected after executable above. Their deliberate invalid
+scissor submissions produce the expected renderer failures and recovery UI. An
+initial attempt to run both GTK tests in one process passed the first but could
+not initialize GTK on libtest's second thread; the wide-color test was rerun
+successfully in its own process. This is a test-runner restriction, not a
+renderer recovery failure. Logs are `native-direct-gtk-recovery*` and
+`native-direct-gtk-wide-recovery*`; capture tests/builds use
+`native-direct-capture-*` and `native-direct-final-*`.

@@ -540,11 +540,12 @@ fn batched_validation_scans_every_texture_slot_and_partial_tail() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    let status = NativeEncodeStatus::new(&r.device);
     let scan = || {
         let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-        native.status.reset(&mut encoder);
-        native.validator.encode(&r, &mut encoder, &inputs, &native.status, &mut Default::default()).unwrap();
-        encoder.copy_buffer_to_buffer(native.status.buffer(), 0, &readback, 0, STATUS_BYTES);
+        status.reset(&mut encoder);
+        native.validator.encode(&r, &mut encoder, &inputs, &status, &mut Default::default()).unwrap();
+        encoder.copy_buffer_to_buffer(status.buffer(), 0, &readback, 0, STATUS_BYTES);
         let submission = encoder.submit(&r.queue);
         let (tx, rx) = mpsc::channel();
         readback.map_async(wgpu::MapMode::Read, .., move |result| { tx.send(result).unwrap(); });
@@ -570,4 +571,111 @@ fn batched_validation_scans_every_texture_slot_and_partial_tail() {
         write(0.);
     }
     assert!(scan().is_ok());
+}
+
+#[test]
+fn deferred_native_outputs_preserve_versions_and_status_during_following_frames() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut layers = restored_fixture(&mut r);
+    let before = backing(&layers[0].raster);
+    let mask_before = backing(&layers[0].mask.as_ref().unwrap().raster);
+    while !r.raster_ready() { std::thread::yield_now(); }
+    let presentation = r.prioritize_raster_presentation();
+    mark_changed(&mut r, &mut layers);
+    r.submit(packet(&layers, false)).unwrap();
+    let first = layers.clone();
+    let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap().active().texture.clone();
+    set_pixel(&r, &page, &[0.; 4]);
+    let mask = r.layer_masks.pages[&(LayerId(2), [0, 0])].texture.clone();
+    set_pixel(&r, &mask, &[0.5]);
+    mark_changed(&mut r, &mut layers);
+    r.submit(packet(&layers, false)).unwrap();
+    let second = layers.clone();
+    // A later failed publication must not poison either earlier status buffer.
+    set_pixel(&r, &page, &[f32::NAN, 0., 0., 1.]);
+    mark_changed(&mut r, &mut layers);
+    r.submit(packet(&layers, false)).unwrap();
+    r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
+    for snapshot in [&first, &second, &layers] {
+        for root in [&snapshot[0].raster, &snapshot[0].mask.as_ref().unwrap().raster] {
+            assert!(root.wait_data().unwrap().tiles.values().all(|t| t.try_backing().is_none()));
+        }
+    }
+    assert_eq!(r.raster_buffers.transfer.load(Ordering::Relaxed), 0);
+    drop(presentation);
+    assert_eq!(backing(&first[0].raster), before);
+    assert_eq!(backing(&first[0].mask.as_ref().unwrap().raster), mask_before);
+    let mut expected = before;
+    expected.get_mut(&TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }).unwrap()[..8].fill(0);
+    let mut mask_expected = mask_before;
+    mask_expected.get_mut(&TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }).unwrap()[..2].copy_from_slice(&32768u16.to_le_bytes());
+    assert_eq!(backing(&second[0].raster), expected);
+    assert_eq!(backing(&second[0].mask.as_ref().unwrap().raster), mask_expected);
+    for root in [&layers[0].raster, &layers[0].mask.as_ref().unwrap().raster] {
+        assert!(root.wait_data().unwrap().tiles.values().all(|t| t.wait_backing().is_err()));
+    }
+}
+
+#[test]
+fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_backing() {
+    let mut document = layer_core::Document::new("pending backing", 256, 256);
+    document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: IntegerDepth::U16 };
+    let (mut input, mut live) = engine(document);
+    while !live.backend().raster_ready() { std::thread::yield_now(); }
+    let presentation = live.backend().prioritize_raster_presentation();
+    stroke(&mut live, &mut input, 1, 60.);
+    let first = live.document().layers[0].raster.clone();
+    stroke(&mut live, &mut input, 10, 75.);
+    let second = live.document().layers[0].raster.clone();
+    assert!(!first.host_backed());
+    assert!(!second.host_backed());
+    let project = layer_core::Project { document: live.document().clone(), assets: Default::default() };
+    let (started, ready) = mpsc::channel();
+    let save = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap()
+    });
+    ready.recv_timeout(READBACK_TIMEOUT).unwrap();
+    assert!(live.undo().unwrap());
+    // Restore cannot yet read the pending first version. It yields without
+    // blocking the renderer or replacing the immutable save snapshot.
+    live.render_frame().unwrap();
+    drop(presentation);
+    flush(&mut live);
+    let first_bytes = backing(&first);
+    let second_bytes = backing(&second);
+    assert_ne!(first_bytes, second_bytes);
+    assert_eq!(backing(&live.document().layers[0].raster), first_bytes);
+    let saved = save.join().unwrap();
+    assert_eq!(backing(&saved.document.layers[0].raster), second_bytes);
+    assert!(live.redo().unwrap());
+    flush(&mut live);
+    assert_eq!(backing(&live.document().layers[0].raster), second_bytes);
+}
+
+#[test]
+fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut layers = restored_fixture(&mut r);
+    let checkpoint = layers.clone();
+    let expected = backing(&checkpoint[0].raster);
+    while !r.raster_ready() { std::thread::yield_now(); }
+    let presentation = r.prioritize_raster_presentation();
+    mark_changed(&mut r, &mut layers);
+    r.submit(packet(&layers, false)).unwrap();
+    r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
+    assert!(!layers[0].raster.host_backed());
+    r.device.destroy();
+    drop(presentation);
+    for root in [&layers[0].raster, &layers[0].mask.as_ref().unwrap().raster] {
+        assert!(root.wait_data().unwrap().tiles.values().all(|tile| tile.wait_backing().is_err()));
+    }
+    assert!(checkpoint[0].raster.host_backed());
+    let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
+    replacement.submit(packet(&checkpoint, true)).unwrap();
+    assert_eq!(backing(&checkpoint[0].raster), expected);
 }

@@ -21,52 +21,13 @@ pub use browser::BrowserRasterEncoder;
 #[cfg(target_arch = "wasm32")]
 use browser::CaptureWorker;
 
-// Reuse unmapped staging allocations; allocation/zeroing at pen-up can cost
-// several milliseconds even when the queue copy itself is cheap.
-#[derive(Default)]
-pub(super) struct BufferPool {
-    buffers: std::sync::Mutex<Vec<wgpu::Buffer>>,
-    bytes: AtomicU64,
-    working: AtomicU64,
-}
-impl BufferPool {
-    fn take(&self, device: &wgpu::Device, size: u64) -> wgpu::Buffer {
-        let mut buffers = self.buffers.lock().unwrap();
-        if let Some(index) = buffers.iter().position(|b| b.size() == size) {
-            self.bytes.fetch_sub(size, Ordering::Relaxed);
-            return buffers.remove(index);
-        }
-        drop(buffers);
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bounded raster capture chunk"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        })
-    }
-    fn put(&self, buffer: wgpu::Buffer) {
-        let mut buffers = self.buffers.lock().unwrap();
-        if buffer.size() == STATUS_BYTES
-            && buffers.iter().filter(|b| b.size() == STATUS_BYTES).count() >= 16
-        {
-            return;
-        }
-        while self.bytes.load(Ordering::Relaxed) + buffer.size() > 64 * 1024 * 1024 {
-            if buffers.is_empty() {
-                break;
-            }
-            // Retain recently used sizes. Keeping four large startup spares
-            // forever prevents all smaller tiles/status buffers from entering
-            // the cache and forces a pinned allocation at every small commit.
-            let old = buffers.remove(0);
-            self.bytes.fetch_sub(old.size(), Ordering::Relaxed);
-        }
-        if self.bytes.load(Ordering::Relaxed) + buffer.size() <= 64 * 1024 * 1024 {
-            self.bytes.fetch_add(buffer.size(), Ordering::Relaxed);
-            buffers.push(buffer);
-        }
-    }
-}
+mod pool;
+pub(super) use pool::BufferPool;
+#[cfg(not(target_arch = "wasm32"))]
+mod deferred;
+#[cfg(not(target_arch = "wasm32"))]
+use deferred::{CaptureBatch, NativeCapture, NativeOutput};
+
 fn capture_allocation(bytes: u64) -> u64 {
     let tail = bytes % CAPTURE_CHUNK;
     bytes / CAPTURE_CHUNK * CAPTURE_CHUNK
@@ -133,7 +94,7 @@ pub(super) struct RasterRuntime {
 }
 #[cfg(not(target_arch = "wasm32"))]
 struct CaptureWorker {
-    sender: Option<mpsc::SyncSender<Vec<RasterCapture>>>,
+    sender: Option<mpsc::SyncSender<CaptureBatch>>,
     pending: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
     staging: Arc<AtomicU64>,
@@ -143,7 +104,7 @@ struct CaptureWorker {
 #[cfg(not(target_arch = "wasm32"))]
 impl CaptureWorker {
     fn new(device: wgpu::Device, pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(16);
+        let (sender, receiver) = mpsc::sync_channel::<CaptureBatch>(16);
         let pending = Arc::new(AtomicUsize::new(0));
         let count = pending.clone();
         let staging = Arc::new(AtomicU64::new(0));
@@ -175,7 +136,7 @@ impl CaptureWorker {
                 }
                 preparation.store(true, Ordering::Release);
                 while let Ok(captures) = receiver.recv() {
-                    let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
+                    let size = captures.storage_bytes();
                     // Dropped tickets publish failures even if a driver callback or
                     // compression panics; never leave backpressure permanently set.
                     let result = if failure.lock().unwrap().is_some() {
@@ -183,10 +144,7 @@ impl CaptureWorker {
                         Ok(())
                     } else {
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            for capture in captures {
-                                capture.finish()?;
-                            }
-                            Ok::<_, String>(())
+                            captures.finish()
                         }))
                         .unwrap_or_else(|_| Err("Raster backing worker panicked".into()))
                     };
@@ -209,13 +167,16 @@ impl CaptureWorker {
     }
     fn ready(&self) -> bool {
         // Reserve room for the largest legal next capture. The total staging
-        // ceiling remains 512 MiB, while small edits can share that allowance.
+        // ceiling remains 512 MiB, including one active background transfer.
         self.prepared.load(Ordering::Acquire)
             && self.pending.load(Ordering::Acquire) < 16
-            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES
+            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
     }
     fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
-        let size = captures.iter().map(|c| c.staging_bytes).sum();
+        self.submit_batch(CaptureBatch::Mapped(captures))
+    }
+    fn submit_batch(&self, captures: CaptureBatch) -> Result<(), GpuRasterError> {
+        let size = captures.storage_bytes();
         self.staging.fetch_add(size, Ordering::Release);
         self.pending.fetch_add(1, Ordering::Release);
         if self.sender.as_ref().unwrap().try_send(captures).is_err() {
@@ -357,13 +318,20 @@ pub(super) struct PreparedCapture {
 }
 impl PreparedCapture {
     pub fn submitted(
-        mut self,
+        self,
         r: &WgpuRasterizer,
+        submission: wgpu::SubmissionIndex,
+    ) -> RasterCapture {
+        self.submitted_device(&r.device, submission)
+    }
+    fn submitted_device(
+        mut self,
+        device: &wgpu::Device,
         submission: wgpu::SubmissionIndex,
     ) -> RasterCapture {
         RasterCapture {
             #[cfg(not(target_arch = "wasm32"))]
-            device: (*r.device).clone(),
+            device: device.clone(),
             submission,
             chunks: self
                 .chunks
@@ -892,6 +860,7 @@ impl WgpuRasterizer {
     pub(super) fn raster_staging_bytes(&self) -> u64 {
         self.raster_buffers.bytes.load(Ordering::Relaxed)
             + self.raster_buffers.working.load(Ordering::Relaxed)
+            + self.raster_buffers.transfer.load(Ordering::Relaxed)
             + self
                 .raster
                 .as_ref()
@@ -1037,90 +1006,7 @@ impl WgpuRasterizer {
         copies: &[TileCapture<'_>],
         status: Option<&NativeEncodeStatus>,
     ) -> Result<PreparedCapture, GpuRasterError> {
-        if copies.is_empty() || copies.len() as u64 > MAX_CAPTURE_BYTES / SCALAR_PAGE_BYTES {
-            return Err(GpuRasterError::Color(
-                "Invalid raster capture tile count".into(),
-            ));
-        }
-        let mut identities = std::collections::HashSet::new();
-        let sizes: Vec<_> = copies
-            .iter()
-            .map(|copy| {
-                if !identities.insert(copy.tile.identity()) || copy.tile.try_backing().is_some() {
-                    return Err(GpuRasterError::Color(
-                        "Raster capture reuses a publication ticket".into(),
-                    ));
-                }
-                copy.byte_len()
-            })
-            .collect::<Result<_, _>>()?;
-        let mut ranges = Vec::new();
-        let mut start = 0;
-        let mut staging_bytes = if status.is_some() { STATUS_BYTES } else { 0 };
-        while start < copies.len() {
-            let mut end = start;
-            let mut bytes = 0;
-            while end < copies.len() && bytes + sizes[end] <= CAPTURE_CHUNK {
-                bytes += sizes[end];
-                end += 1;
-            }
-            let allocation = bytes.next_power_of_two();
-            staging_bytes += allocation;
-            if staging_bytes > MAX_CAPTURE_BYTES {
-                return Err(GpuRasterError::Effect(
-                    "Raster capture exceeds the 256 MiB staging budget".into(),
-                ));
-            }
-            ranges.push((start..end, allocation));
-            start = end;
-        }
-        let mut chunks = Vec::with_capacity(ranges.len());
-        for (range, allocation) in ranges {
-            let buffer = self.raster_buffers.take(&self.device, allocation);
-            let mut entries = Vec::with_capacity(range.len());
-            let mut offset = 0;
-            for index in range {
-                let copy = &copies[index];
-                let size = sizes[index];
-                match copy.source {
-                    CaptureSource::Texture(texture) => encoder.copy_texture_to_buffer(
-                        texture.as_image_copy(),
-                        wgpu::TexelCopyBufferInfo {
-                            buffer: &buffer,
-                            layout: wgpu::TexelCopyBufferLayout {
-                                offset,
-                                bytes_per_row: Some((size / u64::from(PAGE_SIZE)) as u32),
-                                rows_per_image: Some(PAGE_SIZE),
-                            },
-                        },
-                        texture.size(),
-                    ),
-                    CaptureSource::Packed(source) => {
-                        encoder.copy_buffer_to_buffer(source, 0, &buffer, offset, size)
-                    }
-                }
-                entries.push(Entry {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    offset,
-                    size,
-                    descriptor: copy.tile.descriptor(),
-                    tile: copy.tile.clone(),
-                });
-                offset += size;
-            }
-            chunks.push((buffer, entries));
-        }
-        let validation = status.map(|status| {
-            let buffer = self.raster_buffers.take(&self.device, STATUS_BYTES);
-            encoder.copy_buffer_to_buffer(status.buffer(), 0, &buffer, 0, STATUS_BYTES);
-            buffer
-        });
-        Ok(PreparedCapture {
-            chunks,
-            validation,
-            staging_bytes,
-            pool: self.raster_buffers.clone(),
-        })
+        prepare_capture(&self.device, &self.raster_buffers, encoder, copies, status)
     }
 
     /// Restore changed pages only, from exact backing. Called on the GPU owner
@@ -1323,3 +1209,96 @@ mod native_tests;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod native_edit;
 mod residency;
+
+fn prepare_capture(
+    device: &wgpu::Device,
+    pool: &Arc<BufferPool>,
+    encoder: &mut wgpu::CommandEncoder,
+    copies: &[TileCapture<'_>],
+    status: Option<&NativeEncodeStatus>,
+) -> Result<PreparedCapture, GpuRasterError> {
+    if copies.is_empty() || copies.len() as u64 > MAX_CAPTURE_BYTES / SCALAR_PAGE_BYTES {
+        return Err(GpuRasterError::Color(
+            "Invalid raster capture tile count".into(),
+        ));
+    }
+    let mut identities = std::collections::HashSet::new();
+    let sizes: Vec<_> = copies
+        .iter()
+        .map(|copy| {
+            if !identities.insert(copy.tile.identity()) || copy.tile.try_backing().is_some() {
+                return Err(GpuRasterError::Color(
+                    "Raster capture reuses a publication ticket".into(),
+                ));
+            }
+            copy.byte_len()
+        })
+        .collect::<Result<_, _>>()?;
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut staging_bytes = if status.is_some() { STATUS_BYTES } else { 0 };
+    while start < copies.len() {
+        let mut end = start;
+        let mut bytes = 0;
+        while end < copies.len() && bytes + sizes[end] <= CAPTURE_CHUNK {
+            bytes += sizes[end];
+            end += 1;
+        }
+        let allocation = bytes.next_power_of_two();
+        staging_bytes += allocation;
+        if staging_bytes > MAX_CAPTURE_BYTES {
+            return Err(GpuRasterError::Effect(
+                "Raster capture exceeds the 256 MiB staging budget".into(),
+            ));
+        }
+        ranges.push((start..end, allocation));
+        start = end;
+    }
+    let mut chunks = Vec::with_capacity(ranges.len());
+    for (range, allocation) in ranges {
+        let buffer = pool.take(device, allocation);
+        let mut entries = Vec::with_capacity(range.len());
+        let mut offset = 0;
+        for index in range {
+            let copy = &copies[index];
+            let size = sizes[index];
+            match copy.source {
+                CaptureSource::Texture(texture) => encoder.copy_texture_to_buffer(
+                    texture.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset,
+                            bytes_per_row: Some((size / u64::from(PAGE_SIZE)) as u32),
+                            rows_per_image: Some(PAGE_SIZE),
+                        },
+                    },
+                    texture.size(),
+                ),
+                CaptureSource::Packed(source) => {
+                    encoder.copy_buffer_to_buffer(source, 0, &buffer, offset, size)
+                }
+            }
+            entries.push(Entry {
+                #[cfg(not(target_arch = "wasm32"))]
+                offset,
+                size,
+                descriptor: copy.tile.descriptor(),
+                tile: copy.tile.clone(),
+            });
+            offset += size;
+        }
+        chunks.push((buffer, entries));
+    }
+    let validation = status.map(|status| {
+        let buffer = pool.take(device, STATUS_BYTES);
+        encoder.copy_buffer_to_buffer(status.buffer(), 0, &buffer, 0, STATUS_BYTES);
+        buffer
+    });
+    Ok(PreparedCapture {
+        chunks,
+        validation,
+        staging_bytes,
+        pool: pool.clone(),
+    })
+}
