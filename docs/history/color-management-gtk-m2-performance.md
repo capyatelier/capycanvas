@@ -1017,3 +1017,89 @@ working spaces (18.89 s) with in-place capability enabled. Exact GTK test SHA-25
 `native-inplace-gtk-*` records the build, source manifest and private-compositor
 workflow. This is correctness evidence; GTK input-to-present qualification still
 requires further scheduling work and is not implied by the offscreen gain.
+
+## Full native drawing matrix after deferred backing and in-place publication
+
+The complete 25-scenario suite was rerun at `5f37e447` in sRGB U8, Display P3 U8
+and ProPhoto U16, paired with an experimental eight-tile encoder. Every arm uses
+three fresh-device repetitions per scenario: 10,920 measured frames, comprising
+10,686 moves and 234 pen-ups. Six serial arms therefore contribute 65,520 frames.
+The same staged executable pathname is used throughout, with no overlapping
+build or GPU test. The retained implementation remains the two-tile encoder at
+`5f37e447`; the larger-batch experiment described below was removed.
+
+| Retained mode | Worst scenario move CPU / completed p99 ms | Worst scenario pen-up CPU / completed p99 ms | Move / pen-up deadline misses | Scenarios failing completed p99 | Process peak RSS MiB |
+| --- | --- | --- | --- | ---: | ---: |
+| sRGB U8 | 8.454 / 8.833 | 5.390 / 9.588 | 17 / 5 | 3 | 801.59 |
+| Display P3 U8 | 7.496 / 7.753 | 5.332 / 9.608 | 15 / 3 | 1 | 803.77 |
+| ProPhoto U16 | 8.401 / 8.613 | 5.886 / 10.499 | 22 / 3 | 2 | 841.86 |
+
+These are the largest *per-scenario* p99 values, not pooled suite percentiles.
+All modes still fail the absolute latency gate. Palette-knife pen-up fails in
+all three; sRGB also has flat-marker movement and watercolor-wash pen-up
+failures, and ProPhoto has a soft-airbrush movement failure. Individual long
+frames remain in the distributions even when a scenario's p99 passes. In
+particular, both implementations show slow first measured watercolor frames
+after warm-up/undo; these must be investigated separately from ordinary warm
+movement. Three repetitions give only 3–36 pen-ups for an individual scenario;
+its p99 can be the maximum and cannot substitute for sustained tail evidence.
+
+Compared with the first native matrix in this report, failing scenario counts
+fall from 13 / 12 / 15 to 3 / 1 / 2. That is progress against the initial native
+path, not acceptance against the fixed program baseline or the declared GTK
+input-to-present budget. The earlier fresh fixed/M1/parent measurements remain
+in `comparison-data.json`. This run measures frame creation and offscreen
+completion; it does not measure GTK presentation or qualify combined photo,
+export, multiple-window and driver allocation peaks.
+
+Artifacts are `run-native-inplace-matrix.py`,
+`analyze-native-inplace-matrix.py`, `native-inplace-matrix-{environment,runs,summary}.json`
+and the per-arm reports, raw frames, process high-water and GPU samples. The
+retained executable SHA-256 is
+`2ad4572050fe2793f7e41c9a18262fed9b0154219538924e351cedc49faf97bf`.
+All 25 final exported PNGs match byte-for-byte between the two implementations
+in every mode (75 comparisons); their hashes are retained in the summary.
+These sRGB diagnostic exports supplement the native-code tests, rather than
+establishing U16 interchange precision by themselves.
+
+### Rejected eight-tile encoding experiment
+
+The candidate requested only available, bounded binding capacity: at most 16
+storage textures and nine storage buffers per shader stage. Supporting devices
+encoded up to eight independent tiles per dispatch; other devices were limited
+by their advertised capacities. Per-tile extent, pixel storage and quantization
+math were unchanged. Color/scalar tests exercised all eight slots plus a
+one-tile tail, and the late-invalid whole-publication test passed. The candidate
+also passed all 160 color cases with zero native-code error. Exact test SHA-256:
+`b6156eae764c963ef3bdf5609958177c8479e1d1b784bdb38faf3dab49448c13`.
+
+Four separate nine-repeat palette-knife arms suggested a useful improvement:
+completed pen-up medians changed 6.885 → 6.237 ms and 7.050 → 6.162 ms. Every
+individual stroke's median improved. Movement tail changes were mixed, however,
+and the complete matrix exposed repeatable CPU regressions in other brushes.
+For example, the first large-paintbrush pen-up CPU medians in sRGB and P3 changed
+0.820 → 3.263 ms and 0.896 → 2.690 ms. The second chalk pen-up changed
+1.139 → 2.858 ms and 1.068 → 3.336 ms. These are repeated, workload-specific
+changes, not just the occasional 18–21 ms outlier. ProPhoto repeats the same
+patterns. Their exact internal cause has not been established; increased binding
+capacity cannot be treated as a free optimization on this driver.
+
+The candidate was rejected and all six changed production/test files restored
+exactly to `5f37e447`. No GTK device-limit expansion remains. Its immutable
+executable is
+`74059e01d395865c51a3c655e3026c7737b260a708e3d06763c1c758b7146a96`;
+`native-inplace-eight-source/`, `native-inplace-eight-rejected.patch`,
+`native-inplace-eight-restoration.json` and the `native-inplace-eight-*` runs
+preserve the experiment. The retained two-tile code and its earlier GTK workflow
+validation are unchanged; no new GTK correctness claim is made for the rejected
+candidate.
+
+A separate analysis of the first four moves after each palette-knife pen-up did
+not identify readback as the dominant movement tail: those groups' p99 values
+were below the other moves in each of the four nine-repeat arms. GTK already
+holds presentation priority through canvas submission and surface publication.
+The core/headless entry point has no equivalent outer scope; adding one without
+checking restoration/backing waits could introduce a dependency cycle. No such
+speculative scheduling change was made. The outstanding GTK timer delay, larger
+native publication cost and first-use CPU stalls remain distinct investigation
+targets; the exact save/undo/recovery ownership changes are retained.
