@@ -26,6 +26,58 @@ require new evidence and a specific hypothesis before another run or input
 workaround. Keep unresolved acceptance explicit while continuing independent
 parity fixes. Commit only major milestones. All eleven recovery stashes remain.
 
+The Settings presentation milestone replaces Zen's text-only icon picker with
+four shared image tiles, matching Web/Android's 48-point previews and 64-point
+controls. It reuses the existing icon-tile control, shared choice metadata and
+Rust edit/reset actions; ordinary native pickers retain supplied option icons.
+Four AppKit-hosted cases pass across both Apple policies and light/dark themes:
+clicking each preview updates selection and the live Zen command icon;
+Done/reopen retains it and shared Reset restores the default. Representative
+captures are reviewed under `artifacts/apple-preference-choices-v1/`.
+
+The same batch fixes narrow shortcut dialogs. The old 420-point minimum clips
+the editor's title and actions in a 320-point window. Both shortcut sheets now
+allow 320 points while retaining their normal ideal widths; the editor reuses
+`ConfigurationFlow` to wrap its footer. Sixteen subsequent AppKit-hosted captures
+cover the editor/recorder, 320/420 points, both themes and both Apple policies.
+Representative captures show complete labels and actions. Evidence is under
+`artifacts/apple-shortcut-fit-v1/`. Later grouped UIKit review finds that its
+recorder still occupies most of the screen and inherits plain text buttons.
+Standard bordered buttons and native fitted presentation sizing resolve those
+visible differences. No custom presentation controller or sizing observer is
+added. [Apple's fitted sizing](https://developer.apple.com/documentation/swiftui/presentationsizing/fitted)
+uses the content's ideal size; the existing minimum/ideal frames remain.
+
+Both final grouped editor workflows pass with no failures or skips: Mac and
+UIKit image selection, the actual Reset context menu, close/reopen, shortcut
+search, editor/recorder opening and nested cancellation. Final recorder captures
+are reviewed on both hosts and show compact sheets with distinct action buttons.
+Both final Release builds pass without warnings. Evidence is under
+`artifacts/apple-settings-choice-milestone-v1/`; final results are `mac-v2`,
+`simulator-v2` and `release-final`. The test apps and simulator runner are stopped.
+No physical test is run for this batch. These results do not establish every
+Settings state, focused text/numeric Reset, physical keyboard delivery or full
+windowed-iPad acceptance. Main fetch finds no newer commits; all eleven recovery
+stashes remain.
+
+The separate numeric Settings Reset fixture is inconclusive: its initial field
+click/key checks and later native-menu observation do not establish the intended
+workflow or a product failure. Temporary preference-row extraction is removed;
+number draft semantics are unchanged. Preserve the failed evidence under
+`artifacts/apple-settings-number-reset-v1/` and do not repeat that fixture without
+new evidence. The earlier image-choice component fixture also needed capture-based
+clicks because its in-process Form accessibility traversal omitted rows; its
+failures remain recorded. Neither investigation adds a product input workaround.
+
+A later compact-menu routing diagnostic still fails Command-Z and does not
+establish its cause. The capture remains first responder in the key window;
+the trace shows an empty default undo manager and ordinary editing-availability
+queries, with no Command-Z press or target callback. Temporary source logging
+is removed. Evidence is under `artifacts/apple-menu-routing-v1/`. Its isolated
+simulator app and runner are stopped. The later Settings milestone replaces that
+installed diagnostic product with the reviewed `simulator-v2` source above.
+Do not repeat the compact-menu investigation without new evidence.
+
 The property/menu milestone fixes curve-point and gradient-stop selection. Adding
 a stop previously left the old endpoint selected, so Position stayed disabled
 and Color/Opacity edits targeted the wrong stop. A new curve point could not be
@@ -116,7 +168,8 @@ passes ordinary typing/Done/reopen and focused Reset/Done/reopen for both theme
 colors on both Apple policies (four cases). It sends the same shared reset action
 as the context-menu item; it does not automate the native menu or establish UIKit
 delivery. Evidence is under `artifacts/apple-settings-reset-v1/`. Both final
-Release builds include this fix; UIKit Reset menu delivery remains unqualified.
+Release builds include this fix; UIKit focused text Reset remains unqualified.
+Image-choice Reset is covered by the later grouped Settings workflow above.
 
 The shared menu handler also fixes accelerator lookup across submenu
 pages. `AppleContextMenu` exposes its leaf actions; the existing menu key handler

@@ -91,9 +91,7 @@ struct SettingsView: View {
             case "switch":
                 Toggle(row["title"].string, isOn: Binding(get: { kind["active"].bool }, set: { edit(row, $0) }))
             case "choice":
-                Picker(row["title"].string, selection: Binding(get: { Int(kind["selected"].number) }, set: { edit(row, $0) })) {
-                    ForEach(kind["options"].array.indices, id: \.self) { index in Text(kind["options"][index].string).tag(index) }
-                }.accessibilityIdentifier("preference-" + row["id"].string)
+                choice(row)
             case "text":
                 PreferenceText(label: row["title"].string, value: kind["value"].string) { edit(row, $0) }
             case "number":
@@ -117,6 +115,32 @@ struct SettingsView: View {
             .contextMenu {
                 if !row["reset"].isNull { Button(row["reset"]["label"].string) { action(["type": "reset", "id": row["id"].raw]) }.disabled(!row["reset"]["enabled"].bool) }
             }
+    }
+    @ViewBuilder private func choice(_ row: JSON) -> some View {
+        let kind = row["kind"]
+        if kind["presentation"]["type"].string == "image_tiles" {
+            Text(row["title"].string)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0, maximum: 64), spacing: 6),
+                count: max(1, Int(kind["presentation"]["columns"].uint))), spacing: 6) {
+                ForEach(kind["options"].array.indices, id: \.self) { index in
+                    let selected = index == Int(kind["selected"].number)
+                    IconTile(icon: kind["icons"][index].string, label: kind["options"][index].string,
+                        selected: selected, size: 48, background: Color.primary.opacity(0.05)) { edit(row, index) }
+                        .frame(height: 64)
+                        .overlay { RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(selected ? EditorPalette.sharedAccent : .clear, lineWidth: 2).allowsHitTesting(false) }
+                        .accessibilityIdentifier("preference-" + row["id"].string + "-\(index)")
+                }
+            }.padding(.vertical, 6)
+        } else {
+            Picker(row["title"].string, selection: Binding(get: { Int(kind["selected"].number) }, set: { edit(row, $0) })) {
+                ForEach(kind["options"].array.indices, id: \.self) { index in
+                    Label { Text(kind["options"][index].string) } icon: {
+                        if !kind["icons"][index].string.isEmpty { SharedIcon(name: kind["icons"][index].string) }
+                    }.tag(index)
+                }
+            }.accessibilityIdentifier("preference-" + row["id"].string)
+        }
     }
 }
 

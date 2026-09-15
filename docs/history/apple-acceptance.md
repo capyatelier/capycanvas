@@ -108,6 +108,19 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Settings choices and shortcut dialog fit — 2026-09-15
+
+Apple Settings now shows the shared Zen icon previews and retains icons in
+ordinary choices. Shortcut dialogs fit 320-point windows, reuse the existing
+wrapping layout, and use native fitted sizing and bordered actions. Four focused
+image-choice cases pass; narrow/wide light/dark captures cover both Apple policies.
+Final grouped Mac and UIKit workflows pass actual image-choice Reset, reopen,
+shortcut search and nested dialog cancellation. Both final Release builds pass
+without warnings, and representative captures are reviewed. The [handoff](../development/apple-handoff.md)
+records evidence and the retained inconclusive numeric Reset investigation.
+Full feature/visual, physical input, provider/lifecycle and sustained Mac 90 Hz /
+iPad 120 Hz acceptance remain open. The overall goal is **incomplete**.
+
 ## Property selection and menu navigation — 2026-09-15
 
 New curve points and gradient stops select themselves from Rust's published

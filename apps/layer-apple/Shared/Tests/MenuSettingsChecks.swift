@@ -4,6 +4,55 @@ import AppKit
 #endif
 
 extension XCTestCase {
+    @MainActor func checkSettingsChoicePresentation(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"reveal","id":"zen_icon"}}]"#
+        app.launch()
+        let first = app.buttons["preference-zen_icon-0"]
+        XCTAssertTrue(first.waitForExistence(timeout: 20))
+        XCTAssertTrue(first.isSelected)
+        for index in 1...3 {
+            let choice = app.buttons["preference-zen_icon-\(index)"]
+            workspaceActivate(choice)
+            expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: choice)
+            waitForExpectations(timeout: 5)
+            XCTAssertFalse(first.isSelected)
+        }
+        attachEditor(in: app, name: "settings-image-choices")
+        let selected = app.buttons["preference-zen_icon-3"]
+        #if os(macOS)
+        selected.rightClick()
+        let reset = app.menuItems["Reset to Default"]
+        #else
+        selected.press(forDuration: 0.7)
+        let reset = app.buttons["Reset to Default"]
+        #endif
+        XCTAssertTrue(reset.waitForExistence(timeout: 5)); workspaceActivate(reset)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: first)
+        waitForExpectations(timeout: 5)
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertTrue(first.waitForNonExistence(timeout: 5))
+        workspaceActivate(app.buttons["settings-button"])
+        XCTAssertTrue(first.waitForExistence(timeout: 10)); XCTAssertTrue(first.isSelected)
+
+        workspaceActivate(app.staticTexts["settings-page-shortcuts"])
+        let search = app.textFields["shortcut-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); workspaceActivate(search); search.typeText("Zen")
+        let shortcut = app.buttons["shortcut-command.ZenMode"]
+        XCTAssertTrue(shortcut.waitForExistence(timeout: 5)); workspaceActivate(shortcut)
+        let add = app.buttons["shortcut-add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5)); workspaceActivate(add)
+        let cancel = app.buttons["shortcut-cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        attachEditor(in: app, name: "settings-shortcut-recording")
+        workspaceActivate(cancel)
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+        workspaceActivate(app.buttons["shortcut-editor-done"])
+        XCTAssertTrue(add.waitForNonExistence(timeout: 5))
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkNumericSettingsDone(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"input"}}]"#
         app.launch()
