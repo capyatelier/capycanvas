@@ -5,6 +5,8 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod document_creation;
+pub use document_creation::{DocumentBackground, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
@@ -219,7 +221,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
             CommandId::SaveDocumentAs,
             CommandId::ExportDocument,
         ],
-        &[CommandId::CloseDocument],
+        &[CommandId::DocumentProperties, CommandId::CloseDocument],
     ],
 };
 pub const WORKSPACE_MENU_LABEL: &str = "Window";
@@ -429,6 +431,7 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    DocumentProperties,
     NewDocument,
     OpenDocument,
     SaveDocument,
@@ -498,6 +501,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::DocumentProperties => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
                 Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac
@@ -560,6 +564,7 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::DocumentProperties => "info",
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
             Self::SaveDocument => "save-document",
@@ -621,7 +626,8 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 64] = [
+        Self::DocumentProperties,
         Self::NewDocument,
         Self::OpenDocument,
         Self::SaveDocument,
@@ -714,6 +720,7 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::DocumentProperties => "Document Properties…",
             Self::NewDocument => "New…",
             Self::OpenDocument => "Open…",
             Self::SaveDocument => "Save",
@@ -1080,6 +1087,9 @@ pub enum UiAction {
     },
     SystemThemeChanged {
         theme: Theme,
+    },
+    NewDocumentSettings {
+        settings: NewDocumentSettings,
     },
     EditSettings {
         settings: Settings,

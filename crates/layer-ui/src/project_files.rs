@@ -90,7 +90,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.camera.fit([d.width, d.height]);
         std::mem::swap(&mut self.files.assets, &mut candidate.files.assets);
         self.files.saved_checkpoint = self.engine.checkpoint();
-        self.files.recovered = recovered;
+        self.files.unpublished = recovered || (location.is_none() && candidate.files.unpublished);
+        self.state.document_file.unsaved_name = candidate.state.document_file.unsaved_name.clone();
         self.state.document_file.location = location;
         self.state.document_file.epoch = next;
         self.state.document_file.close_ready = false;

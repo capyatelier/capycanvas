@@ -31,6 +31,8 @@ pub struct DocumentFileState {
     pub epoch: u64,
     pub revision: u64,
     pub location: Option<DocumentLocation>,
+    /// Suggested master name for an opened photo; never a save destination.
+    pub unsaved_name: Option<String>,
     pub modified: bool,
     pub busy: bool,
     /// The host closes only after this authorization, not on an initial request.
@@ -38,15 +40,17 @@ pub struct DocumentFileState {
 }
 impl DocumentFileState {
     pub fn title(&self) -> &str {
-        self.location
-            .as_ref()
-            .map_or("Untitled", |location| location.name.as_str())
+        self.location.as_ref().map_or_else(
+            || self.unsaved_name.as_deref().unwrap_or("Untitled"),
+            |location| location.name.as_str(),
+        )
     }
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentRequest {
+    Properties,
     New,
     Open,
     Save {
@@ -63,8 +67,9 @@ pub enum DocumentRequest {
 impl DocumentRequest {
     pub fn title(&self) -> &str {
         match self {
+            Self::Properties => "Document Properties",
             Self::New => "New drawing",
-            Self::Open => "Open drawing",
+            Self::Open => "Open drawing or photo",
             Self::Save { .. } => "Save drawing",
             Self::Export { .. } => "Export image",
             Self::ConfirmClose { title } => title,
@@ -72,6 +77,7 @@ impl DocumentRequest {
     }
     pub fn accept_label(&self) -> &'static str {
         match self {
+            Self::Properties => "Done",
             Self::New => "Create",
             Self::Open => "Open",
             Self::Export { .. } => "Export",
@@ -132,17 +138,11 @@ pub fn new_document_spec() -> NewDocumentSpec {
 /// Shared new-document constraints; creation is a host operation so native
 /// windows and future tabbed/mobile hosts can use different presentation.
 pub fn new_drawing(width: u32, height: u32) -> Result<Project, String> {
-    if width == 0
-        || height == 0
-        || width > MAX_NEW_DOCUMENT_DIMENSION
-        || height > MAX_NEW_DOCUMENT_DIMENSION
-    {
-        return Err("Choose a canvas size from 1 to 8192 pixels".into());
+    NewDocumentOptions {
+        extent: [width, height],
+        ..Default::default()
     }
-    Ok(Project {
-        document: Document::new("untitled", width, height),
-        assets: BTreeMap::new(),
-    })
+    .project()
 }
 
 #[derive(Clone)]
@@ -156,7 +156,7 @@ pub struct DocumentExport {
 pub(super) struct DocumentFiles {
     pub assets: BTreeMap<AssetId, ProjectAsset>,
     pub(super) saved_checkpoint: u64,
-    pub(super) recovered: bool,
+    pub(super) unpublished: bool,
     replace_in_place: bool,
     replace_after: Option<bool>,
     pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
@@ -175,6 +175,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(location) = &location {
             location.validate()?;
         }
+        let photo_name = location
+            .is_none()
+            .then(|| {
+                project
+                    .document
+                    .layers
+                    .iter()
+                    .find(|l| l.source.is_some())
+                    .map(|l| l.name.to_string())
+            })
+            .flatten();
         let mut session = Self::new(renderer, project.document, viewport)?;
         for (id, asset) in &project.assets {
             session
@@ -184,13 +195,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         session.files.assets = project.assets;
         session.state.document_file.location = location;
+        if let Some(name) = photo_name {
+            session.state.document_file.unsaved_name = Some(name);
+            session.files.unpublished = true; // Imported content needs its own master save.
+        }
         session.refresh_document();
         Ok(session)
     }
 
     /// A recovered private checkpoint still needs an explicit user save.
     pub fn mark_recovered(&mut self) {
-        self.files.recovered = true;
+        self.files.unpublished = true;
         self.state.document_file.location = None;
         self.refresh_document();
         self.refresh_commands();
@@ -198,7 +213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn refresh_file_state(&mut self) {
         self.state.document_file.revision = self.engine.document().revision;
-        self.state.document_file.modified = self.files.recovered
+        self.state.document_file.modified = self.files.unpublished
             || self.input_pending
             || self.engine.has_active_stroke()
             || self.engine.checkpoint() != self.files.saved_checkpoint;
@@ -374,7 +389,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && let Some((checkpoint, location)) = snapshot
         {
             self.files.saved_checkpoint = checkpoint;
-            self.files.recovered = false;
+            self.files.unpublished = false;
             self.state.document_file.location = Some(location);
         }
         self.refresh_file_state();

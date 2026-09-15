@@ -4327,3 +4327,132 @@ stage. Managed viewing, photo workflows, combined residency/scheduling, delivery
 controls and the full correctness/memory/latency matrix remain incomplete.
 Benchmarking and optimization remain last. Other platform host integration still
 requires user approval after GTK qualification.
+
+
+## GTK New, Open Photo and document color details (2026-09-15)
+
+New now offers Standard drawing (sRGB8), Wide color (P3 8-bit), and Photo editing
+(ProPhoto integer16). Dimensions, white/transparent background, working space and
+integer depth are independent. Color details expand below the compact preset/size
+form. Named presets and explicit remembered defaults persist in shared settings;
+new GTK windows allocate their native renderer in those same defaults. Cancelling
+creation preserves the current document and defaults. Saving/removing a preset is
+an explicit settings operation independent of whether a drawing is later created.
+The 8,192-pixel creation dimension and 64 saved-preset limits are input guards,
+not measured memory or latency qualification.
+
+Open recognizes native projects, PNG, JPEG and TIFF by signature. It keeps decoded
+source samples, actual channel layout, depth, exact ICC bytes and transparency.
+The source stays attached to a paint layer; local brush edits create native raster
+overrides without replacing the retained original. Untagged SDR RGB assumes sRGB.
+Known matrix gamuts suggest their corresponding built-in editing space. Other
+supported ICC gamuts use ProPhoto working RGB, retaining the original profile and
+samples; no arbitrary device ICC profile becomes a painting space. The full source
+CMM transform remains authoritative, including when its gamut resembles a built-in
+space. No profile-name match, tone-curve substitution or source relabelling occurs.
+
+The profile suggestion was checked against the [ICC PCS/adaptation guidance](https://registry.color.org/rgb-registry/icctransform)
+and actual colord 1.4.8-4.fc44 profiles. Direct comparisons of D50 matrix columns
+missed colord's sRGB/Adobe variants: their recovered native white differs from the
+built-in rounded D65 white by about 1.2e-4 in y. The final suggestion recovers native
+primaries/white using the profile's own inverse chromatic-adaptation matrix and
+compares xy within 2e-4. Without that tag, it conservatively compares D50 columns.
+This threshold chooses a supported working gamut only; it never declares profiles
+identical, bypasses conversion, or relaxes sample precision. The independent sRGB,
+Adobe RGB (1998) and ProPhoto profiles now choose their expected working spaces.
+Tests also give all four built-in profiles misleading names and verify that names
+do not affect suggestions; a linear P3 profile suggests P3 while retaining its
+actual source transfer. Original profile data stays unchanged.
+
+File → Document Properties displays canvas dimensions, working profile, integer
+precision and retained-source details, including an assumed profile. Profile metadata
+is parsed on a worker. Opening a photo supplies a suggested master name with no
+native save location and an unpublished-content flag. Save prompts for a separate
+`.capy` master, and cancellation/close protection remains active until publication.
+The old recovery-only flag is now named for this shared unpublished-content policy.
+Native project open still retains its explicit native location. No source path is
+stored as native save authority.
+
+Artifacts use `artifacts/color-m2/new-photo-`:
+
+- `shared-suite.log`: 385 shared UI tests pass, including all eight creation
+  space/depth combinations with white/transparent backgrounds and exact native
+  archive round trips. `shared-document-final.log` reruns 14 document-policy
+  checks after the unpublished-state refactor; all pass.
+- `workspace-suite.log`: all 86 native workspace database checks pass.
+- `colord-chromaticities.log`: both profile-suggestion tests pass, including the
+  independent installed profiles, retained in `colord-profiles/` for reproduction.
+  Earlier failing direct/adapted-column comparisons remain in their logs.
+- `reviewed-reader.log`: PNG sources at both depths in all four working gamuts
+  retain exact samples/profile data through Open and master serialization despite
+  a misleading `.capy` filename; an untagged JPEG stays sRGB8 and records its
+  assumption. The source file is unchanged. This check passes in 0.36 s.
+- `shared-ffi.log` and `footer-production.log`: shared FFI and production GTK
+  check without warnings. No other platform host was integrated or built.
+
+The complete native journey
+`workspace::tests::new_photo::native_new_presets_and_profiled_photo_master` passes
+on the final `footer-gtk-tests` executable in 13.10 s (`footer-journey.log`). Its
+SHA-256 is `506928ce8a81c8b0bbce5b067316fa2e074996624d186dc43a0bbc75f238f953`;
+`footer-build.{json,log}` and `footer-sources.json` identify the captured code/build.
+It creates/saves/reuses/removes a P3 preset, exercises independent Adobe RGB8
+controls, cancels creation, and paints in a fresh P3 window using remembered defaults.
+It opens a 513×257 ProPhoto U16 TIFF through the actual file dialog, inspects color
+properties, paints across a tile boundary, saves a separate master and reopens it
+in another real window. The canonical project bytes and displayed composite are
+exact across reopening. It exports a ProPhoto U16 TIFF while retaining the source
+file byte-for-byte and keeping the master clean.
+
+The reviewed production implementation also passes the existing native file
+workflow (36.52 s) and wide-color diagnostics/GPU-failure recovery (6.21 s), recorded
+in `existing-checks.json`. Those ran on `gated-gtk-tests`, SHA-256
+`2c103cc80c8e42da1cc518e35814f136335919f2fdab5461cb2db9a2f650b57c`.
+The later build changes only the New form's footer placement, tests and formatting.
+The full New/Open journey passes again after that final presentation change.
+All durations in this section describe correctness runs, not performance acceptance.
+
+Initial native checks caught fixture and presentation issues. RasterRevision equality
+represents publication identity, so the first reopened-project assertion was replaced
+with complete canonical archive-byte comparison. A later synthetic contact produced
+no committed stroke with the fixture's renderer-only readiness check; it now waits
+for workspace/input ownership and dialog dismissal and explicitly selects Pen before
+painting. Both subsequent complete runs pass. Expanded Color initially clipped the
+remembered-default checkbox at the scroll boundary; preset/default controls now sit
+outside the scrolling fields. The final compact P3/ProPhoto, expanded Adobe RGB8 and
+source-properties screenshots in `ui/` were visually inspected. These are layout and
+sRGB-fallback checks, not calibrated monitor-color qualification.
+
+ImageMagick independently verifies all 983,040 U16 samples and ICC bytes from the
+existing file test's RGB TIFF, grayscale PNG and CMYK TIFF: each maximum code
+difference is zero (`external-handoff.log`, GTK process 1736637). The CMYK input is
+`/usr/share/color/icc/krita/cmyk.icm`; output/source profile hashes are recorded.
+Nonfatal private-session GVFS warnings are retained in the harness logs.
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-ui --offline -- --test-threads=1
+cargo test -p layer-workspace --features native --offline -- --test-threads=1
+LAYER_TEST_WORKING_PROFILES="$PWD/artifacts/color-m2/new-photo-colord-profiles" \
+  cargo test -p layer-color --offline icc::description:: -- --include-ignored --nocapture
+cargo test -p layer-linux --offline files::open::tests:: -- --test-threads=1
+cargo test -p layer-linux --offline --no-run --message-format=json
+cargo check -p layer-linux -p layer-ffi --offline
+```
+
+Capture the resulting GTK binary, then run one fully qualified native test per
+process with `gtk-raster.sh` and an exact wrapper. Set `LAYER_TEST_CMYK_PROFILE`
+for the existing file workflow. Reproduce the external handoff with:
+
+```sh
+python3 tools/validation/icc_export_handoff.py artifacts/familiar-workspace/files 1736637
+```
+
+`new-photo-provenance.json` records source, build, profile, screenshot and output
+hashes. Profile-preserving Place/Paste, source repair/rasterization, document
+assignment/conversion/depth, photo inspection, Color preferences and remaining
+output controls are still open. So are managed wide viewing, global cancellation
+and combined source/composite/history/staging budgets. Final fresh baselines,
+frame-creation regressions/optimization and the hardware memory/latency matrix
+remain last. This local functional milestone does not claim those gates pass.
+Other platform hosts remain approval-gated after GTK completion.

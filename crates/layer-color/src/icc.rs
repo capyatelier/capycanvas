@@ -10,6 +10,8 @@ pub use layer_core::color::ProfileChannels;
 
 type FloatTransform<const N: usize> = Transform<[f32; N], [f32; 4], ThreadContext, DisallowCache>;
 mod working;
+mod description;
+pub use description::{profile_description, suggested_working_space};
 pub use working::WorkingDecoder;
 mod output;
 pub use output::{OutputStatistics, WorkingEncoder};

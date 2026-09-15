@@ -5,6 +5,8 @@
 mod color_panel;
 #[path = "color_management_tests.rs"]
 mod color_management;
+#[path = "new_photo_tests.rs"]
+mod new_photo;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_stack_tests.rs"]

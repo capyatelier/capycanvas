@@ -58,10 +58,25 @@ bitmap. Window movement, resizing and scaling must preserve the relationship
 between the native surface, pen coordinates and document camera.
 
 [`files.rs`](../../apps/layer-linux/src/files.rs) supplies native dialogs and local
-project transport. New/Open preserve the current drawing in its own window while
-the incoming document is validated. Saving uses a background write and atomic
-replacement; the [project reference](../reference/project-format.md) explains
-checkpoints and failure handling.
+project and photo transport. New offers sRGB8, P3 8-bit and ProPhoto 16-bit presets,
+independent color/depth controls, white or transparent backgrounds, saved presets
+and remembered defaults. New windows use those same defaults. Open recognizes
+native projects and PNG/JPEG/TIFF by signature; photos retain their integer depth,
+original samples, profile bytes and transparency. Ordinary untagged RGB assumes
+sRGB; unfamiliar supported ICC gamuts use ProPhoto working RGB while preserving
+the original source interpretation. Familiar matrix gamuts select the corresponding
+built-in working space from colorimetry, never a profile name.
+
+File → Document Properties shows working color/depth and each retained source's
+profile or assumption. New/Open preserve the current drawing in its own window
+while the incoming document is validated. An opened photo has no native Save
+location: Save asks for a separate `.capy` master. Saving uses a background write
+and atomic replacement; the [project reference](../reference/project-format.md)
+explains checkpoints and failure handling. The ignored native test
+`workspace::tests::new_photo::native_new_presets_and_profiled_photo_master` covers
+creation presets, cancellation, native source editing, master save/reopen and
+profiled delivery. The existing `native_document_files` check covers file-operation
+failure, cancellation, recovery and additional profiled output routes.
 
 ## Stage a native bundle
 

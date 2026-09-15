@@ -51,15 +51,22 @@ impl GpuCanvas {
             .native()
             .and_then(|native| native.surface())
             .ok_or("GTK surface unavailable")?;
-        let color = project
-            .as_ref()
-            .map_or_else(Default::default, |(p, _)| p.document.color);
-        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;
-        let mut session = if let Some((project, location)) = project {
-            UiSession::from_project(renderer, project, location, extent(area))?
-        } else {
-            UiSession::blank(renderer, extent(area))?
+        // Load once before allocating document resources so a new window uses
+        // the same explicit creation defaults as File → New.
+        let settings = match crate::preferences::load() {
+            Ok(settings) => settings.unwrap_or_default(),
+            Err(error) => {
+                eprintln!("{error}; using default preferences");
+                Default::default()
+            }
         };
+        let (project, location) = match project {
+            Some(project) => project,
+            None => (settings.new_document.defaults.project()?, None),
+        };
+        let color = project.document.color;
+        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;
+        let mut session = UiSession::from_project(renderer, project, location, extent(area))?;
         session.set_platform(layer_ui::Platform::Gtk);
         session.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(
@@ -90,14 +97,7 @@ impl GpuCanvas {
             }
         }
         session.renderer_mut().finish_startup_cache()?;
-        // Read once while creating this window, before it can accept input.
-        match crate::preferences::load() {
-            Ok(Some(settings)) => {
-                session.dispatch(layer_ui::UiAction::RestoreSettings { settings })?;
-            }
-            Ok(None) => {}
-            Err(error) => eprintln!("{error}; using default preferences"),
-        }
+        session.dispatch(layer_ui::UiAction::RestoreSettings { settings })?;
         session.dispatch(layer_ui::UiAction::SystemThemeChanged {
             theme: if adw::StyleManager::default().is_dark() {
                 layer_ui::Theme::Dark

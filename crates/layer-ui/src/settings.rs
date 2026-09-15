@@ -85,6 +85,7 @@ impl ClockVisibility {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub version: u32,
+    pub new_document: NewDocumentSettings,
     pub theme: Option<Theme>,
     // Keep the persisted key compatible with the original clock-only setting.
     pub show_clock: ClockVisibility,
@@ -109,6 +110,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: 1,
+            new_document: NewDocumentSettings::default(),
             theme: None,
             show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
@@ -149,6 +151,7 @@ impl Settings {
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.new_document.validate()?;
         if self.version != 1 {
             return Err("Unsupported settings version".into());
         }

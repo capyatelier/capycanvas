@@ -930,6 +930,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::Command { command } => (
             command.label().into(),
             match command {
+                CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
                 CommandId::Pen => "Draw ink lines with a pen",
                 CommandId::Pencil => "Sketch with pencils and pastels",
                 CommandId::Brush => "Paint with the current brush",

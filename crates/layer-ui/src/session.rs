@@ -1747,7 +1747,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .as_ref()
                         .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
             }
-            CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
+            CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
@@ -2676,6 +2676,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     (0, false)
                 }
             }
+            UiAction::NewDocumentSettings { settings } => {
+                settings.validate()?;
+                save_settings = settings != self.state.settings.new_document;
+                if save_settings {
+                    self.state.settings.new_document = settings;
+                }
+                (SETTINGS | COMMANDS, save_settings)
+            }
             UiAction::EditSettings { settings } => {
                 settings.validate()?;
                 if !self.state.settings_open {
@@ -3377,6 +3385,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::DocumentProperties => {
+                self.request_document(DocumentRequest::Properties)?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::Fullscreen => {
                 self.request(HostRequestKind::SetFullscreen {
                     fullscreen: !self.state.fullscreen,

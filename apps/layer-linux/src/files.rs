@@ -2,11 +2,13 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
-use layer_core::{Project, ProjectLimits};
+use layer_core::Project;
 use layer_ui::*;
-use std::{io::BufReader, rc::Rc};
+use std::rc::Rc;
 
 pub(crate) mod export;
+pub(crate) mod open;
+mod properties;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
@@ -166,34 +168,11 @@ async fn document_request(
     id: u32,
     request: &DocumentRequest,
 ) -> Result<bool, String> {
+    if matches!(request, DocumentRequest::Properties) {
+        return properties::show(w).await;
+    }
     if matches!(request, DocumentRequest::New) {
-        let dialog = adw::AlertDialog::builder().heading(request.title()).build();
-        let group = adw::PreferencesGroup::new();
-        let field = |label: &str, value: u32| {
-            let row = adw::SpinRow::with_range(1., MAX_NEW_DOCUMENT_DIMENSION as f64, 1.);
-            row.set_title(label);
-            row.set_snap_to_ticks(true);
-            row.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
-            row.set_value(value as f64);
-            group.add(&row);
-            row
-        };
-        let width = field(DOCUMENT_WIDTH_LABEL, DEFAULT_DOCUMENT_EXTENT[0]);
-        let height = field(DOCUMENT_HEIGHT_LABEL, DEFAULT_DOCUMENT_EXTENT[1]);
-        width.set_widget_name("new-document-width");
-        height.set_widget_name("new-document-height");
-        dialog.set_extra_child(Some(&group));
-        dialog.add_responses(&[
-            ("cancel", CANCEL_DOCUMENT_LABEL),
-            ("create", request.accept_label()),
-        ]);
-        dialog.set_close_response("cancel");
-        dialog.set_default_response(Some("create"));
-        dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
-        if dialog.choose_future(Some(&w.window)).await != "create" {
-            return Ok(false);
-        }
-        let project = new_drawing(width.value() as u32, height.value() as u32)?;
+        let Some(project) = crate::new_document::run(w).await? else { return Ok(false); };
         w.open_document
             .borrow()
             .as_ref()
@@ -217,18 +196,14 @@ async fn document_request(
     };
     match request {
         DocumentRequest::Open => {
-            let project = gio::spawn_blocking(move || {
-                let file =
-                    std::fs::File::open(path).map_err(|e| format!("Cannot open drawing: {e}"))?;
-                Project::read(BufReader::new(file), ProjectLimits::default())
-            })
+            let (project, location) = gio::spawn_blocking(move || open::read(&path, location))
             .await
             .map_err(|_| "Project reader failed")??;
             w.open_document
                 .borrow()
                 .as_ref()
                 .ok_or("New drawing window is unavailable")?(
-                project, Some(location), None
+                project, location, None
             );
         }
         DocumentRequest::Save { .. } => {
@@ -280,6 +255,10 @@ async fn choose_file(
     let filter = gtk::FileFilter::new();
     filter.set_name(Some(label));
     filter.add_suffix(extension);
+    if matches!(request, DocumentRequest::Open) {
+        filter.set_name(Some("Drawings and photos"));
+        for suffix in ["jpg", "jpeg", "png", "tif", "tiff"] { filter.add_suffix(suffix); }
+    }
     let filters = gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
     dialog.set_filters(Some(&filters));
