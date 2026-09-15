@@ -93,6 +93,7 @@ extension XCTestCase {
         #endif
         expectation(for: NSPredicate(format: "label == %@", "Red, 3 points"), evaluatedWith: curve)
         waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.buttons["curve-remove"].isEnabled, "A new curve point must be selected without another tap")
         let curved = changed(from: blue)
         XCTAssertGreaterThan(curved[0], blue[0])
         XCTAssertEqual(curved[1], blue[1]); XCTAssertEqual(curved[2], blue[2])
@@ -181,6 +182,8 @@ extension XCTestCase {
         #endif
         expectation(for: NSPredicate(format: "label ENDSWITH %@", ", 3 stops"), evaluatedWith: gradient)
         waitForExpectations(timeout: 10); expectPixels(red)
+        expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
+        XCTAssertTrue(app.buttons["gradient-remove"].isEnabled, "A new stop must be selected without another tap")
         let nearMiddle = middle.withOffset(CGVector(dx: 3, dy: 0))
         #if os(macOS)
         nearMiddle.click()

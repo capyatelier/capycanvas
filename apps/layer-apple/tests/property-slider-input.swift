@@ -1,14 +1,17 @@
 import AppKit
 import SwiftUI
 
-@MainActor private final class PropertySliderGeometry { var frames: [String: CGRect] = [:] }
+@MainActor private final class PropertySliderGeometry {
+    var frames: [String: CGRect] = [:]
+    var choices: [String: CGRect] = [:]
+}
 
 /// Native slider contacts through the real property views and serial owner.
 /// Temporary windows and in-memory documents; no renderer or artist storage.
 @main final class PropertySliderChecks: NativeWorkspaceInputFixture {
     @MainActor static func run() async throws {
         for platform: UInt32 in [0, 1] {
-            for (effect, mode) in [("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
+            for (effect, mode) in [("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
                 ("brightness_contrast", "brightness"), ("split_tone", "red"),
                 ("gradient_map", "position"), ("gradient_map", "opacity"), ("gradient_map", "red")] {
                 let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
@@ -35,12 +38,8 @@ import SwiftUI
                     try await action(["type": "effect", "action": ["op": "insert", "effect": effect]])
                 }
                 let layer = store.state["layer_properties"]["layer"].uint
-                let key = effect == "gradient_map" ? "gradient" : effect == "split_tone" ? "shadows"
+                let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient" : effect == "split_tone" ? "shadows"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
-                if effect == "gradient_map" {
-                    try await action(["type": "effect", "action": ["op": "gradient_stop", "layer": layer,
-                        "key": key, "index": NSNull(), "position": 0.5, "remove": false]])
-                }
                 let identifier = mode == "layer-opacity" ? mode : effect == "gradient_map"
                     ? (mode == "red" ? "gradient-stop-rgba-0" : "gradient-" + mode)
                     : "property-" + key + (mode == "red" ? "-rgba-0" : "")
@@ -62,6 +61,8 @@ import SwiftUI
                 }.padding(6).frame(width: 300, height: 500, alignment: .topLeading)
                     .coordinateSpace(name: "number-capture").environment(\.measureNumberControls, true)
                     .onPreferenceChange(NumberControlFrames.self) { geometry.frames = $0 }
+                    .coordinateSpace(name: "choice-capture").environment(\.measureChoices, true)
+                    .onPreferenceChange(ChoiceFrames.self) { geometry.choices = $0 }
                     .font(.system(size: store.catalog["text_size_pt"].number * 4 / 3)))
                 let host = NSHostingView(rootView: content)
                 window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -71,10 +72,37 @@ import SwiftUI
                         try event(type, at: point, marker: host, number: 1); try await drain()
                     }
                 }
+                if effect == "curves" {
+                    func points() -> JSON {
+                        store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
+                    }
+                    let original = points().stableKey
+                    let top = geometry.choices["property-channel"]!.maxY + 6
+                    try await click(CGPoint(x: 150, y: top + 50))
+                    let inserted = points().stableKey
+                    try require(points().array.count == 3 && inserted != original, "A native plot click must insert a curve point")
+                    let remove = CGPoint(x: 45, y: top + 200 + 6 + 10)
+                    try await click(remove)
+                    try require(points().stableKey == original, "Remove must act on a new curve point without another selection tap")
+                    try await action(["type": "invoke", "command": "undo"])
+                    try require(points().stableKey == inserted, "Undo must restore the removed curve point")
+                    try await click(remove)
+                    try require(points().stableKey == original, "A restored curve point must be selected for removal")
+                    try await action(["type": "invoke", "command": "undo"])
+                    try await action(["type": "invoke", "command": "redo"])
+                    try require(points().stableKey == original, "Curve removal must retain one-step Undo/Redo")
+                    try require(store.failure == nil, store.failure ?? "")
+                    note("PASS: platform \(platform), native curve insertion/selection/removal and history")
+                    continue
+                }
                 if effect == "gradient_map" {
                     let position = geometry.frames["gradient-position:root"]!
-                    // The middle stop is 43 points down the 52-point ramp above Position.
+                    // Add the stop through the real view. Its controls must target
+                    // the inserted stop immediately, without a second selection tap.
                     try await click(CGPoint(x: 150, y: position.minY - 6 - 52 + 43))
+                    let stops = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"].array
+                    try require(stops.count == 3 && abs(stops[1]["position"].number - 0.5) < 0.0001,
+                        "Native gradient insertion must add the middle stop")
                 }
                 if mode == "red" {
                     let swatchY = effect == "gradient_map" ? geometry.frames["gradient-position:root"]!.maxY + 6 + 14

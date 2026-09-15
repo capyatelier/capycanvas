@@ -99,6 +99,8 @@ struct EditorActionMenu: View {
         switch key {
         case "arrowdown": step(1)
         case "arrowup": step(-1)
+        case "home": focus = enabled.first
+        case "end": focus = enabled.last
         case "tab": step(shift ? -1 : 1)
         case "arrowright":
             if let focus, entries.indices.contains(focus), !entries[focus].sections.isEmpty { activate(focus) }

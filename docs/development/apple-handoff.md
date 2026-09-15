@@ -26,7 +26,42 @@ require new evidence and a specific hypothesis before another run or input
 workaround. Keep unresolved acceptance explicit while continuing independent
 parity fixes. Commit only major milestones. All eleven recovery stashes remain.
 
-This refinement batch fixes the iPad toolbar's Zen transition. A direct owner
+The property/menu milestone fixes curve-point and gradient-stop selection. Adding
+a stop previously left the old endpoint selected, so Position stayed disabled
+and Color/Opacity edits targeted the wrong stop. A new curve point could not be
+removed without another selection tap. Both views now select the inserted
+position from Rust's published list, including single-point history restoration,
+without predicting an insertion index. The existing native property fixture
+reproduces both failures before their fixes; all eighteen cases pass afterward
+across both Apple policies, covering curve insertion/removal/history and gradient
+position/color/opacity, one-step history, cancellation and locking. Property
+colors reuse the existing RGBA conversion, removing its duplicate helper.
+
+The same batch adds Home/End to the existing shared menu key handler, matching
+Web's first/last-item navigation. The native menu fixture reproduces End leaving
+the last row offscreen before the fix. It now passes Home/End and last-row
+activation at all three window sizes, plus existing submenu, shortcut and
+dismissal checks. No native key adapter or input workaround changes.
+
+Evidence is under `artifacts/apple-property-selection-v1/`. All four final grouped
+editor workflows pass with no failures or skips: Mac filter artwork/history and
+blend choices, and simulator filter artwork/history and submenu shortcuts. Both
+filter workflows assert selection immediately after insertion, before another
+tap; they retain curve/gradient dragging, removal/reset and sampled artwork
+Undo/Redo. Representative Mac/simulator curve and gradient captures plus the
+Mac blend menu are reviewed. Results and cleanup are under `editor/`; the
+isolated Mac app, simulator app and simulator runner are all stopped. These
+focused captures do not establish every visual state or a new exhaustive Web
+pixel comparison. No physical workflow is repeated for this batch.
+
+Both Release builds pass (`release/mac` and `release-final/ipad` reports). The
+iPad compiler exposed an implicit strong capture warning while preparing scene
+closure; making the existing capture explicit preserves its lifetime and removes
+the warning. Main fetch finds no newer commits. The compact-menu UIKit shortcut,
+remaining feature/visual and physical input/provider/lifecycle cases, and
+sustained Mac 90 Hz/iPad 120 Hz gates remain open.
+
+The published refinement batch fixes the iPad toolbar's Zen transition. A direct owner
 check on both Apple policies demonstrates that a contact after Zen activation
 reveals chrome again, while contact before activation leaves it hidden. The
 first `SpatialEventGesture` candidate passes simulator Zen/Tab but subsequently
@@ -48,7 +83,16 @@ setup opened the whole column and then waited for drawer-only tabs. Evidence,
 retained failures and final source hashes are under
 `artifacts/apple-chrome-milestone-v1/`; final results are `mac-v4`, `simulator-v2`
 and `passive-release`. Earlier Zen evidence is under
-`artifacts/apple-zen-contact-v1/`. No physical-device run accompanies this batch;
+`artifacts/apple-zen-contact-v1/`. A subsequent physical milestone attempt uses
+the signed published source after Xcode setup, with the known iPad connected,
+paired and Developer Mode enabled. XCTest again times out enabling automation
+before any workflow executes. The review app is restored, its runner is stopped,
+and the artist app descriptor is unchanged. Evidence is under
+`artifacts/apple-chrome-device-v1/`; this is a runner-initialization failure,
+not a product workflow result. Do not repeat device setup without new evidence.
+A later read-only lock-state query reports `unlockedSinceBoot: true` and
+`passcodeRequired: false`; it does not explain that earlier timeout or establish
+physical workflow acceptance. No unlock request or test retry follows it.
 Pencil, keyboard, provider/lifecycle and sustained performance acceptance remain
 open. These results do not claim every visual state or every native workflow.
 

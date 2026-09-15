@@ -108,6 +108,28 @@ blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
 
+## Property selection and menu navigation — 2026-09-15
+
+New curve points and gradient stops select themselves from Rust's published
+positions, fixing immediate removal/editing and single-point history restoration.
+The shared menu handler adds Home/End navigation. Property colors reuse the
+existing RGBA conversion; iPad scene closure makes its existing strong capture
+explicit for the current compiler.
+
+All eighteen native property component cases and the native menu keyboard check
+pass, including three constrained window sizes. Both Release builds pass. Four
+grouped editor workflows pass without failures or skips: Mac filter artwork/history
+and blend choices, simulator filter artwork/history and submenu shortcuts.
+Immediate insertion selection, later dragging/removal/reset and sampled artwork
+Undo/Redo are covered. Representative Mac/simulator captures are reviewed and the
+isolated apps/runners are stopped. No physical workflow accompanies this batch.
+Evidence and limits are in the [handoff](../development/apple-handoff.md) and
+ignored `artifacts/apple-property-selection-v1/`.
+
+The compact-menu UIKit shortcut, remaining native feature/visual and hardware
+acceptance, provider/lifecycle cases and sustained Mac 90 Hz/iPad 120 Hz gates
+remain open. The overall goal remains **incomplete**.
+
 ## Zen, editor dialogs and row cleanup — 2026-09-15
 
 UIKit reports chrome contacts before button activation through a passive native

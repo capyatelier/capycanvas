@@ -233,6 +233,10 @@ numeric and color values, layer/Paper opacity and gradient stop controls. Moves
 preview without adding history; release commits one Undo step and cancellation
 restores the original value while preserving Redo. Ordinary text, step and tap
 edits retain their discrete numeric validation path.
+New curve points and gradient stops become selected from Rust's published list,
+so removal and color/position edits work immediately after insertion. Undoing a
+single-point removal selects the restored point. Property colors reuse the shared
+RGBA color conversion.
 
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-slider-input.swift
@@ -240,10 +244,10 @@ cargo test -p layer-apple property_edits_and_gestures_preserve_exact_metal_histo
 ```
 
 The native component check uses local AppKit contacts through the shared property
-views for both Apple presets, including view-removal cancellation and locked
-layers. The Metal check compares every artwork pixel through preview, commit,
-Undo/Redo and cancellation. UIKit delivery is checked separately by the grouped
-`testInlineLayerOpacity` editor workflow.
+views for both Apple presets, including insertion/selection/removal, history,
+view-removal cancellation and locked layers. The Metal check compares every
+artwork pixel through preview, commit, Undo/Redo and cancellation. UIKit delivery
+is checked separately by the grouped `testInlineLayerOpacity` editor workflow.
 
 The compact Color panel follows the shared layout down to 128 logical points:
 an Okhsv circle, HSV square or HLS triangle; overlapping foreground/background
@@ -462,8 +466,8 @@ Both hosts also pass `testWorkspaceSwitcher`, `testToolbarStylesAndActions` and
 `testToolbarCustomization`. Toolbar grips include their names in accessibility
 labels; Mac's Select All command respects the focused native text editor.
 The direct menu keyboard check uses native events in its own Mac window for
-arrows, Return, Escape, disabled rows and shifted shortcuts. Submenu pages retain
-their parent row, so returning from a later submenu restores keyboard navigation
+arrows, Home/End, Return, Escape, disabled rows and shifted shortcuts. Submenu
+pages retain their parent row, so returning from a later submenu restores keyboard navigation
 to that row instead of the first enabled item. Accelerators search the complete
 menu tree, so an enabled action remains reachable from another page or before
 its submenu opens; disabled actions stay inactive. The focused

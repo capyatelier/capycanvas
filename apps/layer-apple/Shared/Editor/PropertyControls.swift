@@ -98,7 +98,7 @@ private struct PropertyColor: View {
             HStack {
                 Text(label).frame(maxWidth: .infinity, alignment: .leading)
                 Button { expanded.toggle() } label: {
-                    RoundedRectangle(cornerRadius: 6).fill(value.effectColor).frame(width: 48, height: 28)
+                    RoundedRectangle(cornerRadius: 6).fill(value.paintColor).frame(width: 48, height: 28)
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(.primary.opacity(0.3), lineWidth: 1))
                 }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
             }
@@ -202,6 +202,10 @@ private struct CurveProperty: View {
                 Button("Reset") { selected = nil; store.effect(layer, key: key, action: ["op": "reset"]) }
                     .accessibilityIdentifier("curve-reset")
             }.buttonStyle(.plain)
+        }.onChange(of: points.map { $0[0].number }) { previous, current in
+            guard current.count == previous.count + 1,
+                let inserted = current.firstIndex(where: { !previous.contains($0) }) else { return }
+            selected = inserted
         }
     }
     private func distance(_ point: JSON, _ location: CGPoint, _ size: CGSize) -> CGFloat {
@@ -243,13 +247,13 @@ private struct GradientProperty: View {
             GeometryReader { geometry in
                 Canvas { context, size in
                     let width = max(1, size.width - 12)
-                    let gradient = Gradient(stops: stops.map { Gradient.Stop(color: $0["color"].effectColor, location: $0["position"].number) })
+                    let gradient = Gradient(stops: stops.map { Gradient.Stop(color: $0["color"].paintColor, location: $0["position"].number) })
                     context.fill(Path(roundedRect: CGRect(x: 6, y: 0, width: width, height: 32), cornerRadius: 4), with: .linearGradient(gradient,
                         startPoint: CGPoint(x: 6, y: 0), endPoint: CGPoint(x: size.width - 6, y: 0)))
                     for (i, stop) in stops.enumerated() {
                         let x = 6 + stop["position"].number * width
                         let marker = Path(ellipseIn: CGRect(x: x - 4.5, y: 38.5, width: 9, height: 9))
-                        context.fill(marker, with: .color(stop["color"].effectColor))
+                        context.fill(marker, with: .color(stop["color"].paintColor))
                         context.stroke(marker, with: .color(palette["text"]), lineWidth: 1)
                         if i == index {
                             context.stroke(Path(ellipseIn: CGRect(x: x - 7, y: 36, width: 14, height: 14)),
@@ -306,13 +310,15 @@ private struct GradientProperty: View {
                 Button("Reset") { selected = 0; store.effect(layer, key: key, action: ["op": "reset"]) }
                     .accessibilityIdentifier("gradient-reset")
             }.buttonStyle(.plain)
+        }.onChange(of: stops.map { $0["position"].number }) { previous, current in
+            // Select the stop Rust actually inserted, including history restoration.
+            guard current.count == previous.count + 1,
+                let inserted = current.firstIndex(where: { !previous.contains($0) }) else { return }
+            selected = inserted
         }
     }
 }
 
-private extension JSON {
-    var effectColor: Color { Color(.sRGB, red: self[0].number, green: self[1].number, blue: self[2].number, opacity: self[3].number) }
-}
 extension EditorStore {
     func effect(_ layer: UInt64, key: String, action: [String: Any], phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {

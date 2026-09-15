@@ -157,12 +157,17 @@ private struct MenuFixtureView: View {
             let rect = host.convert(scroll.bounds, from: scroll)
             try require(host.bounds.insetBy(dx: 7, dy: 7).contains(rect),
                 "The menu scroller must fit inside the editor with its edge clearance: window=\(host.bounds), menu=\(rect)")
-            for _ in 1..<fixture.rowCount { try key("\u{F701}", code: 125, window: window); try await drain(0.01) }
+            try key("\u{F72B}", code: 119, window: window)
             try await drain()
             guard let document = scroll.documentView else { throw HostFailure(message: "Missing menu scroll content") }
             let visible = scroll.documentVisibleRect
             let remaining = document.isFlipped ? document.bounds.maxY - visible.maxY : visible.minY - document.bounds.minY
             try require(remaining <= 7, "Keyboard navigation must reveal the end of the menu: content=\(document.bounds), visible=\(visible), remaining=\(remaining)")
+            try key("\u{F729}", code: 115, window: window); try await drain()
+            let start = document.isFlipped ? scroll.documentVisibleRect.minY - document.bounds.minY
+                : document.bounds.maxY - scroll.documentVisibleRect.maxY
+            try require(start <= 7, "Home must reveal the first menu item")
+            try key("\u{F72B}", code: 119, window: window); try await drain()
             if let directory = ProcessInfo.processInfo.environment["CAPY_MENU_CAPTURES"] {
                 try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
                 let capture = Process(); capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -173,7 +178,7 @@ private struct MenuFixtureView: View {
             }
             try key("\r", code: 36, window: window); try await drain()
             try require(!fixture.presented && fixture.actions == ["Row 29"], "The last item must remain reachable in a constrained menu")
-            print("PASS: menu fit and last-row navigation at \(Int(size.width))×\(Int(size.height))")
+            print("PASS: menu fit, Home/End and last-row navigation at \(Int(size.width))×\(Int(size.height))")
         }
     }
     @MainActor static func main() {

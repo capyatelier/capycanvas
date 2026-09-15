@@ -4,7 +4,7 @@ import UIKit
 @MainActor enum DocumentScene {
     static func close(_ scene: UIWindowScene?, store: EditorStore) {
         guard let scene else { failed("The drawing window is unavailable", store: store); return }
-        store.prepareClose { saved in
+        store.prepareClose { [store] saved in
             guard saved else { failed("Some changes could not be saved. Retry before closing this window.", store: store); return }
             UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil) { [weak store] error in
                 DispatchQueue.main.async {
