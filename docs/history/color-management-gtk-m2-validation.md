@@ -4980,3 +4980,67 @@ workloads were run; these durations identify correctness checks only. Document
 assignment/conversion/depth, managed wide viewing, remaining inspection/settings/
 output controls and full precision/memory/job gates remain open. Fresh benchmarks,
 regression investigation and optimization remain last; other hosts require approval.
+
+## Document color preparation and atomic model history (2026-09-15)
+
+The shared document worker now prepares Assign, Convert and Bit Depth candidates
+without mutating the live project. Assign shares canonical RGB backing exactly;
+Convert uses the existing native Float32/CMM output path with intent/BPC; depth
+changes preserve scalar meaning and optionally dither 8-bit RGB, never coverage.
+Rasterized image bases keep their full extent, including outside the canvas.
+Retained originals keep their independent samples, ICC interpretation and Arc
+ownership; source-profile repair remains a separate operation. Existing effect
+color parameters are explicitly sRGB in current code and are not reinterpreted.
+
+These semantics were checked against current code and Adobe's
+[Assign/Convert documentation](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-profiles/change-color-profile-for-documents.html),
+which distinguishes retaining numeric values from transforming them. The
+[ICC explanation of profile connections](https://www.color.org/iccmax/connection2/)
+describes absolute intent's white-point adjustment. This worker reuses the
+previously qualified CMM implementation; its absolute-intent routing check proves
+that the selection affects the prepared data, not independent CMM accuracy.
+
+`Edit::SetColor` publishes mode and completed layer backing in one model edit.
+It preserves layer properties, masks, sparse tile coverage, watercolor state,
+source roles and full extents, and rejects replacement of an original. Both
+history directions undergo existing admission before mutation. Preparation polls
+pending backing with cancellation and charges new compressed backing/index/cache
+ownership against a caller-supplied component limit. This is not a claim that
+combined source/history/worker/GPU budgets have been qualified.
+
+The engine now rejects color edits, nested batches and color Undo/Redo when its
+renderer is configured for another mode, before consuming input. **GTK renderer
+transition, dialogs, complete-stack comparison and flattened-copy integration
+are still pending. These operations are not exposed through GTK commands yet.**
+
+Evidence in `artifacts/color-m2/document-color-*`:
+
+- `worker-tests.log`: initial six tests pass (15.45 s).
+- `shared-suite.log`: 41 color, 65 core, 56 engine and 389 UI tests pass
+  (11.59/1.44/0.42/18.42 s); four explicit/fixture color tests remain ignored.
+  Includes mismatch rejection without input consumption or history mutation.
+- `worker-reviewed-tests.log`: all eight final worker tests pass (15.11 s).
+  Assignment covers every code at both depths in all four spaces. Depth changes
+  check all 65,536 U16 codes, RGBA, masks and both wetness planes, exact U8×257
+  promotion and nearest U16→U8 reduction. Conversion compares each RGB sample
+  against the f64 coordinate path within one code, with exact alpha and clipping
+  counts. The f64 path shares the standard space definitions; it is not an
+  independent set of colorimetric coefficients. Further checks cover stable
+  coordinate dithering, backing deduplication, full off-canvas sources, exact
+  Undo/Redo/checkpoints, cancellation during work or pending publication,
+  memory-limit rejection and malformed candidates. The two added tests check
+  absolute intent and canonicalization of explicitly tagged attachment input.
+- `production-check.log`: GTK and shared FFI compile without warnings (4.37 s).
+
+Reproduce with the JPEG pkg-config setup above:
+
+```sh
+cargo test -p layer-core -p layer-engine -p layer-color -p layer-ui --offline
+cargo test -p layer-color --offline document::tests -- --test-threads=1
+cargo check -p layer-linux -p layer-ffi --offline
+```
+
+`document-color-provenance.json` records parent/source/output hashes. This stage
+runs correctness tests only. Fresh performance baselines, frame-creation
+regression investigation, optimization and final memory/latency qualification
+remain last; other platform integration still requires approval after GTK.

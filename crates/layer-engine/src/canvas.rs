@@ -641,6 +641,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
+        self.require_renderer_color(self.editor.undo_color())?;
         self.flush_pending_edits()?;
         self.completed_stroke = None;
         self.completed_before = None;
@@ -655,6 +656,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
+        self.require_renderer_color(self.editor.redo_color())?;
         self.flush_pending_edits()?;
         self.completed_stroke = None;
         self.completed_before = None;
@@ -672,7 +674,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.validate_edit(edit)
     }
 
+    fn require_renderer_color(&self, color: layer_core::color::DocumentColor) -> Result<(), DocumentError> {
+        if self.backend.document_color() != color {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Prepare the matching renderer before applying document color or its history",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn apply_edit(&mut self, mut edit: Edit) -> Result<(), DocumentError> {
+        self.require_renderer_color(edit.resulting_color(self.document().color))?;
         fn discard_submitted(edit: &mut Edit, document: &Document) {
             match edit {
                 Edit::Batch(edits) => {
@@ -748,6 +760,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         prepare(&mut edit, self.document(), &mut operation_batches);
         fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
             match edit {
+                Edit::SetColor { .. } => true,
                 Edit::InsertLayer { layer, .. } => layer.asset.is_some() || layer.source.is_some(),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
                 // A batch may replace a layer inserted earlier in that batch;
@@ -3042,6 +3055,45 @@ mod tests {
                 assert_eq!(engine.document().color, color);
             }
         }
+    }
+
+    #[test]
+    fn color_edits_and_history_reject_an_unprepared_renderer_without_consuming_input() {
+        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(), Document::new("color edit", 64, 64),
+            consumer, view(64, 64), ViewTransform::IDENTITY,
+        ).unwrap();
+        engine.render_frame().unwrap();
+        let original = engine.document().clone();
+        let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+        let edit = Edit::SetColor { color, layers: original.layers.clone() };
+        input.push(event(1, PenPhase::Down, 8.)).unwrap();
+        input.push(event(2, PenPhase::Up, 24.)).unwrap();
+        for edit in [edit.clone(), Edit::Batch(vec![edit.clone()])] {
+            assert!(engine.apply_edit(edit).unwrap_err().to_string().contains("matching renderer"));
+            assert_eq!(engine.document(), &original);
+            assert_eq!(engine.checkpoint(), 0);
+            assert_eq!(engine.metrics().input_events, 0);
+        }
+        // Arrange a valid model color history to check both direction guards.
+        engine.editor.perform(edit).unwrap();
+        engine.backend.color = color;
+        let converted = engine.document().clone();
+        let checkpoint = engine.checkpoint();
+        assert!(engine.undo().unwrap_err().to_string().contains("matching renderer"));
+        assert_eq!(engine.document(), &converted);
+        assert_eq!(engine.checkpoint(), checkpoint);
+        engine.editor.undo().unwrap();
+        engine.backend.color = original.color;
+        let restored = engine.document().clone();
+        assert!(engine.redo().unwrap_err().to_string().contains("matching renderer"));
+        assert_eq!(engine.document(), &restored);
+        assert_eq!(engine.checkpoint(), 0);
+        assert_eq!(engine.metrics().input_events, 0);
+        engine.render_frame().unwrap();
+        assert_eq!(engine.metrics().input_events, 2);
     }
 
     #[test]

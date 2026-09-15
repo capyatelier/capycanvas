@@ -27,6 +27,7 @@ pub use affine::{Affine, ImageTransform, Interpolation};
 mod project;
 mod project_storage;
 mod history_budget;
+mod color_edit;
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
@@ -1317,6 +1318,7 @@ impl Document {
     /// Applies one reversible edit and returns its exact inverse.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
         let inverse = match edit {
+            Edit::SetColor { color, layers } => self.apply_color_edit(color, layers)?,
             Edit::SetRaster { target, revision } => {
                 let raster = self
                     .target_raster_mut(target)
@@ -1548,6 +1550,12 @@ impl Document {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
+    /// One atomic interpretation/backing change. Structure and properties stay
+    /// intact; all native color and scalar replacements must be host-backed.
+    SetColor {
+        color: color::DocumentColor,
+        layers: Vec<Layer>,
+    },
     SetRaster {
         target: LayerId,
         revision: raster::RasterRevision,
@@ -1583,9 +1591,20 @@ pub enum Edit {
 }
 
 impl Edit {
-    fn changes_retained_sources(&self, document: &Document) -> bool {
+    /// Final interpretation after this transaction, including ordered batches.
+    /// Hosts prepare the matching renderer before publishing color history.
+    pub fn resulting_color(&self, current: color::DocumentColor) -> color::DocumentColor {
         match self {
-            Self::Batch(edits) => edits.iter().any(|e| e.changes_retained_sources(document)),
+            Self::SetColor { color, .. } => *color,
+            Self::Batch(edits) => edits.iter().fold(current, |color, edit| edit.resulting_color(color)),
+            _ => current,
+        }
+    }
+
+    fn requires_history_admission(&self, document: &Document) -> bool {
+        match self {
+            Self::SetColor { .. } => true,
+            Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
             Self::InsertLayer { layer, .. } => layer.source.is_some(),
             Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some()),
             Self::ReplaceLayer(layer) => {
@@ -1608,6 +1627,7 @@ impl Edit {
     }
     fn source_roots<'a>(&'a self, out: &mut Vec<&'a Arc<color::source::SourceImage>>) {
         match self {
+            Self::SetColor { layers, .. } => out.extend(layers.iter().filter_map(|l| l.source.as_ref())),
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.source_roots(out)),
             Self::ReplaceLayer(layer) => out.extend(layer.source.as_ref()),
             Self::InsertLayer { layer, .. } => out.extend(layer.source.as_ref()),
@@ -1616,6 +1636,12 @@ impl Edit {
     }
     fn raster_roots<'a>(&'a self, out: &mut Vec<&'a raster::RasterRevision>) {
         match self {
+            Self::SetColor { layers, .. } => {
+                for layer in layers {
+                    out.push(&layer.raster);
+                    out.extend(layer.masks().map(|m| &m.raster));
+                }
+            }
             Self::SetRaster { revision, .. } => out.push(revision),
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.raster_roots(out)),
             Self::ReplaceLayer(layer) => {
@@ -1687,6 +1713,7 @@ impl HistoryEntry {
         fn size(edit: &Edit) -> usize {
             std::mem::size_of::<Edit>().saturating_add(match edit {
                 Edit::Batch(edits) => edits.iter().map(size).fold(0usize, usize::saturating_add),
+                Edit::SetColor { layers, .. } => serialized(layers),
                 Edit::ReplaceLayer(layer) => serialized(layer),
                 Edit::InsertLayer { layer, .. } => serialized(layer),
                 Edit::SetSelection(selection) => serialized(selection),
@@ -1735,6 +1762,14 @@ impl Editor {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    pub fn undo_color(&self) -> color::DocumentColor {
+        self.undo.last().map_or(self.document.color, |entry| entry.edit.resulting_color(self.document.color))
+    }
+
+    pub fn redo_color(&self) -> color::DocumentColor {
+        self.redo.last().map_or(self.document.color, |entry| entry.edit.resulting_color(self.document.color))
     }
 
     pub fn undo_changes_image(&self) -> bool {
@@ -1792,10 +1827,10 @@ impl Editor {
             return Ok(());
         }
         let changes_project = edit.changes_project();
-        // Source jobs publish completed ownership. Check both directions before
+        // Source and color jobs publish completed ownership. Check both directions before
         // publication. Live raster transactions retain the existing capture
         // reservation path: their pending roots do not yet identify shared tiles.
-        let inverse = if edit.changes_retained_sources(&self.document) {
+        let inverse = if edit.requires_history_admission(&self.document) {
             let (candidate, inverse) = self.prepare_history_edit(edit, budget)?;
             self.document = candidate;
             inverse

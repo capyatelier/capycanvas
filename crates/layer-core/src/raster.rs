@@ -278,8 +278,11 @@ impl RasterTile {
         self.0.data.id
     }
     pub fn backed(blob: TileBlob) -> Self {
+        Self::backed_shared(Arc::new(blob))
+    }
+    pub fn backed_shared(blob: Arc<TileBlob>) -> Self {
         let tile = Self::pending(blob.descriptor);
-        tile.publish(Ok(blob)).expect("new tile");
+        tile.0.data.publish(Ok(blob)).expect("new tile");
         tile
     }
     pub fn publish(&self, value: Result<TileBlob, String>) -> Result<(), String> {

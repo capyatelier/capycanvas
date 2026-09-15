@@ -6,3 +6,5 @@ pub mod photo;
 
 mod rasterize;
 pub use rasterize::rasterize_source;
+mod document;
+pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_color};
