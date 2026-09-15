@@ -1103,3 +1103,121 @@ checking restoration/backing waits could introduce a dependency cycle. No such
 speculative scheduling change was made. The outstanding GTK timer delay, larger
 native publication cost and first-use CPU stalls remain distinct investigation
 targets; the exact save/undo/recovery ownership changes are retained.
+
+## Prompt GTK stroke completion with display-phase restoration
+
+GTK now expedites its existing canvas timer for pen-up and cancellation. It
+still coalesces input into one frame source. After that frame, continuing work
+returns to the compositor's normal display phase even if the expedited time
+was inside the clock's ordinary jitter tolerance. Movement keeps its existing
+pacing, and idle/unmapped/failed canvases release the timer handle. The handle
+replaces the separate `ticking` boolean; no second timer or per-sample rendering
+path was added.
+
+Rearming introduces a real readiness edge case. The [Linux timerfd manual](https://man7.org/linux/man-pages/man2/timerfd_create.2.html)
+defines expiration counts relative to the latest rearm/read, and a nonblocking
+read can return EAGAIN when no expiration remains. If input rearms after GLib
+polls the descriptor, that old readiness must not remove the frame source. The
+callback now retains the source on EAGAIN/EINTR. A kernel-timer test first polls
+an expired timer, rearms it, checks the cleared readiness, and verifies the next
+expiration still works.
+
+The GTK correctness fixture passes (4.00 s) on a P3 U16 drawing. Repeated
+completion-wake requests produce one committed stroke; a second stroke visibly
+changes the canvas before cancellation restores the exact prior pixels and
+raster revision. One undo/redo restores the expected roots, and idle processing
+stops. This checks actual GTK input dispatch, worker rendering and readback,
+rather than just timer state.
+
+### Measurement correction and full presentation accounting
+
+The pen-up fixture previously used a one-millisecond sleep/poll loop while
+waiting for admission. It now waits on `MainContext::iteration(true)`, as it
+already did during movement. Both comparison executables were rebuilt with the
+same corrected benchmark function. This also changes the phase at which later
+contacts begin, so results are compared within these new paired arms, not against
+the earlier polling fixture's latency numbers.
+
+Mailbox presentation can replace a pen-up frame with a later frame containing
+the same completed stroke. The analysis retains direct presented/discarded
+feedback and measures the first successfully presented frame at or after the
+commit frame ID. This fixture never undoes a measured contact, so later frames
+include it. Every one of the 24 contacts in each arm must have such feedback;
+there is no percentile calculated only from the faster directly presented subset.
+Movement numbers below remain enqueue-to-present, not physical input latency.
+
+Four serial 24-contact arms use the same staged executable pathname, private
+120 Hz Wayland display, 4096² ProPhoto U16 document, 32 paint layers and 720 px
+palette knife. No build or GPU test overlaps measurement.
+
+| Arm | Pen-up enqueue delay p50 / p99 ms | First-visible pen-up p50 / p95 / p99 ms | Pen-ups over 8.33 ms / contacts | Move enqueue-to-present p99 ms | Move worker CPU p99 ms |
+| --- | --- | --- | --- | ---: | ---: |
+| Before | 6.670 / 7.894 | 12.572 / 13.759 / 14.067 | 23 / 24 | 6.353 | 0.986 |
+| After | 0.152 / 0.322 | 6.264 / 9.852 / 10.463 | 7 / 24 | 6.357 | 1.017 |
+| Before repeat | 6.636 / 7.727 | 12.518 / 13.456 / 13.619 | 22 / 24 | 6.310 | 0.964 |
+| After repeat | 0.161 / 0.339 | 6.149 / 9.715 / 9.956 | 6 / 24 | 6.375 | 0.978 |
+
+Before arms contain 2,305 movement worker frames and no discarded presentation
+feedback. After arms contain 2,309 / 2,306 movement worker frames, with 2,297 /
+2,295 directly presented; 11 / 10 of the 24 original pen-up frames are replaced.
+All contacts remain in the first-visible statistics. Directly presented movement
+frames over 8.33 ms are 0 / 2 / 0 / 2 in table order. Movement p95/p99 changes
+remain inside the declared investigation thresholds. Process peak RSS is
+612.66 / 611.70 / 624.67 / 610.23 MiB respectively; these are the test processes,
+not a combined multi-window/export memory qualification.
+
+Observed host-backing medians improve from about 22.6 to 16.4 ms. As before,
+these are first observations at the fixture's event-loop sampling cadence, not
+exact compression service times. The renderer's numerical work is unchanged.
+The retained scheduling change removes a measured input-owner wait and improves
+pen-up latency, but its roughly 10 ms p99 still fails the currently declared
+8.33 ms input-to-present gate. This is not a complete GTK latency qualification.
+
+An earlier candidate allowed an expedited timer to retain a phase error inside
+the normal jitter tolerance. Its repeat move p99 changed 6.290 → 6.699 ms, crossing
+the relative threshold. The final candidate explicitly restores phase, with the
+paired results above. Initial polling-harness and intermediate event-loop runs
+remain separately named `native-terminal-wake-*` and `native-terminal-eventloop-*`;
+they are not substituted for the final `native-terminal-realign-*` evidence.
+
+Exact final measurement test executables:
+
+- Before: `e87bb33e23bb74545f5baa7b16c46c07ae07afb726b90c6764cfe4c65cdb898f`.
+- After: `3dc867ec1f4dfc632519c8e429b76ce9ee8b0ad66ef977bfdaca432a04b4e9c0`.
+
+`rebuild-native-terminal-eventloop.py` records the baseline rebuild with common
+instrumentation and fresh source mtimes. `run-native-terminal-realign-gtk.py`,
+`analyze-native-terminal-realign-gtk.py`, the source snapshot/patch, build records,
+raw presentation JSON, per-arm process/GPU logs and environment records retain
+the final comparison. The preceding offscreen matrix remains applicable to the
+unchanged shared renderer, including its outstanding large-commit and first-frame
+stalls. Photo/global-effect/concurrent-worker and monitor/platform qualification
+remain open.
+
+The final integration follow-up passes navigation/color sampling (3.68 s), wide-
+color diagnostics/device-failure recovery, and twelve successive window
+create/destroy cycles (5.06 s). These are correctness checks, not latency trials;
+the recovery check overlapped a test-only CPU rebuild. The lifecycle check now
+verifies that each renderer thread is joined and its frame timer released. The
+current unrealize path intentionally retains the shared document session for
+reattachment, so the former assertion that the whole `GpuCanvas` option vanished
+was obsolete.
+
+The navigation fixture also needed to use the existing readiness-aware stroke
+helper after selecting its brush. Its original white-sample assertion failed
+identically on the unchanged baseline. Once painting was admitted correctly, its
+fixed 250 ms idle assumption proved too short in a cold run: a bounded state wait
+settled after another 956.9 ms; the subsequent warm run needed no extra wait.
+Color sample values were already correct before that idle wait. The corrected
+fixture keeps the actual idle assertion and failure-state diagnostics, without
+claiming that functional timeout as a color-sampling latency budget. Initial
+assertion-failing runs also ended with exit 139 during teardown; their logs are
+retained, including the matching baseline failure. Corrected runs close normally.
+
+Only test fixtures/inspection changed after the final measured production code.
+Recovery executable SHA-256:
+`9f6a2b8cbca5d3d9a07533aad8d6322914482a0aa0abad6e029828fb6f5c4d42`.
+Final navigation/lifecycle executable SHA-256:
+`e79e0750fecff48d909cd4c917b043d5e9a40f7461f63beec009e9c0e9615ac0`.
+Their exact build/source manifests and logs use `native-terminal-final-*`,
+`native-terminal-idle-*` and `native-terminal-integrated-*` prefixes.

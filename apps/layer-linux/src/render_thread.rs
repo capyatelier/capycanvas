@@ -352,6 +352,10 @@ impl RenderWorker {
             && (!self.first_frame_sent || self.startup.canvas_ready)
             && self.in_flight.load(Ordering::Acquire) < 2)
     }
+    #[cfg(test)]
+    pub(super) fn worker_is_joined(&self) -> bool {
+        self.thread.is_none()
+    }
     pub(super) fn stop(&mut self) {
         let _ = self.discard_prepared_color();
         if let Some(thread) = self.thread.take() {

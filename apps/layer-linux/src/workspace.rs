@@ -831,7 +831,7 @@ pub struct Workspace {
     pub(crate) drawer: Rc<drawers::Drawer>,
     columns: columns::Columns,
     refreshing: Cell<bool>,
-    ticking: Cell<bool>,
+    frame_timer: RefCell<Option<crate::canvas::FrameTimer>>,
     frame_deadline: Cell<u64>,
 }
 impl Drop for Workspace {
@@ -1013,7 +1013,7 @@ impl Workspace {
             drawer: drawers::Drawer::new(0),
             columns: columns::Columns::default(),
             refreshing: Cell::new(false),
-            ticking: Cell::new(false),
+            frame_timer: RefCell::new(None),
             frame_deadline: Cell::new(0),
             input: Rc::default(),
             tooltips: Rc::default(),
@@ -1773,6 +1773,12 @@ impl Workspace {
         }
     }
     pub fn wake(self: &Rc<Self>) {
+        self.wake_frame(false);
+    }
+    pub(crate) fn wake_stroke_end(self: &Rc<Self>) {
+        self.wake_frame(true);
+    }
+    fn wake_frame(self: &Rc<Self>, immediate: bool) {
         if self
             .gpu
             .borrow()
@@ -1781,7 +1787,10 @@ impl Workspace {
         {
             return;
         }
-        if self.ticking.replace(true) {
+        if let Some(timer) = self.frame_timer.borrow().as_ref() {
+            if immediate {
+                self.frame_deadline.set(timer.expedite());
+            }
             return;
         }
         let now = glib::monotonic_time().max(0) as u64 * 1000;
@@ -1797,9 +1806,10 @@ impl Workspace {
                 )
             })
             .unwrap_or((self.frame_deadline.get(), crate::canvas::FRAME_NS));
-        let first = crate::canvas::schedule(
+        let (first, timer) = crate::canvas::schedule(
             deadline,
             period,
+            immediate,
             glib::clone!(
                 #[weak(rename_to = this)]
                 self,
@@ -1810,7 +1820,7 @@ impl Workspace {
                     let frame_start = std::time::Instant::now();
                     let area = &this.area;
                     if !area.is_mapped() {
-                        this.ticking.set(false);
+                        this.frame_timer.borrow_mut().take();
                         return glib::ControlFlow::Break;
                     }
                     // The first wake can precede initial allocation.
@@ -1819,6 +1829,8 @@ impl Workspace {
                         return glib::ControlFlow::Continue;
                     }
                     let now = glib::monotonic_time().max(0) as u64 * 1000;
+                    let expedited = this.frame_timer.borrow().as_ref()
+                        .is_some_and(|timer| timer.take_expedited());
                     // Retain pacing across short pan/hover bursts as well as ink.
                     let previous = this.frame_deadline.get();
                     #[cfg(test)]
@@ -1852,7 +1864,7 @@ impl Workspace {
                         Some(Ok(change)) => this.changed(Ok(change)),
                         Some(Err(error)) => {
                             this.gpu_error(&error);
-                            this.ticking.set(false);
+                            this.frame_timer.borrow_mut().take();
                             return glib::ControlFlow::Break;
                         }
                         None => {}
@@ -1873,16 +1885,20 @@ impl Workspace {
                             .push(frame_start.elapsed().as_secs_f64() * 1000.0);
                     }
                     if active {
-                        if this.gpu.borrow().as_ref().is_some_and(|g| {
+                        // An expedited wake deliberately changes timer phase.
+                        // Restore it even when the change is inside the normal
+                        // feedback-jitter tolerance; otherwise each pen-up can
+                        // leave subsequent movement slightly early or late.
+                        if expedited || this.gpu.borrow().as_ref().is_some_and(|g| {
                             !g.session.engine().backend().clock.aligned(next, period)
                         }) {
-                            this.ticking.set(false);
+                            this.frame_timer.borrow_mut().take();
                             this.wake();
                             return glib::ControlFlow::Break;
                         }
                         glib::ControlFlow::Continue
                     } else {
-                        this.ticking.set(false);
+                        this.frame_timer.borrow_mut().take();
                         glib::ControlFlow::Break
                     }
                 }
@@ -1891,6 +1907,7 @@ impl Workspace {
         // schedule may advance an expired deadline after a genuinely idle gap.
         // Keep our next deadline aligned with the actual kernel timer phase.
         self.frame_deadline.set(first);
+        *self.frame_timer.borrow_mut() = Some(timer);
     }
     fn install_gpu(self: &Rc<Self>) {
         let actions = gtk::gio::SimpleActionGroup::new();

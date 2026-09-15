@@ -14,7 +14,10 @@ fn native_penup_and_following_strokes() {
     for _ in 0..31 {
         let id = project.document.allocate_layer_id();
         let position = project.document.layers.len() - 1;
-        project.document.layers.insert(position, layer_core::Layer::paint(id, "pacing layer"));
+        project
+            .document
+            .layers
+            .insert(position, layer_core::Layer::paint(id, "pacing layer"));
     }
     project.validate(Default::default()).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
@@ -141,7 +144,9 @@ fn native_penup_and_following_strokes() {
         expected += 1;
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            pump(1);
+            // Wait on the same event loop as production. A sleep/poll loop here
+            // adds its own latency to the prompt terminal timer wake.
+            context.iteration(true);
             let gpu = w.gpu.borrow();
             let engine = gpu.as_ref().unwrap().session.engine();
             if engine.metrics().committed_strokes == expected {
@@ -218,6 +223,140 @@ fn native_penup_and_following_strokes() {
     drop(stats);
     let path = std::env::var("LAYER_PACING_REPORT").unwrap();
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_terminal_wake_preserves_commit_cancel_and_idle() {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    let app = native_test_app("art.capycanvas.TerminalWake");
+    let mut project = new_drawing(256, 256).unwrap();
+    project.document.color = DocumentColor {
+        space: RgbSpace::DisplayP3,
+        depth: IntegerDepth::U16,
+    };
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.present();
+    w.dispatch(UiAction::SetBrushSize { value: 24. });
+    let settle = || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            pump(2);
+            let gpu = w.gpu.borrow();
+            let ready = gpu.as_ref().is_some_and(|g| {
+                assert!(!g.session.rendering_suspended());
+                let e = g.session.engine();
+                e.backend().startup.complete
+                    && e.backend()
+                        .paint_ready(e.document(), e.configured_brush(), false)
+                    && !e.has_pending_input()
+                    && !e.has_pending_document_edits()
+                    && e.document().layers[0].raster.host_backed()
+            });
+            if ready && w.frame_timer.borrow().is_none() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "terminal input must settle");
+        }
+    };
+    settle();
+    let root = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .layers[0]
+            .raster
+            .clone()
+    };
+    let committed = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .metrics()
+            .committed_strokes
+    };
+    let empty = root();
+    let count = committed();
+    let camera = state(&w).camera;
+    let m = camera.document_to_surface();
+    let send = |phase, x, y| {
+        w.input.send(
+            &w,
+            PenEvent {
+                device_id: 91,
+                sequence: 0, // The native input owner assigns the actual sequence.
+                timestamp_ns: glib::monotonic_time() as u64 * 1000,
+                view_revision: camera.revision,
+                surface_position: Point {
+                    x: m[0] * x + m[2] * y + m[4],
+                    y: m[1] * x + m[3] * y + m[5],
+                },
+                pressure: 0.8,
+                tilt_radians: [0.; 2],
+                twist_radians: 0.,
+                distance: 0.,
+                phase,
+                tool: ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            },
+        );
+    };
+    send(PenPhase::Down, 30., 70.);
+    pump(20);
+    send(PenPhase::Move, 140., 80.);
+    pump(20);
+    send(PenPhase::Up, 220., 90.);
+    // Multiple requests before dispatch still own one timer and one commit.
+    w.wake_stroke_end();
+    w.wake_stroke_end();
+    settle();
+    assert_eq!(committed(), count + 1);
+    let painted = root();
+    assert_ne!(painted, empty);
+    let context = glib::MainContext::default();
+    let before = context.block_on(read_canvas_pixels(&w, 9101)).unwrap();
+    send(PenPhase::Down, 30., 150.);
+    pump(20);
+    send(PenPhase::Move, 220., 170.);
+    pump(20);
+    let active = context.block_on(read_canvas_pixels(&w, 9103)).unwrap();
+    assert_ne!(
+        before.bytes, active.bytes,
+        "the cancelled stroke must have painted"
+    );
+    send(PenPhase::Cancel, 220., 170.);
+    w.wake_stroke_end();
+    settle();
+    assert_eq!(committed(), count + 1);
+    assert_eq!(root(), painted);
+    let after = context.block_on(read_canvas_pixels(&w, 9102)).unwrap();
+    assert_eq!(
+        before.bytes, after.bytes,
+        "cancel restores exact displayed paint"
+    );
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    settle();
+    assert_eq!(root(), empty, "one undo removes the completed stroke");
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    settle();
+    assert_eq!(root(), painted);
+    assert!(
+        w.frame_timer.borrow().is_none(),
+        "idle canvas has no running timer"
+    );
     w.window.destroy();
     pump(100);
 }

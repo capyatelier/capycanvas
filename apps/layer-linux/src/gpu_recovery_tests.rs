@@ -174,7 +174,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         w.wake();
         pump(20);
     }
-    assert!(!w.ticking.get(), "failed workers must not be rescheduled");
+    assert!(w.frame_timer.borrow().is_none(), "failed workers must not be rescheduled");
     assert!(w.restart_canvas.is_visible());
     click(&w.restart_canvas);
     until(|| {

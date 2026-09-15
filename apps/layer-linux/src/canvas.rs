@@ -149,7 +149,11 @@ impl GpuCanvas {
         let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
         changed.regions |= resized.regions;
-        if view_color_changed { changed.regions |= layer_ui::regions::BRUSH | layer_ui::regions::SETTINGS | layer_ui::regions::DOCUMENT; }
+        if view_color_changed {
+            changed.regions |= layer_ui::regions::BRUSH
+                | layer_ui::regions::SETTINGS
+                | layer_ui::regions::DOCUMENT;
+        }
         self.needs_present = !self.session.engine().backend().startup.complete;
         #[cfg(test)]
         {
@@ -203,11 +207,55 @@ fn extent(area: &gtk::Picture) -> [u32; 2] {
 /// presentation phase when available. timerfd uses absolute kernel intervals;
 /// missed expirations coalesce, preserving input without replaying stale frames.
 pub const FRAME_NS: u64 = 8_333_333;
+pub struct FrameTimer {
+    timer: std::rc::Rc<std::os::fd::OwnedFd>,
+    period_ns: u64,
+    expedited: std::cell::Cell<bool>,
+}
+impl FrameTimer {
+    fn arm(&self, deadline_ns: u64) -> u64 {
+        use std::os::fd::AsRawFd;
+        let first = deadline_ns.max(gtk::glib::monotonic_time().max(0) as u64 * 1000 + 1);
+        let interval = libc::itimerspec {
+            it_interval: libc::timespec {
+                tv_sec: (self.period_ns / 1_000_000_000) as _,
+                tv_nsec: (self.period_ns % 1_000_000_000) as _,
+            },
+            it_value: libc::timespec {
+                tv_sec: (first / 1_000_000_000) as _,
+                tv_nsec: (first % 1_000_000_000) as _,
+            },
+        };
+        assert_eq!(
+            unsafe {
+                libc::timerfd_settime(
+                    self.timer.as_raw_fd(),
+                    libc::TFD_TIMER_ABSTIME,
+                    &interval,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        first
+    }
+    /// Complete/cancel a contact promptly. Rearming the same timer coalesces
+    /// terminal events and never adds a second frame source. The workspace
+    /// realigns continued movement with presentation after this wake.
+    pub fn expedite(&self) -> u64 {
+        self.expedited.set(true);
+        self.arm(0)
+    }
+    pub fn take_expedited(&self) -> bool {
+        self.expedited.replace(false)
+    }
+}
 pub fn schedule(
     deadline_ns: u64,
     period_ns: u64,
+    immediate: bool,
     mut frame: impl FnMut() -> gtk::glib::ControlFlow + 'static,
-) -> u64 {
+) -> (u64, FrameTimer) {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let raw = unsafe {
         libc::timerfd_create(
@@ -220,36 +268,81 @@ pub fn schedule(
         "canvas timerfd: {}",
         std::io::Error::last_os_error()
     );
-    let timer = unsafe { OwnedFd::from_raw_fd(raw) };
-    let first = deadline_ns.max(gtk::glib::monotonic_time().max(0) as u64 * 1000 + 1);
-    let interval = libc::itimerspec {
-        it_interval: libc::timespec {
-            tv_sec: (period_ns / 1_000_000_000) as _,
-            tv_nsec: (period_ns % 1_000_000_000) as _,
-        },
-        it_value: libc::timespec {
-            tv_sec: (first / 1_000_000_000) as _,
-            tv_nsec: (first % 1_000_000_000) as _,
-        },
+    let timer = FrameTimer {
+        timer: std::rc::Rc::new(unsafe { OwnedFd::from_raw_fd(raw) }),
+        period_ns,
+        expedited: std::cell::Cell::new(immediate),
     };
-    assert_eq!(
-        unsafe {
-            libc::timerfd_settime(
-                raw,
-                libc::TFD_TIMER_ABSTIME,
-                &interval,
-                std::ptr::null_mut(),
-            )
-        },
-        0
-    );
+    let first = timer.arm(if immediate { 0 } else { deadline_ns });
+    let descriptor = timer.timer.clone();
     glib_unix::unix_fd_add_local(raw, gtk::glib::IOCondition::IN, move |_, _| {
-        let mut elapsed = 0u64;
-        let bytes = unsafe { libc::read(timer.as_raw_fd(), (&mut elapsed as *mut u64).cast(), 8) };
-        if bytes != 8 {
-            return gtk::glib::ControlFlow::Break;
+        if !timer_fired(descriptor.as_raw_fd()) {
+            return gtk::glib::ControlFlow::Continue;
         }
         frame()
     });
-    first
+    (first, timer)
+}
+
+fn timer_fired(descriptor: std::os::fd::RawFd) -> bool {
+    let mut elapsed = 0u64;
+    let bytes = unsafe { libc::read(descriptor, (&mut elapsed as *mut u64).cast(), 8) };
+    if bytes == 8 {
+        return true;
+    }
+    let error = std::io::Error::last_os_error();
+    // Input may rearm a timer after GLib polled it but before this source runs.
+    // Rearming clears its old expiration count. Keep the source alive to receive
+    // the new expiration instead of leaving the workspace without a timer.
+    if bytes < 0
+        && matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        )
+    {
+        return false;
+    }
+    panic!("canvas timerfd read returned {bytes}: {error}");
+}
+
+#[cfg(test)]
+mod timer_tests {
+    use super::*;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    #[test]
+    fn rearm_clears_old_readiness_and_next_expiration_remains_usable() {
+        let raw = unsafe {
+            libc::timerfd_create(
+                libc::CLOCK_MONOTONIC,
+                libc::TFD_NONBLOCK | libc::TFD_CLOEXEC,
+            )
+        };
+        assert!(raw >= 0);
+        let timer = FrameTimer {
+            timer: std::rc::Rc::new(unsafe { OwnedFd::from_raw_fd(raw) }),
+            period_ns: 1_000_000_000,
+            expedited: std::cell::Cell::new(false),
+        };
+        let ready = || {
+            let mut descriptor = libc::pollfd {
+                fd: timer.timer.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 1000) }, 1);
+            assert_ne!(descriptor.revents & libc::POLLIN, 0);
+        };
+        timer.expedite();
+        ready();
+        // Simulate a terminal input handler changing an already-polled timer.
+        timer.arm(gtk::glib::monotonic_time() as u64 * 1000 + 1_000_000_000);
+        assert!(!timer_fired(raw));
+        timer.expedite();
+        ready();
+        assert!(timer_fired(raw));
+        assert!(!timer_fired(raw));
+        assert!(timer.take_expedited());
+        assert!(!timer.take_expedited());
+    }
 }

@@ -547,7 +547,11 @@ impl Input {
                 self.pending.borrow_mut().push_back(event);
             }
         }
-        workspace.wake();
+        if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
+            workspace.wake_stroke_end();
+        } else {
+            workspace.wake();
+        }
     }
     pub fn has_pending(&self) -> bool {
         !self.pending.borrow().is_empty()

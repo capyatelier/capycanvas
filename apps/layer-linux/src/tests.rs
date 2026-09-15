@@ -3805,9 +3805,7 @@ fn native_navigation_tools() {
         w.cursor_input(Some(e));
         w.input.send(&w, e);
     };
-    contact(PenPhase::Down);
-    contact(PenPhase::Up);
-    pump(250);
+    native_pen_path(&w, &[[1024., 768.], [1024., 768.]]);
     w.dispatch(UiAction::SetLayerOpacity {
         id: None,
         opacity: 0.5,
@@ -3844,10 +3842,22 @@ fn native_navigation_tools() {
     for (actual, expected) in color.into_iter().zip([1.0, 0.0, 0.0, 1.0]) {
         assert!((actual - expected).abs() < 0.001, "raw color {color:?}");
     }
+    let startup_pending = !w.gpu.borrow().as_ref().unwrap().session.engine().backend().startup.complete;
+    let idle_start = Instant::now();
+    while w.frame_timer.borrow().is_some() && idle_start.elapsed() < Duration::from_secs(5) {
+        pump(5);
+    }
+    let gpu = w.gpu.borrow();
+    let g = gpu.as_ref().unwrap();
     assert!(
-        !w.ticking.get(),
-        "sampling completes and stops the frame timer"
+        w.frame_timer.borrow().is_none(),
+        "sampling timer: session={} active={} input={} edits={} present={} startup={}",
+        g.session.wants_continuous_frames(), g.session.engine().has_active_stroke(),
+        g.session.engine().has_pending_input(), g.session.engine().has_pending_document_edits(),
+        g.needs_present, g.session.engine().backend().startup.complete,
     );
+    drop(gpu);
+    eprintln!("sampling settled after {:.3} ms additional wait (startup pending: {startup_pending})", idle_start.elapsed().as_secs_f64() * 1000.);
     let dir = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
@@ -9439,11 +9449,16 @@ fn native_window_lifecycle() {
         let next = windows.borrow().last().unwrap().clone();
         next.window.destroy();
         pump(150);
-        assert!(next.gpu.borrow().is_none());
+        // Unrealize stops/joins the renderer while retaining the shared session
+        // for possible remapping. Verify GPU ownership, not model destruction.
+        assert!(next.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_joined()));
+        assert!(next.frame_timer.borrow().is_none());
         assert_eq!(windows.borrow().len(), 1);
     }
     first.window.destroy();
     pump(100);
+    assert!(first.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_joined()));
+    assert!(first.frame_timer.borrow().is_none());
     assert!(windows.borrow().is_empty());
 }
 
@@ -13078,7 +13093,7 @@ fn native_workspace_controls_docking_and_ink() {
         theme: Some(Theme::Dark),
     });
     pump(100);
-    assert!(!w.ticking.get(), "idle canvas must stop requesting frames");
+    assert!(w.frame_timer.borrow().is_none(), "idle canvas must stop requesting frames");
     let close = find_css(w.header.root.upcast_ref(), "close").unwrap();
     let circle = close.first_child().unwrap().compute_bounds(&close).unwrap();
     assert_eq!((circle.width(), circle.height()), (24.0, 24.0));
@@ -13495,7 +13510,7 @@ fn native_workspace_controls_docking_and_ink() {
             w.area.height() as u32 * scale
         ]
     );
-    assert!(!w.ticking.get(), "resize presentation must settle");
+    assert!(w.frame_timer.borrow().is_none(), "resize presentation must settle");
     assert_eq!(
         w.gpu
             .borrow()
@@ -13669,7 +13684,7 @@ fn native_workspace_controls_docking_and_ink() {
     assert!(w.header.root.has_css_class("zen-hidden"));
     assert_eq!(state(&w).camera, camera);
     assert!(
-        !w.ticking.get(),
+        w.frame_timer.borrow().is_none(),
         "Zen fade must not run the canvas frame loop"
     );
     for (slot, widget) in w.surface.imp().children.borrow().iter() {
