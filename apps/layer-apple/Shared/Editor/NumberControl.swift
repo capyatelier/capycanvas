@@ -8,11 +8,13 @@ struct NumberControl: View {
     var identifier = ""
     var valueOnly = false
     var inline = false
+    var gestureChange: ((String, Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
     @State private var formatted = JSON()
     @State private var showsEntry = false
     @State private var horizontalDrag: Bool?
+    @GestureState private var contact = false
     @State private var editing = false
     @State private var inlineMeasure = ""
     @Environment(\.isEnabled) private var enabled
@@ -67,6 +69,9 @@ struct NumberControl: View {
         .modifier(NumberControlMeasurement(id: key + ":root"))
         .onAppear { field.receive(value); format(); measureInlineRange() }
         .onChange(of: value) { _, next in field.receive(next); format() }
+        .onChange(of: contact) { _, active in if !active { cancelDrag() } }
+        .onChange(of: enabled) { _, active in if !active { cancelDrag() } }
+        .onDisappear(perform: cancelDrag)
         .onChange(of: editing) { _, focused in
             if focused {
                 if !field.dirty { field.text = formatted["edit"].string }
@@ -102,14 +107,20 @@ struct NumberControl: View {
                 .contentShape(Rectangle())
                 .onTapGesture { location in position(location.x / max(1, geometry.size.width)) }
                 // Preserve vertical scrolling through long tool-settings lists.
-                .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { event in
+                .simultaneousGesture(DragGesture(minimumDistance: 6).updating($contact) { _, active, _ in active = true }.onChanged { event in
+                    guard enabled else { cancelDrag(); return }
                     if horizontalDrag == nil {
                         horizontalDrag = abs(event.translation.width) > abs(event.translation.height)
+                        if horizontalDrag == true { gestureChange?("down", field.value) { field.error = $0 } }
                     }
                     if horizontalDrag == true {
-                        position(event.location.x / max(1, geometry.size.width))
+                        position(event.location.x / max(1, geometry.size.width), phase: "move")
                     }
-                }.onEnded { _ in horizontalDrag = nil })
+                }.onEnded { event in
+                    guard enabled else { cancelDrag(); return }
+                    if horizontalDrag == true { position(event.location.x / max(1, geometry.size.width), phase: "up") }
+                    horizontalDrag = nil
+                })
         }.frame(height: 24).modifier(NumberControlMeasurement(id: key + ":track"))
             .accessibilityElement().accessibilityLabel(label)
             .accessibilityValue(formatted["text"].string)
@@ -184,17 +195,26 @@ struct NumberControl: View {
         guard commit() else { return }
         _ = resolve(["type": "step", "steps": direction])
     }
-    private func position(_ position: Double) {
-        field.dirty = false; showsEntry = false; editing = false
-        _ = resolve(["type": "position", "position": min(1, max(0, position))])
+    private func cancelDrag() {
+        if horizontalDrag == true { gestureChange?("cancel", field.value) { field.error = $0 } }
+        horizontalDrag = nil
     }
-    @discardableResult private func resolve(_ operation: [String: Any]) -> Bool {
+    private func position(_ position: Double, phase: String? = nil) {
+        guard enabled else { return }
+        field.dirty = false; showsEntry = false; editing = false
+        _ = resolve(["type": "position", "position": min(1, max(0, position))], phase: phase)
+    }
+    @discardableResult private func resolve(_ operation: [String: Any], phase: String? = nil) -> Bool {
         do {
             let result = try store.resolveNumber(control, value: field.value, operation: operation)
             field.dirty = false; field.error = nil
             field.text = result["edit"].string
             let next = result["value"].number
-            if Float(next) != Float(field.value) {
+            if let phase, let gestureChange {
+                // Gesture previews follow the published shared value. Only
+                // discrete edits need optimistic receipt/acknowledgment state.
+                gestureChange(phase, next) { error in field.error = error }
+            } else if Float(next) != Float(field.value) {
                 let token = field.submit(next)
                 change(next) { error in field.complete(token, error: error); format() }
             }

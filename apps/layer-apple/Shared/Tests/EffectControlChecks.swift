@@ -244,6 +244,14 @@ extension XCTestCase {
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20)); expect(canvas, "Metal ready")
         activate(app.buttons["panel-tab-adjustments"])
+        let category = app.buttons["filter-category"]
+        for index in [1, 0] {
+            activate(category)
+            let option = app.buttons["filter-category-option-\(index)"]
+            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            let label = option.label
+            activate(option); expect(category, label)
+        }
         search("Gaussian Blur")
         let blur = app.buttons["adjustment-gaussian_blur"]
         XCTAssertTrue(blur.waitForExistence(timeout: 10)); expect(blur, "Preview ready")

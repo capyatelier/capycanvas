@@ -4,14 +4,15 @@ import SwiftUI
 @MainActor private final class MenuFixture: ObservableObject {
     @Published var presented = true
     var actions: [String] = []
+    var selected: String?
     var menu: AppleContextMenu {
         func leaf(_ name: String, enabled: Bool = true) -> [String: Any] {
-            ["label": name, "enabled": enabled, "action": ["id": name],
+            ["label": name, "enabled": enabled, "selected": name == selected, "action": ["id": name],
              "bindings": name == "Direct" ? [["key": "z", "command": true, "shift": true]] : []]
         }
         return AppleContextMenu(JSON(["sections": [[
             leaf("Disabled", enabled: false),
-            ["label": "Submenu", "enabled": true, "sections": [[leaf("Disabled child", enabled: false), leaf("Nested")]]],
+            ["label": "Submenu", "enabled": true, "sections": [[leaf("Disabled child", enabled: false), leaf("Nested"), leaf("Selected child")]]],
             leaf("Direct")
         ]]])) { self.actions.append($0["id"].string) }
     }
@@ -70,6 +71,23 @@ private struct MenuFixtureView: View {
         try await drain()
         try require(!fixture.presented && fixture.actions == ["Nested", "Direct", "Direct"],
             "Shifted letters must match the shared shortcut's normalized key")
+        fixture.selected = "Direct"
+        fixture.presented = true; try await drain()
+        try await send("\r", 36)
+        try require(!fixture.presented && fixture.actions.last == "Direct" && fixture.actions.count == 4,
+            "Return must keep the selected choice when a menu opens")
+        fixture.selected = "Selected child"
+        fixture.presented = true; try await drain()
+        try await send("\u{F703}", 124)
+        try await send("\r", 36)
+        try require(!fixture.presented && fixture.actions.last == "Selected child" && fixture.actions.count == 5,
+            "Opening a submenu must focus its selected enabled choice")
+        fixture.selected = "Disabled"
+        fixture.presented = true; try await drain()
+        try await send("\r", 36)
+        try await send("\r", 36)
+        try require(!fixture.presented && fixture.actions.last == "Nested" && fixture.actions.count == 6,
+            "A selected disabled row must not take focus or prevent navigation")
         print("PASS: shared popup keyboard focus, submenus, disabled rows, action dismissal and Escape")
     }
     @MainActor static func main() {

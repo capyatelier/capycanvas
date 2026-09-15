@@ -45,9 +45,9 @@ private struct PropertyField: View {
     private var kind: String { control["kind"]["kind"].string }
     private var label: String { control["label"].string }
     private var value: JSON { control["value"]["value"] }
-    private func change(_ value: Any, completion: @escaping @MainActor (String?) -> Void) {
-        store.edit(["type": "effect", "action": ["op": "set", "layer": layer, "key": key,
-            "value": ["kind": kind, "value": value]]], completion: completion)
+    private func change(_ value: Any, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
+        store.effect(layer, key: key, action: ["op": "set", "value": ["kind": kind, "value": value]],
+            phase: phase, completion: completion)
     }
     private func change(_ value: Any) { change(value) { if let error = $0 { store.failure = error } } }
     var body: some View {
@@ -59,7 +59,8 @@ private struct PropertyField: View {
         switch kind {
         case "number":
             NumberControl(store: store, label: label, value: value.number, control: control["kind"]["numeric"],
-                identifier: "property-" + key) { change($0, completion: $1) }
+                identifier: "property-" + key,
+                gestureChange: { change($1, phase: $0, completion: $2) }) { change($0, completion: $1) }
                 .id(control["kind"].stableKey + label)
         case "toggle":
             Toggle(label, isOn: Binding(get: { value.bool }, set: { change($0) }))
@@ -72,7 +73,7 @@ private struct PropertyField: View {
                     background: EditorPalette(source: store.state["palette"])["input"]) { change($0) }
             }
         case "color":
-            PropertyColor(store: store, label: label, identifier: "property-" + key, value: value) { change($0, completion: $1) }
+            PropertyColor(store: store, label: label, identifier: "property-" + key, value: value) { change($0, phase: $1, completion: $2) }
         case "gradient": GradientProperty(store: store, layer: layer, control: control)
         default: EmptyView()
         }
@@ -84,8 +85,14 @@ private struct PropertyColor: View {
     let label: String
     let identifier: String
     let value: JSON
-    let change: (Any, @escaping @MainActor (String?) -> Void) -> Void
+    let change: (Any, String?, @escaping @MainActor (String?) -> Void) -> Void
     @State private var expanded = false
+    private func component(_ index: Int, _ value: Double, phase: String? = nil,
+        completion: @escaping @MainActor (String?) -> Void) {
+        var color = self.value.array.map(\.number)
+        guard color.count == 4 else { completion("Invalid color"); return }
+        color[index] = value; change(color, phase, completion)
+    }
     var body: some View {
         VStack(spacing: 4) {
             HStack {
@@ -98,10 +105,9 @@ private struct PropertyColor: View {
             if expanded {
                 ForEach(0..<4, id: \.self) { index in
                     NumberControl(store: store, label: ["Red", "Green", "Blue", "Alpha"][index],
-                        value: value[index].number, control: store.catalog["opacity"], identifier: identifier + "-rgba-\(index)") { next, completion in
-                        var color = value.array.map(\.number)
-                        guard color.count == 4 else { return }
-                        color[index] = next; change(color, completion)
+                        value: value[index].number, control: store.catalog["opacity"], identifier: identifier + "-rgba-\(index)",
+                        gestureChange: { component(index, $1, phase: $0, completion: $2) }) {
+                        component(index, $0, completion: $1)
                     }
                 }
             }
@@ -222,6 +228,12 @@ private struct GradientProperty: View {
         store.effect(layer, key: key, action: ["op": "gradient_stop", "index": index as Any? ?? NSNull(),
             "position": position, "color": color, "remove": remove], phase: phase, completion: completion)
     }
+    private func opacity(_ value: Double, phase: String? = nil, completion: @escaping @MainActor (String?) -> Void) {
+        var color = stops[index]["color"].array.map(\.number)
+        guard color.count == 4 else { completion("Invalid color"); return }
+        color[3] = value
+        change(stops[index]["position"].number, index: index, color: color, phase: phase, completion: completion)
+    }
     private func cancelDrag() {
         if let stop = dragStop { change(0, index: stop.index, phase: "cancel") }
         dragging = false; dragStop = nil
@@ -277,18 +289,15 @@ private struct GradientProperty: View {
             }.frame(height: 52)
             if !stops.isEmpty {
                 NumberControl(store: store, label: "Position", value: stops[index]["position"].number,
-                    control: store.catalog["opacity"], identifier: "gradient-position") { change($0, index: index, completion: $1) }
+                    control: store.catalog["opacity"], identifier: "gradient-position",
+                    gestureChange: { change($1, index: index, phase: $0, completion: $2) }) { change($0, index: index, completion: $1) }
                     .disabled(!removable).id(index)
                 PropertyColor(store: store, label: "Color", identifier: "gradient-stop", value: stops[index]["color"]) {
-                    change(stops[index]["position"].number, index: index, color: $0, completion: $1)
+                    change(stops[index]["position"].number, index: index, color: $0, phase: $1, completion: $2)
                 }.id(index)
                 NumberControl(store: store, label: "Opacity", value: stops[index]["color"][3].number,
-                    control: store.catalog["opacity"], identifier: "gradient-opacity") { value, completion in
-                    var color = stops[index]["color"].array.map(\.number)
-                    guard color.count == 4 else { return }
-                    color[3] = value
-                    change(stops[index]["position"].number, index: index, color: color, completion: completion)
-                }.id(index)
+                    control: store.catalog["opacity"], identifier: "gradient-opacity",
+                    gestureChange: { opacity($1, phase: $0, completion: $2) }) { opacity($0, completion: $1) }.id(index)
             }
             HStack {
                 Button("Remove stop") { change(0, index: index, remove: true); selected = max(0, index - 1) }
@@ -304,7 +313,7 @@ private struct GradientProperty: View {
 private extension JSON {
     var effectColor: Color { Color(.sRGB, red: self[0].number, green: self[1].number, blue: self[2].number, opacity: self[3].number) }
 }
-private extension EditorStore {
+extension EditorStore {
     func effect(_ layer: UInt64, key: String, action: [String: Any], phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {
         var action = action; action["layer"] = layer; action["key"] = key

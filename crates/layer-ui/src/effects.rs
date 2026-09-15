@@ -395,13 +395,27 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         let (layer, key) = match &action {
             EffectAction::CurvePoint { layer, key, .. }
-            | EffectAction::GradientStop { layer, key, .. } => (*layer, key.clone()),
+            | EffectAction::GradientStop { layer, key, .. }
+            | EffectAction::Set {
+                layer,
+                key,
+                value: EffectValue::Number(_) | EffectValue::Color(_),
+            } => (*layer, key.clone()),
             _ => return Err("Not a draggable effect property".into()),
         };
         if phase == ContactPhase::Down {
             self.require_idle()?;
+            let original = self
+                .engine
+                .document()
+                .layer(LayerId(layer))
+                .ok_or("Unknown layer")?
+                .clone();
+            if self.engine.document().is_locked(original.id) {
+                return Err("This layer is locked".into());
+            }
             self.effect_gesture = Some(EffectGesture {
-                original: self.editable_layer(layer)?,
+                original,
                 key: key.clone(),
             });
         } else if !self
@@ -432,7 +446,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .layer(gesture.original.id)
                 .unwrap()
                 .clone();
-            let changed = edited.effect != gesture.original.effect;
+            let changed = edited.effect != gesture.original.effect
+                || edited.opacity != gesture.original.opacity;
             self.engine
                 .preview_edit(Edit::ReplaceLayer(Box::new(gesture.original)))
                 .map_err(error)?;

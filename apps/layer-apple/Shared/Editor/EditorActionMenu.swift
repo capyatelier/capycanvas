@@ -30,6 +30,7 @@ struct EditorActionMenu: View {
     private var sections: [[AppleContextMenu.Item]] { pages.last?.sections ?? model.sections }
     private var entries: [AppleContextMenu.Item] { sections.flatMap { $0 } }
     private var enabled: [Int] { entries.indices.filter { entries[$0].enabled } }
+    private var initialFocus: Int? { enabled.first { entries[$0].selected == true } ?? enabled.first }
     var body: some View {
         ScrollViewReader { reader in
             ScrollView {
@@ -41,7 +42,7 @@ struct EditorActionMenu: View {
         }.frame(width: width, height: menuHeight)
             .font(.system(size: 15))
             .accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
-            .onAppear { focus = enabled.first }
+            .onAppear { focus = initialFocus }
             .background(ShortcutKeyCapture(captured: key).frame(width: 1, height: 1))
     }
     private var menuHeight: CGFloat {
@@ -114,7 +115,7 @@ struct EditorActionMenu: View {
     private func back() { pages.removeLast(); focus = enabled.first }
     private func activate(_ item: AppleContextMenu.Item) {
         guard item.enabled else { return }
-        if !item.sections.isEmpty { pages.append(item); focus = enabled.first }
+        if !item.sections.isEmpty { pages.append(item); focus = initialFocus }
         else { dismiss(); item.action?() }
     }
 }

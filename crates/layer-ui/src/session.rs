@@ -12929,24 +12929,56 @@ mod tests {
             Platform::Android,
             Platform::Windows,
         ] {
-            for effect in ["curves", "gradient_map"] {
+            for effect in [
+                "curves",
+                "gradient_map",
+                "brightness_contrast",
+                "split_tone",
+                "paint",
+                "paper",
+            ] {
                 let mut app = session();
                 app.set_platform(platform);
-                app.dispatch(UiAction::Effect {
-                    action: EffectAction::Insert {
-                        effect: effect.into(),
-                    },
-                })
-                .unwrap();
+                if effect == "paper" {
+                    let id = app
+                        .engine
+                        .document()
+                        .layers
+                        .iter()
+                        .find(|layer| layer.kind == layer_core::LayerKind::Background)
+                        .unwrap()
+                        .id
+                        .0;
+                    app.dispatch(UiAction::SelectLayer { id }).unwrap();
+                } else if effect != "paint" {
+                    app.dispatch(UiAction::Effect {
+                        action: EffectAction::Insert {
+                            effect: effect.into(),
+                        },
+                    })
+                    .unwrap();
+                }
                 let controls = &app.state.layer_properties.controls;
                 let index = controls
                     .iter()
-                    .position(|c| matches!(&c.value, EffectValue::Curve(_) | EffectValue::Gradient(_)))
+                    .position(|c| {
+                        matches!(
+                            &c.value,
+                            EffectValue::Curve(_)
+                                | EffectValue::Gradient(_)
+                                | EffectValue::Number(_)
+                                | EffectValue::Color(_)
+                        )
+                    })
                     .unwrap();
                 let key = controls[index].key.clone();
                 let layer = app.engine.document().active_layer.0;
                 let initial = if effect == "curves" {
                     EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
+                } else if effect == "split_tone" {
+                    EffectValue::Color([0.5, 0.25, 0.75, 1.])
+                } else if effect != "gradient_map" {
+                    EffectValue::Number(0.5)
                 } else {
                     EffectValue::Gradient(vec![
                         GradientStop {
@@ -12982,7 +13014,7 @@ mod tests {
                                 point: [position, 0.75],
                                 remove: false,
                             }
-                        } else {
+                        } else if effect == "gradient_map" {
                             EffectAction::GradientStop {
                                 layer,
                                 key: key.clone(),
@@ -12990,6 +13022,16 @@ mod tests {
                                 position,
                                 color: None,
                                 remove: false,
+                            }
+                        } else {
+                            EffectAction::Set {
+                                layer,
+                                key: key.clone(),
+                                value: if effect == "split_tone" {
+                                    EffectValue::Color([position, 0.25, 0.75, 1.])
+                                } else {
+                                    EffectValue::Number(position)
+                                },
                             }
                         }),
                     },

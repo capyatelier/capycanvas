@@ -494,7 +494,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.engine.document().is_locked(id) {
             return Err("This layer is locked".into());
         }
-        self.engine.set_layer_opacity(id, opacity).map_err(error)
+        if self.effect_gesture.is_some() {
+            self.engine
+                .preview_edit(Edit::SetLayerOpacity { id, opacity })
+                .map_err(error)
+        } else {
+            self.engine.set_layer_opacity(id, opacity).map_err(error)
+        }
     }
     pub(super) fn editable_layer(&self, id: u64) -> Result<Layer, String> {
         let layer = self

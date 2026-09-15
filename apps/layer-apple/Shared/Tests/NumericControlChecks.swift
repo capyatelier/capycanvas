@@ -57,6 +57,15 @@ extension XCTestCase {
         workspaceActivate(track)
         expect("50")
         command("Undo"); expect("100")
+        let start = track.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let end = track.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        expectation(for: NSPredicate(format: "value != %@", "100"), evaluatedWith: value)
+        waitForExpectations(timeout: 5)
+        let dragged = value.value as? String ?? ""
+        XCTAssertNotNil(Double(dragged), "The completed slider drag must publish a numeric value")
+        command("Undo"); expect("100")
+        command("Redo"); expect(dragged)
         workspaceActivate(original); expect("42")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }

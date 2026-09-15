@@ -20,6 +20,51 @@ Pencil, provider, lifecycle and performance acceptance. Avoid repeating passing
 checks without a relevant change. Commit only major milestones. All eleven
 recovery stashes remain.
 
+This control milestone follows published `c6f9926`, the input/navigation batch
+described below, including integration of the shared capy mark update.
+
+The control batch replaces the Filters category's separate
+native menu with the existing shared choice control. Its separate category icon,
+bold choice label, 34-point field and 48-point search button follow Web/Android.
+Shared menus now start keyboard navigation at the selected enabled row, including
+submenus; disabled choices remain excluded. The existing native menu fixture
+fails before that fix and passes after it. The focused Filters component check
+then reproduces Escape leaving search open; a standard SwiftUI key handler fixes
+it. All eight categories, native search typing, Escape dismissal and unchanged
+document state pass in both themes and Apple presets (32 category selections).
+Twelve component captures are retained and representative open/search states are
+reviewed. These are local AppKit mouse/keyboard events through the real shared
+views and Apple owner. The grouped editor and Metal acceptance below extends
+this evidence; physical acceptance remains separate. Sources and retained
+failures/results are under
+`artifacts/apple-filter-controls-v1/`; the reproducible fixture is
+`apps/layer-apple/tests/filter-controls.swift`.
+
+The same batch fixes numeric property sliders creating an Undo entry
+for every move. A native opacity drag from 100% to 80% previously undid only to
+65%. NumberControl now sends the existing effect gesture phases; shared Rust
+extends that transaction to numeric/color properties and paint/Paper opacity.
+Gradient position, opacity and RGBA sliders use the same path. Discrete numeric
+edits retain existing validation; previews follow published values without a
+second optimistic-state mechanism. All 400 shared UI tests pass. Sixteen native
+component cases pass across both Apple presets, covering one-step history,
+view-removal cancellation, late release and locked input (Paper has no lock
+case). The first expanded fixture failed by looking for an unpublished layer
+`name`; it now identifies Paper by the existing bottom-anchor flag. The Metal
+regression passes for paint, Paper, blur and color effects on both configurations,
+checking complete pixel equality through preview, history and cancellation.
+Both Release builds and Debug test builds pass. Two grouped editor workflows
+pass with no failures or skips on Mac (165 seconds) and iPad simulator (162
+seconds): filter category selection/search/previews and curve/gradient property
+edits; inline opacity expressions, layer switching and one-step drag Undo/Redo.
+Representative captures are reviewed, including iPad keyboard clearance. The
+source remains unchanged through these runs. The command audit passes against
+the retained inventory (reference checking, not a new GPU inventory). Evidence
+is under `artifacts/apple-property-sliders-v1/` and its `app-qualification-v1/`
+subdirectory. No physical-device run accompanies this milestone. Remaining native
+feature/visual cases, full hardware acceptance and sustained Mac 90 Hz / iPad
+120 Hz performance remain open.
+
 Published milestone `be1f27d` matches the latest Web toolset and open-drawer styling,
 qualifies native region/ruler workflows, and simplifies shared renderer page
 preparation. Grouped Mac app acceptance passes painting controls/artwork,
@@ -32,7 +77,7 @@ Mac and iPad Debug/Release builds pass. Representative full-editor captures are
 reviewed; no physical iPad run accompanies this milestone. Evidence is under
 `artifacts/apple-toolset-parity-v1/app-qualification-v1/`.
 
-The latest grouped UI runs take about 19 minutes on Mac and 10 minutes on
+That toolset milestone's broad UI runs take about 19 minutes on Mac and 10 minutes on
 simulator; the focused drawer rerun takes 24 seconds. Region bridge checks take
 about 10 seconds including incremental compilation, and sixteen native canvas
 workflow groups take 84 seconds including their build. Keep broad UI sweeps and

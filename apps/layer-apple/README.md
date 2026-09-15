@@ -209,6 +209,23 @@ text adapters use tabular digits. The
 includes both Apple presets/themes, width and endpoint cases, plus mounted-field
 checks of actual editor actions. Full UIKit and editor pixel parity remain open.
 
+Property slider drags use the existing shared effect gesture transaction for
+numeric and color values, layer/Paper opacity and gradient stop controls. Moves
+preview without adding history; release commits one Undo step and cancellation
+restores the original value while preserving Redo. Ordinary text, step and tap
+edits retain their discrete numeric validation path.
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-slider-input.swift
+cargo test -p layer-apple property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms -- --test-threads=1
+```
+
+The native component check uses local AppKit contacts through the shared property
+views for both Apple presets, including view-removal cancellation and locked
+layers. The Metal check compares every artwork pixel through preview, commit,
+Undo/Redo and cancellation. UIKit delivery is checked separately by the grouped
+`testInlineLayerOpacity` editor workflow.
+
 The compact Color panel follows the shared layout down to 128 logical points:
 an Okhsv circle, HSV square or HLS triangle; overlapping foreground/background
 swatches; transparent paint; Swap; two alternate shape buttons; and a curved
@@ -372,6 +389,21 @@ the serial `NativeOwner`, comparing the actual published schemas and values.
 Both presets run without visible windows or a renderer, in disposable storage.
 This covers shared Apple routing, decoding, history and lock behavior; it does
 not establish UIKit widget, GPU filter-pixel or physical interaction acceptance.
+
+The Filters category control reuses the shared editor choice and its opaque menu.
+Opening a choice focuses its selected enabled row; Escape closes filter search.
+The focused native check visits every category, types a search, verifies Escape
+and unchanged document state, and captures both themes on both Apple presets:
+
+```sh
+CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app \
+CAPY_FILTER_CAPTURES=/tmp/capy-filter-controls \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/filter-controls.swift
+```
+
+Point `CAPY_TEST_ASSETS_APP` at a built Mac app to supply the shared vector assets.
+This check uses local mouse/keyboard events in temporary AppKit windows; it does
+not launch the simulator or validate UIKit event delivery or GPU filter previews.
 
 The direct Swift menu check dispatches actual shared menu payloads through the
 Apple editor and workspace service on both presets. It checks all nine routes,

@@ -34,7 +34,7 @@ class NativeWorkspaceInputFixture {
             NSApp.postEvent(event, atStart: false)
         }
     }
-    @MainActor static func event(_ type: NSEvent.EventType, at point: CGPoint, marker: ReorderInputView, number: Int, tablet: Bool = false) throws {
+    @MainActor static func event(_ type: NSEvent.EventType, at point: CGPoint, marker: NSView, number: Int, tablet: Bool = false) throws {
         guard let window = marker.window, let event = NSEvent.mouseEvent(with: type,
             location: marker.convert(point, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1, pressure: 0.5) else {

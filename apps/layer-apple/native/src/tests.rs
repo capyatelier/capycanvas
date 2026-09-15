@@ -302,31 +302,106 @@ fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() 
 }
 
 #[test]
-fn property_number_edits_change_metal_pixels_and_undo_exactly_on_both_platforms() {
+fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() {
     for platform in [0, 1] {
-        let app = App::new(platform);
-        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
-        app.draw_frame();
-        app.stroke();
-        app.draw_frame();
-        app.action(json!({"type":"effect","action":{"op":"insert","effect":"gaussian_blur"}}));
-        app.draw_frame();
-        let before = app.pixels();
-        let layer = app.state()["layer_properties"]["layer"].clone();
-        app.action(
-            json!({"type":"effect","action":{"op":"set","layer":layer,"key":"sigma",
-            "value":{"kind":"number","value":12}}}),
-        );
-        app.draw_frame();
-        let edited = app.pixels();
-        assert_ne!(edited, before);
-        app.invoke("undo");
-        app.draw_frame();
-        assert_eq!(app.pixels(), before);
-        app.invoke("redo");
-        app.draw_frame();
-        assert_eq!(app.pixels(), edited);
+        for target in ["paint", "paper", "gaussian_blur", "split_tone"] {
+            let app = App::new(platform);
+            unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
+                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"),
+            );
+            app.draw_frame();
+            app.stroke();
+            app.draw_frame();
+            if target == "paper" {
+                let id = unsafe { &*app.0 }
+                    .host
+                    .session
+                    .engine()
+                    .document()
+                    .layers
+                    .iter()
+                    .find(|layer| layer.kind == layer_core::LayerKind::Background)
+                    .unwrap()
+                    .id
+                    .0;
+                app.action(json!({"type":"select_layer","id":id}));
+            } else if target != "paint" {
+                app.action(json!({"type":"effect","action":{"op":"insert","effect":target}}));
+            }
+            app.draw_frame();
+            let key = match target {
+                "gaussian_blur" => "sigma",
+                "split_tone" => "shadows",
+                _ => "opacity",
+            };
+            let state = app.state();
+            let layer = state["layer_properties"]["layer"].clone();
+            let original = state["layer_properties"]["controls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|control| control["key"] == key)
+                .unwrap()["value"]
+                .clone();
+            let (middle, final_value) = match target {
+                "gaussian_blur" => (
+                    json!({"kind":"number","value":6}),
+                    json!({"kind":"number","value":12}),
+                ),
+                "split_tone" => (
+                    json!({"kind":"color","value":[0.4,0.2,0.1,1]}),
+                    json!({"kind":"color","value":[0.8,0.2,0.1,1]}),
+                ),
+                _ => (
+                    json!({"kind":"number","value":0.6}),
+                    json!({"kind":"number","value":0.25}),
+                ),
+            };
+            let set = |value: &Value| json!({"op":"set","layer":layer,"key":key,"value":value});
+            let gesture = |phase: &str, value: &Value| {
+                app.action(
+                json!({"type":"effect","action":{"op":"gesture","phase":phase,"action":set(value)}}))
+            };
+            let before = app.pixels();
+            app.action(json!({"type":"effect","action":set(&final_value)}));
+            app.draw_frame();
+            let edited = app.pixels();
+            assert_ne!(edited, before, "{platform}/{target} must change artwork");
+            app.invoke("undo");
+            app.draw_frame();
+            assert_eq!(app.pixels(), before);
+            gesture("down", &original);
+            gesture("move", &middle);
+            app.draw_frame();
+            gesture("move", &final_value);
+            app.draw_frame();
+            assert_eq!(
+                app.pixels(),
+                edited,
+                "Preview pixels must match a discrete edit"
+            );
+            gesture("up", &final_value);
+            app.draw_frame();
+            assert_eq!(app.pixels(), edited);
+            app.invoke("undo");
+            app.draw_frame();
+            assert_eq!(app.pixels(), before, "One Undo restores the complete drag");
+            app.invoke("redo");
+            app.draw_frame();
+            assert_eq!(app.pixels(), edited);
+            app.invoke("undo");
+            app.draw_frame();
+            gesture("down", &original);
+            gesture("move", &final_value);
+            app.draw_frame();
+            assert_eq!(app.pixels(), edited);
+            gesture("cancel", &final_value);
+            app.draw_frame();
+            assert_eq!(app.pixels(), before, "Cancel restores every artwork pixel");
+            app.invoke("redo");
+            app.draw_frame();
+            assert_eq!(app.pixels(), edited, "Cancel preserves the earlier Redo");
+        }
     }
 }
 
