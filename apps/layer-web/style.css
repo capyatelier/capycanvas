@@ -570,8 +570,10 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .tool-choice-button svg, .tool-choice-label svg { flex-shrink:0; }
 .tool-setting-action { display:flex; align-items:center; gap:6px; }
 .tool-groups .tool-choice-button { width:auto; flex:1; min-width:70px; flex-direction:column; font-size:.85em; }
-.tool-subtools { display:flex; flex-direction:column; gap:4px; }
-.tool-subtools .brush-preview { width:82px; height:32px; object-fit:contain; }
+.tool-subtools { display:flex; flex-direction:column; gap:2px; }
+.tool-subtools .tool-choice-button { flex-direction:column; align-items:stretch; gap:0; padding:3px 6px; }
+.tool-subtools .tool-choice-label { width:100%; min-width:0; }
+.tool-subtools .tool-choice-name { flex:1; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
 .tool-settings-control h3 { margin:4px 0; font-size:inherit; }
 /* Shared square allocations keep the curved controls clear at four tiles. */
