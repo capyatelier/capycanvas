@@ -25,7 +25,10 @@ Native live physical filters now use bounded windows above a provisional image
 allocation ceiling, with complete halos and preflight rejection of oversized
 document-wide dependencies. Completed native color can now leave its mutable GPU
 cache and feed viewing, queries and later edits through lossless backing. This
-does not yet bound active edits or scalar planes. Remaining tool/effect precision,
+does not yet bound active edits or scalar planes.
+Exact composite picking and connected selections now capture artwork in bounded
+regions, independently of display pixels; filter previews capture their declared
+insertion scope. Remaining tool/effect precision,
 bounded active-edit and composite residency, source mips, global-job scheduling/cancellation, managed GTK
 viewing, color/photo controls and interchange are still required.
 Large-photo transforms fail the latency gate. Existing drawing, project files,
@@ -3610,3 +3613,147 @@ The full GTK color/photo controls, managed viewing and interchange journeys also
 remain incomplete. No benchmarking or performance optimization was performed in
 this stage. Previously recorded latency failures remain open for the final
 qualification phase. Other hosts still require approval after GTK qualification.
+
+## Exact artwork queries independent of display storage (2026-09-14)
+
+Parent: `9216852b`. Inspection found three dependencies on the displayed
+composite that would make reduced display caches unsafe: composite color picking,
+connected selections and an opportunistic filter-preview copy. Composite picking
+also included the mask-area inspection tint. This stage removes those dependencies
+before changing the live composite's storage. The full live composite itself is
+still allocated; this is not completion of that residency prerequisite.
+
+Successful submissions retain composition metadata, effective background, time
+and current preview styles. They retain no additional document-sized pixel image.
+Composite point/Average5 queries capture at most 5×5 working pixels. Composite and
+projected-layer selections capture one 256×256 tile at a time into a reusable
+target, then classify it into the existing packed eligibility mask. Raw-layer
+selections continue using the 16-slot source path. The old full-document selection
+color target and its capture entry point are deleted. Filter previews always
+capture their insertion scope; the displayed-composite copy shortcut is deleted.
+
+Queries preserve masks, opacity, groups, clipping, complete physical-filter halos
+and current watercolor prediction while excluding mask-area, checkerboard and
+presentation overlays. Watercolor style records now use layer IDs, so a projected
+layer list does not accidentally address another layer's style record. Obsolete
+positional style-base fields and assignments are removed. Background opacity in
+projected selections is applied once from the unattenuated document background.
+
+Each artwork-query capture preflights physical-filter image pixels against a
+provisional 256 MiB ceiling. A document-wide dependency retains its full support
+or returns an explicit limit error; it never substitutes a cropped or lower-
+precision input. Native queue completion retires a previous filter window before
+allocating its replacement. The source decoder retains its fixed slots and
+ordered staging; the pinned [wgpu 30.0.1 staging-belt ownership contract](https://docs.rs/wgpu/30.0.1/wgpu/util/struct.StagingBelt.html)
+was checked against the current upload implementation. These synchronous chunk
+drains still require job scheduling/cancellation and latency qualification.
+
+A new partial-alpha fixture exposed an empty zero-tolerance selection, including
+at its seed. The seed shader previously stored encoded comparison color, while
+the classifier separately encoded candidates. Moving both comparisons into the
+classifier and accepting identical working samples fixes the failure without
+adding an arbitrary tolerance. This avoids reliance on cross-pipeline Float32
+rounding identity, which is not a general promise of [WGSL floating-point
+accuracy](https://www.w3.org/TR/WGSL/#floating-point-accuracy). The failing output
+is retained in `artwork-query-gpu.log`; the corrected two-test run is in
+`artwork-query-seed-gpu.log` (9.17 s).
+
+Three final artwork tests cover:
+
+- P3 integer16 and ProPhoto integer8 with partial alpha, layer opacity, mask-area
+  inspection, tile seams and partial document edges. The display texture/view/
+  binding are removed. Point/Average5 values match a Float64 transfer/coverage
+  reference within 3e-6, connected selection has the independently specified
+  rectangle, cold paint remains unmaterialized, and the retained display texture
+  is byte-for-byte unchanged.
+- Two neighborhood filters, edge/seam sampling against full-resolution working
+  output, and pre-allocation rejection of an insufficient image budget. A
+  deliberately overwritten display texture remains untouched by queries.
+- Watercolor paint and prediction with an unrelated style slot ahead of the
+  queried layer. A projected-layer crop matches the complete working image within
+  3e-6 per channel across page boundaries.
+
+The filter-preview regression additionally clears the displayed composite while
+retaining it, discards preview caches and repeats a top-level insertion query.
+Its output must remain exactly equal to the earlier preview. These are residency
+and source-ownership comparisons; perceptual equivalence remains the acceptance
+criterion for edited filters, separate from exact saved/undo state.
+
+GPU results on the Linux/Vulkan RTX PRO 6000 reference system (driver 610.57.04):
+
+| Check | Result | Log under `artifacts/color-m2/` |
+| --- | --- | --- |
+| New artwork queries | 3 pass, 10.18 s | `artwork-query-final.log` |
+| Existing region/flood/selection and related region primitives | 12 pass, 19.15 s | `artwork-query-regions.log` |
+| Document/view color, raw samples and previews | 4 pass, 26.05 s | `artwork-query-view.log` |
+| Snapshot and profiled interchange | 8 pass, 42.95 s | `artwork-query-snapshot.log` |
+| Cold color, save/reopen, history, transforms and filter windows | 7 pass, 138.11 s | `artwork-query-cold.log` |
+| Watercolor and its material/selection/prediction paths | 13 pass, 21.56 s; includes the new projected query test above | `artwork-query-watercolor.log` |
+| Filter previews, probe cancellation, insertion scopes and physical crops | 4 pass, 11.73 s | `artwork-query-previews.log` |
+
+All performance workloads are excluded. These durations are correctness-suite
+elapsed times, not latency measurements. The first six rows use the saved
+`artwork-query-final-gpu-tests` executable and its matching Cargo JSON/log build
+mapping. The final preview change and its added check use
+`artwork-query-reviewed-gpu-tests`; that build also produces
+`artwork-query-reviewed-gtk-tests`. The production GTK check passes in 2.52 s
+(`artwork-query-gtk-check.log`).
+
+GTK's connected-tool fixture initially failed its gap-closing check. The saved
+parent executable (`cold-paint-final-source-gtk-tests`) reproduces that failure
+in `artwork-query-parent-tools.log`; an extra two seconds of event processing
+does not fix it. A diagnostic screenshot and layer inspection show no ink:
+the fixture started its pen contact before the brush was ready, and the native
+input gate correctly suppressed the whole contact. The fixture now waits for
+that actual readiness gate and asserts a committed boundary stroke. Gap closing
+then passes. Its later fill assertions also still expected operations to remain
+queued, predating committed raster ownership. They now verify nonempty raster
+publication and exact revision restoration on undo/redo. Clearing the foreground
+before picking additionally prevents the existing fill color from hiding a
+failed picker. No application behavior or gap-closing tolerance was relaxed.
+The corrected fixture passes in 5.65 s (`artwork-query-gtk-raster-tools.log`), using
+`artwork-query-gtk-raster-tests` and its matching build mapping. Intermediate
+failures and the blank-canvas diagnostic remain in the evidence directory.
+
+Private-Mutter GTK diagnostics/GPU recovery passes in 4.60 s and native
+save/reopen/profiled export passes in 38.86 s
+(`artwork-query-gtk-{recovery,files}.log`, reviewed GTK executable). The invalid
+scissor in the recovery test is intentional. Independent ImageMagick decoding
+of process 1420539's integer16 RGB, gray and CMYK outputs matches all 983,040
+samples and embedded ICC bytes exactly (`artwork-query-handoff.log`). These
+checks use the same local GPU and private compositor as the preceding stage;
+they do not establish calibrated display agreement or physical tablet delivery.
+Source, executable, output and evidence hashes are recorded in
+`artwork-query-provenance.json`.
+
+Reproduce with the existing local libjpeg pkg-config setup:
+
+```sh
+PKG_CONFIG_PATH="$PWD/artifacts/deps/jpeg/usr/lib64/pkgconfig" \
+  cargo test -p layer-render-wgpu -p layer-linux --offline --no-run --message-format=json
+ABSOLUTE_GPU_TEST_BINARY artwork::tests --test-threads=1 --nocapture
+ABSOLUTE_GPU_TEST_BINARY region --test-threads=1 --skip latency --skip workloads
+ABSOLUTE_GPU_TEST_BINARY tests::view_color --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY snapshot::tests --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY tests::cold_paint --test-threads=1
+ABSOLUTE_GPU_TEST_BINARY watercolor --test-threads=1 --skip latency --skip workloads
+ABSOLUTE_GPU_TEST_BINARY scene::previews::tests --test-threads=1 --skip latency
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_connected_tools ABSOLUTE_REPORT_PREFIX
+bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_diagnostics_and_gpu_failure_recovery ABSOLUTE_REPORT_PREFIX
+LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+  bash tools/performance/gtk-raster.sh ABSOLUTE_GTK_TEST_BINARY \
+  native_document_files ABSOLUTE_REPORT_PREFIX
+```
+
+The capture ceiling excludes source slots, reusable scene scratch, shader tables,
+packed classification/connected-component/history buffers and driver allocations.
+Existing connected-component device limits still apply. Large-document query
+cancellation, scheduling and total memory/latency budgets remain unfinished. The
+legacy explicit readback API still consumes full composition; native GTK file
+output uses the independent streaming snapshot worker. Live display/composite
+residency and source mips remain next, alongside active-edit bounds and complete
+GTK color/photo controls and managed viewing. No benchmarking or performance
+optimization ran in this stage; other platform hosts remain unintegrated and
+require approval after GTK qualification.

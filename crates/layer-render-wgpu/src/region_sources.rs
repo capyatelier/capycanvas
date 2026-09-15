@@ -1,4 +1,4 @@
-//! Classify raw paint/original tiles directly into the region's one-bit mask.
+//! Classify raw layers or bounded artwork captures into the region's one-bit mask.
 //! Source cache slots may be reused immediately after their dispatch is encoded.
 use super::*;
 use wgpu::util::DeviceExt;
@@ -13,6 +13,7 @@ struct Binding {
 }
 
 pub(super) struct RawRegions {
+    capture: artwork::Capture,
     layout: wgpu::BindGroupLayout,
     seed_pipeline: Deferred<wgpu::ComputePipeline>,
     tile_pipeline: Deferred<wgpu::ComputePipeline>,
@@ -100,6 +101,7 @@ impl RawRegions {
             })
         };
         Self {
+            capture: Default::default(),
             layout,
             seed_pipeline: pipeline("sample_seed"),
             tile_pipeline: pipeline("classify_tile"),
@@ -133,7 +135,8 @@ impl RawRegions {
         ready
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.seed.size()
+        self.capture.storage_bytes()
+            + self.seed.size()
             + self.empty_selection.size()
             + self.uniform.as_ref().map_or(0, |b| b.size())
             + self.mask.as_ref().map_or(0, |b| b.size())
@@ -150,11 +153,40 @@ impl RawRegions {
     pub fn encode(
         &mut self,
         r: &mut WgpuRasterizer,
-        layer: LayerId,
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         let [w, h] = r.document_extent;
+        let layer = match &request.source {
+            layer_render::RegionSource::Layer(id) => Some(*id),
+            _ => None,
+        };
+        let frame = match &request.source {
+            layer_render::RegionSource::Composite => Some(
+                r.artwork_frame
+                    .clone()
+                    .ok_or(GpuRasterError::InvalidExtent)?,
+            ),
+            layer_render::RegionSource::Layers(layers) => {
+                let mut frame = (**r
+                    .artwork_frame
+                    .as_ref()
+                    .ok_or(GpuRasterError::InvalidExtent)?)
+                .clone();
+                frame.layers = layers.clone();
+                frame.view.background_rgba_linear = layers
+                    .iter()
+                    .find(|l| l.kind == LayerKind::Background && l.visible)
+                    .map(|paper| {
+                        let mut color = frame.background;
+                        color[3] *= paper.opacity;
+                        color
+                    })
+                    .unwrap_or([0.; 4]);
+                Some(Arc::new(frame))
+            }
+            layer_render::RegionSource::Layer(_) => None,
+        };
         let limit = r.device.limits();
         // Preflight the subsequent connected-component allocation before any
         // source decoding/submission. Classification does not relax its limit.
@@ -178,27 +210,33 @@ impl RawRegions {
         let fallback = r
             .thumbnails
             .paper
-            .filter(|(id, _)| *id == layer)
+            .filter(|(id, _)| Some(*id) == layer)
             .map_or([0.; 4], |(_, c)| {
                 [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]
             });
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
         let tiles: Vec<_> = page_coordinates(PixelRect::full([w, h])).collect();
         let batches: Vec<_> = std::iter::once(std::slice::from_ref(&seed_tile))
-            .chain(tiles.chunks(BATCH_TILES))
+            .chain(tiles.chunks(if layer.is_some() { BATCH_TILES } else { 1 }))
             .collect();
         let stride =
             (PARAMETER_BYTES as u32).next_multiple_of(limit.min_uniform_buffer_offset_alignment);
         let mut uniforms = vec![0; stride as usize * batches.len()];
         // Occupancy only, without decoding/copying originals or retaining pages.
         let has_tile = |coordinate: [u32; 2]| {
+            let Some(layer) = layer else {
+                return true;
+            };
             r.paint_layers
                 .iter()
                 .find(|l| l.id == layer)
                 .is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
-                || r.native_backing(layer).is_some_and(|data| data.tiles.contains_key(&layer_core::raster::TileKey {
-                    plane: layer_core::raster::RasterPlane::Color, coordinate,
-                }))
+                || r.native_backing(layer).is_some_and(|data| {
+                    data.tiles.contains_key(&layer_core::raster::TileKey {
+                        plane: layer_core::raster::RasterPlane::Color,
+                        coordinate,
+                    })
+                })
                 || r.tiled_sources.get(&layer).is_some_and(|s| {
                     coordinate[0] * PAGE_SIZE < s.extent[0]
                         && coordinate[1] * PAGE_SIZE < s.extent[1]
@@ -263,7 +301,18 @@ impl RawRegions {
             let mut views: [wgpu::TextureView; BATCH_TILES] =
                 std::array::from_fn(|_| r.empty_view.clone());
             for (slot, coordinate) in tiles.iter().enumerate() {
-                let source = r.raw_layer_tile(layer, *coordinate, encoder)?;
+                let source = if let Some(layer) = layer {
+                    r.raw_layer_tile(layer, *coordinate, encoder)?
+                } else {
+                    let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
+                    Some(self.capture.region(
+                        r,
+                        frame.as_ref().unwrap().packet([w, h]),
+                        region,
+                        [PAGE_SIZE; 2],
+                        encoder,
+                    )?)
+                };
                 views[slot] = source.map_or_else(|| r.empty_view.clone(), |t| t.view);
             }
             let hit = self

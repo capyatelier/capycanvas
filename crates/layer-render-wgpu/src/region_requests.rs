@@ -2,13 +2,11 @@
 //! one packed history copy asynchronously, with no CPU flood/raster algorithm.
 use super::*;
 use flood::{Flood, Region};
-use layer_render::{RegionRequest, RegionResult, RegionSource};
+use layer_render::{RegionRequest, RegionResult};
 
 pub(super) struct RegionRequests {
     pub(super) flood: Flood,
     pub(super) raw: region_sources::RawRegions,
-    source: Option<(wgpu::Texture, wgpu::TextureView)>,
-    scene: Option<scene::Scene>,
     readback: Option<wgpu::Buffer>,
     pending: Option<Region>,
     waiting: Option<RegionRequest>,
@@ -21,11 +19,6 @@ impl RegionRequests {
     pub fn storage_bytes(&self) -> u64 {
         self.flood.storage_bytes()
             + self.raw.storage_bytes()
-            + self
-                .source
-                .as_ref()
-                .map_or(0, |(t, _)| texture_bytes(t))
-            + self.scene.as_ref().map_or(0, |s| s.scratch_bytes())
             + self.readback.as_ref().map_or(0, |b| b.size())
             + self.pending.as_ref().map_or(0, |r| r.coverage.size())
     }
@@ -34,8 +27,6 @@ impl RegionRequests {
         Self {
             flood: Flood::new(device),
             raw: region_sources::RawRegions::new(device),
-            source: None,
-            scene: None,
             readback: None,
             pending: None,
             waiting: None,
@@ -68,9 +59,7 @@ impl RegionRequests {
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
             let mut ready = self.flood.prepare(&startup.compiler, request.refinement);
-            if matches!(request.source, RegionSource::Layer(_)) {
-                ready &= self.raw.prepare(&startup.compiler);
-            }
+            ready &= self.raw.prepare(&startup.compiler);
             if request.limit.is_some() {
                 for pipeline in [
                     &r.selection_clip.crossings,
@@ -96,76 +85,23 @@ impl RegionRequests {
         if let Some(t) = &mut self.timing {
             t.begin(&r.device, &mut encoder);
         }
-        if matches!(request.source, RegionSource::Layers(_))
-            && self
-                .source
-                .as_ref()
-                .is_none_or(|(t, _)| [t.width(), t.height()] != extent)
-        {
-            self.source = Some(create_color_target(&r.device, extent, "region source"));
-        }
         if let Some(selection) = &request.limit {
-            r.selection_clip.prepare(&r.device, &mut encoder, extent, selection)?;
+            r.selection_clip
+                .prepare(&r.device, &mut encoder, extent, selection)?;
         }
-        let mut classified = None;
-        let source = match &request.source {
-            RegionSource::Composite => r
-                .composite_view
-                .as_ref()
-                .ok_or(GpuRasterError::InvalidExtent)?
-                .clone(),
-            RegionSource::Layers(layers) => {
-                let (texture, view) = self.source.as_ref().unwrap();
-                let scene = self.scene.get_or_insert_with(|| scene::Scene::new(r));
-                let background = r
-                    .thumbnails
-                    .paper
-                    .and_then(|(id, mut color)| {
-                        let layer = layers.iter().find(|l| l.id == id && l.visible)?;
-                        color[3] *= layer.opacity;
-                        Some(color)
-                    })
-                    .unwrap_or([0.; 4]);
-                scene.capture(
-                    r,
-                    FramePacket {
-                        time_seconds: r.last_time_seconds,
-                        view: layer_render::ViewState {
-                            background_rgba_linear: background,
-                            width_px: extent[0],
-                            height_px: extent[1],
-                            document_to_surface: [1., 0., 0., 1., 0., 0.],
-                        },
-                        document_extent: extent,
-                        layers,
-                        dabs: &[],
-                        dab_batches: &[],
-                        restore_rasters: &[],
-                        reset_layers: false,
-                        composite_all: true,
-                    },
-                    texture,
-                    &mut encoder,
-                )?;
-                view.clone()
-            }
-            RegionSource::Layer(id) => {
-                classified = Some(self.raw.encode(r, *id, &request, &mut encoder)?);
-                r.empty_view.clone()
-            }
-        };
+        let classified = self.raw.encode(r, &request, &mut encoder)?;
         #[cfg(test)]
         let source_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         let region = self.flood.encode_input(
             &r.device,
             &mut encoder,
-            &source,
+            &r.empty_view,
             extent,
             request.position,
             request.tolerance,
             request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
             request.refinement,
-            classified.as_ref(),
+            Some(&classified),
         )?;
         #[cfg(test)]
         let flood_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
@@ -189,16 +125,28 @@ impl RegionRequests {
         #[cfg(test)]
         let encode_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         #[cfg(test)]
-        let submission = if trace.is_some() { encoder.submit_timed(&r.queue) }
-            else { encoder.submit(&r.queue); [0.; 2] };
+        let submission = if trace.is_some() {
+            encoder.submit_timed(&r.queue)
+        } else {
+            encoder.submit(&r.queue);
+            [0.; 2]
+        };
         #[cfg(not(test))]
         encoder.submit(&r.queue);
         #[cfg(test)]
         if let Some(trace) = trace {
             let total = trace.elapsed().as_secs_f64() * 1000.;
             if total > 0.6 {
-                eprintln!("region timing request={} cumulative source/flood/encode/submit={:.3}/{:.3}/{:.3}/{:.3}ms; finish/queue={:.3}/{:.3}",
-                    request.request_id, source_ms.unwrap(), flood_ms.unwrap(), encode_ms.unwrap(), total, submission[0], submission[1]);
+                eprintln!(
+                    "region timing request={} cumulative source/flood/encode/submit={:.3}/{:.3}/{:.3}/{:.3}ms; finish/queue={:.3}/{:.3}",
+                    request.request_id,
+                    source_ms.unwrap(),
+                    flood_ms.unwrap(),
+                    encode_ms.unwrap(),
+                    total,
+                    submission[0],
+                    submission[1]
+                );
             }
         }
         #[cfg(test)]

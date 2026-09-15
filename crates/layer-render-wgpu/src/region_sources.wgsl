@@ -13,7 +13,7 @@ fn raw_color(index: u32, p: vec2<u32>) -> vec4<f32> {
     return tile_load(index, vec2<i32>(p));
 }
 @compute @workgroup_size(1)
-fn sample_seed() { seed = comparison_color(raw_color(0u, batch.tiles[0].position)); }
+fn sample_seed() { seed = raw_color(0u, batch.tiles[0].position); }
 
 @compute @workgroup_size(64)
 fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -25,8 +25,13 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var i = 0u; i < 32u && p.x+i < tile.size.x; i++) {
         let local = p + vec2<u32>(i, 0);
         let world = tile.origin + local;
-        let color = comparison_color(raw_color(id.z, local));
-        if all(abs(color - seed) <= vec4<f32>(tile.options.x))
+        let value = raw_color(id.z, local);
+        // Compare the seed and candidates in the same shader. Encoding only
+        // the seed in another pipeline can differ by one Float32 rounding step
+        // and exclude even the seed itself at zero tolerance.
+        let same = all(value == seed);
+        let color = comparison_color(value);
+        if (same || all(abs(color - comparison_color(seed)) <= vec4<f32>(tile.options.x)))
             && brush_selection_at(vec2<f32>(world) + .5) > 0. {
             packed |= 1u << i;
         }

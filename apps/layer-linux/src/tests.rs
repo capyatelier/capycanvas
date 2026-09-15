@@ -2696,6 +2696,24 @@ fn native_connected_tools() {
     w.dispatch(UiAction::SetColor {
         rgba: [0.15, 0.15, 0.15, 1.],
     });
+    // Cold shader compilation suppresses a contact that starts before readiness.
+    // Wait for the same gate as GTK input so this fixture actually draws its line.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let ready = w.gpu.borrow().as_ref().is_some_and(|g| {
+            let engine = g.session.engine();
+            engine.backend().paint_ready(
+                engine.document(),
+                engine.brush(),
+                engine.transform_preview().is_some(),
+            )
+        });
+        if ready {
+            break;
+        }
+        assert!(Instant::now() < deadline, "connected-tool brush startup");
+        pump(5);
+    }
     native_pen_path(
         &w,
         &[
@@ -2706,6 +2724,18 @@ fn native_connected_tools() {
             [750., 470.],
             [990., 470.],
         ],
+    );
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .metrics()
+            .committed_strokes,
+        1,
+        "gap closing requires a committed ink boundary"
     );
     w.dispatch(UiAction::Invoke {
         command: CommandId::AutoSelect,
@@ -2803,21 +2833,19 @@ fn native_connected_tools() {
     w.dispatch(reference_source);
     pump(100);
     edit_number(&setting("expansion"), "2");
+    let fill_raster = || {
+        let gpu = w.gpu.borrow();
+        let doc = gpu.as_ref().unwrap().session.engine().document();
+        doc.layer(doc.active_layer).unwrap().raster.clone()
+    };
+    let before_fill = fill_raster();
+    assert!(before_fill.is_empty());
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(250);
-    assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .engine()
-            .document()
-            .layers
-            .iter()
-            .map(|l| l.pending_operations.len())
-            .sum::<usize>(),
-        1
+    let after_fill = fill_raster();
+    assert!(
+        !after_fill.try_data().expect("published fill index").unwrap().tiles.is_empty(),
+        "fill commits raster pixels"
     );
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -2828,24 +2856,13 @@ fn native_connected_tools() {
         command: CommandId::Undo,
     });
     pump(100);
-    assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .engine()
-            .document()
-            .layers
-            .iter()
-            .map(|l| l.pending_operations.len())
-            .sum::<usize>(),
-        0
-    );
+    assert_eq!(fill_raster(), before_fill, "undo restores the exact empty raster");
     w.dispatch(UiAction::Invoke {
         command: CommandId::Redo,
     });
     pump(100);
+    assert_eq!(fill_raster(), after_fill, "redo restores the committed fill raster");
+    w.dispatch(UiAction::SetColor { rgba: [1.; 4] });
     w.dispatch(UiAction::Layer {
         action: LayerAction::Tool {
             tool: LayerCanvasTool::PickLayer,

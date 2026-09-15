@@ -59,6 +59,7 @@ mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
 mod present;
+mod artwork;
 mod region_requests;
 mod region_sources;
 mod scene;
@@ -724,7 +725,8 @@ pub struct WgpuRasterizer {
     filter_previews: Option<scene::FilterPreviews>,
     effect_validation: Option<effect_validation::Pending>,
     validated_effects: Option<effects::Effects>,
-    last_style_base: usize,
+    layer_style_records: std::collections::HashMap<LayerId, u32>,
+    artwork_frame: Option<Arc<artwork::Frame>>,
     last_time_seconds: f32,
     filter_source_epoch: u64,
     image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
@@ -1066,7 +1068,8 @@ impl WgpuRasterizer {
             filter_previews: None,
             effect_validation: None,
             validated_effects: None,
-            last_style_base: 0,
+            layer_style_records: std::collections::HashMap::new(),
+            artwork_frame: None,
             last_time_seconds: 0.,
             filter_source_epoch: 0,
             canvas_preview: canvas_preview::CanvasOverview::new(),
@@ -1989,6 +1992,7 @@ impl WgpuRasterizer {
             .saturating_add(material_surface_pages.saturating_mul(scalar_bytes))
             .saturating_add(u64::from(RESERVOIR_SIZE * RESERVOIR_SIZE) * pixel_bytes * 2)
             .saturating_add(self.selection_clip.storage_bytes())
+            .saturating_add(self.color_sampler.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
             self.composite_texture.as_ref().map_or(0, texture_bytes);
@@ -2047,7 +2051,9 @@ impl WgpuRasterizer {
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
         }
+        self.layer_style_records.clear();
         for (index, layer) in packet.layers.iter().enumerate() {
+            self.layer_style_records.insert(layer.id, (packet.dab_batches.len() + index) as u32);
             let watercolor = packet
                 .dab_batches
                 .iter()
@@ -4083,7 +4089,6 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
         }
-        self.last_style_base = packet.dab_batches.len();
         self.last_time_seconds = packet.time_seconds;
         if packet.reset_layers
             || !packet.dabs.is_empty()
@@ -4140,7 +4145,6 @@ impl CanvasRenderer for WgpuRasterizer {
             .then(|| (packet.view, packet.layers.to_vec(), packet.time_seconds));
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
-            scene.style_base = packet.dab_batches.len();
         }
         let original_batches = packet.dab_batches;
         let filtered: std::borrow::Cow<'_, [DabBatch]> = if original_batches
@@ -4562,7 +4566,6 @@ impl CanvasRenderer for WgpuRasterizer {
                     result?;
                 } else {
                     let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-                    scene.style_base = packet.dab_batches.len();
                     scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
                     self.scene = Some(scene);
                 }
@@ -4903,7 +4906,6 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         if (!dirty.is_empty() || animated) && scene_required {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-            scene.style_base = packet.dab_batches.len();
             // A moved target's damage is stored in image coordinates. Round to
             // scene tiles after applying the target's document translation.
             for batch in original_batches {
@@ -5201,6 +5203,7 @@ impl CanvasRenderer for WgpuRasterizer {
             self.finish_native_rasters(commit, submission)?;
         }
         self.commit_rasters(packet.layers)?;
+        self.artwork_frame = Some(Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)));
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
         if let Some(started) = started {
@@ -6926,7 +6929,7 @@ mod tests {
         layer_core::bundled_effect_catalog().get(id).unwrap()
     }
     mod adjustments;
-    mod image_windows;
+    pub(crate) mod image_windows;
     #[cfg(not(target_arch = "wasm32"))]
     mod live_windows;
     #[cfg(not(target_arch = "wasm32"))]
@@ -6961,7 +6964,7 @@ mod tests {
         }
     }
 
-    fn test_dab(center: [f32; 2], color: [f32; 4], flow: f32) -> Dab {
+    pub(crate) fn test_dab(center: [f32; 2], color: [f32; 4], flow: f32) -> Dab {
         Dab {
             center: Point {
                 x: center[0],
@@ -6978,7 +6981,7 @@ mod tests {
         }
     }
 
-    fn test_style(execution: BrushExecution) -> DabStyle {
+    pub(crate) fn test_style(execution: BrushExecution) -> DabStyle {
         DabStyle {
             alpha_locked: false,
             selection: None,

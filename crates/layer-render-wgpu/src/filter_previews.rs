@@ -702,30 +702,6 @@ impl Scene {
             .position(|l| l.id == request.target)
             .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
         let parent = request.layers[index].properties.parent;
-        if parent.is_none()
-            && !request.layers[..index]
-                .iter()
-                .any(|l| l.visible && l.properties.parent.is_none())
-            && !request.layers.iter().any(|l| {
-                l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area)
-                    || l.effect.as_ref().is_some_and(|e| e.animated())
-            })
-            && let Some(composite) = &r.composite_texture
-        {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    origin: wgpu::Origin3d {
-                        x: region.min_x(),
-                        y: region.min_y(),
-                        z: 0,
-                    },
-                    ..composite.as_image_copy()
-                },
-                destination.as_image_copy(),
-                destination.size(),
-            );
-            return Ok(());
-        }
         // Keep only the insertion scope and its ancestors. An excluded global
         // effect above the target must not force a full-document dependency.
         let mut ancestors = Vec::new();
@@ -1093,6 +1069,30 @@ mod tests {
                 .compilations,
             3
         );
+        // A top-level insertion formerly copied the displayed composite. A
+        // display cache may be reduced or independently overwritten; previews
+        // must always capture their declared artwork scope.
+        let mut projected = layers.clone();
+        projected[0].visible = false;
+        r.submit(FramePacket {
+            time_seconds: 0., view, document_extent: [512, 256], layers: &projected,
+            dabs: &[], dab_batches: &[], restore_rasters: &[], reset_layers: false,
+            composite_all: true,
+        }).unwrap();
+        let mut request = FilterPreviewRequest {
+            request_id: 4, target: LayerId(1), size: [200, 40], extent: [512, 256], view,
+            layers: projected, filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
+        };
+        r.filter_previews = None;
+        assert!(r.request_filter_previews(request.clone()).unwrap());
+        let expected = finish(&mut r).image.bytes;
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        r.encode_clear_value(&mut encoder, r.composite_view.as_ref().unwrap(), "replace display only", 1.);
+        encoder.submit(&r.queue);
+        r.filter_previews = None;
+        request.request_id = 5;
+        assert!(r.request_filter_previews(request).unwrap());
+        assert_eq!(finish(&mut r).image.bytes, expected);
     }
     #[test]
     fn empty_document_filter_previews_have_a_masked_color_sample() {

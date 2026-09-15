@@ -6,15 +6,20 @@ use super::*;
 use layer_render::{ColorSample, ColorSampleRequest, ColorSampleSource};
 
 pub(super) struct ColorSampler {
+    capture: artwork::Capture,
     buffer: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<ColorSample, GpuRasterError>>,
     rx: mpsc::Receiver<Result<ColorSample, GpuRasterError>>,
     pending: bool,
 }
 impl ColorSampler {
+    pub(super) fn storage_bytes(&self) -> u64 {
+        self.buffer.as_ref().map_or(0, |b| b.size()) + self.capture.storage_bytes()
+    }
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
+            capture: Default::default(),
             buffer: None,
             tx,
             rx,
@@ -109,12 +114,31 @@ impl WgpuRasterizer {
         // Sparse missing pages contribute transparent black, never old buffer
         // contents. Copy each contiguous row segment across page boundaries.
         encoder.clear_buffer(&buffer, 0, None);
+        let composite = if request.source == ColorSampleSource::Composite {
+            let frame = self
+                .artwork_frame
+                .clone()
+                .ok_or(GpuRasterError::InvalidExtent)?;
+            let mut capture = mem::take(&mut self.color_sampler.capture);
+            let region = PixelRect::new(left, top, right, bottom);
+            let result = capture.region(
+                self,
+                frame.packet(self.document_extent),
+                region,
+                [width, bottom - top],
+                &mut encoder,
+            );
+            self.color_sampler.capture = capture;
+            Some(result?.texture)
+        } else {
+            None
+        };
         for row in top..bottom {
             let mut column = left;
             while column < right {
                 let (source, origin, mut end) = match request.source {
                     ColorSampleSource::Composite => {
-                        (self.composite_texture.clone(), [column, row], right)
+                        (composite.clone(), [column - left, row - top], right)
                     }
                     ColorSampleSource::Layer(id) => {
                         let coordinate = [column / PAGE_SIZE, row / PAGE_SIZE];

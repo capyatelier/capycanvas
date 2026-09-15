@@ -55,7 +55,6 @@ enum Job {
 pub(super) struct Scene {
     #[cfg(not(target_arch = "wasm32"))]
     source_tiles: sources::DecodedTiles,
-    pub style_base: usize,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
     jobs: Vec<Job>,
@@ -222,7 +221,7 @@ impl Scene {
         r.metrics.source_upload_submissions += 1;
         Self::submit_chunk(r, encoder, "after source upload")
     }
-    fn submit_chunk(
+    pub(super) fn submit_chunk(
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         label: &'static str,
@@ -320,7 +319,6 @@ impl Scene {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             source_tiles: sources::DecodedTiles::new(r.document_color().space),
-            style_base: 0,
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
@@ -806,7 +804,7 @@ impl Scene {
                         self.jobs.push(Job::Watercolor {
                             target: self.pool[page].view.clone(),
                             binding,
-                            record: (self.style_base + index) as u32,
+                            record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
                             coordinate: c,
                         });
                         self.draw(
@@ -1149,7 +1147,7 @@ impl Scene {
                         self.jobs.push(Job::Watercolor {
                             target: self.pool[p].view.clone(),
                             binding,
-                            record: (self.style_base + layer_index) as u32,
+                            record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
                             coordinate: c,
                         });
                         resolved = Some(p);
@@ -1277,21 +1275,10 @@ impl Scene {
         window.area().saturating_mul(16).saturating_mul(images + scratch)
     }
 
-    /// Explicit source capture, with independent caches for the caller's
-    /// layer projection. Reuse ordinary groups, masks, effects and tile jobs.
-    pub fn capture(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        packet: FramePacket<'_>,
-        destination: &wgpu::Texture,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        self.capture_region(r, packet, destination, PixelRect::full(packet.document_extent), None, encoder)
-    }
-
     /// Capture a document-coordinate crop. Neighborhood dependencies share one
     /// conservative window expanded by every visible spatial pass. A global
     /// dependency retains its full input; it must never silently sample a crop.
+    /// A larger destination receives the crop in its top-left prefix.
     pub(super) fn capture_region(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -1302,14 +1289,13 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         if region.is_empty() || region.intersect(PixelRect::full(packet.document_extent)) != region
-            || [destination.width(), destination.height()] != [region.width(), region.height()]
+            || destination.width() < region.width() || destination.height() < region.height()
         {
             return Err(GpuRasterError::InvalidExtent);
         }
         let window = images::capture_window(packet.layers, region, packet.document_extent);
         self.begin_frame();
         self.image_window = Some(window);
-        self.style_base = r.last_style_base;
         self.effects.retain(packet.layers);
         let result = (|| {
             self.update_images(r, packet, window, encoder)?;
