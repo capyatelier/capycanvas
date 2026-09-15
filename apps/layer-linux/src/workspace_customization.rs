@@ -907,7 +907,7 @@ impl Customization {
     }
 
     fn refresh_color_palette(&self, colors: &layer_ui::ColorState) -> bool {
-        let next = [colors.foreground, colors.background];
+        let next = [colors.preview(colors.foreground), colors.preview(colors.background)];
         if self.palette_colors.replace(Some(next)) == Some(next) {
             return false;
         }
@@ -916,8 +916,8 @@ impl Customization {
         let rgba = |[r, g, b, a]: [f32; 4]| gdk::RGBA::new(r, g, b, a);
         self.palette.load_from_string(&format!(
             ".brush-color {{ -gtk-icon-palette: success {}, warning {}; }}",
-            rgba(colors.foreground),
-            rgba(colors.background)
+            rgba(next[0]),
+            rgba(next[1])
         ));
         true
     }
@@ -1636,18 +1636,18 @@ mod tests {
         colors.space = layer_ui::ColorSpace::Hls;
         assert!(!view.refresh_color_palette(&colors));
         assert_eq!(view.palette.to_str(), initial_css);
-        colors.foreground = [0.8, 0.2, 0.4, 1.];
+        colors.foreground.rgba = [0.8, 0.2, 0.4, 1.];
         assert!(view.refresh_color_palette(&colors));
         assert_ne!(view.palette.to_str(), initial_css);
         assert!(!view.refresh_color_palette(&colors));
-        colors.background = [0.1, 0.3, 0.9, 0.5];
+        colors.background.rgba = [0.1, 0.3, 0.9, 0.5];
         assert!(view.refresh_color_palette(&colors));
         assert!(!view.refresh_color_palette(&colors));
         // Each window owns its own provider, including first initialization
         // when every channel happens to be zero.
         let other = Customization::new();
-        colors.foreground = [0.; 4];
-        colors.background = [0.; 4];
+        colors.foreground.rgba = [0.; 4];
+        colors.background.rgba = [0.; 4];
         assert!(other.refresh_color_palette(&colors));
         assert_ne!(other.palette.to_str(), view.palette.to_str());
     }

@@ -48,10 +48,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             let next = epoch
                 .checked_add(1)
                 .ok_or("Document generation exhausted")?;
-            candidate
-                .engine
-                .set_brush(self.engine.configured_brush().clone())
-                .map_err(error)?;
+            let source = self.engine.document().color.space;
+            let destination = candidate.engine.document().color.space;
+            let transform = source.linear_transform(destination);
+            let mut brush = self.engine.configured_brush().clone();
+            brush.color_rgba_linear = self.state.colors.definition().linear_in(destination)?;
+            let secondary = &mut brush.color_dynamics.secondary_color_rgba_linear;
+            let rgb = layer_core::color::rgb::apply(transform, [secondary[0] as f64, secondary[1] as f64, secondary[2] as f64]);
+            secondary[..3].copy_from_slice(&rgb.map(|v| v as f32));
+            candidate.engine.set_brush(brush).map_err(error)?;
+            // Prepare the new picker before publishing document resources.
+            candidate.state.colors = self.state.colors.clone();
+            candidate.state.colors.set_rgb_space(destination)?;
             candidate.apply_settings(self.state.settings.clone())?;
             Ok(next)
         })();
@@ -59,6 +67,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             Ok(v) => v,
             Err(e) => return Err((e, candidate)),
         };
+        std::mem::swap(&mut self.state.colors, &mut candidate.state.colors);
+        self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
         std::mem::swap(&mut self.engine, &mut candidate.engine);
         std::mem::swap(&mut self.pen, &mut candidate.pen);
         self.input_pending = false;
@@ -97,7 +107,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         self.sync_renderer_telemetry();
         self.changed(
-            regions::DOCUMENT | regions::CAMERA | regions::COMMANDS,
+            regions::DOCUMENT | regions::CAMERA | regions::COMMANDS | regions::BRUSH,
             true,
         );
         Ok(candidate)

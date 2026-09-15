@@ -80,19 +80,18 @@ impl<B: CanvasRenderer> UiSession<B> {
             x: p.x - offset.x,
             y: p.y - offset.y,
         };
-        let mut colors = [
+        let definitions = [
             if paint == FigurePaint::Both {
                 self.state.colors.foreground
             } else {
-                self.state.colors.rgba()
+                self.state.colors.definition()
             },
             self.state.colors.background,
         ];
-        for c in &mut colors {
-            for v in &mut c[..3] {
-                *v = srgb_to_linear(*v);
-            }
-            c[3] *= self.state.brush.opacity;
+        let mut colors = [[0.; 4]; 2];
+        for (value, definition) in colors.iter_mut().zip(definitions) {
+            *value = definition.linear_in(doc.color.space).ok()?;
+            value[3] *= self.state.brush.opacity;
         }
         Some(Figure {
             shape,

@@ -69,7 +69,7 @@ fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
     ] {
         let old = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
         let mut working = layer_ui::WorkspacePreset::Painter.working_state();
-        working.colors.foreground = [0.2, 0.4, 0.6, 1.];
+        working.colors.foreground.rgba = [0.2, 0.4, 0.6, 1.];
         let mut entity = Entity::workspace(
             "My Painter",
             WorkspaceCapture {

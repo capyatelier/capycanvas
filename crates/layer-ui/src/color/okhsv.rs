@@ -1,15 +1,14 @@
-//! Okhsv ↔ display-encoded sRGB, adapted from Björn Ottosson's reference.
+//! Okhsv ↔ profile-encoded RGB, adapted from Björn Ottosson's sRGB reference.
 //! https://bottosson.github.io/posts/colorpicker/ (MIT, copyright 2021).
 //! See THIRD_PARTY_NOTICES.md. Internal f64 arithmetic keeps gamut-edge and
 //! near-neutral conversions stable; the UI boundary uses degrees / percent.
 
-fn linear(v: f64) -> f64 {
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
-}
+use super::gamut::Gamut;
+use layer_core::color::{
+    RgbSpace,
+    rgb::{Matrix3, apply},
+};
+
 fn encoded(v: f64) -> f64 {
     if v <= 0.0031308 {
         12.92 * v
@@ -17,7 +16,7 @@ fn encoded(v: f64) -> f64 {
         1.055 * v.powf(1. / 2.4) - 0.055
     }
 }
-fn to_lab([r, g, b]: [f64; 3]) -> [f64; 3] {
+pub(super) fn to_lab([r, g, b]: [f64; 3]) -> [f64; 3] {
     let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
     let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
     let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
@@ -30,17 +29,21 @@ fn to_lab([r, g, b]: [f64; 3]) -> [f64; 3] {
 /// CSS OKLCH units: lightness percent, unscaled chroma, hue degrees.
 /// Neutrals retain the picker's hue instead of exposing matrix roundoff.
 /// https://www.w3.org/TR/css-color-4/#oklch
+#[cfg(test)]
 pub(super) fn to_oklch(rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
-    let [l, a, b] = to_lab(rgb.map(|v| linear(v as f64)));
+    to_oklch_in(RgbSpace::Srgb, rgb, previous_hue)
+}
+pub(super) fn to_oklch_in(space: RgbSpace, rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
+    let [l, a, b] = Gamut::get(space).lab(rgb.map(|v| space.decode(v as f64)));
     let chroma = a.hypot(b);
     let (chroma, hue) = if chroma <= 0.000004 {
         (0., previous_hue as f64)
     } else {
         (chroma, b.atan2(a).to_degrees().rem_euclid(360.))
     };
-    [(l * 100.).clamp(0., 100.) as f32, chroma as f32, hue as f32]
+    [(l * 100.) as f32, chroma as f32, hue as f32]
 }
-fn from_lab([l, a, b]: [f64; 3]) -> [f64; 3] {
+pub(super) fn from_lab([l, a, b]: [f64; 3]) -> [f64; 3] {
     let ll = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
     let mm = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
     let ss = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
@@ -58,68 +61,29 @@ fn toe(x: f64) -> f64 {
 fn toe_inv(x: f64) -> f64 {
     (x * x + 0.206 * x) / ((1.206 / 1.03) * (x + 0.03))
 }
-fn max_saturation(a: f64, b: f64) -> f64 {
-    let (k, weights) = if -1.88170328 * a - 0.80936493 * b > 1. {
-        (
-            [1.19086277, 1.76576728, 0.59662641, 0.75515197, 0.56771245],
-            [4.0767416621, -3.3077115913, 0.2309699292],
-        )
-    } else if 1.81444104 * a - 1.19445276 * b > 1. {
-        (
-            [0.73956515, -0.45954404, 0.08285427, 0.12541070, 0.14503204],
-            [-1.2684380046, 2.6097574011, -0.3413193965],
-        )
-    } else {
-        (
-            [
-                1.35733652,
-                -0.00915799,
-                -1.15130210,
-                -0.50559606,
-                0.00692167,
-            ],
-            [-0.0041960863, -0.7034186147, 1.7076147010],
-        )
-    };
-    let mut s = k[0] + k[1] * a + k[2] * b + k[3] * a * a + k[4] * a * b;
-    let slopes = [
-        0.3963377774 * a + 0.2158037573 * b,
-        -0.1055613458 * a - 0.0638541728 * b,
-        -0.0894841775 * a - 1.2914855480 * b,
-    ];
-    // The reference's single Halley step leaves a larger error around blue.
-    // Three iterations make the gamut boundary accurate without per-pixel work.
-    for _ in 0..3 {
-        let mut f = 0.;
-        let mut f1 = 0.;
-        let mut f2 = 0.;
-        for (k, w) in slopes.into_iter().zip(weights) {
-            let t = 1. + s * k;
-            f += w * t.powi(3);
-            f1 += w * 3. * k * t * t;
-            f2 += w * 6. * k * k * t;
-        }
-        s -= f * f1 / (f1 * f1 - 0.5 * f * f2);
-    }
-    s
-}
 /// Hue-only gamut terms are reused across the entire field raster.
 pub(super) struct Hue {
+    gamut: &'static Gamut,
     a: f64,
     b: f64,
     s_max: f64,
     t_max: f64,
 }
 impl Hue {
+    #[cfg(test)]
     pub(super) fn new(degrees: f32) -> Self {
-        let angle = (degrees as f64).to_radians();
-        Self::from_direction(angle.cos(), angle.sin())
+        Self::new_in(RgbSpace::Srgb, degrees)
     }
-    fn from_direction(a: f64, b: f64) -> Self {
-        let s_max = max_saturation(a, b);
-        let rgb = from_lab([1., s_max * a, s_max * b]);
+    pub(super) fn new_in(space: RgbSpace, degrees: f32) -> Self {
+        let angle = (degrees as f64).to_radians();
+        Self::from_direction(Gamut::get(space), angle.cos(), angle.sin())
+    }
+    fn from_direction(gamut: &'static Gamut, a: f64, b: f64) -> Self {
+        let s_max = gamut.max_saturation(a, b);
+        let rgb = gamut.linear_rgb([1., s_max * a, s_max * b]);
         let l = (1. / rgb.into_iter().fold(0., f64::max)).cbrt();
         Self {
+            gamut,
             a,
             b,
             s_max,
@@ -148,14 +112,16 @@ impl Hue {
         // the inverse matrix. Cancel those operations algebraically: one matrix
         // evaluation and no per-pixel cube root (expensive in scalar Wasm).
         let chroma = cv / lv;
-        let rgb = from_lab([1., self.a * chroma, self.b * chroma]);
+        let rgb = self
+            .gamut
+            .linear_rgb([1., self.a * chroma, self.b * chroma]);
         let maximum = rgb.into_iter().fold(0., f64::max);
         let factor = 1. / (toe_inv(lv).powi(3) * maximum);
         [lv, rgb[0] * factor, rgb[1] * factor, rgb[2] * factor]
     }
     pub(super) fn rgb(&self, saturation: f32, value: f32) -> [f32; 3] {
         self.linear_rgb(saturation, value)
-            .map(|v| encoded(v).clamp(0., 1.) as f32)
+            .map(|v| self.gamut.space.encode(v).clamp(0., 1.) as f32)
     }
 }
 
@@ -165,18 +131,28 @@ impl Hue {
 pub(super) struct RasterHue {
     curve: Vec<[f64; 4]>,
     transfer: &'static [f32; 4097],
+    to_display: Option<Matrix3>,
+    display: RgbSpace,
 }
 impl RasterHue {
+    #[cfg(test)]
     pub(super) fn new(degrees: f32) -> Self {
-        let hue = Hue::new(degrees);
-        static TRANSFER: std::sync::LazyLock<[f32; 4097]> = std::sync::LazyLock::new(|| {
-            std::array::from_fn(|i| (encoded(i as f64 / 4096.) * 255.) as f32)
+        Self::new_in(degrees, RgbSpace::Srgb, RgbSpace::Srgb)
+    }
+    pub(super) fn new_in(degrees: f32, space: RgbSpace, display: RgbSpace) -> Self {
+        let hue = Hue::new_in(space, degrees);
+        static TRANSFERS: std::sync::LazyLock<[[f32; 4097]; 4]> = std::sync::LazyLock::new(|| {
+            RgbSpace::ALL.map(|space| {
+                std::array::from_fn(|i| (space.encode(i as f64 / 4096.) * 255.) as f32)
+            })
         });
         Self {
             curve: (0..=1024)
                 .map(|i| hue.saturation_curve(i as f64 / 1024.))
                 .collect(),
-            transfer: &TRANSFER,
+            transfer: &TRANSFERS[RgbSpace::ALL.iter().position(|s| *s == display).unwrap()],
+            to_display: (space != display).then(|| space.linear_transform(display)),
+            display,
         }
     }
     pub(super) fn rgb8(&self, saturation: f32, value: f32) -> [u8; 3] {
@@ -189,37 +165,52 @@ impl RasterHue {
         let factor = toe_inv(value as f64 * lv).powi(3);
         let transfer = self.transfer;
         let encode = |v: f64| {
+            // Adobe RGB has no linear toe. A uniformly sampled transfer table
+            // misses visible near-black codes; evaluate its power law exactly.
+            if self.display == RgbSpace::AdobeRgb {
+                return (self.display.encode(v.clamp(0., 1.)) * 255. + 0.5) as u8;
+            }
             let position = (v.clamp(0., 1.) * 4096.) as f32;
             let i = (position as usize).min(4095);
             // Nonnegative values need only add-half then truncate. Rust's
             // general round() otherwise calls libm three times per Wasm pixel.
             (transfer[i] + (transfer[i + 1] - transfer[i]) * (position - i as f32) + 0.5) as u8
         };
-        // Explicit channels avoid out-of-line array-map callbacks in Wasm.
-        [
-            encode((a[1] + (b[1] - a[1]) * t) * factor),
-            encode((a[2] + (b[2] - a[2]) * t) * factor),
-            encode((a[3] + (b[3] - a[3]) * t) * factor),
-        ]
+        let rgb = [
+            (a[1] + (b[1] - a[1]) * t) * factor,
+            (a[2] + (b[2] - a[2]) * t) * factor,
+            (a[3] + (b[3] - a[3]) * t) * factor,
+        ];
+        let rgb = self.to_display.map_or(rgb, |matrix| apply(matrix, rgb));
+        [encode(rgb[0]), encode(rgb[1]), encode(rgb[2])]
     }
 }
-pub(super) fn to_rgb([h, s, v]: [f32; 3]) -> [f32; 3] {
-    Hue::new(h).rgb(s / 100., v / 100.)
+#[cfg(test)]
+pub(super) fn to_rgb(value: [f32; 3]) -> [f32; 3] {
+    to_rgb_in(RgbSpace::Srgb, value)
 }
+pub(super) fn to_rgb_in(space: RgbSpace, [h, s, v]: [f32; 3]) -> [f32; 3] {
+    Hue::new_in(space, h).rgb(s / 100., v / 100.)
+}
+#[cfg(test)]
 pub(super) fn from_rgb(rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
-    let [l, a, b] = to_lab(rgb.map(|v| linear(v as f64)));
+    from_rgb_in(RgbSpace::Srgb, rgb, previous_hue)
+}
+pub(super) fn from_rgb_in(space: RgbSpace, rgb: [f32; 3], previous_hue: f32) -> [f32; 3] {
+    let gamut = Gamut::get(space);
+    let [l, a, b] = gamut.lab(rgb.map(|v| space.decode(v as f64)));
     let c = a.hypot(b);
     // Neutral RGB has no hue. Avoid matrix roundoff inventing a hue/saturation.
     if rgb[0] == rgb[1] && rgb[1] == rgb[2] || c < 1e-12 {
         return [previous_hue, 0., (toe(l) * 100.).clamp(0., 100.) as f32];
     }
-    let hue = Hue::from_direction(a / c, b / c);
+    let hue = Hue::from_direction(gamut, a / c, b / c);
     let t = hue.t_max / (c + l * hue.t_max);
     let lv = t * l;
     let cv = t * c;
     let lvt = toe_inv(lv);
     let cvt = cv * lvt / lv;
-    let scale_rgb = from_lab([lvt, hue.a * cvt, hue.b * cvt]);
+    let scale_rgb = gamut.linear_rgb([lvt, hue.a * cvt, hue.b * cvt]);
     let scale = (1. / scale_rgb.into_iter().fold(0., f64::max)).cbrt();
     let v = toe(l / scale) / lv;
     let k = 1. - 0.5 / hue.s_max;
@@ -338,6 +329,79 @@ mod tests {
                     }
                     if r == g && g == b {
                         assert_eq!([hsv[0], hsv[1]], [137., 0.]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_gamut_grid_roundtrips() {
+        for space in RgbSpace::ALL {
+            let mut maximum = [0f64; 2];
+            for r in 0..=20 {
+                for g in 0..=20 {
+                    for b in 0..=20 {
+                        let rgb = [r, g, b].map(|v| v as f32 / 20.);
+                        let hsv = from_rgb_in(space, rgb, 137.);
+                        assert!(
+                            hsv.iter().enumerate().all(|(i, v)| v.is_finite()
+                                && (0.0..=if i == 0 { 360. } else { 100. }).contains(v)),
+                            "{space:?} {rgb:?}: {hsv:?}"
+                        );
+                        let actual = to_rgb_in(space, hsv);
+                        // f32 hue quantization near a pure primary produces tiny
+                        // linear residues. Adobe's toe-less gamma magnifies their
+                        // encoded value, so check linear accuracy and less than a quarter code.
+                        for (a, b) in actual.into_iter().zip(rgb) {
+                            maximum[0] = maximum[0]
+                                .max((space.decode(a as f64) - space.decode(b as f64)).abs());
+                            maximum[1] = maximum[1].max((a - b).abs() as f64);
+                        }
+                        assert!(
+                            actual
+                                .into_iter()
+                                .zip(rgb)
+                                .all(|(a, b)| (space.decode(a as f64) - space.decode(b as f64))
+                                    .abs()
+                                    < 0.000003
+                                    && (a - b).abs() < 0.25 / 255.),
+                            "{space:?} {rgb:?} -> {hsv:?} -> {actual:?}"
+                        );
+                    }
+                }
+            }
+            eprintln!(
+                "{space:?}: max linear {}, encoded {}",
+                maximum[0], maximum[1]
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_rasters_convert_to_display_after_field_evaluation() {
+        for space in RgbSpace::ALL {
+            for display in RgbSpace::ALL {
+                for h in (0..360).step_by(3).map(|h| h as f32 + 0.03) {
+                    let hue = Hue::new_in(space, h);
+                    let raster = RasterHue::new_in(h, space, display);
+                    for s in 0..=41 {
+                        for v in [0., 0.00001, 0.001, 0.01, 0.03, 0.1, 0.25, 0.5, 0.75, 1.] {
+                            let rgb = apply(
+                                space.linear_transform(display),
+                                hue.linear_rgb(s as f32 / 41., v),
+                            );
+                            let exact =
+                                rgb.map(|c| (display.encode(c).clamp(0., 1.) * 255.).round() as u8);
+                            let actual = raster.rgb8(s as f32 / 41., v);
+                            assert!(
+                                exact
+                                    .into_iter()
+                                    .zip(actual)
+                                    .all(|(a, b)| a.abs_diff(b) <= 1),
+                                "{space:?}->{display:?} h={h} s={s}/41 v={v}: {exact:?} != {actual:?}"
+                            );
+                        }
                     }
                 }
             }

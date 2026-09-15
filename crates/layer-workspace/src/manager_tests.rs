@@ -1486,7 +1486,7 @@ fn failed_outgoing_save_prevents_switch_and_retains_accepted_edits_for_retry() {
         assert_eq!(m.current().unwrap().working, Some(working.clone()));
         m.store.fail.set(false);
         let mut latest = working;
-        latest.colors.foreground = [0.3, 0.4, 0.5, 1.];
+        latest.colors.foreground.rgba = [0.3, 0.4, 0.5, 1.];
         m.observe_working(latest.clone());
         m.flush().await.unwrap();
         assert!(!m.dirty());

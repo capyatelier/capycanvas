@@ -1,7 +1,9 @@
 use crate::interaction::{Interaction, PointerContact};
 use crate::layout::{ResizeDrag, ResizeDragPhase};
 use crate::*;
-use layer_core::{DefaultBrushPreset, Document, LayerId, LayerKind, StrokeTool, default_brush};
+use layer_core::{DefaultBrushPreset, Document, LayerId, LayerKind, StrokeTool};
+#[cfg(test)]
+use layer_core::default_brush;
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurve, input_queue};
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
@@ -131,7 +133,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             camera.input_transform(),
         )
         .map_err(|e| e.to_string())?;
-        let brush = default_brush(DefaultBrushPreset::GPen);
+        let mut colors = ColorState::default();
+        colors.set_rgb_space(engine.document().color.space)?;
+        let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
@@ -179,7 +183,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     opacity: brush.opacity,
                     color: [0.075, 0.075, 0.07, 1.0],
                 },
-                colors: ColorState::default(),
+                colors,
                 tool_settings: Vec::new(),
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
@@ -2411,13 +2415,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SetColor { rgba } => {
                 self.state.colors.set_rgba(rgba)?;
-                self.state.brush.color = self.state.colors.rgba();
+                self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)
             }
             UiAction::Color { action } => {
                 self.state.colors.apply(action)?;
-                self.state.brush.color = self.state.colors.rgba();
+                self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)
             }
@@ -3349,9 +3353,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::BRUSH;
         }
         self.poll_region_tool()?;
-        if let Some(color) = self.eyedropper.poll(self.engine.backend_mut())? {
-            self.state.colors.set_rgba(color)?;
-            self.state.brush.color = self.state.colors.rgba();
+        let sample_space = self.engine.document().color.space;
+        if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
+            self.state.colors.set_color(color)?;
+            self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
             self.apply_brush()?;
             changed |= regions::BRUSH;
         }
@@ -3740,7 +3745,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_layer_gesture()?;
         self.tools
             .remember(self.state.brush.preset, self.engine.configured_brush());
-        let brush = self.tools.brush(preset);
+        let brush = self.tools.brush_in(preset, self.engine.document().color.space);
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.layer_interaction.tool = LayerCanvasTool::Paint;
         self.state.layer_tools.tool = LayerCanvasTool::Paint;
@@ -3757,12 +3762,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
-        brush.color_rgba_linear = [
-            srgb_to_linear(state.color[0]),
-            srgb_to_linear(state.color[1]),
-            srgb_to_linear(state.color[2]),
-            state.color[3],
-        ];
+        brush.color_rgba_linear = self.state.colors.definition().linear_in(self.engine.document().color.space)?;
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_tool(
             if state.tool == Tool::Eraser || self.state.colors.transparent() {
@@ -4149,6 +4149,7 @@ mod tests {
     /// Protocol recorder only: no canvas storage or software rasterization.
     #[derive(Default)]
     struct Recorder {
+        color: layer_core::color::DocumentColor,
         telemetry_enabled: bool,
         pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
         last_style: Option<layer_render::DabStyle>,
@@ -4167,6 +4168,7 @@ mod tests {
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
         fn set_telemetry_enabled(&mut self, enabled: bool) {
             self.telemetry_enabled = enabled;
         }
@@ -4296,6 +4298,8 @@ mod tests {
         )
         .unwrap()
     }
+
+    include!("session_color_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -6714,7 +6718,7 @@ mod tests {
         for (a, b) in s
             .state
             .colors
-            .background
+            .background.rgba
             .into_iter()
             .zip([0.537099, 0.735357, 1.0, 1.0])
         {
@@ -6729,7 +6733,7 @@ mod tests {
         });
         s.frame(4, 4).unwrap();
         assert_eq!(
-            s.state.colors.background, color,
+            s.state.colors.background.rgba, color,
             "late sample cannot overwrite a manual choice"
         );
         assert!(!s.wants_continuous_frames());
@@ -6766,7 +6770,7 @@ mod tests {
         });
         s.frame(6, 6).unwrap();
         assert_eq!(
-            s.state.colors.background, color,
+            s.state.colors.background.rgba, color,
             "tool changes cancel sampling"
         );
         invoke(&mut s, CommandId::Eyedropper);
@@ -7301,7 +7305,7 @@ mod tests {
             rgba: [0.1, 0.8, 0.3, 1.],
         })
         .unwrap();
-        assert_eq!(s.state.colors.background, s.state.brush.color);
+        assert_eq!(s.state.colors.background.rgba, s.state.brush.color);
         s.dispatch(UiAction::Color {
             action: ColorAction::Select {
                 slot: ColorSlot::Transparent,

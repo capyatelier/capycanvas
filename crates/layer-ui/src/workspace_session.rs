@@ -48,7 +48,6 @@ impl WorkspaceCapture {
 
 pub struct PreparedWorkspace {
     capture: WorkspaceCapture,
-    brush: layer_core::BrushSnapshot,
     region_tools: region_tools::RegionTools,
 }
 impl PreparedWorkspace {
@@ -61,13 +60,7 @@ impl PreparedWorkspace {
         state.tools.validate()?;
         state.colors.validate()?;
         let mut brush = state.tools.brush(preset(state.preset)?);
-        let rgba = state.colors.rgba();
-        brush.color_rgba_linear = [
-            srgb_to_linear(rgba[0]),
-            srgb_to_linear(rgba[1]),
-            srgb_to_linear(rgba[2]),
-            rgba[3],
-        ];
+        brush.color_rgba_linear = state.colors.definition().linear_in(layer_core::color::RgbSpace::Srgb)?;
         brush.validate().map_err(error)?;
         let mut region_tools = region_tools::RegionTools::default();
         for (id, &value) in &state.region_values {
@@ -76,7 +69,6 @@ impl PreparedWorkspace {
         region_tools.source = state.region_sources;
         Ok(Self {
             capture,
-            brush,
             region_tools,
         })
     }
@@ -222,7 +214,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
         }
-        let mut brush = default_brush(preset(self.state.brush.preset)?);
+        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
         brush.color_rgba_linear = self.engine.configured_brush().color_rgba_linear;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();
@@ -341,12 +333,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let PreparedWorkspace {
             capture,
-            brush,
             region_tools,
         } = prepared;
+        let mut working = capture.working;
+        let space = self.engine.document().color.space;
+        working.colors.set_rgb_space(space)?;
+        let mut brush = working.tools.brush_in(preset(working.preset)?, space);
+        brush.color_rgba_linear = working.colors.definition().linear_in(space)?;
         // This is the only fallible mutation; CanvasEngine validates before setting.
         self.engine.set_brush(brush.clone()).map_err(error)?;
-        let working = capture.working;
         let titlebar_insets = self.state.workspace.layout.titlebar_insets;
         let bottom_inset = self.state.workspace.layout.bottom_inset;
         let header_presentation = self.state.workspace.layout.header_presentation.clone();
@@ -377,7 +372,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tool: tools::group(working.preset).tool(),
             diameter: brush.diameter,
             opacity: brush.opacity,
-            color: self.state.colors.rgba(),
+            color: self.state.colors.preview(self.state.colors.definition()),
         };
         self.layer_interaction.tool = working.canvas_tool;
         self.layer_interaction.gradient = working.gradient;

@@ -42,6 +42,9 @@ const colorPanel = ARGV.includes('--color-panel') || ARGV.includes('--web-color-
 const workspaceDropSizes = ARGV.includes('--workspace-drop-sizes');
 const workspaceEdges = ARGV.includes('--workspace-edges');
 const workspaceMotion = workspaceDropSizes || workspaceEdges || colorPanel || columnStacks || ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
+// A captured executable lets correctness runs identify their exact build and
+// avoids an unrelated release rebuild. The ordinary cargo route remains usable.
+const testExecutable = GLib.getenv('LAYER_NATIVE_TEST_EXECUTABLE');
 const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 // Column stacks include the real storage lifecycle: maintenance must preserve
 // open projections and retained controls while ordinary motion stays incremental.
@@ -56,7 +59,7 @@ if (nativeTest) {
     // Cargo's filter is a substring match: a short name can accidentally run
     // another case (and its storage/input protocol) in the same process.
     const listing = Gio.Subprocess.new(
-        ['cargo', 'test', '--locked', '--release', '-p', 'layer-linux', '--', '--list'],
+        testExecutable ? [testExecutable, '--list'] : ['cargo', 'test', '--locked', '--release', '-p', 'layer-linux', '--', '--list'],
         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
     );
     const [, stdout, stderr] = listing.communicate_utf8(null, null);
@@ -66,6 +69,9 @@ if (nativeTest) {
     if (matches.length !== 1) throw Error(`Expected exactly one native test named ${nativeTest}, found ${matches.length}`);
     launch[5] = matches[0];
     launch.push('--exact');
+}
+if (testExecutable && !workspaceWeb) {
+    launch.splice(0, 7, testExecutable, launch[5]);
 }
 const process = launcher.spawnv(launch);
 let passed = false;

@@ -254,7 +254,7 @@ mod tests {
         s.poll_navigator_preview(0, true).unwrap();
         s.eyedropper
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
-        s.eyedropper.poll(s.engine.backend_mut()).unwrap();
+        s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
         assert!(s.eyedropper.busy());
         let original = s.effect_catalog.clone();
         let mut package = layer_core::EffectPackage {
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(s.engine.backend().previews, 1);
         s.eyedropper
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
-        s.eyedropper.poll(s.engine.backend_mut()).unwrap();
+        s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
         assert_eq!(s.engine.backend().samples, 1);
     }
 
@@ -390,7 +390,7 @@ mod tests {
         .unwrap();
         s.eyedropper
             .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
-        s.eyedropper.poll(s.engine.backend_mut()).unwrap();
+        s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
         let document = s.engine.document().clone();
         let checkpoint = s.engine.checkpoint();
         assert!(

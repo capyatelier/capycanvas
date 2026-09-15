@@ -11,7 +11,13 @@ motion_platform=${1:-gtk}
 shift || true
 if [[ $# -eq 0 ]]; then set -- --workspace-motion; fi
 case "$motion_platform" in
-    gtk) cargo test --locked --release -p layer-linux --no-run ;;
+    gtk)
+        if [[ -n ${LAYER_NATIVE_TEST_EXECUTABLE:-} ]]; then
+            [[ -x "$LAYER_NATIVE_TEST_EXECUTABLE" ]]
+        else
+            cargo test --locked --release -p layer-linux --no-run
+        fi
+        ;;
     web) bash apps/layer-web/build.sh ;;
     *) echo 'Usage: workspace-motion.sh [gtk|web] [test flag]' >&2; exit 2 ;;
 esac

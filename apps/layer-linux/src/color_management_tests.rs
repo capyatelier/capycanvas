@@ -155,6 +155,103 @@ fn sdr_ready(w: &Rc<Workspace>) {
     }
 }
 
+fn pixels(w: &Rc<Workspace>, id: u32) -> Vec<u8> {
+    glib::MainContext::default()
+        .block_on(read_canvas_pixels(w, id))
+        .unwrap()
+        .bytes
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_sdr_portable_paint_and_sampling() {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
+    let app = native_test_app("art.capycanvas.PortablePaint");
+    let definition = RgbColor::new(RgbSpace::DisplayP3, [0.68, 0.23, 0.47, 1.]).unwrap();
+    for space in RgbSpace::ALL {
+        let mut project = new_drawing(256, 256).unwrap();
+        project.document.color = DocumentColor {
+            space,
+            depth: IntegerDepth::U16,
+        };
+        let w = Workspace::with_project(&app, Some((project, None)));
+        w.window.present();
+        sdr_ready(&w);
+        assert_eq!(state(&w).colors.rgb_space(), space);
+        w.dispatch(UiAction::Color {
+            action: layer_ui::ColorAction::Definition { color: definition },
+        });
+        w.dispatch(UiAction::SetBrushSize { value: 80. });
+        assert_eq!(state(&w).colors.definition(), definition);
+        assert_eq!(
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .configured_brush()
+                .color_rgba_linear,
+            definition.linear_in(space).unwrap()
+        );
+        native_pen_path(
+            &w,
+            &[
+                [40., 128.],
+                [80., 128.],
+                [128., 128.],
+                [170., 128.],
+                [210., 128.],
+            ],
+        );
+        sdr_ready(&w);
+        let before = pixels(&w, 9810);
+        // Eyedropper goes through the host contact route and asynchronous exact
+        // sample result. Every averaging size samples the fully covered center.
+        for width in [1, 3, 5] {
+            w.dispatch(UiAction::Layer {
+                action: LayerAction::Tool {
+                    tool: LayerCanvasTool::PickLayer,
+                },
+            });
+            w.dispatch(UiAction::SetColorSampleSize { width });
+            w.dispatch(UiAction::SetBrushOpacity { value: 0.37 });
+            w.dispatch(UiAction::Color {
+                action: layer_ui::ColorAction::Definition {
+                    color: RgbColor::WHITE,
+                },
+            });
+            native_pen_path(&w, &[[128., 128.], [128., 128.]]);
+            let picked = state(&w).colors.definition();
+            assert_eq!(picked.space, space);
+            let expected = definition.encoded_in(space).unwrap();
+            for (a, b) in picked.rgba.into_iter().zip(expected) {
+                // Native U16 backing rounds once in encoded document RGB.
+                assert!(
+                    (a - b).abs() < 2. / 65535.,
+                    "{space:?} {width}: {picked:?} != {expected:?}"
+                );
+            }
+            assert_eq!(state(&w).brush.opacity, 0.37);
+            assert_eq!(pixels(&w, 9811), before, "sampling changes no pixels");
+        }
+        for shape in [
+            layer_ui::ColorShape::Circle,
+            layer_ui::ColorShape::Square,
+            layer_ui::ColorShape::Triangle,
+        ] {
+            let before = state(&w).colors.definition();
+            w.dispatch(UiAction::Color {
+                action: layer_ui::ColorAction::Shape { shape },
+            });
+            pump(50);
+            assert_eq!(state(&w).colors.definition(), before);
+        }
+        w.window.destroy();
+        pump(50);
+    }
+}
+
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_sdr_document_modes() {
@@ -210,12 +307,6 @@ fn native_sdr_document_modes() {
                     .document_color(),
                 color
             );
-            let pixels = |w: &Rc<Workspace>, id| {
-                glib::MainContext::default()
-                    .block_on(read_canvas_pixels(w, id))
-                    .unwrap()
-                    .bytes
-            };
             let original = pixels(&w, 9100);
             w.dispatch(UiAction::SetColor {
                 rgba: [0., 0., 0., 1.],

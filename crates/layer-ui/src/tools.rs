@@ -553,6 +553,17 @@ impl WorkspaceToolMemory {
             .copied()
             .unwrap_or_else(|| group.default_preset())
     }
+    /// Built-in pigment definitions use linear sRGB. Resolve them once into
+    /// the destination document before exposing the configured brush to edits.
+    pub(crate) fn brush_in(&self, preset: DefaultBrushPreset, space: layer_core::color::RgbSpace) -> BrushSnapshot {
+        let mut brush = self.brush(preset);
+        let transform = layer_core::color::RgbSpace::Srgb.linear_transform(space);
+        for color in [&mut brush.color_rgba_linear, &mut brush.color_dynamics.secondary_color_rgba_linear] {
+            let rgb = layer_core::color::rgb::apply(transform, [color[0] as f64, color[1] as f64, color[2] as f64]);
+            color[..3].copy_from_slice(&rgb.map(|v| v as f32));
+        }
+        brush
+    }
     pub fn brush(&self, preset: DefaultBrushPreset) -> BrushSnapshot {
         let mut brush = layer_core::default_brush(preset);
         if let Some(values) = self.overrides.get(&(preset as u32)) {

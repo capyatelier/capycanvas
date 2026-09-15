@@ -119,6 +119,9 @@ Persistence cases should verify reopening as well as the visible rows.
 
 For the compact Color panel, run
 `LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/gtk" bash tools/performance/workspace-motion.sh gtk --color-panel`.
+Set `LAYER_NATIVE_TEST_EXECUTABLE` to an absolute, already-built GTK test executable
+to validate a captured build without recompiling. The driver uses that executable
+for test discovery as well as execution; omit it for the usual release build.
 This exercises native mouse/touch picking, overlapping paint swatches, the
 visible swap button and its context menu, both shape alternatives, readout
 cycles and keyboard activation. It checks 144/160/200/280/360 px panels in both

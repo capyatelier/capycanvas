@@ -2,6 +2,8 @@
 use serde::{Deserialize, Serialize};
 pub mod rgb;
 pub use rgb::RgbSpace;
+mod value;
+pub use value::RgbColor;
 mod profile;
 pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, ProfileChannels, RenderingIntent};
 mod output;

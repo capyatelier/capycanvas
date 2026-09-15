@@ -2868,7 +2868,7 @@ fn native_connected_tools() {
     });
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     assert!(
-        state(&w).colors.foreground[0] < 0.2 && state(&w).colors.foreground[2] > 0.75,
+        state(&w).colors.foreground.rgba[0] < 0.2 && state(&w).colors.foreground.rgba[2] > 0.75,
         "{:?}",
         state(&w).colors.foreground
     );
@@ -3001,7 +3001,7 @@ fn native_ruler_tools() {
     });
     native_pen_path(&w, &[[1000., 400.], [1000., 400.]]);
     pump(100);
-    let color = state(&w).colors.foreground;
+    let color = state(&w).colors.foreground.rgba;
     assert!(
         color[2] > 0.7 && color[0] < 0.25,
         "snapped GPU ink: {color:?}"
@@ -3284,7 +3284,7 @@ fn native_operation_tool() {
     });
     native_pen_path(&w, &[[700., 750.], [700., 750.]]);
     assert!(
-        state(&w).colors.foreground[0] > 0.9,
+        state(&w).colors.foreground.rgba[0] > 0.9,
         "old location should be paper"
     );
     w.dispatch(UiAction::Invoke {
@@ -3297,7 +3297,7 @@ fn native_operation_tool() {
     assert_eq!(document().layers, original.layers);
     assert_eq!(document().selection, original.selection);
     native_pen_path(&w, &[[700., 750.], [700., 750.]]);
-    let c = state(&w).colors.foreground;
+    let c = state(&w).colors.foreground.rgba;
     assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");
     // A selected mask uses the same native controls. By default the linked
     // artwork travels with it, and one undo restores both targets.
@@ -3556,7 +3556,7 @@ fn native_figure_tools() {
     send(PenPhase::Down, [950., 800.]);
     send(PenPhase::Up, [950., 800.]);
     pump(150);
-    let color = state(&w).colors.foreground;
+    let color = state(&w).colors.foreground.rgba;
     assert!(color[2] > 0.7 && color[0] < 0.2, "fill ink: {color:?}");
     w.window.destroy();
     pump(100);
@@ -3693,7 +3693,7 @@ fn native_gradient_tool() {
         color(PenPhase::Down);
         color(PenPhase::Up);
         pump(150);
-        assert!(state(&w).colors.foreground[2] > 0.85 && state(&w).colors.foreground[0] < 0.2);
+        assert!(state(&w).colors.foreground.rgba[2] > 0.85 && state(&w).colors.foreground.rgba[0] < 0.2);
         w.dispatch(UiAction::SetColor {
             rgba: [0.1, 0.25, 0.9, 1.0],
         });
@@ -3809,7 +3809,7 @@ fn native_navigation_tools() {
     contact(PenPhase::Down);
     contact(PenPhase::Up);
     pump(250);
-    let color = state(&w).colors.foreground;
+    let color = state(&w).colors.foreground.rgba;
     assert!(
         color[0] > 0.99 && (color[1] - 0.735).abs() < 0.015 && (color[2] - 0.735).abs() < 0.015,
         "visible color {color:?}"
@@ -3820,7 +3820,7 @@ fn native_navigation_tools() {
     contact(PenPhase::Down);
     contact(PenPhase::Up);
     pump(250);
-    let color = state(&w).colors.foreground;
+    let color = state(&w).colors.foreground.rgba;
     for (actual, expected) in color.into_iter().zip([1.0, 0.0, 0.0, 1.0]) {
         assert!((actual - expected).abs() < 0.001, "raw color {color:?}");
     }
@@ -14212,7 +14212,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     );
     assert_eq!(durable_layout(&state(&reopened).workspace.layout), moved);
     assert_eq!(state(&reopened).brush.diameter, 73.);
-    assert_eq!(state(&reopened).colors.foreground, [0.2, 0.4, 0.6, 1.]);
+    assert_eq!(state(&reopened).colors.foreground.rgba, [0.2, 0.4, 0.6, 1.]);
     assert!(state(&reopened).workspace.zen_mode);
     reopened.dispatch(UiAction::Invoke {
         command: CommandId::UndoWorkspace,

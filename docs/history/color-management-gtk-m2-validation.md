@@ -4120,3 +4120,131 @@ both required Float32 features; constrained and unsupported GPU policies are not
 qualified by these checks. No performance workloads ran. Fresh baseline and parent
 comparisons, regression investigation, optimization and memory/latency acceptance
 remain last. Other platform host integration still requires the user's approval.
+
+## Portable paint definitions and document-gamut GTK picking
+
+This checkpoint builds on `2a985772`. It removes the remaining sRGB reinterpretation
+from the shared foreground/background paint path and GTK picker. It is an
+intermediate correctness checkpoint, not milestone 2 completion or performance
+qualification. No other host integration was changed.
+
+`RgbColor` retains straight encoded RGB, its defining built-in space, and independent
+alpha. Finite extended RGB survives serialization and conversion. Changing documents,
+picker shape, readout or preview never replaces the definition with clipped picker
+coordinates. Alpha edits retain the original space/RGB. The workspace stores these
+definitions; adopting a workspace resolves its picker and brush in the receiving
+document. The old untagged color-array payload is replaced rather than migrated.
+
+Brush paint, preset secondary pigment, figures and both gradient endpoints resolve
+into document-linear RGB. Document adoption also converts retained secondary pigment;
+resetting presets resolves their sRGB definitions into the current document. Point,
+3×3 and 5×5 sampling encode exact document-linear artwork in its own space, keep
+extended RGB, ignore fully transparent samples and leave brush opacity independent.
+The existing `BrushState.color` is an sRGB widget preview, never a source for pigment.
+
+The numerical design was checked against the [CSS Color 4 conversion code](https://www.w3.org/TR/2026/CRD-css-color-4-20260913/#color-conversion-code)
+and [Ottosson's picker reference](https://bottosson.github.io/posts/colorpicker/).
+The latter's fitted cusp model is specifically sRGB. Our four-space extension derives
+channel-boundary cubics from the working RGB matrix and white adaptation. A hue ray
+near blue can leave and reenter the gamut: selecting its first root failed the existing
+sRGB round-trip checks. Selecting the outermost feasible root fixes that failure
+without loosening those existing checks. The smooth perceptual hue ring remains the
+absolute sRGB reference guide; the disc itself covers the document gamut.
+
+Independent checks cover 14,400 hue boundaries and a 21³ RGB grid in each space.
+Maximum grid round-trip errors (linear / encoded RGB) were:
+
+| Space | Maximum linear error | Maximum encoded error |
+| --- | --- | --- |
+| sRGB | 6.780e-7 | 4.195e-6 |
+| Display P3 | 7.077e-7 | 4.979e-6 |
+| Adobe RGB | 7.396e-7 | 5.229e-4 |
+| ProPhoto | 2.345e-6 | 3.949e-6 |
+
+Adobe RGB's transfer has no linear toe, magnifying minute near-zero residues from
+f32 hue coordinates. Picker projection validation checks linear error below 3e-6
+and encoded error below one quarter of an 8-bit code; the retained definition never
+round-trips through these coordinates. These are picker tolerances, not an exception
+to exact stored-U16/undo requirements. All original sRGB author-reference and grid
+checks retain their 2e-5 encoded tolerance. The initially uniform Adobe preview
+transfer table missed visible near-black codes; exact power-law evaluation fixes it.
+All 16 working/display pairs now satisfy the one-byte field-preview test.
+
+GTK evaluates all three picker fields in working RGB before converting their pixels
+to its explicit sRGB widget fallback. Its old Cairo square/triangle endpoint gradients
+are deleted. Field cache keys include hue, size, shape and working space. Paint chips,
+markers and retained toolbar/drawer icon palettes use derived previews. A compact `!`
+and accessible tooltip identify document/sRGB-preview gamut limits without changing
+the stored color. Monitor-aware wide widget presentation remains outstanding.
+
+Validation artifacts use the `artifacts/color-m2/portable-color-` prefix:
+
+- `shared-validation.log`: all 380 shared UI tests and the workspace migration
+  check pass. The new protocol checks cover document/workspace adoption, multiple
+  brush presets, both figure/gradient colors and extended samples in all four spaces.
+- `workspace-native.log`: all 86 SQLite/native workspace tests pass, including
+  persistence, failure, recovery and ownership checks.
+- `final-values.log`: all three portable-core-color checks pass, including an
+  independent P3-red conversion, extended round trips and rejected overflow.
+- `production-check.log`: production GTK compiles without warnings.
+- `native-ready-build.{json,log}`, `native-sources.json`: captured GTK test build,
+  code hashes and executable SHA-256
+  `370a32a8eeae5532e3e8a3d9816641369b25fe4ef59a9604db006f27db1595c6`.
+
+All six final native checks pass on that executable:
+
+| Check | Correctness-run duration |
+| --- | --- |
+| Portable paint and point/3×3/5×5 samples, four U16 document spaces | 21.92 s |
+| Native tool/color controls | 4.62 s |
+| Wide-color GPU failure/restart | 6.01 s |
+| Gradient tools | 7.09 s |
+| Native files/profiled delivery | 35.93 s |
+| Real Mutter mouse/touch color-panel input | 30.57 s |
+
+The four-space paint test checks native sampled coordinates within two U16 codes
+and exact unchanged pixels across sampling. File/restore tests keep their existing
+exact assertions. These durations do not establish latency or throughput budgets.
+The mouse/touch case retains 88 screenshots; light 280px circle/triangle and dark
+144px square captures were visually inspected. The panel screenshots exercise layout
+and sRGB fallback appearance, not calibrated physical monitor agreement. The driver
+now accepts `LAYER_NATIVE_TEST_EXECUTABLE`, avoiding an unrelated release rebuild.
+Nonfatal portal/secret-service warnings are preserved in the native-input log.
+
+ImageMagick independently decodes GTK process 1665254's RGB TIFF, gray PNG and CMYK
+TIFF with all 983,040 U16 samples and embedded ICC bytes exact: each maximum code
+difference is zero (`external-handoff.log`). The CMYK input profile was the retained
+`artifacts/familiar-workspace/files/custom-cmyk-1630194.icc` from the preceding
+qualification; the delivered ICC hash is recorded. Copies are in `portable-color-ui/`.
+
+Reproduce with the JPEG pkg-config setup described above:
+
+```sh
+cargo test -p layer-ui --offline -- --test-threads=1
+cargo test -p layer-workspace --features native --offline -- --test-threads=1
+cargo test -p layer-core --offline color::value:: -- --test-threads=1
+cargo test -p layer-linux --offline --no-run --message-format=json
+cargo check -p layer-linux --offline
+```
+
+Use `gtk-raster.sh` with the captured executable and an `--exact` wrapper, one
+fully-qualified test per process. `native-checks.json` records four existing test
+names; the additional paint test is
+`workspace::tests::color_management::native_sdr_portable_paint_and_sampling`.
+For the real-input case:
+
+```sh
+LAYER_NATIVE_TEST_EXECUTABLE="$PWD/artifacts/color-m2/portable-color-gtk-tests" \
+LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-m2/portable-color-panel" \
+  bash tools/performance/workspace-motion.sh gtk --color-panel
+python3 tools/validation/icc_export_handoff.py \
+  artifacts/familiar-workspace/files 1665254
+```
+
+The next functional work is numeric Edit Color and reusable swatches, followed by
+the remaining New/Open/Place, document conversion/precision, photo inspection,
+preferences and delivery UI. GTK managed wide viewing/monitor transitions, combined
+memory/scheduling gates and the final hardware workload matrix remain open. Fresh
+frame-creation baselines, regression investigation, optimization and performance
+acceptance remain last. The milestone 1 cleanup/prerequisite gaps recorded above
+still apply. Other platform hosts require the user's approval before integration.

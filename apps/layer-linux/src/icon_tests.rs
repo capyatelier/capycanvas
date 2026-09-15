@@ -512,8 +512,8 @@ fn controls(app: &adw::Application, output: &Path) {
             let left = (color_texture.width() as usize - size) / 2;
             let top = (color_texture.height() as usize - size) / 2;
             for (x, y, expected) in [
-                (4, 4, state(&w).colors.foreground),
-                (13, 13, state(&w).colors.background),
+                (4, 4, state(&w).colors.preview(state(&w).colors.foreground)),
+                (13, 13, state(&w).colors.preview(state(&w).colors.background)),
             ] {
                 for c in 0..3 {
                     let at = (top + y * size / 16) * stride + (left + x * size / 16) * 4 + c;

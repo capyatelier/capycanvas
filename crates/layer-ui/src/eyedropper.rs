@@ -1,5 +1,6 @@
 //! Latest-point coalescing and color policy, shared by every host. One GPU
 //! sample can be in flight; neither pointer events nor frames wait for it.
+use layer_core::color::{RgbColor, RgbSpace};
 use layer_render::{CanvasRenderer, ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 #[derive(Default)]
@@ -42,7 +43,8 @@ impl Eyedropper {
     pub fn poll<R: CanvasRenderer>(
         &mut self,
         renderer: &mut R,
-    ) -> Result<Option<[f32; 4]>, String> {
+        space: RgbSpace,
+    ) -> Result<Option<RgbColor>, String> {
         if !self.busy() {
             return Ok(None);
         }
@@ -52,16 +54,9 @@ impl Eyedropper {
             let sample = result.map_err(|e| e.to_string())?;
             if sample.request_id == self.generation && sample.rgba[3] > 0.0 {
                 let [r, g, b, _] = sample.rgba;
-                let encode = |v: f32| {
-                    let v = v.clamp(0.0, 1.0);
-                    if v <= 0.0031308 {
-                        v * 12.92
-                    } else {
-                        1.055 * v.powf(1.0 / 2.4) - 0.055
-                    }
-                };
                 // Pick paint color, not the existing pixel's transparency.
-                color = Some([encode(r), encode(g), encode(b), 1.0]);
+                // Samples are straight document-linear, including extended RGB.
+                color = Some(RgbColor::from_linear(space, [r, g, b, 1.])?);
             }
         }
         if !self.pending

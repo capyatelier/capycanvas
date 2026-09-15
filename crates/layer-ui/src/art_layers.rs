@@ -1610,7 +1610,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             y: p.y - offset.y,
         };
         let color = self.state.colors.foreground;
-        let mut colors = [
+        let definitions = [
             color,
             if transparent {
                 color
@@ -1618,11 +1618,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.colors.background
             },
         ];
-        for c in &mut colors {
-            for value in &mut c[..3] {
-                *value = srgb_to_linear(*value);
-            }
-            c[3] *= self.state.brush.opacity;
+        let mut colors = [[0.; 4]; 2];
+        for (value, definition) in colors.iter_mut().zip(definitions) {
+            *value = definition.linear_in(doc.color.space)?;
+            value[3] *= self.state.brush.opacity;
         }
         if transparent {
             colors[1][3] = 0.0;

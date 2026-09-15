@@ -423,7 +423,7 @@ mod wheel {
         // Background precedes foreground so their deliberate overlap also picks correctly.
         pub corners: RefCell<Vec<WheelButton>>,
         pub menu: RefCell<Option<gtk::Popover>>,
-        pub disc: RefCell<Option<(u32, f32, cairo::ImageSurface)>>,
+        pub disc: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, cairo::ImageSurface)>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Wheel {
@@ -520,40 +520,36 @@ mod wheel {
                 // Smooth field colors need logical-pixel sampling; Cairo scales
                 // them bilinearly. The ring, clip and markers retain native DPI.
                 let side = size.ceil() as u32;
-                if state.wheel_shape() == ColorShape::Circle {
+                {
+                    let shape = state.wheel_shape();
+                    let space = state.rgb_space();
                     let mut cache = self.disc.borrow_mut();
                     if cache
                         .as_ref()
-                        .is_none_or(|(s, h, _)| *s != side || *h != hue)
+                        .is_none_or(|(s, h, p, c, _)| *s != side || *h != hue || *p != shape || *c != space)
                     {
                         let mut pixels = vec![0; side as usize * side as usize * 4];
-                        layer_ui::render_okhsv_disc(side, hue, &mut pixels);
+                        state.render_field(side, &mut pixels);
                         for p in pixels.chunks_exact_mut(4) {
-                            let native = u32::from_be_bytes([255, p[0], p[1], p[2]]).to_ne_bytes();
+                            let native = u32::from_be_bytes([p[3], p[0], p[1], p[2]]).to_ne_bytes();
                             p.copy_from_slice(&native);
                         }
                         let surface = cairo::ImageSurface::create_for_data(
                             pixels,
-                            cairo::Format::Rgb24,
+                            cairo::Format::ARgb32,
                             side as i32,
                             side as i32,
                             side as i32 * 4,
                         )
                         .unwrap();
-                        *cache = Some((side, hue, surface));
+                        *cache = Some((side, hue, shape, space, surface));
                     }
                     let cr = snapshot.append_cairo(&bounds);
                     let _ = cr.save();
-                    cr.arc(
-                        geometry.center[0] as f64,
-                        geometry.center[1] as f64,
-                        geometry.disc_radius() as f64,
-                        0.,
-                        std::f64::consts::TAU,
-                    );
+                    color_field_path(&cr, shape, &geometry);
                     cr.clip();
                     cr.scale(size as f64 / side as f64, size as f64 / side as f64);
-                    let _ = cr.set_source_surface(&cache.as_ref().unwrap().2, 0., 0.);
+                    let _ = cr.set_source_surface(&cache.as_ref().unwrap().4, 0., 0.);
                     let _ = cr.paint();
                     let _ = cr.restore();
                 }
@@ -640,8 +636,8 @@ impl ColorPanel {
                 move |_, cr, width, height| {
                     let state = wheel.imp().color.borrow();
                     let color = match slot {
-                        ColorSlot::Foreground => state.foreground,
-                        ColorSlot::Background => state.background,
+                        ColorSlot::Foreground => state.preview(state.foreground),
+                        ColorSlot::Background => state.preview(state.background),
                         ColorSlot::Transparent => [0.0; 4],
                     };
                     cr.arc(
@@ -939,7 +935,8 @@ impl ColorPanel {
             button.set_tooltip_text(Some(description));
             button.update_property(&[gtk::accessible::Property::Label(description)]);
         }
-        let description = state.readout_description();
+        let description = format!("{}. {}", state.gamut_description(), state.readout_description());
+        self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
         self.readout_drawing.queue_draw();
@@ -978,6 +975,14 @@ fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: 
     cr.move_to(2., font + 1.);
     let _ = cr.show_text(state.readout_label());
     let label_width = cr.text_extents(state.readout_label()).unwrap().x_advance();
+    if !state.definition().in_gamut(layer_core::color::RgbSpace::Srgb).unwrap()
+        || !state.definition().in_gamut(state.rgb_space()).unwrap()
+    {
+        // The definition remains intact. The compact marker's tooltip and
+        // accessible label identify the gamut the preview cannot represent.
+        cr.move_to(label_width + 6., font + 1.);
+        let _ = cr.show_text("!");
+    }
     if area
         .parent()
         .is_some_and(|button| button.has_visible_focus())
@@ -1072,72 +1077,39 @@ fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     cr.close_path();
 }
 
+fn color_field_path(cr: &cairo::Context, shape: ColorShape, g: &ColorWheelGeometry) {
+    match shape {
+        ColorShape::Circle => cr.arc(g.center[0] as f64, g.center[1] as f64, g.disc_radius() as f64, 0., std::f64::consts::TAU),
+        ColorShape::Triangle => {
+            cr.move_to(g.triangle[0][0] as f64, g.triangle[0][1] as f64);
+            for p in &g.triangle[1..] { cr.line_to(p[0] as f64, p[1] as f64); }
+            cr.close_path();
+        }
+        ColorShape::Square => {
+            let [x, y, w] = g.square.map(f64::from);
+            let radius = (g.center[0] as f64 * 0.04).min(6.);
+            cr.new_sub_path();
+            for (cx, cy, start) in [(x+w-radius, y+radius, -90f64), (x+w-radius, y+w-radius, 0.), (x+radius, y+w-radius, 90.), (x+radius, y+radius, 180.)] {
+                cr.arc(cx, cy, radius, start.to_radians(), (start+90.).to_radians());
+            }
+            cr.close_path();
+        }
+    }
+}
+
 fn draw_wheel(cr: &cairo::Context, state: &ColorState, g: &ColorWheelGeometry) {
     // This is a tiny UI vector drawing, never a canvas or brush raster path.
     // GTK caches the resulting node until the color or allocation changes.
     let [r, green, b] = state.wheel_hue_color(state.wheel_components()[0]).map(f64::from);
-    if state.wheel_shape() == ColorShape::Square {
-        let [x, y, w] = g.square.map(f64::from);
-        let h = w;
-        let radius = (g.center[0] as f64 * 0.04).min(6.);
-        let _ = cr.save();
-        cr.new_sub_path();
-        for (cx, cy, start) in [
-            (x + w - radius, y + radius, -90.),
-            (x + w - radius, y + h - radius, 0.),
-            (x + radius, y + h - radius, 90.),
-            (x + radius, y + radius, 180.),
-        ] {
-            cr.arc(
-                cx,
-                cy,
-                radius,
-                start * std::f64::consts::PI / 180.,
-                (start + 90.) * std::f64::consts::PI / 180.,
-            );
-        }
-        cr.close_path();
-        cr.clip();
-        let horizontal = cairo::LinearGradient::new(x, y, x + w, y);
-        horizontal.add_color_stop_rgb(0., 1., 1., 1.);
-        horizontal.add_color_stop_rgb(1., r, green, b);
-        cr.rectangle(x, y, w, h);
-        let _ = cr.set_source(&horizontal);
-        let _ = cr.fill();
-        let vertical = cairo::LinearGradient::new(x, y, x, y + h);
-        vertical.add_color_stop_rgba(0., 0., 0., 0., 0.);
-        vertical.add_color_stop_rgba(1., 0., 0., 0., 1.);
-        cr.rectangle(x, y, w, h);
-        let _ = cr.set_source(&vertical);
-        let _ = cr.fill();
-        let _ = cr.restore();
-    } else if state.wheel_shape() == ColorShape::Triangle {
-        let mesh = cairo::Mesh::new();
-        mesh.begin_patch();
-        for (index, p) in g.triangle.iter().chain([&g.triangle[2]]).enumerate() {
-            if index == 0 {
-                mesh.move_to(p[0] as f64, p[1] as f64);
-            } else {
-                mesh.line_to(p[0] as f64, p[1] as f64);
-            }
-        }
-        mesh.set_corner_color_rgb(cairo::MeshCorner::MeshCorner0, 1., 1., 1.);
-        mesh.set_corner_color_rgb(cairo::MeshCorner::MeshCorner1, 0., 0., 0.);
-        mesh.set_corner_color_rgb(cairo::MeshCorner::MeshCorner2, r, green, b);
-        mesh.set_corner_color_rgb(cairo::MeshCorner::MeshCorner3, r, green, b);
-        mesh.end_patch();
-        let _ = cr.set_source(&mesh);
-        let _ = cr.paint();
-    }
     let radius = (g.center[0] * 2. * 0.04).clamp(6., 10.) as f64;
     for (point, fill) in [
         (state.wheel_hue_marker(g, state.wheel_components()[0]), [r, green, b]),
         (
             state.wheel_marker(g),
             [
-                state.rgba()[0] as f64,
-                state.rgba()[1] as f64,
-                state.rgba()[2] as f64,
+                state.preview(state.definition())[0] as f64,
+                state.preview(state.definition())[1] as f64,
+                state.preview(state.definition())[2] as f64,
             ],
         ),
     ] {
