@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 
 @MainActor private final class PropertySliderGeometry {
     var frames: [String: CGRect] = [:]
@@ -7,11 +8,11 @@ import SwiftUI
 }
 
 /// Native slider contacts through the real property views and serial owner.
-/// Temporary windows and in-memory documents; no renderer or artist storage.
+/// Temporary windows and in-memory documents; no artist storage.
 @main final class PropertySliderChecks: NativeWorkspaceInputFixture {
     @MainActor static func run() async throws {
         let filter = ProcessInfo.processInfo.environment["CAPY_PROPERTY_CASE"] ?? ""
-        let cases = [("", "brush-size"), ("", "brush-opacity"),
+        let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "tool-document"),
             ("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
             ("brightness_contrast", "brightness"), ("split_tone", "red"),
             ("gradient_map", "position"), ("gradient_map", "opacity"), ("gradient_map", "red")]
@@ -42,16 +43,19 @@ import SwiftUI
                 } else if !effect.isEmpty {
                     try await action(["type": "effect", "action": ["op": "insert", "effect": effect]])
                 }
+                let toolControl = mode == "tool-document"
+                if toolControl { try await action(["type": "invoke", "command": "auto_select"]) }
                 let layer = store.state["layer_properties"]["layer"].uint
                 let brushControl = mode.hasPrefix("brush-")
                 let defaultControls = store.state["layer_properties"]["controls"].stableKey
                 let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient" : effect == "split_tone" ? "shadows"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
-                let identifier = brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
+                let identifier = toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
                     : mode == "layer-opacity" ? mode : effect == "gradient_map"
                     ? (mode == "red" ? "gradient-stop-rgba-0" : "gradient-" + mode)
                     : "property-" + key + (mode == "red" ? "-rgba-0" : "")
                 func value() -> Double {
+                    if toolControl { return store.state["tool_settings"].array.first { $0["id"].string == "tolerance" }!["value"].number }
                     if brushControl { return store.state["brush"][mode == "brush-size" ? "diameter" : "opacity"].number }
                     let value = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
                     if effect == "gradient_map" {
@@ -65,7 +69,8 @@ import SwiftUI
                 window.isReleasedWhenClosed = false
                 defer { window.contentView = nil; window.close() }
                 let content = AnyView(Group {
-                    if brushControl {
+                    if toolControl { ToolSettingsControls(store: store) }
+                    else if brushControl {
                         PanelControls(store: store, panel: JSON(["id": "sizes", "controls": [
                             ["control": mode == "brush-size" ? "brush_size" : "brush_opacity", "visible_in_panel": true]
                         ]]), scrollable: false, measureForWorkspace: false)
@@ -108,6 +113,42 @@ import SwiftUI
                     try require(delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
                         "The retained native field must handle its commit callback")
                     try await drain()
+                }
+                if toolControl {
+                    let (field, delegate) = try await draft(identifier, "37 %")
+                    let epoch = store.state["document_file"]["epoch"].uint
+                    let target = store.state["layer_tools"]["editing_layer"]["id"].uint
+                    // Use the production document replacement path with an
+                    // offscreen Metal surface and a supplied New Drawing size.
+                    let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
+                    store.native!.attach(surface, width: 128, height: 128, scale: 1)
+                    try await action(["type": "set_tool_setting", "id": "tolerance", "value": 0.23])
+                    try require(field.isDescendant(of: host) && field.stringValue == "37 %",
+                        "An ordinary tool-value update must preserve its active draft")
+                    store.projectFiles = ProjectFiles(store: store, dialogs: .init(
+                        open: { $0(nil) }, save: { _, _, completed in completed(nil) },
+                        create: { _, completed in completed([256, 256]) }))
+                    store.invoke("new_document")
+                    let deadline = Date().addingTimeInterval(30)
+                    while store.state["document_file"]["epoch"].uint == epoch || store.projectFiles.busy {
+                        try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
+                        try require(Date() < deadline, "Tool-settings document replacement timed out")
+                        try await drain(0.01)
+                    }
+                    try await action(["type": "invoke", "command": "auto_select"])
+                    try require(store.state["layer_tools"]["editing_layer"]["id"].uint == target,
+                        "The replacement must reuse the previous numeric layer ID")
+                    let replacement = value()
+                    try await commit(field, delegate)
+                    try require(abs(value() - replacement) < 0.0001,
+                        "A retired tool draft must not edit another document after the same tool is selected: expected \(replacement), found \(value())")
+                    try require(!field.isDescendant(of: host), "Document replacement must discard the original field")
+                    let (current, currentDelegate) = try await draft(identifier, "37 %")
+                    try await commit(current, currentDelegate)
+                    try require(abs(value() - 0.37) < 0.0001 && store.failure == nil,
+                        "The replacement document's own tool field must accept edits")
+                    note("PASS: platform \(platform), tool draft rejects reused targets across documents and preserves ordinary edits")
+                    continue
                 }
                 if brushControl {
                     let text = mode == "brush-size" ? "37 px" : "37 %"

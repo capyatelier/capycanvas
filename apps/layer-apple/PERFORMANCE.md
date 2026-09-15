@@ -61,10 +61,14 @@ Both cadence gates still fail. These current short runs are not a controlled
 before/after comparison and do not establish a timing or memory-growth benefit.
 No ten-minute run follows. Sustained cadence, physical-input latency, isolated
 GPU timing, recorder overhead and the complete performance matrix remain open.
-Grouped native evidence and current Release metadata are under
+Grouped native evidence and that milestone's Release metadata are under
 `artifacts/apple-brush-state-milestone-v1/` (`physical/`, `release/`). Both owned
 processes are stopped; the physical diagnostic is removed and its prior test
 runner restored, with the artist's editor descriptors unchanged.
+The later tool-control/color-preview batch rebuilds both Release apps; their
+current metadata is under `artifacts/apple-tool-color-milestone-v1/release/`.
+Its production changes affect native controls only, with no additional physical
+drawing run or performance claim.
 
 ## Hardware tile hashing, short physical comparison — 2026-09-15
 

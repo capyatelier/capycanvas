@@ -10,6 +10,42 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Current tool controls and color preview milestone
+
+Tool settings now include the shared document epoch in their existing editing
+context. A local reproduction retains an Auto Select tolerance draft, creates a
+new drawing and reselects Auto Select on the reused layer ID: the former field's
+late commit changes the new document's default from 10% to 37% before the fix.
+The existing component fixture now verifies rejection on both Apple policies,
+ordinary draft preservation and accepted edits through the replacement field.
+It uses the production document replacement path with an offscreen Metal surface
+and in-memory storage. Evidence is under `artifacts/apple-tool-document-context-v1/`.
+Both final cases pass; this is AppKit component/owner evidence, not UIKit or
+physical input acceptance.
+
+The compact Brush color panel now shows its current color above the precise RGB
+fields. Its swatch opens the existing color picker and shares BrushColorButton
+with panel configuration, removing the duplicate button body. Both actual Mac
+and UIKit panel-configuration workflows pass both swatches/picker selection,
+visibility changes, scrolling to RGB editing and subsequent group dragging:
+two workflows, no failures or skips. Final native captures are reviewed; the
+UIKit capture shows the new swatch, while Mac's short panel is scrolled to RGB.
+Mac XCTest reports one responsiveness warning; UIKit reports none.
+
+Both Release builds pass without compiler warnings. Grouped evidence and
+**current on-disk Release metadata** are under
+`artifacts/apple-tool-color-milestone-v1/` (`mac-v5`, `simulator-v5`, `release/`).
+Earlier brush-state Release hashes no longer describe these rebuilt apps. Four
+earlier Mac workflow failures are retained: the configuration ancestor identifier
+was replaced by the workspace group, immediate assertions raced shared state
+publication, and a live control was outside its short panel's scroll viewport.
+The fixture now uses the containing scroller, condition-based state expectations
+and the existing reveal helper. Production sources did not change during those
+fixture corrections. All owned app/runner processes are stopped. No physical
+device or drawing benchmark is repeated for this native-control batch. Full
+feature/visual, physical input/provider/lifecycle and sustained performance
+acceptance remain open; the overall goal is incomplete.
+
 ## Current brush-state milestone
 
 Brush size and opacity fields now capture the selected preset, discard their

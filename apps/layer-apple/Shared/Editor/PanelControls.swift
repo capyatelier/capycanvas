@@ -64,6 +64,7 @@ struct PanelControls: View {
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes
         case "brush_color":
+            BrushColorButton(store: store, label: item["label"].string)
             ForEach(0..<3, id: \.self) { component in
                 NumberControl(store: store, label: ["Red", "Green", "Blue"][component], value: store.state["brush"]["color"][component].number, control: store.catalog["opacity"]) { value, completion in
                     store.edit(["type": "color", "action": ["op": "rgba_component", "index": component, "value": value]], completion: completion)

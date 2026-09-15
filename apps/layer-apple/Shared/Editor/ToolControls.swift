@@ -88,12 +88,14 @@ private struct ToolGroupsLayout: Layout {
 struct ToolSettingsControls: View {
     @ObservedObject var store: EditorStore
     private var settings: [JSON] { store.state["tool_settings"].array }
-    // Changing tool or target must discard an unfinished field draft. Ordinary
-    // value updates retain view identity, focus and selection.
+    // Changing document, tool or target must discard an unfinished field draft.
+    // Layer IDs can be reused by a new document. Ordinary value updates retain
+    // view identity, focus and selection.
     private var context: String {
         let selected = ["groups", "subtools"].flatMap { store.state["tool_set"][$0].array }
             .filter { $0["selected"].bool }.map { $0["action"].stableKey }.joined(separator: ":")
-        return selected + ":" + String(store.state["brush"]["preset"].uint)
+        return String(store.state["document_file"]["epoch"].uint)
+            + ":" + selected + ":" + String(store.state["brush"]["preset"].uint)
             + ":" + String(store.state["layer_tools"]["editing_layer"]["id"].uint)
             + ":" + String(store.state["layer_tools"]["editing_layer"]["mask_selected"].bool)
     }

@@ -51,14 +51,7 @@ struct PanelConfiguration: View {
         switch control {
         case "size_presets": configurationSizes
         case "brush_color":
-            Button { store.customize(["type": "open_control", "control": "brush_color"]) } label: {
-                ColorSwatch(rgba: store.state["brush"]["color"])
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
-                    .background(palette["button"].opacity(13 / 255), in: RoundedRectangle(cornerRadius: 6))
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(item["label"].string)
-                .accessibilityIdentifier("configuration-brush-color")
+            BrushColorButton(store: store, label: item["label"].string)
         case "brushes": ScrollView { ToolSetControls(store: store) }.frame(height: 250)
         case "color_wheel": ColorPanel(store: store)
         case "navigator": NavigatorPanel(store: store).frame(height: 240)

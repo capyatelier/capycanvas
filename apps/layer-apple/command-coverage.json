@@ -23,9 +23,9 @@
     {
       "name": "Selection, fill, and shapes",
       "commands": ["lasso", "auto_select", "fill", "gradient", "figure"],
-      "checks": ["native/src/tests.rs", "native/src/region_tests.rs", "tests/canvas-native-input.swift", "Shared/Tests/CanvasToolChecks.swift", "Shared/Tests/RegionSelectionChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift"],
-      "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; physical Pencil artwork, native refinement workflows and modifiers remain",
-      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and AppKit canvas component freehand selection/fill, Escape/focus/tool cancellation, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; full-editor lasso interactions, refinement workflows and modifiers remain"
+      "checks": ["native/src/tests.rs", "native/src/region_tests.rs", "tests/canvas-native-input.swift", "tests/property-slider-input.swift", "Shared/Tests/CanvasToolChecks.swift", "Shared/Tests/RegionSelectionChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift"],
+      "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; physical Pencil artwork, native refinement workflows and modifiers remain; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies",
+      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and AppKit canvas component freehand selection/fill, Escape/focus/tool cancellation, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; full-editor lasso interactions, refinement workflows and modifiers remain; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies"
     },
     {
       "name": "Object transforms",
@@ -73,8 +73,8 @@
       "name": "Workspace and Zen",
       "commands": ["undo_workspace", "redo_workspace", "new_toolbar", "manage_toolbars", "reset_layout", "zen_mode"],
       "checks": ["native/src/workspace_tests.rs", "Shared/Tests/WorkspaceControlChecks.swift", "Shared/Tests/ToolbarStyleChecks.swift", "Shared/Tests/DrawerDragChecks.swift", "tests/workspace-drawers.swift", "tests/toolbar-capture.swift"],
-      "ios": "partial: direct topology/style/history, drawer docking, shared component captures and focused simulator controls; full customization/Zen/physical layout matrix remains",
-      "mac": "partial: direct topology/style/history, SwiftUI drawer geometry/docking, component captures and focused editor controls; full customization/Zen/window layout matrix remains"
+      "ios": "partial: direct topology/style/history, drawer docking, shared component captures and focused simulator controls; full customization/Zen/physical layout matrix remains; native configuration/live brush-color swatches, picker selection, visibility publication, short-panel RGB scrolling/editing and subsequent group dragging pass in the grouped workflow",
+      "mac": "partial: direct topology/style/history, SwiftUI drawer geometry/docking, component captures and focused editor controls; full customization/Zen/window layout matrix remains; native configuration/live brush-color swatches, picker selection, visibility publication, short-panel RGB scrolling/editing and subsequent group dragging pass in the grouped workflow"
     },
     {
       "name": "Title-bar customization",

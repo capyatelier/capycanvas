@@ -209,13 +209,19 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: value)
         }
         waitForExpectations(timeout: 5)
-        workspaceActivate(app.buttons["configuration-brush-color"])
+        let configuration = app.scrollViews.containing(.button, identifier: "configure-visible-brush_size").firstMatch
+        workspaceActivate(configuration.buttons["brush-color"])
         let popup = app.descendants(matching: .any)["toolbar-control-popup"].firstMatch
         XCTAssertTrue(popup.waitForExistence(timeout: 5))
         workspaceActivate(popup.buttons["color-background"])
-        XCTAssertTrue(popup.buttons["color-background"].isSelected)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: popup.buttons["color-background"])
+        waitForExpectations(timeout: 5)
         workspaceActivate(popup.buttons["Done"])
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
+        waitForExpectations(timeout: 5)
+        let colorToggle = app.buttons["configure-visible-brush_color"]
+        if colorToggle.value as? String == "Off" { workspaceActivate(colorToggle) }
+        expectation(for: NSPredicate(format: "value == %@", "On"), evaluatedWith: colorToggle)
         waitForExpectations(timeout: 5)
         workspaceActivate(toggle)
         expectation(for: NSPredicate(format: "value == %@", "Off"), evaluatedWith: toggle)
@@ -224,6 +230,28 @@ extension XCTestCase {
         let size = app.buttons["number-value-Brush size"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: size)
         waitForExpectations(timeout: 5)
+        let liveColor = app.buttons["brush-color"]
+        let liveControls = app.scrollViews.containing(.button, identifier: "brush-color").firstMatch
+        revealEditorControl(liveColor, in: liveControls)
+        workspaceActivate(liveColor)
+        XCTAssertTrue(popup.waitForExistence(timeout: 5), "The live panel swatch must open the same color picker")
+        XCTAssertTrue(popup.buttons["color-background"].isSelected)
+        workspaceActivate(popup.buttons["color-foreground"])
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: popup.buttons["color-foreground"])
+        waitForExpectations(timeout: 5)
+        workspaceActivate(popup.buttons["Done"])
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
+        waitForExpectations(timeout: 5)
+        let red = app.buttons["number-value-Red"]
+        XCTAssertTrue(red.waitForExistence(timeout: 5), "The live swatch must retain precise RGB controls")
+        let originalRed = red.value as? String ?? ""
+        let increaseRed = app.buttons["number-increase-Red"]
+        let stepRed = increaseRed.isEnabled ? increaseRed : app.buttons["number-decrease-Red"]
+        revealEditorControl(stepRed, in: liveControls)
+        workspaceActivate(stepRed)
+        expectation(for: NSPredicate(format: "value != %@", originalRed), evaluatedWith: red)
+        waitForExpectations(timeout: 5)
+        attachWorkspaceScreen(app, name: "panel-brush-color")
         let group = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-group-"))
             .containing(.button, identifier: "panel-tab-sizes").firstMatch
@@ -239,7 +267,8 @@ extension XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: target)
         #endif
         XCTAssertTrue(grip.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(grip.frame.minX, original.maxX + 30, "The configured group must retain its drag contact while becoming floating")
+        expectation(for: NSPredicate { _, _ in grip.frame.minX > original.maxX + 30 }, evaluatedWith: grip)
+        waitForExpectations(timeout: 5)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachWorkspaceScreen(app, name: "panel-configuration-drag")
     }
