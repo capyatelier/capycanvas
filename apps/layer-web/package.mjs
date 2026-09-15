@@ -173,15 +173,19 @@ export function packageWeb() {
       }
     }
     cpSync(join(root,"assets/filters"),join(runtime,"filters"),{recursive:true});
-    // Shared brand geometry and mid-gray background at every icon size.
-    const mark = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"))
-      .replace('width="24" height="24"', 'x="96" y="96" width="320" height="320" color="#f6f5f4"');
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="76.8" fill="#767676"/>${mark}</svg>`;
+    const brand = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"));
     for (const size of [32, 180, 192, 512]) {
-      // File input avoids renderer stdin/EOF stalls in constrained build hosts.
+      // Enlarge the capy in the compact favicon while keeping it centered.
+      const markSize = size === 32 ? 440 : 320;
+      const inset = (512 - markSize) / 2;
+      const mark = brand.replace('width="24" height="24"',
+        `x="${inset}" y="${inset}" width="${markSize}" height="${markSize}" color="#f6f5f4"`);
       // Apple masks artwork itself; other platforms retain rounded corners.
+      const corners = size === 180 ? "" : ' rx="76.8"';
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512"${corners} fill="#767676"/>${mark}</svg>`;
+      // File input avoids renderer stdin/EOF stalls in constrained build hosts.
       const source = join(staging, "icon.svg");
-      writeFileSync(source, size === 180 ? svg.replace(' rx="76.8"', "") : svg);
+      writeFileSync(source, svg);
       run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), source, join(runtime, `icon-${size}.png`)]);
     }
     const names = fingerprintAssets(runtime);
