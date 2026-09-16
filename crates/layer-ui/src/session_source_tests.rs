@@ -129,6 +129,11 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
 
 #[test]
 fn source_profile_repair_preserves_samples_and_baked_edits() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        source_profile_repair_preserves_samples_and_baked_edits_on(platform);
+    }
+}
+fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform) {
     use layer_core::{
         color::{ColorProfile, IntegerDepth, RgbSpace, source::*},
         raster::*,
@@ -156,7 +161,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
         .import_layer_source("Original", builder.finish().unwrap())
         .unwrap();
     let id = session.engine.document().active_layer;
-    session.state.platform = Platform::Gtk;
+    session.state.platform = platform;
     let change = session.dispatch(UiAction::Layer {
         action: LayerAction::RepairSourceProfile { id: id.0 },
     }).unwrap();
@@ -326,10 +331,15 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
 
 #[test]
 fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        rasterizing_an_image_preserves_full_extent_edits_masks_and_history_on(platform);
+    }
+}
+fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history_on(platform: Platform) {
     use layer_core::{color::source::*, raster::*};
     use std::sync::Arc;
     let mut session = session();
-    session.state.platform = Platform::Gtk;
+    session.state.platform = platform;
     session.engine.backend_mut().tiled_sources = true;
     // The retained image is larger than the document. Materializing it must not
     // crop off-canvas pixels or bake/shift the layer's existing paint and mask.

@@ -43,7 +43,7 @@ export function chooseExport({app,dialog,element,button}) {
   });
 }
 
-function importProfile(app,element) {
+export function importProfile(app,element) {
   return new Promise((resolve,reject)=>{
     const input=element("input");input.type="file";input.accept=".icc,.icm";input.hidden=true;document.body.append(input);
     input.oncancel=()=>{input.remove();resolve(null);};

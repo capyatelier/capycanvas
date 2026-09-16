@@ -273,6 +273,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val id = request.getInt("id")
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
+            "repair_source_profile", "rasterize_source" -> if (!DocumentController.nativeFileJobsForTest) key(id) { SourceEditDialog(host, request) }
             "properties" -> key(id) { DocumentPropertiesDialog(host) { controller.cancel(id) } }
             "change_color", "color_history" -> if (!DocumentController.nativeFileJobsForTest) key(id) { DocumentColorDialog(host, request) }
             "new" -> key(id) {

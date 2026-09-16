@@ -87,7 +87,7 @@ function runtimeFixture(t, changes = {}) {
     "editor-panels.js": "import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
     "documents.js": "import {chooseDocumentColor} from './document-color.js'; import {createHistogram} from './histogram.js'; import {chooseExport} from './export-controls.js'; export function createDocuments() {}",
-    "document-color.js": "export function chooseDocumentColor() {}",
+    "document-color.js": "import {importProfile} from './export-controls.js'; export function chooseDocumentColor() {}",
     "histogram.js": "export function createHistogram() {}",
     "export-controls.js": "export function chooseExport() {}",
     "numeric.js": "export function createNumberField() {}",

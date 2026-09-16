@@ -2,6 +2,7 @@
 
 mod documents;
 mod color_edit;
+mod source_edit;
 mod output;
 mod editor;
 mod header;

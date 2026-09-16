@@ -180,3 +180,39 @@ export async function checkSourceImports({call,evaluate}) {
   for(const image of copy.tiled_sources.images){assert.equal(image.depth,'U16');assert.deepEqual(image.tiles,original.images[0].tiles);}
   console.log('Layer-panel import and real custom-format clipboard paste preserve every ProPhoto16 sample/ICC in a P3 U8 master; undo/redo, reopen and document details passed');
 }
+
+export async function checkSourceEdits({call,evaluate,settle}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
+  const backing=m=>({blobs:m.blobs,rasters:m.rasters,sources:m.tiled_sources});
+  const source=m=>m.tiled_sources.images[m.tiled_sources.layers.find(l=>l.target===m.document.active_layer).image];
+  async function change(command,profile,apply=true){
+    await invoke(command);await wait('!!document.querySelector("dialog[open]")');
+    if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('select[aria-label="Correct source profile"]');select.value=${JSON.stringify(profile)};select.dispatchEvent(new Event('change'));})()`);
+    await click('Preview Complete Result');await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
+    const adds=await evaluate('!![...document.querySelectorAll("dialog[open] button")].find(b=>b.textContent==="Add Corrected Source")');
+    await click(!apply?'Cancel':command==='rasterize_source'?'Rasterize':adds?'Add Corrected Source':'Apply Profile');await idle();
+    assert.equal(await evaluate('layerApp.state().host_error??null'),null);return adds;
+  }
+  const before=await save();await change('repair_source_profile','2',false);assert.deepEqual(backing(await save()),backing(before));
+  assert.equal(await change('repair_source_profile','2'),false);const repaired=await save();
+  assert.deepEqual(repaired.blobs,before.blobs);assert.deepEqual(source(repaired).profile,{Builtin:'AdobeRgb'});
+  await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(before));
+  await invoke('redo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
+  await change('rasterize_source',null);const rasterized=await save();
+  assert.equal(source(rasterized).kind,'Rasterized');assert.equal(source(rasterized).depth,'U8');assert.deepEqual(source(rasterized).profile,{Builtin:'DisplayP3'});assert.deepEqual(source(rasterized).extent,source(repaired).extent);
+  await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
+  await invoke('fit_canvas');await settle();
+  const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
+  for(const [type,dx,buttons]of[['mousePressed',0,1],['mouseMoved',40,1],['mouseReleased',40,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
+  const painted=await save(),old=painted.document.layers.find(l=>l.id===painted.document.active_layer);
+  assert.equal(await change('repair_source_profile','3'),true);const added=await save();
+  assert.equal(added.document.layers.length,painted.document.layers.length+1);assert.deepEqual(added.document.layers.find(l=>l.id===old.id),old);assert.deepEqual(added.blobs,painted.blobs);
+  await evaluate(`window.sdrSourceMaster=sdrFiles.get(layerApp.state().document_file.location.name).slice();window.showOpenFilePicker=async()=>[{name:'source-edited.capy',async getFile(){return new File([sdrSourceMaster],'source-edited.capy')}}];`);
+  await invoke('open_document');await idle();assert.deepEqual(backing(await save()),backing(added));
+  await invoke('rasterize_source');await click('Preview Complete Result');await click('Cancel');await idle();assert.deepEqual(backing(await save()),backing(added));
+  console.log('Source repair/rasterize full-composition comparisons, exact undo/redo, worker/preview cancellation, baked-paint preservation and save/reopen passed');
+}

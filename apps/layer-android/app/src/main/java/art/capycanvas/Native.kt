@@ -46,6 +46,13 @@ internal object Native {
     @JvmStatic external fun documentClose(handle: Long, request: Int, decision: String)
     @JvmStatic external fun documentInfoTask(handle: Long): Long
     @JvmStatic external fun documentInfo(task: Long): String
+    @JvmStatic external fun sourceTask(handle: Long, id: Int, cancel: Long): Long
+    @JvmStatic external fun sourceWork(task: Long, profile: String)
+    @JvmStatic external fun sourcePrepareComparison(handle: Long, task: Long)
+    @JvmStatic external fun sourceCompare(task: Long): String
+    @JvmStatic external fun sourcePreview(task: Long, after: Boolean): ByteArray
+    @JvmStatic external fun sourceAdopt(handle: Long, task: Long)
+    @JvmStatic external fun sourceFree(task: Long)
     @JvmStatic external fun colorTask(handle: Long, id: Int, cancel: Long): Long
     @JvmStatic external fun colorWork(task: Long, choice: String): String
     @JvmStatic external fun colorPreview(task: Long, after: Boolean): ByteArray

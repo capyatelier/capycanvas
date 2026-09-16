@@ -18,11 +18,13 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** A single worker owns the candidate until explicit Apply, Cancel, or disposal. */
-private class DocumentColorJob(val host: CanvasHost, val id: Int) {
+internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val source: Boolean = false) {
     var busy by mutableStateOf(false)
     var ready by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var clipped by mutableStateOf(0L)
+    var addsLayer by mutableStateOf(false)
+    var sourceProfile by mutableStateOf("")
     var previews by mutableStateOf<List<ImageBitmap>>(emptyList())
     private var task = 0L
     private var control = 0L
@@ -31,7 +33,7 @@ private class DocumentColorJob(val host: CanvasHost, val id: Int) {
     private suspend fun release() {
         val old = task; task = 0
         val flag = control; control = 0
-        withContext(NonCancellable + Dispatchers.IO) { if (old != 0L) Native.colorFree(old); if (flag != 0L) Native.captureFree(flag) }
+        withContext(NonCancellable + Dispatchers.IO) { if (old != 0L) { if (source) Native.sourceFree(old) else Native.colorFree(old) }; if (flag != 0L) Native.captureFree(flag) }
         ready = false
     }
     fun invalidate() { ready = false; previews = emptyList() }
@@ -52,11 +54,15 @@ private class DocumentColorJob(val host: CanvasHost, val id: Int) {
         host.viewModelScope.launch {
             try {
                 release(); control = Native.captureControl()
-                task = host.withNative { Native.colorTask(it, id, control) }
-                val result = withContext(Dispatchers.IO) { JSONObject(Native.colorWork(task, choice?.toString() ?: "null")) }
+                task = host.withNative { if (source) Native.sourceTask(it, id, control) else Native.colorTask(it, id, control) }
+                val result = if (source) {
+                    withContext(Dispatchers.IO) { Native.sourceWork(task, choice?.toString() ?: "null") }
+                    host.withNative { Native.sourcePrepareComparison(it, task) }
+                    withContext(Dispatchers.IO) { JSONObject(Native.sourceCompare(task)) }
+                } else withContext(Dispatchers.IO) { JSONObject(Native.colorWork(task, choice?.toString() ?: "null")) }
                 if (!closing) {
-                    clipped = result.optLong("clipped_channels")
-                    if (!history) previews = withContext(Dispatchers.IO) { listOf(false, true).map { bitmap(Native.colorPreview(task, it)) } }
+                    clipped = result.optLong("clipped_channels"); addsLayer = result.optBoolean("adds_layer"); sourceProfile = result.optString("source_profile")
+                    if (!history) previews = withContext(Dispatchers.IO) { listOf(false, true).map { bitmap(if (source) Native.sourcePreview(task, it) else Native.colorPreview(task, it)) } }
                     ready = true
                 }
             } catch (e: Exception) { if (!closing) error = e.message ?: "Could not prepare color change"; release() }
@@ -69,7 +75,7 @@ private class DocumentColorJob(val host: CanvasHost, val id: Int) {
         busy = true
         host.viewModelScope.launch {
             try {
-                host.withNative { Native.colorAdopt(it, task) }
+                host.withNative { if (source) Native.sourceAdopt(it, task) else Native.colorAdopt(it, task) }
                 finished = true; host.documentChanged(); release()
             } catch (e: Exception) { error = e.message ?: "Could not apply color change"; release() }
             finally { busy = false; if (closing) finishCancel() }

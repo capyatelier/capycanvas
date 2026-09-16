@@ -110,9 +110,9 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         const rows=await app.document_properties();
         await dialog("Document Properties",(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button("Done",()=>finish(true)));});
         applyChange(app.finish_document(id,true));
-      } else if(r.type==="change_color"||r.type==="color_history") {
+      } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
         candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
-        if(candidate){const prepared=candidate;candidate=null;applyChange(app.adopt_color(prepared));wake();}
+        if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
       } else if(["new","open","place","paste"].includes(r.type)) {
         const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;

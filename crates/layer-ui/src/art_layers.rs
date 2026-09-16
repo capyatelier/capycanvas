@@ -1161,7 +1161,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let item = |label: &str, action: A| {
             let enabled = match &action {
-                A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => self.state.platform == Platform::Gtk && self.can_edit_original(l.id) && !self.state.document_file.busy,
+                A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => CommandId::RepairSourceProfile.available_on(self.state.platform) && self.can_edit_original(l.id) && !self.state.document_file.busy,
                 A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0)).is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
                 A::DeleteSelected => doc.can_delete_layers(&roots),
@@ -1437,7 +1437,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 },
             ]);
-            if l.source.as_ref().is_some_and(|s| s.is_original()) && self.state.platform == Platform::Gtk {
+            if l.source.as_ref().is_some_and(|s| s.is_original()) && CommandId::RepairSourceProfile.available_on(self.state.platform) {
                 protection.push(item("Repair Source Profile…", A::RepairSourceProfile { id }));
                 protection.push(item("Rasterize Source…", A::RasterizeSource { id }));
             }

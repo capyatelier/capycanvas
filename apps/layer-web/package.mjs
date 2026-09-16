@@ -79,7 +79,7 @@ export function fingerprintAssets(directory) {
   publish("color-controls.js");
   publish("export-controls.js");
   publish("histogram.js");
-  publish("document-color.js");
+  publish("document-color.js", replaceRequired(read(join(directory, "document-color.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
   publish("editor-panels.js", replaceRequired(read(join(directory, "editor-panels.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
   publish("workspace-chrome.js");
   let documents = read(join(directory, "documents.js"));

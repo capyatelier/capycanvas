@@ -298,3 +298,43 @@ Android reads the clipboard's image URI directly without Bitmap decoding.
 Still pending: source repair/rasterization, flattened conversion copies,
 persistent named export presets/profile library, output comparisons, broader
 adjustment/effect qualification and final tablet memory/navigation measurements.
+
+## Retained-source corrections — 2026-09-16
+
+Both tablet hosts now expose Repair Source Profile and Rasterize Source in the
+shared commands and layer menu. Repair validates the selected builtin/custom ICC
+against the actual source channels on the worker, retaining every original
+sample. Rasterization converts at full source extent to the document's space and
+integer depth. Both prepare the same complete-stack edit that Apply publishes,
+with Before/After comparisons, explicit clipping/baked-edit explanations,
+independent cancellation and stale document/request/GPU checks.
+
+The existing shared edit code preserves paint, masks, adjustments and position.
+Repair of a layer with baked pixel edits adds a corrected original separately;
+the painted layer is untouched. One-step undo restores the exact prior source.
+Web repair transfers only interpretation metadata to the CMM worker. Web
+rasterization transfers only the selected source; the rest of the master stays
+shared with its owner. Android conversion and comparisons run on IO. The host
+comparison UI reuses the document-color job lifecycle and cancellation handling.
+
+Validation:
+
+- `tablet-native-source-edits.log`: physical Android extended placement/source
+  test passed (14.388 s), including repair/rasterize comparisons, cancellation
+  before conversion and after preview, exact undo/redo, baked-paint preservation,
+  saved/reopened corrected sources and actual comparison UI cancellation.
+- `tablet-web-source-edits.log` and `tablet-web-source-edits-retry.log`: the prior
+  SDR/color/import suite passed; after fixing a quoted selector in the test,
+  actual source dialogs passed repair/rasterize comparisons, exact undo/redo,
+  preparation/preview cancellation, baked-paint preservation and save/reopen.
+- `shared-source-repair-hosts.log`, `shared-source-rasterize-hosts.log`: shared
+  tests now run for GTK, Web and Android, including source-sample identity,
+  full off-canvas extent, paint/mask preservation and exact history.
+- `android-source-edit-build.log`, `android-source-edit-tests-build.log`,
+  `web-source-edit-build.log`: actual ARM64/Wasm builds passed.
+- `package-source-edit.log`: all 13 browser packaging checks passed, including
+  the new source comparison's rewritten ICC-picker module dependency.
+
+Remaining: flattened conversion copies, output comparison previews, persistent
+named export presets/profile library, broader correction/effect and display
+qualification, and the final tablet navigation/memory benchmark and handoff.

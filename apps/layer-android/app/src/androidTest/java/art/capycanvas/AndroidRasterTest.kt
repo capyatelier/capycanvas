@@ -313,7 +313,65 @@ class AndroidRasterTest {
             compose.runOnUiThread {previous?.let {clipboard.setPrimaryClip(it)} ?: clipboard.clearPrimaryClip()}
             resolver.delete(uri,null,null)
         }
+        sourceEdits()
         assertNull(host.failure)
+    }
+
+    private fun sourceEdits() {
+        fun change(command:String,profile:JSONObject?=null,apply:Boolean=true,cancel:Boolean=false):JSONObject? {
+            val flag=Native.captureControl();if(cancel)Native.captureCancel(flag)
+            val id=native {request(it,command).first};val task=native {Native.sourceTask(it,id,flag)}
+            try {
+                if(cancel){
+                    try {Native.sourceWork(task,profile?.toString() ?: "null");fail("Cancelled source conversion succeeded")}
+                    catch(e:Exception){assertTrue(e.message.orEmpty().contains("cancel",ignoreCase=true))}
+                    native {Native.documentComplete(it,id,false,"null")};return null
+                }
+                Native.sourceWork(task,profile?.toString() ?: "null")
+                native {Native.sourcePrepareComparison(it,task)}
+                val stats=JSONObject(Native.sourceCompare(task))
+                for(after in listOf(false,true))assertTrue(Native.sourcePreview(task,after).size>8)
+                if(apply)native {Native.sourceAdopt(it,task)}else native {Native.documentComplete(it,id,false,"null")}
+                tick();return stats
+            }finally{Native.sourceFree(task);Native.captureFree(flag)}
+        }
+        fun backingEqual(a:JSONObject,b:JSONObject){for(key in listOf("blobs","rasters","tiled_sources"))assertEquals(key,a.get(key).toString(),b.get(key).toString())}
+        fun activeSource(m:JSONObject):JSONObject {
+            val id=m.getJSONObject("document").getLong("active_layer");val s=m.getJSONObject("tiled_sources")
+            val index=s.getJSONArray("layers").objects().first{it.getLong("target")==id}.getInt("image")
+            return s.getJSONArray("images").getJSONObject(index)
+        }
+        val before=manifest(save("source-before.capy"))
+        change("rasterize_source",cancel=true);backingEqual(before,manifest(save("source-cancel-worker.capy")))
+        change("repair_source_profile",obj("Builtin" to "AdobeRgb"),apply=false);backingEqual(before,manifest(save("source-cancel-preview.capy")))
+        assertFalse(change("repair_source_profile",obj("Builtin" to "AdobeRgb"))!!.getBoolean("adds_layer"))
+        val repaired=manifest(save("source-repaired.capy"))
+        assertEquals(before.getJSONArray("blobs").toString(),repaired.getJSONArray("blobs").toString())
+        assertEquals("AdobeRgb",activeSource(repaired).getJSONObject("profile").getString("Builtin"))
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(before,manifest(save("source-repair-undo.capy")))
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick();backingEqual(repaired,manifest(save("source-repair-redo.capy")))
+        change("rasterize_source")
+        val rasterized=manifest(save("source-rasterized.capy"));val image=activeSource(rasterized)
+        assertEquals("Rasterized",image.getString("kind"));assertEquals("U8",image.getString("depth"));assertEquals("DisplayP3",image.getJSONObject("profile").getString("Builtin"))
+        assertEquals(activeSource(repaired).getJSONArray("extent").toString(),image.getJSONArray("extent").toString())
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(repaired,manifest(save("source-rasterize-undo.capy")))
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())};tick();stroke(0.0)
+        val painted=manifest(save("source-painted.capy"));val oldId=painted.getJSONObject("document").getLong("active_layer")
+        assertTrue(change("repair_source_profile",obj("Builtin" to "ProPhoto"))!!.getBoolean("adds_layer"))
+        val added=manifest(save("source-corrected-layer.capy"))
+        assertEquals(painted.getJSONObject("document").getJSONArray("layers").length()+1,added.getJSONObject("document").getJSONArray("layers").length())
+        assertEquals(painted.getJSONObject("document").getJSONArray("layers").objects().first{it.getLong("id")==oldId}.toString(),added.getJSONObject("document").getJSONArray("layers").objects().first{it.getLong("id")==oldId}.toString())
+        assertEquals(painted.getJSONArray("blobs").toString(),added.getJSONArray("blobs").toString())
+        open(File(files,"source-corrected-layer.capy"));backingEqual(added,manifest(save("source-corrected-reopened.capy")))
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread {host.invoke("rasterize_source")}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Preview Complete Result").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Preview Complete Result").performClick()
+        compose.waitUntil(60_000) {compose.onAllNodesWithContentDescription("Prepared composition").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+        DocumentController.nativeFileJobsForTest=true
+        backingEqual(added,manifest(save("source-ui-cancel.capy")))
     }
 
     @Test fun documentColorChangesPreserveExactHistoryAndCancel() {
