@@ -6470,3 +6470,55 @@ Capability changes require explicit qualification:
 All named logs/reference outputs are local under
 `artifacts/color-m2/final-performance/`. Other platform host integration remains
 outside the GTK approval boundary.
+
+## Full-resolution 60 MP edit publication — 2026-09-15
+
+The closing audit found a real correctness failure that the small-region photo
+fixtures did not cover. Translating a complete 8192×7324 ProPhoto16 source by
+256 pixels failed with `Raster frame exceeds the 256 MiB native output budget`.
+The old cap still treated immutable native outputs like mapped readback staging.
+The failing reproduction is `native-60mp-transform-baseline.log`.
+
+Native publications now permit up to 1 GiB of exact integer output. Actual
+allocations remain proportional to changed pages. The backing worker still
+transfers one 16 MiB chunk at a time after presentation submission; earlier
+pending storage must fall below 240 MiB before another publication is admitted.
+Pending output plus active transfer is therefore bounded by 1.25 GiB, with the
+existing 64 MiB spare pool separate. The mapped-only path retains its previous
+256/512 MiB limits. A pending revision carries a shared, monotonic byte
+reservation until its published tile index supplies exact ownership accounting.
+No integer precision, working format, source pixels or readback priority changed.
+
+Two explicit hardware regressions pass:
+
+- `raster::native_edit::tests::native_60mp_source_transform_commits_and_preserves_history`:
+  complete source transform, exact transparent/opaque codes including the final
+  partial row, unchanged retained source, undo/redo, native save/reopen and GPU
+  renderer replacement. 928 integer color pages require 464 MiB of output;
+  the run completes in 7.47 s with process RSS high-water 1,236,868 KiB.
+- `raster::native_edit::tests::native_60mp_linked_mask_transform_commits_and_preserves_history`:
+  full photo and linked R16 mask through preview and Apply, exact mask codes and
+  the same history/save/replacement checks. Combined native output is 580 MiB,
+  demonstrating why a 512 MiB cap would also be insufficient. The run completes
+  in 8.01 s with process RSS high-water 1,329,136 KiB.
+
+These are correctness/resource observations, not interactive regeneration
+latency qualification. That optimization remains deferred by the user. The
+source fixture uses a deterministic horizontal integer ramp and uniform mask;
+it is not a worst-case compression or total GPU-memory measurement. The larger
+output allowance is not a guarantee for arbitrarily large edits or constrained
+devices. Existing 24/45/60 MP noisy-source and simultaneous-worker resource
+measurements remain in the performance record.
+
+All 77 core tests pass, including the new shared-reservation accounting check.
+The final focused GPU executable is `native-60mp-linked-gpu-tests`, SHA-256
+`fef63a0ee2170a41c71397a6c7ff32c34451efd0425fdba60037fc65812422ee`.
+The earlier color-only capture is `native-60mp-output-layer_render_wgpu-tests`,
+SHA-256 `67b7203087c2df419091ab5bf4dc418ef6b1741163611f9518a3336e48e983f4`.
+Artifacts and build records are under `artifacts/color-m2/final-performance/`.
+Reproduce each ignored test alone from a release build with `LAYER_GPU_INDEX=0`,
+`--ignored --exact --nocapture --test-threads=1`, optionally `/usr/bin/time -v`.
+The full renderer suite then passes **251 tests, zero failures, 28 optional
+hardware/performance tests ignored** (`native-60mp-output-all-gpu-tests.log`,
+393.04 s). The two 60 MP cases above are among the ignored tests and were run
+explicitly. Final GTK integration checks follow this focused checkpoint.

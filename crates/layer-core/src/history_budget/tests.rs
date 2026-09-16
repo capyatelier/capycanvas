@@ -1,6 +1,23 @@
 use super::*;
 use color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
 
+#[test]
+fn admitted_native_output_reservation_is_shared_until_tile_publication() {
+    let document = Document::new("pending native output", 256, 256);
+    let revision = raster::RasterRevision::pending();
+    let mut layer = document.layers[0].clone();
+    layer.raster = revision.clone();
+    let entry = HistoryEntry::new(Edit::ReplaceLayer(Box::new(layer)), 0);
+    let charge = || Accounting::new(&document).charge(&entry);
+    let initial = charge();
+    revision.clone().reserve_pending_bytes(480 * 1024 * 1024);
+    assert_eq!(charge() - initial, 480 * 1024 * 1024 - raster::MAX_CAPTURE_BYTES as usize);
+    revision.reserve_pending_bytes(1);
+    assert_eq!(charge() - initial, 480 * 1024 * 1024 - raster::MAX_CAPTURE_BYTES as usize);
+    revision.publish(Ok(raster::RasterData::default())).unwrap();
+    assert_eq!(charge(), initial - raster::MAX_CAPTURE_BYTES as usize);
+}
+
 fn source() -> Arc<SourceImage> {
     let mut builder = SourceBuilder::new(
         [1, 1],

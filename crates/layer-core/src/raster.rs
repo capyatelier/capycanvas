@@ -390,7 +390,12 @@ impl RasterData {
 /// renderer publishes its sparse index, then the worker publishes tile backing.
 /// Durability is deliberately absent: only atomic file publication grants it.
 #[derive(Clone, Debug)]
-pub struct RasterRevision(Arc<Publication<RasterData>>);
+pub struct RasterRevision(Arc<RasterPublication>);
+#[derive(Debug)]
+struct RasterPublication {
+    data: Publication<RasterData>,
+    pending_bytes: AtomicU64,
+}
 impl Default for RasterRevision {
     fn default() -> Self {
         Self::backed(RasterData::default())
@@ -421,13 +426,25 @@ impl RasterRevision {
         }
     }
     pub fn identity(&self) -> u64 {
-        self.0.id
+        self.0.data.id
     }
     pub fn is_empty(&self) -> bool {
         matches!(self.try_data(), Some(Ok(data)) if data.tiles.is_empty() && data.watercolor.is_none())
     }
     pub fn pending() -> Self {
-        Self(Arc::default())
+        Self(Arc::new(RasterPublication {
+            data: Publication::default(),
+            pending_bytes: AtomicU64::new(MAX_CAPTURE_BYTES),
+        }))
+    }
+    /// A producer admitting a larger native publication must account its
+    /// retained output before allocating it. This is not an allocation target;
+    /// published tile identities replace the reservation in history accounting.
+    pub fn reserve_pending_bytes(&self, bytes: u64) {
+        self.0.pending_bytes.fetch_max(bytes, Ordering::Relaxed);
+    }
+    pub(crate) fn pending_bytes(&self) -> usize {
+        usize::try_from(self.0.pending_bytes.load(Ordering::Relaxed)).unwrap_or(usize::MAX)
     }
     pub fn backed(data: RasterData) -> Self {
         let revision = Self::pending();
@@ -435,13 +452,13 @@ impl RasterRevision {
         revision
     }
     pub fn publish(&self, value: Result<RasterData, String>) -> Result<(), String> {
-        self.0.publish(value.map(Arc::new))
+        self.0.data.publish(value.map(Arc::new))
     }
     pub fn try_data(&self) -> Option<Result<Arc<RasterData>, String>> {
-        self.0.get()
+        self.0.data.get()
     }
     pub fn wait_data(&self) -> Result<Arc<RasterData>, String> {
-        self.0.wait()
+        self.0.data.wait()
     }
     pub fn host_backed(&self) -> bool {
         matches!(self.try_data(), Some(Ok(data)) if data.host_backed())

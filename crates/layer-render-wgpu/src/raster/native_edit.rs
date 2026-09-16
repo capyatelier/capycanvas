@@ -291,15 +291,22 @@ impl WgpuRasterizer {
         }
         // Immutable native outputs replace frame-sized mapped staging. Admission
         // reserves one separate bounded transfer in the backing worker.
-        let staging: u64 = STATUS_BYTES
+        let output_bytes: u64 = STATUS_BYTES
             + inputs
                 .iter()
                 .map(|(_, tile)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
                 .sum::<u64>();
-        if staging > MAX_CAPTURE_BYTES {
+        if output_bytes > MAX_NATIVE_OUTPUT_BYTES {
             return Err(GpuRasterError::Effect(
-                "Raster frame exceeds the 256 MiB native output budget".into(),
+                "Raster frame exceeds the 1 GiB native output budget".into(),
             ));
+        }
+        for publication in &frame.publications {
+            let pending_bytes = publication.data.tiles.values()
+                .filter(|tile| tile.try_backing().is_none())
+                .map(|tile| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64 + 1024)
+                .sum::<u64>();
+            publication.revision.reserve_pending_bytes(pending_bytes);
         }
         // Full views live only through this publication's command recording;
         // the view cache never pins working or encoded pixels between frames.

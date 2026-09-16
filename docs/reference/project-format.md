@@ -96,17 +96,25 @@ These are distinct boundaries:
 - A manual save becomes durable only after successful atomic publication by the
   host. Capture or autosave never acknowledges a manual save checkpoint.
 
-GTK transfers immutable roots to its GPU owner. Readback mapping/compression runs
-on a separate worker, with 256 MiB staging per frame and a 512 MiB pending-staging
-ceiling. At most 16 small capture jobs can share that budget; admission always
-reserves room for the largest next frame. A worker-prepared 64 MiB spare pool
-reuses unmapped buffers of at most 16 MiB.
+GTK transfers immutable roots to its GPU owner. Native commits retain at most
+1 GiB of immutable integer output per publication, allowing a full 60 MP U16
+photo plus linked mask. Readback mapping/compression runs on a separate worker,
+transferring at most 16 MiB at a time after canvas presentation submission.
+Admission allows at most 16 jobs and requires earlier pending storage below
+240 MiB, reserving room for the next publication. Total live pending output plus
+one transfer is bounded by 1.25 GiB; the separate 64 MiB spare pool reuses
+outputs and unmapped transfer buffers. These are ceilings, not eager allocations.
+The mapped-only host path retains 256 MiB per frame and 512 MiB pending staging.
 Compression copies at most four chunks into cached CPU memory (64 MiB scratch)
 and runs at most four compression jobs per capture, including within smaller
 chunks. Capture pressure defers pen-up/correction/operation boundaries; ordinary
 move frames continue. The separate native frame mailbox stays bounded to two.
 History retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
 excluding current document ownership. No precision is reduced to fit a budget.
+Before admitting a larger native output, its revision records the pending byte
+reservation shared by all owners. Once the index is published, history charges
+actual tile identities and layouts instead; completed compression replaces raw
+sample reservations with retained blob sizes.
 Changes to retained sources are admitted in both Undo and Redo directions before
 publication. An oversized source edit fails without changing the document or
 existing history. Import, source repair and rasterization also validate aggregate

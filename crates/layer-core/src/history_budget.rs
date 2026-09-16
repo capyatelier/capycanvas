@@ -62,7 +62,7 @@ impl Accounting {
                     }
                 }
                 // Pending producers reserve the permitted capture, never zero.
-                None => bytes = bytes.saturating_add(raster::MAX_CAPTURE_BYTES as usize),
+                None => bytes = bytes.saturating_add(revision.pending_bytes()),
                 Some(Err(_)) => (),
             }
         }
