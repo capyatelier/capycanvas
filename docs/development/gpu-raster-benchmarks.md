@@ -309,3 +309,51 @@ being silently excluded from the pen-up denominator. Subsequent strokes begin
 as soon as the preceding stroke is admitted and can overlap its backing work.
 Queued-frame-to-present timing for movement excludes input-to-queue delay;
 pen-up event-to-present includes that delay. Keep these boundaries distinct.
+
+### Web and Android tablet photo navigation
+
+Use an isolated Android package, preserving normal application data:
+
+```sh
+ANDROID_HOME="$HOME/Android/Sdk" CARGO_NET_OFFLINE=true \
+  apps/layer-android/gradlew -p apps/layer-android --offline \
+  :app:assembleDebug :app:assembleDebugAndroidTest \
+  -PcapyAbi=arm64-v8a -PcapyApplicationId=art.capycanvas.colorm2 \
+  -PcapyAppLabel='Capy Canvas Color M2'
+adb install -r apps/layer-android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r apps/layer-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell run-as art.capycanvas.colorm2 tee files/photo-benchmark.jpg \
+  < "$HOME/Downloads/sony_a7r_v_29.jpg" > /dev/null
+adb shell am instrument -w -e photoBenchmark true \
+  -e class art.capycanvas.AndroidPhotoNavigationBenchmarkTest#fullSizePhotoNavigation \
+  art.capycanvas.colorm2.test/androidx.test.runner.AndroidJUnitRunner
+adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-0.json
+adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-1.json
+adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-2.json
+adb pull /sdcard/Android/data/art.capycanvas.colorm2/files/photo-navigation-info.json
+```
+
+The fixture requires the 9504×6336 Sony JPEG. It sends two-finger records through
+ordinary owner scheduling at 361 Choreographer ticks per run, three runs, with
+fit→20×→fit zoom, rotation and pan. It preserves isolated workspace/recovery
+settings and records the actual physical viewport. Report import/cold run and
+warm runs separately. A test finishing successfully does not by itself pass the
+120 Hz gate: inspect delivered-frame counts, callback cadence and each CPU field.
+Do not count expected-presentation timestamps as measured presentation feedback.
+
+For Chrome, forward its debug socket, open the photo in a dedicated test tab and
+select that tab's explicit ID from the endpoint's `/json/list` response:
+
+```sh
+adb forward tcp:9228 localabstract:chrome_devtools_remote
+node apps/layer-web/photo-navigation-bench.test.mjs TEST_TAB_ID REPORT.json
+```
+
+The script requests fullscreen, uses ordinary app frame scheduling and records
+three 361-request runs, CPU frame time, RAF cadence, camera, viewport and renderer
+storage. It never changes Chrome flags or launches/closes user tabs. This injects
+camera commands, not hardware touch; it is not an input-to-photon test. Run tablet
+native and Web workloads separately, with other test photos released. Account for
+browser refresh throttling independently of GPU rendering time. The milestone
+[tablet validation record](../history/color-management-web-android-m2-validation.md)
+records current results, exact baselines and remaining limits.

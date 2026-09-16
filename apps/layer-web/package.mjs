@@ -17,11 +17,28 @@ const page = (title, body) => `<!doctype html><html lang="en"><meta charset="utf
 export function dependencyNotices(licenses) {
   return licenses.map((license) => {
     // Workspace licensing is included separately with the branding exception.
-    const crates = license.used_by.map((used) => used.crate).filter((crate) => crate.source);
-    if (!crates.length) return "";
+    let crates = license.used_by.map((used) => used.crate).filter((crate) => crate.source);
+    let original = "";
+    // This published archive has neither notices nor repository metadata, so
+    // cargo-about cannot fetch its git clarification. Preserve the exact upstream
+    // Zlib alternative, checked against the recorded publication revision.
+    if (!license.source_path) {
+      const missing = crates.filter(crate => crate.name === "zune-core");
+      if (missing.length) {
+        if (missing.some(crate => crate.version !== "0.4.12" || crate.license !== "MIT OR Apache-2.0 OR Zlib"))
+          throw new Error("Revalidate the original zune-core notice for this release");
+        const notice = readFileSync(join(web, "licenses/zune-core-0.4.12-ZLIB.txt"));
+        if (digest(notice).digest("hex") !== "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352")
+          throw new Error("Original zune-core notice checksum differs");
+        const source = "https://github.com/etemesi254/zune-image/blob/f8fbb123d5ed04441e8324a555bfcda0cb1bd28f/LICENSE-ZLIB";
+        original = `<section><h2>Zlib License</h2><p>zune-core 0.4.12 · <a href="${source}">Original notice</a></p><pre>${escape(notice.toString("utf8"))}</pre></section>`;
+        crates = crates.filter(crate => crate.name !== "zune-core");
+      }
+    }
+    if (!crates.length) return original;
     if (!license.source_path || /<year>|<copyright holders>/i.test(license.text))
       throw new Error(`Missing original license notice: ${crates.map((crate) => crate.name).join(", ")}`);
-    return `<section><h2>${escape(license.name)}</h2><ul>${crates.map((crate) => `<li>${escape(crate.name)} ${escape(crate.version)}</li>`).join("")}</ul><pre>${escape(license.text)}</pre></section>`;
+    return original + `<section><h2>${escape(license.name)}</h2><ul>${crates.map((crate) => `<li>${escape(crate.name)} ${escape(crate.version)}</li>`).join("")}</ul><pre>${escape(license.text)}</pre></section>`;
   }).join("\n");
 }
 

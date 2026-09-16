@@ -659,3 +659,63 @@ finish whole-process memory and latency evidence, verify file-worker retirement
 followed by delivery, deploy the final named Android/PWA builds, and receive the
 user's hands-on confirmation. Apple/Windows ports and print proofing remain out
 of scope; the main-integration platform warnings still apply.
+
+### Final delivery checks and measured limits
+
+`native-memory-samples.json` samples Android `dumpsys meminfo` and system
+`/proc/meminfo` approximately once per second during a separate 61 MP import and
+navigation run. Observed process peaks were 841.8 MiB PSS / 994.2 MiB RSS; steady
+PSS was about 765 MiB. Android's graphics accounting reports only about 169 MiB,
+less than the renderer's 1309 MiB tracked textures, so it cannot stand in for total
+GPU residency. System available memory fell from 4466.9 MiB to a sampled minimum
+1044.0 MiB and settled near 1430–1447 MiB. The system delta includes driver/cache
+and other processes; it is not exclusively this app. These are sampled peaks,
+not allocator-enforced maxima. The separate memory run passes without device
+loss; its instrumentation timings are not mixed into performance results.
+
+`software-latency-estimates.json` associates each submitted frame with the latest
+already-processed synthetic input by host timestamps. Android's warm request to
+CPU submission is median / p95 / p99 **10.22 / 11.56 / 14.52 ms**. Choreographer's
+**expected**, not observed, presentation adds roughly 22 ms, for a 32.33 ms
+request-to-expected-present estimate. Web's three runs give p95 17.5–17.8 ms and
+p99 18.0–19.5 ms to CPU submission at its 60 Hz RAF cadence. These omit coalesced
+requests and lack per-present camera confirmation; they are not measured
+input-to-presentation or input-to-photon percentiles. Actual panel latency remains
+unmeasured. The identified navigation regression was minification GPU cost plus
+Android's missing complete-cache admission; additional compositor latency has
+not been causally isolated. No claim is made that cadence proves input latency.
+
+`web-worker-retirement-save.json` records creation/request/termination events:
+a 61 MP import's oversized idle file worker terminates, the next Save As creates
+a new worker, and a 146,745,637-byte native master is delivered successfully.
+`tablet-web-handoff-workflows-retry.log` then passes native paint/photo save and
+reopen, exact U16 PNG/TIFF samples/profile content, resized P3 delivery, sRGB JPEG,
+nonmodal histograms, cancellation and explicit untagged interpretation. Its first
+invocation exposed a test error: it compared profile **archive offsets**, which
+may change with workspace metadata. The corrected assertion preserves profile
+content digest/length checks; native readers independently verify profile bytes.
+`tablet-native-handoff-workflows.log` passes all nine affected Android workflow
+tests in 80.028 s, including retained effects/masks, colors/history, exact copies,
+saving, profile/preset ownership, diagnostics and GPU/recovery paths.
+
+The production Web package now includes exact codec license notices. Bilevel
+fax TIFF was already rejected by the supported unsigned 8/16-bit matrix; disabling
+that unused decoder removes `fax`/`fax_derive`. Supported Deflate/LZW/JPEG TIFF
+routes remain enabled. TIFF's old zune JPEG/core archives omit notices; the
+original Zlib alternative is pinned to their publication revisions. zune-core
+also omits repository metadata, so its exact complete notice is checked into
+`apps/layer-web/licenses` and the packager verifies both version and checksum.
+`shared-final-tiff-feature-tests.log`: 61 shared color/codec tests pass, four
+external-fixture tests skipped (their earlier separate results remain above).
+`package-handoff-notices.log`: all 14 real package tests pass, including refusal
+to reuse a notice after dependency version drift. The static PWA builds with
+275 precached files (`web-handoff-package-final.log`). Android's test name is
+provided through `-PcapyAppLabel='Capy Canvas Color M2'`; normal builds retain
+`Capy Canvas`.
+
+`tablet-web-final-package-workflows.log` passes the same SDR journey on the
+actual fingerprinted PWA at `http://127.0.0.1:8128/`, with a valid standalone
+manifest and service worker. `android-final-package-build.log` builds the final
+ARM64 APK after the unsupported TIFF feature removal; it is installed as
+`art.capycanvas.colorm2`, label **Capy Canvas Color M2**, alongside the normal app.
+The Downloads JPEG's SHA-256 was rechecked after deployment and remains unchanged.

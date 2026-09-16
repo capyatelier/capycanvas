@@ -200,6 +200,15 @@ test("dependency notices require original text and exclude private metadata", ()
   assert.equal(dependencyNotices([{ ...license, source_path: null, used_by: [{ crate: { source: null } }] }]), "");
 });
 
+test("the pinned zune-core notice preserves its complete alternative and rejects version drift", () => {
+  const crate = { name:"zune-core", version:"0.4.12", source:"registry", license:"MIT OR Apache-2.0 OR Zlib" };
+  const notice = { name:"MIT", source_path:null, text:"Copyright <year> <copyright holders>", used_by:[{crate}] };
+  const html = dependencyNotices([notice]);
+  assert.ok(html.includes("Zlib License") && html.includes("zune-core 0.4.12") && html.includes("f8fbb123d5ed04441e8324a555bfcda0cb1bd28f"));
+  assert.ok(html.includes("This notice may not be removed"));
+  assert.throws(() => dependencyNotices([{...notice,used_by:[{crate:{...crate,version:"0.4.13"}}]}]), /Revalidate/);
+});
+
 test("worker stays in scope and deletes only its own obsolete caches", async (t) => {
   const dir = fixture(t), { version } = writeWorker(dir);
   const scope = "https://example.test/draw/", prefix = `capycanvas:${scope}:`;

@@ -11,6 +11,7 @@ android {
     ndkVersion = "29.0.14206865"
     defaultConfig {
         applicationId = providers.gradleProperty("capyApplicationId").getOrElse("art.capycanvas")
+        manifestPlaceholders["capyAppLabel"] = providers.gradleProperty("capyAppLabel").getOrElse("Capy Canvas")
         minSdk = 29
         targetSdk = 37
         versionCode = 1

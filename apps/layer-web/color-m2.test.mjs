@@ -56,7 +56,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
     await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
     const output=await evaluate('sdrManifest(sdrFiles.get("identity.capy"))');
     assert.deepEqual(output.tiled_sources.images[0].tiles,source.tiled_sources.images[0].tiles,format+' retains every original sample');
-    assert.deepEqual(output.tiled_sources.profiles,source.tiled_sources.profiles,format+' retains the original ICC profile');
+    assert.deepEqual(output.tiled_sources.profiles.map(({offset,...profile})=>profile),source.tiled_sources.profiles.map(({offset,...profile})=>profile),format+' retains original ICC content digests and lengths independently of archive placement');
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}];`);
     await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.state().document_file.location?.name==="photo-master.capy" && layerApp.app.brush_ready()');
   }

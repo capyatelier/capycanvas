@@ -21,3 +21,14 @@ license = "MIT"
 path = "LICENSE.txt"
 license = "MIT"
 checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+
+# TIFF's pinned JPEG decoder declares Zlib as an alternative. Its old archives
+# omit the files; retrieve the original complete notice at the recorded commits.
+# zune-core 0.4.12 also omits its repository field. package.mjs supplies its
+# checksum-pinned original notice from licenses/ for that exact crate only.
+[zune-jpeg.clarify]
+license = "Zlib"
+[[zune-jpeg.clarify.git]]
+path = "LICENSE-ZLIB"
+license = "Zlib"
+checksum = "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352"
