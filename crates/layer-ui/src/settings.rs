@@ -1041,6 +1041,7 @@ impl PreferencesState {
         {
             if row.id == PreferenceId::PlatformPrediction && !platform_prediction_available {
                 row.enabled = false;
+                row.kind = PreferenceKind::Switch { active: false };
                 row.description = "Unavailable for this system or connected pen.".into();
             }
             if row.id == PreferenceId::PredictionHorizon
@@ -1048,6 +1049,7 @@ impl PreferencesState {
                 && settings.platform_prediction
             {
                 row.enabled = false;
+                row.visible = platform != Platform::Ios;
                 row.description = "Automatic while native stroke prediction is on.".into();
             }
             if !row.enabled
@@ -1065,7 +1067,8 @@ impl PreferencesState {
                         PreferenceKind::Link { url, .. } => url.as_str(),
                         _ => "",
                     };
-                    if !query.is_empty()
+                    if row.visible
+                        && !query.is_empty()
                         && format!(
                             "{} {} {} {} {}",
                             page.title, group.title, row.title, row.description, value

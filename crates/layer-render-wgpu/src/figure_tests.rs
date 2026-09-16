@@ -453,6 +453,7 @@ fn figure_latency() {
             v.sort_by(f32::total_cmp);
             [v[59], v[113], v[118]]
         };
+        r.telemetry.completed_snapshot(&r.device, &r.queue);
         let stats = r.telemetry();
         assert!(stats.gpu_timestamps);
         eprintln!(

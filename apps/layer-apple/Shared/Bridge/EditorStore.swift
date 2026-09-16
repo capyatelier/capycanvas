@@ -78,10 +78,16 @@ import SwiftUI
                 return
             }
             let hadRenderer = snapshot["gpu_ready"].bool
+            let documentEpoch = state["document_file"]["epoch"].uint
             switch ui.receive(next) {
             case .full:
+                // Replacing a document retires its GPU readbacks even when
+                // the new renderer is already ready in the same publication.
+                if hadRenderer != snapshot["gpu_ready"].bool || documentEpoch != state["document_file"]["epoch"].uint {
+                    layerThumbnails.reset()
+                }
                 if hadRenderer != snapshot["gpu_ready"].bool {
-                    layerThumbnails.reset(); filterPreviews.reset()
+                    filterPreviews.reset()
                     if !snapshot["gpu_ready"].bool { canvasSubmitted = false }
                 }
                 filterPreviews.refresh()

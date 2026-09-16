@@ -3936,7 +3936,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.telemetry.enabled = enabled;
     }
     fn telemetry(&self) -> layer_render::RendererTelemetry {
-        let mut t = self.telemetry.snapshot();
+        let mut t = self.telemetry.snapshot(&self.device, &self.queue);
         let m = &self.metrics;
         t.submissions = m.submissions;
         t.dabs = m.dabs;
@@ -4212,7 +4212,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 label: Some("layer incremental sparse frame"),
             },
         );
-        self.telemetry.begin(&self.device, &mut encoder);
+        self.telemetry.begin(&self.device, &self.queue, &mut encoder);
         let display_missing = if let Some(mut cache) = self.live_display.take() {
             let result = cache.prepare(self, packet.view, &mut encoder);
             self.live_display = Some(cache);
@@ -5213,7 +5213,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.uploads.finish(&encoder);
         self.telemetry.end(&mut encoder);
         let submission = encoder.submit(&self.queue);
-        self.telemetry.submitted();
+        self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, submission)?;

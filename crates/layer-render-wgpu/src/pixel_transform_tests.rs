@@ -755,7 +755,7 @@ fn transform_latency() {
             let start = Instant::now();
             let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             if i >= 40 {
-                telemetry.begin(r.device(), &mut e);
+                telemetry.begin(r.device(), r.queue(), &mut e);
             }
             p.encode(
                 r.device(),
@@ -774,7 +774,7 @@ fn transform_latency() {
             e.submit(&r.queue);
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             if i >= 40 {
-                telemetry.submitted();
+                telemetry.submitted(&r.queue);
             }
             wait(&r);
             if i >= 40 {
@@ -785,7 +785,7 @@ fn transform_latency() {
                 capacity = p.storage_bytes();
             }
         }
-        let snapshot = telemetry.snapshot();
+        let snapshot = telemetry.completed_snapshot(&r.device, &r.queue);
         let mut gpu: Vec<_> = snapshot.gpu.ordered().into_iter().map(f64::from).collect();
         assert_eq!(gpu.len(), 120);
         let cpu = percentile(&mut cpu);

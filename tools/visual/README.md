@@ -713,9 +713,15 @@ at zero tolerance; no pixels are cropped, masked or excluded:
 | Dark / 120 | 0.884 | 14.701% | 180 |
 | Dark / 226 | 0.446 | 8.607% | 159 |
 
-Residual glyph, edge and fill differences remain visible in
-the full comparison reports; this is not a full pixel acceptance pass. These
-AppKit component captures do not establish native UIKit appearance, activation,
+The current-source recapture on 2026-09-16 reproduces all eight retained native
+and browser images byte for byte after RGBA decoding. Current shared palettes,
+font size and all six command identities/checkability also match the fixtures.
+All four pairs pass normal-size perceptual review: wrapping, icon placement,
+selected fills and disabled appearance agree. Residual glyph/edge rasterization
+differences remain in the raw reports; the zero-tolerance failures above are
+unchanged. Evidence is `artifacts/apple-visual-closure-v1/`.
+
+These AppKit component captures do not establish native UIKit appearance, activation,
 accessibility interaction, complete editor parity or hardware performance.
 The existing Apple ABI tool-panel and transform tests separately exercise
 ruler settings, transform Apply/Cancel and exact pixel Undo/Redo through the

@@ -232,6 +232,31 @@ extension XCTestCase {
             expectInk(scaled); attachEditor(in: app, name: name)
             finish(true); history(scaled)
         }
+        // Every corner must use the visible handle and keep the opposite
+        // corner fixed. Sample all four quadrants independently of the fields.
+        let title = app.staticTexts["document-title"]
+        let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
+        let dimensions = extent.components(separatedBy: " × ").compactMap(Double.init)
+        XCTAssertEqual(dimensions.count, 2)
+        let corners = [CGPoint(x: -1, y: -1), CGPoint(x: 1, y: -1), CGPoint(x: -1, y: 1), CGPoint(x: 1, y: 1)]
+        let quadrantSamples = corners.map {
+            CGPoint(x: center.x + $0.x * bounds.width * 0.375, y: center.y + $0.y * bounds.height * 0.375)
+        }
+        for corner in corners {
+            begin()
+            drag(CGPoint(x: center.x + corner.x * bounds.width * 0.5, y: center.y + corner.y * bounds.height * 0.5),
+                CGPoint(x: center.x + corner.x * bounds.width * 0.25, y: center.y + corner.y * bounds.height * 0.25))
+            near("width", 75); near("height", 75)
+            near("x", -corner.x * dimensions[0] / 8, tolerance: 6)
+            near("y", -corner.y * dimensions[1] / 8, tolerance: 6)
+            let scaled = corners.map { $0.x != corner.x && $0.y != corner.y }
+            expectBluePaper(scaled, at: quadrantSamples, in: app)
+            attachEditor(in: app, name: "corner-scale-\(Int(corner.x))-\(Int(corner.y))")
+            finish(true); expectBluePaper(scaled, at: quadrantSamples, in: app)
+            editorHistory("Undo", in: app); expectBluePaper([true, true, true, true], at: quadrantSamples, in: app)
+            editorHistory("Redo", in: app); expectBluePaper(scaled, at: quadrantSamples, in: app)
+            editorHistory("Undo", in: app); expectInk(filled)
+        }
         begin()
         drag(center, CGPoint(x: center.x + bounds.width * 0.15, y: center.y + bounds.height * 0.1), modifiers: .shift)
         near("x", 307.2, tolerance: 6); near("y", 0)

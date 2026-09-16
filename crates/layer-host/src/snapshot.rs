@@ -611,7 +611,10 @@ mod tests {
                     .find(|g| Some(g.id as u64) == group["id"].as_u64())
                     .unwrap();
                 let expected =
-                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) {
+                    if matches!(
+                        platform,
+                        Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+                    ) {
                         layer_ui::Bounds {
                             x: x - 10.,
                             y: 400.,

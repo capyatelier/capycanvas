@@ -26,6 +26,7 @@ struct LayerPanel: View {
                                 let thumbnailToken = "\(popupID):\(layer["id"].uint)"
                                 LayerRow(store: store, layer: layer, previews: store.layerThumbnails, interaction: interaction)
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
+                                    .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
                                     .overlay { dropMark(layer) }
                                     .editorPopover(isPresented: menuPresented(at: .row(layer["id"].uint)), placement: .inward) { menuContent }
                                     .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: layer["id"].uint) }
@@ -38,7 +39,7 @@ struct LayerPanel: View {
                             .background(NativeReorderInput(model: interaction))
                             .onPreferenceChange(LayerRowFrames.self) { interaction.frames = $0 }
                             .overlay(alignment: .topLeading) { dragPreview }
-                            .modifier(PanelBodyMeasurement(panel: "layers", part: "rows"))
+                            .modifier(PanelBodyMeasurement(panel: "layers", part: "rows", kind: .scroll))
                     }.accessibilityIdentifier("layer-rows").modifier(LayerInputCheckOrder(layers: layers))
                 } else { Spacer(minLength: 0) }
                 if visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }

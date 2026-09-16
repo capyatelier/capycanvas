@@ -115,6 +115,7 @@ import SwiftUI
 
         try await action(["type": "move_panel", "panel": "toolbar", "target": ["kind": "tab", "group": 6], "viewport": [1200, 870]])
         try await action(["type": "customize", "action": ["type": "set_column_collapsed", "group": 6, "collapsed": true]])
+        try await action(["type": "customize", "action": ["type": "set_column_drawers", "column": 4, "drawers": true]])
         func source(_ surface: ReorderSurface) -> (key: String, value: WorkspaceSource)? {
             workspace.sourceInstances.first { $0.value.item == handle.stableKey && $0.value.surface == surface && !$0.value.bounds.isEmpty }
         }

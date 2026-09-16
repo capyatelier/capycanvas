@@ -33,7 +33,7 @@ private struct IPadEditorScene: View {
                     PersistenceBackground.flush(store)
                 }
                 else {
-                    store.native?.invalidatePresentations()
+                    store.native?.redraw()
                     if let library = store.workspaceLibrary {
                         Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
                     }
@@ -47,7 +47,8 @@ private struct IPadEditorScene: View {
     static func flush(_ store: EditorStore) {
         let lease = BackgroundLease()
         lease.identifier = UIApplication.shared.beginBackgroundTask(withName: "Save drawing recovery and preferences") {
-            Task { @MainActor in lease.finish() }
+            // UIKit invokes expiration synchronously on MainActor, before suspension.
+            lease.finish()
         }
         store.flushPersistence { _ in lease.finish() }
     }

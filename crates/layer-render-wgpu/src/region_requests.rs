@@ -83,7 +83,7 @@ impl RegionRequests {
         );
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
-            t.begin(&r.device, &mut encoder);
+            t.begin(&r.device, &r.queue, &mut encoder);
         }
         if let Some(selection) = &request.limit {
             r.selection_clip
@@ -151,7 +151,7 @@ impl RegionRequests {
         }
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
-            t.submitted();
+            t.submitted(&r.queue);
         }
         let ready = readback.clone();
         let tx = self.tx.clone();

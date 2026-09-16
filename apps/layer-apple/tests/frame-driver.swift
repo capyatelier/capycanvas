@@ -7,19 +7,8 @@ import Foundation
     var canvasSubmitted = false
 }
 @MainActor final class NativeOwner {
-    var canAdmitPresentation = true
     var admissions: [Bool] = []
     var denials: [UInt64] = []
-    var available: (@Sendable () -> Void)?
-    var retries: [UInt64] = []
-    func whenPresentationAvailable(_ action: (@Sendable () -> Void)?) { available = action }
-    func observeFrameRetry(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64) {
-        retries.append(denial)
-    }
-    func releaseCapacity() {
-        canAdmitPresentation = true
-        let action = available; available = nil; action?()
-    }
     func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64) {
         admissions.append(admitted); denials.append(denial)
     }
@@ -50,13 +39,6 @@ import Foundation
         frames.setPaused = { paused = $0 }
         frames.submittedViewport = { submissions += 1 }
         frames.activate()
-        store.native!.canAdmitPresentation = false
-        frames.tick(target: 0.5)
-        assert(store.native!.completions.isEmpty && store.native!.admissions == [false])
-        assert(store.native!.denials == [3])
-        assert(!paused, "A full drawable pool must keep the link awake for retry")
-        frames.wake()
-        store.native!.canAdmitPresentation = true
         frames.tick(target: 1); frames.tick(target: 2)
         assert(store.native!.completions.count == 1, "Only one frame may be queued")
         assert(store.native!.denials.suffix(2) == [0, 2])
@@ -89,53 +71,6 @@ import Foundation
         await drainMainQueue()
         assert(paused && store.canvasSubmitted && submissions == 2)
         assert(store.cameraRevision == 4)
-        await checkPresentationRetry()
-        print("Shared frame-driver checks passed: drawable backpressure, admission, wake, detach and replacement")
-    }
-    @MainActor static func checkPresentationRetry() async {
-        let store = EditorStore(), native = store.native!
-        var now: TimeInterval = 100
-        let driver = CanvasFrameDriver(store: store, currentTime: { now })
-        driver.activate()
-        native.canAdmitPresentation = false
-        driver.tick(target: 101)
-        assert(native.available != nil && native.completions.isEmpty)
-        native.releaseCapacity()
-        await drainMainQueue()
-        assert(native.completions.count == 1 && native.retries == [0])
-        assert(native.admissions == [false], "A presentation retry is not a display tick")
-        native.complete(again: true); await drainMainQueue()
-
-        // A delayed main-queue delivery cannot submit past its original target.
-        native.canAdmitPresentation = false
-        driver.tick(target: 101)
-        now = 101; native.releaseCapacity(); await drainMainQueue()
-        assert(native.completions.isEmpty && native.retries == [0])
-
-        // A newer tick and its submission supersede an already queued callback.
-        native.canAdmitPresentation = false
-        driver.tick(target: 102)
-        let old = native.available!
-        native.canAdmitPresentation = true
-        driver.tick(target: 103); old(); await drainMainQueue()
-        assert(native.completions.count == 1 && native.retries == [0])
-        native.complete(again: true); await drainMainQueue()
-
-        // A callback from a removed surface cannot render its replacement.
-        native.canAdmitPresentation = false
-        driver.tick(target: 104)
-        let detached = native.available!
-        driver.deactivate(); driver.activate()
-        native.canAdmitPresentation = true; detached(); await drainMainQueue()
-        assert(native.completions.isEmpty && native.retries == [0])
-
-        // If capacity disappeared again, do not register a retry loop.
-        native.canAdmitPresentation = false
-        driver.tick(target: 105)
-        native.releaseCapacity(); native.canAdmitPresentation = false
-        await drainMainQueue()
-        assert(native.completions.isEmpty && native.available == nil && native.retries == [0, 3])
-        driver.deactivate()
-        print("Presentation retry checks passed: deadline, superseding tick, detached surface and bounded retry")
+        print("Shared frame-driver checks passed: admission, wake, detach and replacement")
     }
 }

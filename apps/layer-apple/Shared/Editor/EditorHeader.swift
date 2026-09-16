@@ -162,7 +162,6 @@ import SwiftUI
                         .accessibilityIdentifier("header-item-\(id)")
                         .accessibilityAddTraits(header.selected == id ? .isSelected : [])
                         .modifier(HeaderSourceMeasurement(source: JSON(["kind":"item", "value":id])))
-                        .editorContextAction { header.showMenu(HeaderSource(source: JSON(["kind":"item", "value":id]).stableKey, bounds: allocation["bounds"].rect)) }
                 } else {
                     item(entry, width: allocation["bounds"]["width"].number)
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind":"header", "id":id])))

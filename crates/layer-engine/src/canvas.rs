@@ -6,8 +6,8 @@
 
 use crate::brush::{DabGenerator, dabs_cover_point, damage_for_dabs, lock_dab_tail};
 use crate::feedback::{
-    FeedbackConfigError, InstantFeedbackConfig, PredictionState, TipSource, estimate_tip,
-    finalized_count, surface_distance,
+    FeedbackConfigError, InstantFeedbackConfig, MAX_FINALIZATION_LAG_MICROS, PredictionState,
+    TipSource, estimate_tip, finalized_count, surface_distance,
 };
 use crate::input::{
     InputConsumer, PenEvent, PenPhase, PressureCurve, SampleFlags, StrokeBuilder, ToolKind,
@@ -1025,8 +1025,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !active.feedback.enabled {
             return;
         }
+        let real = self.builder.real_points();
+        // A driver may never resolve its estimated sensor values. Give updates
+        // the maximum feedback window, but never keep replaying the whole stroke
+        // while waiting. Retain the tokens: late corrections rebuild persistent
+        // ink through the existing correction path.
+        let estimate_cutoff = real.last().map_or(0, |point| {
+            point
+                .elapsed_micros
+                .saturating_sub(MAX_FINALIZATION_LAG_MICROS)
+        });
+        let before_estimate_window =
+            real.partition_point(|point| point.elapsed_micros < estimate_cutoff);
         let count = finalized_count(
-            self.builder.real_points(),
+            real,
             self.finalized_real_points,
             active.feedback.finalization_lag_micros,
         )
@@ -1036,7 +1048,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .filter(|e| e.stroke == active.id)
                 .map(|e| e.index)
                 .min()
-                .unwrap_or(usize::MAX),
+                .unwrap_or(usize::MAX)
+                .max(before_estimate_window),
         );
         while self.finalized_real_points < count {
             let point = self.builder.real_points()[self.finalized_real_points];
@@ -1528,7 +1541,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 u64::from(active.feedback.prediction_horizon_micros).saturating_mul(1_000),
             )
         });
+        // Native samples follow display timing. Manual engine prediction must
+        // use the selected lookahead, not stop at the next display refresh.
         let requested_elapsed = presentation_timestamp_ns
+            .filter(|_| active.feedback.use_platform_prediction)
             .or(fallback_timestamp)
             .and_then(|timestamp| self.builder.elapsed_micros_at(timestamp))
             .unwrap_or_else(|| {
@@ -3361,6 +3377,109 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_estimates_bound_the_preview_and_preserve_late_corrections() {
+        for platform_prediction in [false, true] {
+            let (mut input, consumer) = input_queue(8);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("unresolved estimates", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    use_platform_prediction: platform_prediction,
+                    ..InstantFeedbackConfig::default()
+                })
+                .unwrap();
+            let mut down = event(1, PenPhase::Down, 8.);
+            down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+            // A driver may mark every sample as awaiting sensor updates without
+            // ever delivering a correction. Reproduce two seconds at 240 Hz.
+            for index in 0..481 {
+                let sample = PenEvent {
+                    sequence: index + 1,
+                    timestamp_ns: down.timestamp_ns + index * 4_166_667,
+                    phase: if index == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    surface_position: Point {
+                        x: 8. + (index as f32 * 0.07).sin() * 6.,
+                        y: 16.,
+                    },
+                    ..down
+                };
+                input.push(sample).unwrap();
+                input
+                    .push(PenEvent {
+                        timestamp_ns: sample.timestamp_ns + 8_000_000,
+                        phase: PenPhase::Move,
+                        flags: SampleFlags::PREDICTED,
+                        ..sample
+                    })
+                    .unwrap();
+                engine
+                    .render_frame_for(sample.timestamp_ns, sample.timestamp_ns + 8_000_000)
+                    .unwrap();
+                assert!(
+                    engine.builder.real_points().len() - engine.finalized_real_points <= 13,
+                    "unresolved estimates must not make preview work grow with stroke length"
+                );
+            }
+            assert_eq!(engine.estimates.len(), 481, "keep late correction tokens");
+            assert!(!engine.backend().persistent.is_empty());
+            let correction = PenEvent {
+                flags: SampleFlags::CORRECTION,
+                pressure: 0.2,
+                ..down
+            };
+            engine.backend_mut().saw_reset = false;
+            input.push(correction).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.builder.real_points()[0].pressure, 0.2);
+            assert_eq!(engine.metrics().corrected_input_samples, 1);
+            assert!(
+                engine.backend().saw_reset,
+                "rebuild corrected persistent ink"
+            );
+
+            input
+                .push(PenEvent {
+                    sequence: 482,
+                    timestamp_ns: down.timestamp_ns + 2_010_000_000,
+                    phase: PenPhase::Up,
+                    flags: SampleFlags::PRIMARY,
+                    ..down
+                })
+                .unwrap();
+            engine.render_frame().unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
+            assert_eq!(stroke.points.len(), 482);
+            assert_eq!(stroke.points[0].pressure, 0.2);
+            let mut replay = Vec::new();
+            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+            assert_eq!(engine.backend().persistent, replay);
+            assert!(engine.backend().preview.is_empty());
+            let raster = engine.document().layers[0].raster.identity();
+            assert!(engine.undo().unwrap());
+            assert!(engine.document().layers[0].raster.is_empty());
+            assert!(
+                !engine.undo().unwrap(),
+                "corrections must not add history steps"
+            );
+            assert!(engine.redo().unwrap());
+            assert_eq!(engine.document().layers[0].raster.identity(), raster);
+        }
+    }
+
+    #[test]
     fn completed_contact_estimates_expire_without_retaining_historical_input() {
         let (mut input, consumer) = input_queue(8);
         let mut engine = CanvasEngine::new(
@@ -3921,6 +4040,91 @@ mod tests {
 
         let stroke = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(stroke.brush.diameter, BrushSnapshot::default().diameter);
+    }
+
+    #[test]
+    fn manual_prediction_amount_reaches_beyond_the_cursor_with_display_timing() {
+        let mut leads = Vec::new();
+        for horizon in [0, 8_000, 16_000, 64_000] {
+            let (mut input, consumer) = input_queue(8);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("manual prediction", 1024, 128),
+                consumer,
+                view(1024, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    use_platform_prediction: false,
+                    prediction_horizon_micros: horizon,
+                    ..Default::default()
+                })
+                .unwrap();
+            engine
+                .set_brush(BrushSnapshot {
+                    diameter: 4.,
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut last = event(1, PenPhase::Down, 100.);
+            // Constant 400 px/s motion with steady pressure, long enough for
+            // the lead filter to settle. The host supplies a display target.
+            for index in 0..101 {
+                last = PenEvent {
+                    timestamp_ns: 1_000_000_000 + index * 10_000_000,
+                    surface_position: Point {
+                        x: 100. + index as f32 * 4.,
+                        y: 16.,
+                    },
+                    phase: if index == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    sequence: index + 1,
+                    ..last
+                };
+                input.push(last).unwrap();
+                engine
+                    .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
+                    .unwrap();
+            }
+            let tip = engine.backend().preview.last().unwrap().center.x;
+            let lead = tip - last.surface_position.x;
+            eprintln!(
+                "manual={horizon}us cursor={} predicted_tip={tip} lead={lead}px engine_frames={}",
+                last.surface_position.x,
+                engine.metrics().engine_prediction_frames
+            );
+            leads.push(lead);
+            let mut up = last;
+            up.phase = PenPhase::Up;
+            up.timestamp_ns += 1_000_000;
+            input.push(up).unwrap();
+            engine
+                .render_frame_for(up.timestamp_ns, up.timestamp_ns + 8_000_000)
+                .unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
+            assert_eq!(
+                stroke.points.last().unwrap().position,
+                last.surface_position
+            );
+            let mut replay = Vec::new();
+            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+            assert_eq!(engine.backend().persistent, replay);
+            assert!(engine.backend().preview.is_empty());
+        }
+        for (lead, expected) in leads.into_iter().zip([0., 3.2, 6.4, 25.6]) {
+            assert!(
+                (lead - expected).abs() < 0.25,
+                "Manual prediction should reach its selected time beyond real input: {lead} vs {expected}"
+            );
+        }
     }
 
     #[test]

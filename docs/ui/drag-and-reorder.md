@@ -109,7 +109,7 @@ the control must already offer or deliberately gain that capability.
 
 ## Floating preview and release size
 
-GTK, Web, and Android keep a dragged panel's visible width and height frozen.
+GTK, Web, Android, macOS and iPadOS keep a dragged panel's visible width and height frozen.
 Its grab point follows the contact past workspace edges, and the host clips the
 preview at the application surface. A collapsed icon has no visible body to
 preserve, so its preview uses the measured/default floating size. Toolbars keep

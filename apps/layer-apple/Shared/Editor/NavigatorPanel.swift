@@ -16,7 +16,7 @@ struct NavigatorPanel: View {
                 }
             }
         }.padding(8)
-            .modifier(PanelBodyMeasurement(panel: "navigator", intrinsicHeight: 164 + 2 + 32 + 16))
+            .modifier(PanelBodyMeasurement(panel: "navigator", intrinsicHeight: 164 + 2 + 32 + 16, kind: .scroll))
     }
 }
 
@@ -76,12 +76,12 @@ struct RendererStatsPanel: View {
         VStack(spacing: 6) {
             ForEach(stats.view["rows"].array.indices, id: \.self) { index in
                 let row = stats.view["rows"][index]
-                HStack(alignment: .firstTextBaseline) {
-                    Text(row["label"].string)
-                    Spacer(minLength: 4)
+                HStack(spacing: 0) {
+                    Text(row["label"].string).lineLimit(1)
+                    Spacer(minLength: 6)
                     Text(row["value"].string).monospacedDigit().fixedSize()
                         .accessibilityIdentifier("stats-value-\(index)")
-                }.help(row["description"].string)
+                }.frame(height: 17).help(row["description"].string)
                 if index + 1 == Int(stats.view["chart_after_rows"].number) {
                     chart
                 }
@@ -94,15 +94,19 @@ struct RendererStatsPanel: View {
             let samples = stats.view["samples"].array.map(\.number)
             let budget = stats.view["budget_ms"].number
             let maximum = max(0.001, max(budget, samples.max() ?? 0) * 1.1)
-            let y = size.height * (1 - budget / maximum)
-            var line = Path(); line.move(to: CGPoint(x: 0, y: y)); line.addLine(to: CGPoint(x: size.width, y: y))
-            context.stroke(line, with: .color(palette["text"].opacity(0.55)), lineWidth: 1)
+            // Match the shared chart's centered 200×46 SVG view box.
+            let scale = min(size.width / 200, size.height / 46)
+            context.translateBy(x: (size.width - 200 * scale) / 2, y: (size.height - 46 * scale) / 2)
+            context.scaleBy(x: scale, y: scale)
+            let y = 46 * (1 - budget / maximum)
+            var line = Path(); line.move(to: CGPoint(x: 0, y: y)); line.addLine(to: CGPoint(x: 200, y: y))
+            context.stroke(line, with: .color(palette["text"].opacity(0.3)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
             var chart = Path()
             for (index, value) in samples.enumerated() {
-                let point = CGPoint(x: Double(index) * size.width / 119, y: size.height * (1 - value / maximum))
+                let point = CGPoint(x: Double(index) * 200 / 119, y: 46 * (1 - value / maximum))
                 if index == 0 { chart.move(to: point) } else { chart.addLine(to: point) }
             }
-            context.stroke(chart, with: .color(palette["text"]), lineWidth: 1)
+            context.stroke(chart, with: .color(palette["text"]), lineWidth: 1.5)
         }.frame(height: 46).accessibilityElement().accessibilityLabel(stats.view["chart_label"].string)
     }
 }

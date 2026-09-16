@@ -249,6 +249,36 @@ import ImageIO
             try await invoke("open_document")
             precondition(store.projectFiles.error != nil)
             precondition(store.state["layers"].array.count == 2)
+            store.projectFiles.error = nil
+            store.invoke("add_layer")
+            try await wait("Unsaved failed-open fixture") { store.state["layers"].array.count == 3 }
+            let unsavedLayers = store.state["layers"].stableKey
+            let unsavedFile = store.state["document_file"].stableKey
+            store.invoke("open_document")
+            try await wait("Unsaved Open must request confirmation") { store.projectFiles.confirming }
+            store.projectFiles.choose("discard")
+            try await wait("Invalid replacement must finish with an error") {
+                !store.projectFiles.busy && store.projectFiles.error != nil && store.state["requests"].array.isEmpty
+            }
+            precondition(store.state["layers"].stableKey == unsavedLayers
+                && store.state["document_file"].stableKey == unsavedFile,
+                "Failed Open must retain the original unsaved drawing even after Discard approval")
+            store.projectFiles.error = nil
+            store.invoke("undo")
+            try await wait("Failed Open must retain Undo") { store.state["layers"].array.count == 2 }
+            store.invoke("redo")
+            try await wait("Failed Open must retain Redo") { store.state["layers"].stableKey == unsavedLayers }
+            store.invoke("open_document")
+            try await wait("Failed replacement must not mark the original drawing saved") { store.projectFiles.confirming }
+            store.projectFiles.choose("cancel")
+            try await wait("Retry cancellation must release the file operation") { !store.projectFiles.busy }
+            precondition(store.state["document_file"]["modified"].bool
+                && store.state["layers"].stableKey == unsavedLayers)
+            store.invoke("undo")
+            try await wait("Restore the clean fixture before the queued-edit check") {
+                store.state["layers"].array.count == 2 && !store.state["document_file"]["modified"].bool
+            }
+            print("PASS platform \(platform): failed Open after Discard preserves unsaved drawing, history and retry cancellation")
             store.projectFiles.error = nil; openLocation = target
             beforeOpen = { store.invoke("add_layer") }
             try await invoke("open_document")
@@ -275,7 +305,7 @@ import ImageIO
             store.projectFiles.choose("save")
             try await wait("Save on close did not finish") { closed != nil }
             precondition(closed == true && !store.state["document_file"]["modified"].bool)
-            precondition(choices == 7, "Each user request must present at most one location choice")
+            precondition(choices == 8, "Each user request must present at most one location choice")
             withExtendedLifetime(layer) {}
             print("Project files pass for Apple platform \(platform)")
         }

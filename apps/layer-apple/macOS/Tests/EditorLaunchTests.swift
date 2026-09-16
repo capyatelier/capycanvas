@@ -11,6 +11,10 @@ final class EditorLaunchTests: XCTestCase {
         try checkNativeProjectRoundTrip(in: editorCaptureApplication())
     }
 
+    @MainActor func testFailedProjectOpenPreservesArtwork() throws {
+        try checkFailedProjectOpenPreservesArtwork(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeImageImport() throws {
         try checkNativeImageImport(in: editorCaptureApplication())
     }
@@ -21,6 +25,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }
     @MainActor func testSettingsTextState() { checkSettingsTextState(in: editorCaptureApplication()) }
     @MainActor func testSettingsChoicePresentation() { checkSettingsChoicePresentation(in: editorCaptureApplication()) }
+    @MainActor func testSettingsDropdownsAndPrediction() { checkSettingsControls(in: editorCaptureApplication()) }
 
     @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }
 
@@ -53,6 +58,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testHandAndEyedropper() { checkHandAndEyedropper(in: editorCaptureApplication()) }
 
     @MainActor func testRegionSelectionAndFill() { checkRegionSelectionAndFill(in: editorCaptureApplication()) }
+
+    @MainActor func testNativeRegionRefinement() throws { try checkNativeRegionRefinement(in: editorCaptureApplication()) }
 
     @MainActor func testSelectionInversion() { checkSelectionInversion(in: editorCaptureApplication()) }
 

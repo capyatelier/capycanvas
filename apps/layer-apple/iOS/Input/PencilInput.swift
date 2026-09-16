@@ -100,7 +100,7 @@ extension CanvasView {
                 guard sample.timestamp > contact.lastTimestamp || terminal else { continue }
                 let samplePhase = terminal ? phase : contact.lastTimestamp < 0 ? 1.0 : 2.0
                 let record = pack(sample, phase: samplePhase)
-                let capture = estimates.capture(key: estimateKey(sample), contact: contact.id,
+                let capture = estimates.capture(key: sample.estimationUpdateIndex?.uint64Value, contact: contact.id,
                     revision: revision, scale: contentScaleFactor, record: record,
                     expected: contact.tool == 0 ? UInt64(sample.estimatedPropertiesExpectingUpdates.rawValue) : 0)
                 if let released = capture.released { sendCorrection(released) }
@@ -138,12 +138,9 @@ extension CanvasView {
             Double(pressure), Double(tiltX), Double(tiltY), pencil ? Double(touch.rollAngle) : 0, 0,
             touch.timestamp * 1_000_000_000, phase]
     }
-    private func estimateKey(_ touch: UITouch) -> EstimatedInput.Key? {
-        touch.estimationUpdateIndex.map { EstimatedInput.Key(index: $0.uint64Value, timestamp: touch.timestamp) }
-    }
     func updateEstimates(_ touches: Set<UITouch>) {
         for touch in touches {
-            guard let key = estimateKey(touch), let captured = estimates.pending[key],
+            guard let key = touch.estimationUpdateIndex?.uint64Value, let captured = estimates.pending[key],
                 let update = estimates.correct(key: key,
                     record: pack(touch, phase: captured.record[8], scale: captured.scale),
                     expected: UInt64(touch.estimatedPropertiesExpectingUpdates.rawValue)) else { continue }

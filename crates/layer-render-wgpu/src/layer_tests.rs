@@ -603,7 +603,7 @@ fn region_request_latency() {
             .timing
             .as_ref()
             .unwrap()
-            .snapshot()
+            .completed_snapshot(&r.device, &r.queue)
             .gpu;
         for (label, samples) in [
             ("CPU", cpu),
@@ -754,13 +754,13 @@ fn affine_selection_preparation_latency() {
             let started = Instant::now();
             let mut encoder =
                 crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            timing.begin(&r.device, &mut encoder);
+            timing.begin(&r.device, &r.queue, &mut encoder);
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, &selection)
                 .unwrap();
             timing.end(&mut encoder);
             r.last_submission = Some(encoder.submit(&r.queue));
-            timing.submitted();
+            timing.submitted(&r.queue);
             let submit_ms = started.elapsed().as_secs_f32() * 1000.;
             r.wait_idle().unwrap();
             if i >= 40 {
@@ -780,7 +780,7 @@ fn affine_selection_preparation_latency() {
             generation = r.selection_clip.generations;
             storage = r.selection_clip.storage_bytes();
         }
-        let telemetry = timing.snapshot();
+        let telemetry = timing.completed_snapshot(&r.device, &r.queue);
         assert_eq!(telemetry.gpu.count, 120);
         let (cpu, gpu, completed) = (
             percentile(cpu),
@@ -2693,6 +2693,7 @@ fn selected_brush_latency() {
                 values.sort_by(f32::total_cmp);
                 [values[60], values[114], values[118]]
             };
+            r.telemetry.completed_snapshot(&r.device, &r.queue);
             let stats = r.telemetry();
             assert!(stats.gpu_timestamps);
             eprintln!(
@@ -2843,6 +2844,7 @@ fn paint_operation_latency() {
                     completed.push(ms);
                 }
             }
+            r.telemetry.completed_snapshot(&r.device, &r.queue);
             let stats = r.telemetry();
             assert!(stats.gpu_timestamps);
             let summary = |mut values: Vec<f32>| {

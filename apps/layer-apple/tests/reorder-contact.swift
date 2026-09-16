@@ -3,7 +3,7 @@ import Foundation
 @main struct ReorderContactChecks {
     @MainActor static func main() {
         let origin = CGPoint(x: 10, y: 20), destination = CGPoint(x: 80, y: 90)
-        for surface: ReorderSurface in [.tile, .row, .handle] {
+        for surface: ReorderSurface in [.tile, .row, .handle, .headerEditor] {
             for device: ReorderDevice in [.mouse, .touch, .pen] {
                 var events: [String] = [], valid = true
                 let contact = ReorderContact()
@@ -42,6 +42,6 @@ import Foundation
                 precondition(events.isEmpty && contact.target == nil, "Removed sources cannot arm or commit")
             }
         }
-        print("PASS: nine surface/device combinations preserve clicks, negative hold gates, menu continuation, cancellation and one transaction")
+        print("PASS: twelve surface/device combinations preserve clicks, negative hold gates, menu continuation, cancellation and one transaction")
     }
 }

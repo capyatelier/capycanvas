@@ -31,6 +31,10 @@ final class EditorLaunchTests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkSettingsChoicePresentation(in: editorCaptureApplication())
     }
+    @MainActor func testSettingsDropdowns() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSettingsControls(in: editorCaptureApplication())
+    }
 
     @MainActor func testBlendAndLiquify() {
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -636,7 +640,7 @@ extension EditorLaunchTests {
         let folder = try nativeFilesTestFolder()
         let app = editorTestApplication()
         XCUIDevice.shared.orientation = .landscapeLeft
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
         func capture(_ name: String) {
             let tree = XCTAttachment(string: app.debugDescription)
             tree.name = name + "-hierarchy"; tree.lifetime = .keepAlways; add(tree)
@@ -653,8 +657,7 @@ extension EditorLaunchTests {
             field.typeText(value)
         }
         func folderTitle(_ label: String) -> XCUIElement {
-            app.navigationBars.descendants(matching: .any).matching(
-                NSPredicate(format: "label == %@ OR label == %@", label, label + ", Actions Menu")).firstMatch
+            app.otherElements["DOC.browsingRoot Source: com.apple.FileProvider.LocalStorage, Title: " + label]
         }
         func location() {
             workspaceActivate(app.cells["DOC.sidebar.item.On My iPad"])
@@ -667,12 +670,23 @@ extension EditorLaunchTests {
         }
         let title = app.staticTexts["document-title"]
         let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
-        let save = app.buttons["DOCPicker.actionButton"]
+        let save = app.navigationBars.buttons["Save"].firstMatch
         let name = app.textFields["DOCPicker.filenameTextField"]
         app.launch()
         XCTAssertTrue(title.waitForExistence(timeout: 30))
         expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectation(for: NSPredicate { _, _ in
+            let pixel = self.editorPixels(in: app); return Int(pixel[2]) > Int(pixel[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let painted = editorPixels(in: app)
         command("save_document_as")
         XCTAssertTrue(name.waitForExistence(timeout: 20))
         location()
@@ -705,6 +719,9 @@ extension EditorLaunchTests {
         expectation(for: NSPredicate(format: "label CONTAINS %@", "RoundTrip"), evaluatedWith: title)
         waitForExpectations(timeout: 30)
         XCTAssertEqual(rows.count, 3, "The saved layer structure must survive a new process and native Open")
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
         XCTAssertFalse(app.alerts.firstMatch.exists)
         capture("project-reopened")
         command("export_document")
@@ -732,7 +749,7 @@ extension EditorLaunchTests {
         workspaceActivate(files.cells["DOC.sidebar.item.On My iPad"])
         let cell = files.cells[folder + ", Folder"]
         XCTAssertTrue(cell.waitForExistence(timeout: 10))
-        guard cell.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", " - 2 items"))
+        guard cell.staticTexts.matching(NSPredicate(format: "label == %@ OR label ENDSWITH %@", "2 items", " - 2 items"))
             .firstMatch.waitForExistence(timeout: 5) else {
             XCTFail("Only the generated project and PNG may be present")
             return

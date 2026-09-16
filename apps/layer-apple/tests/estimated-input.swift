@@ -3,7 +3,7 @@ import Foundation
 @main struct EstimatedInputChecks {
     static func main() {
         var ledger = EstimatedInput(capacity: 2)
-        let key = EstimatedInput.Key(index: 4, timestamp: 1)
+        let key: UInt64 = 4
         let original: [Double] = [20, 40, 0.2, 0.1, 0.2, 0.3, 0, 1_000_000_000, 1]
         let capture = ledger.capture(key: key, contact: 8, revision: 10, scale: 2, record: original, expected: 1 | 16)
         assert(capture.metadata[0] != 0 && capture.metadata[1] == 1 && capture.released == nil)
@@ -19,13 +19,13 @@ import Foundation
         let final = ledger.correct(key: key, record: updated, expected: 0)!
         assert(final.record[2] == 0.8 && final.record[5] == 2.1 && final.metadata[1] == 0)
         assert(ledger.pending.isEmpty && ledger.correct(key: key, record: updated, expected: 0) == nil)
-        for timestamp in 2...4 {
-            let added = ledger.capture(key: .init(index: 4, timestamp: Double(timestamp)), contact: UInt64(timestamp),
+        for contact in 2...4 {
+            let added = ledger.capture(key: UInt64(contact + 3), contact: UInt64(contact),
                 revision: 10, scale: 2, record: original, expected: 1)
-            if timestamp == 4 { assert(added.released?.contact == 2 && added.released?.metadata[1] == 0) }
+            if contact == 4 { assert(added.released?.contact == 2 && added.released?.metadata[1] == 0) }
         }
         assert(ledger.pending.count == 2 && ledger.expired == 1)
-        assert(ledger.correct(key: key, record: updated, expected: 0) == nil, "Reused source IDs cannot redirect old callbacks")
+        assert(ledger.correct(key: key, record: updated, expected: 0) == nil, "Retired update indices cannot redirect old callbacks")
         ledger.cancel(contact: 3)
         let remaining = ledger.finish()
         assert(remaining.count == 1 && remaining[0].contact == 4 && remaining[0].metadata[1] == 0)

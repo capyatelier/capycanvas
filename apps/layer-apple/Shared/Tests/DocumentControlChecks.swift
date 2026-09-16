@@ -4,6 +4,96 @@ import UniformTypeIdentifiers
 
 #if os(macOS)
 extension XCTestCase {
+    @MainActor func checkFailedProjectOpenPreservesArtwork(in app: XCUIApplication) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Failed Open " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("Survivor.capy")
+        let invalid = root.appendingPathComponent("Invalid.capy")
+        let invalidBytes = Data("This is not a Capy Canvas drawing".utf8)
+        try invalidBytes.write(to: invalid)
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let title = app.staticTexts["document-title"]
+        func titleText() -> String { title.value as? String ?? title.label }
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        func command(_ id: String, _ label: String) {
+            editorMenu(in: app, menu: "File", id: id, label: label)
+        }
+        func goTo(_ url: URL) {
+            app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
+        }
+        func expectPixels(_ expected: Data) {
+            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == expected }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        func chooseOpen(_ url: URL) {
+            let open = app.windows.buttons["OKButton"].firstMatch
+            XCTAssertTrue(open.waitForExistence(timeout: 15))
+            goTo(url); workspaceActivate(open)
+            XCTAssertTrue(open.waitForNonExistence(timeout: 15))
+        }
+        let paper = editorPixels(in: app)
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectation(for: NSPredicate { _, _ in
+            let sample = self.editorPixels(in: app); return Int(sample[2]) > Int(sample[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let painted = editorPixels(in: app)
+        command("save_document_as", "Save As…")
+        let save = app.windows.buttons["OKButton"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 15)); goTo(root)
+        let name = app.textFields["saveAsNameTextField"]
+        workspaceActivate(name)
+        name.typeKey("a", modifierFlags: .command); name.typeText(project.lastPathComponent)
+        workspaceActivate(save)
+        XCTAssertTrue(save.waitForNonExistence(timeout: 15))
+        expectation(for: NSPredicate { _, _ in titleText().hasPrefix("Survivor.capy · ") }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let saved = try Data(contentsOf: project)
+        let savedTitle = titleText(), savedRows = rows.count
+        // SwiftUI presents these native Mac alerts as sheets. Scope their
+        // buttons to that sheet, excluding the Touch Bar's duplicate actions.
+        let dialog = app.sheets.firstMatch
+
+        editorMenu(in: app, menu: "Edit", id: "clear_layer", label: "Clear layer")
+        expectPixels(paper)
+        command("open_document", "Open…")
+        workspaceActivate(dialog.buttons["Discard Changes"])
+        chooseOpen(invalid)
+        let failure = dialog
+        XCTAssertTrue(failure.waitForExistence(timeout: 20), "An invalid project must report its error")
+        XCTAssertTrue(failure.staticTexts["Document"].exists)
+        XCTAssertGreaterThan(failure.staticTexts.count, 1, "The error must explain why the project could not open")
+        workspaceActivate(failure.buttons["OK"])
+        XCTAssertTrue(failure.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(titleText(), savedTitle); XCTAssertEqual(rows.count, savedRows)
+        expectPixels(paper)
+        for (action, pixels) in [("Undo", painted), ("Redo", paper)] {
+            editorHistory(action, in: app); expectPixels(pixels)
+        }
+        attachEditor(in: app, name: "failed-open-preserves-unsaved-artwork-and-history")
+
+        // A failed replacement must not mark the original drawing clean, even
+        // after the user agreed to discard it for that unsuccessful Open.
+        command("open_document", "Open…")
+        workspaceActivate(dialog.buttons["Cancel"])
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
+        expectPixels(paper)
+        command("open_document", "Open…")
+        workspaceActivate(dialog.buttons["Discard Changes"])
+        chooseOpen(project)
+        expectPixels(painted)
+        XCTAssertEqual(titleText(), savedTitle); XCTAssertEqual(rows.count, savedRows)
+        XCTAssertEqual(try Data(contentsOf: project), saved)
+        XCTAssertEqual(try Data(contentsOf: invalid), invalidBytes)
+        XCTAssertFalse(dialog.exists); XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "failed-open-retry-restores-saved-artwork")
+    }
+
     @MainActor func checkNativeImageImport(in app: XCUIApplication) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Image " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

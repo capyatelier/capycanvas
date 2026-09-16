@@ -36,7 +36,90 @@ private final class State: @unchecked Sendable {
         func flush(_ owner: NativeOwner) -> Bool {
             let reply = Reply<Bool>(); owner.flushPersistence { reply.set($0) }; return reply.get()
         }
+        func preferenceRows(_ state: State) -> [JSON] {
+            state.read().0["preferences"]["pages"].array.flatMap { page in
+                page["groups"].array.flatMap { $0["rows"].array }
+            }
+        }
+        func preferenceValue(_ row: JSON) -> JSON {
+            let kind = row["kind"]
+            switch kind["type"].string {
+            case "switch": return kind["active"]
+            case "choice": return kind["selected"]
+            default: return kind["value"]
+            }
+        }
+        func checkPreferenceRows(platform: UInt32) throws {
+            let inventory = State()
+            let catalogOwner = try NativeOwner(platform: platform, persistence: EditorPersistence(root: nil),
+                receive: { inventory.receive($0, $1) })
+            send(catalogOwner, ["type": "invoke", "command": "settings"])
+            let rows = preferenceRows(inventory)
+            precondition(!rows.isEmpty, "Settings inventory must be published")
+            var checked = 0
+            for row in rows where ["switch", "choice", "number", "text"].contains(row["kind"]["type"].string) {
+                let id = row["id"].string
+                let root = directory.appendingPathComponent("preferences-\(platform)/\(id)")
+                let persistence = EditorPersistence(root: root), state = State()
+                let owner = try NativeOwner(platform: platform, persistence: persistence,
+                    receive: { state.receive($0, $1) })
+                send(owner, ["type": "invoke", "command": "settings"])
+                func action(_ type: String, value: Any? = nil) {
+                    var action: [String: Any] = ["type": type, "id": id]
+                    if let value { action["value"] = value }
+                    send(owner, ["type": "preferences", "action": action])
+                }
+                func current(_ value: State = state) -> JSON { preferenceRows(value).first { $0["id"].string == id }! }
+                // UIKit's native lookahead hides the manual amount. Test its
+                // exposed manual state, without changing the other cases.
+                if platform == 0 && id == "prediction_horizon" {
+                    send(owner, ["type": "preferences", "action": ["type": "edit", "id": "platform_prediction", "value": false]])
+                }
+                let original = current(), kind = original["kind"], baseline = state.read().0["state"]["settings"].stableKey
+                if !original["enabled"].bool {
+                    precondition(platform == 1 && id == "platform_prediction" && !kind["active"].bool,
+                        "An unaccounted disabled preference requires an explicit acceptance case")
+                    print("PASS preference platform \(platform): \(id) is off/disabled because native prediction is unavailable")
+                    continue
+                }
+                precondition(original["visible"].bool, "Editable preference must be reachable: \(id)")
+                let value: Any
+                switch kind["type"].string {
+                case "switch": value = !kind["active"].bool
+                case "choice": value = (Int(kind["selected"].uint) + 1) % kind["options"].array.count
+                case "number": value = kind["control"]["max"].number
+                case "text":
+                    precondition(kind["constraint"].string == "hex_color", "Unaccounted text constraint: \(id)")
+                    value = "#123456"
+                default: preconditionFailure("Unaccounted editable preference kind")
+                }
+                action("edit", value: value)
+                precondition(state.read().0["preferences"]["error"].isNull && state.read().2 == nil)
+                let edited = preferenceValue(current()).stableKey
+                precondition(edited == JSON(value).stableKey && edited != preferenceValue(original).stableKey,
+                    "The exact row ID must update its displayed value: \(id)")
+                precondition(current()["reset"]["enabled"].bool && flush(owner), "Edited preference must save and enable Reset: \(id)")
+                let restoredState = State()
+                let restored = try NativeOwner(platform: platform, persistence: persistence,
+                    receive: { restoredState.receive($0, $1) })
+                send(restored, ["type": "invoke", "command": "settings"])
+                precondition(preferenceValue(current(restoredState)).stableKey == edited,
+                    "A fresh owner must restore the edited preference: \(id)")
+                action("reset")
+                precondition(state.read().0["preferences"]["error"].isNull && flush(owner) && flush(restored))
+                precondition(state.read().0["state"]["settings"].stableKey == baseline,
+                    "Reset must restore the complete baseline without changing unrelated preferences: \(id)")
+                let disk = try JSON.decode(String(decoding: Data(contentsOf: root.appendingPathComponent("settings.json")), as: UTF8.self))
+                precondition(disk.stableKey == baseline && !current()["reset"]["enabled"].bool,
+                    "Reset must be durable: \(id)")
+                checked += 1
+                print("PASS preference platform \(platform): \(id) edit, fresh-owner restore and exact durable Reset")
+            }
+            print("PASS platform \(platform): \(rows.count) Settings rows enumerated; \(checked) editable preference routes restored and reset")
+            fflush(stdout)
+        }
         for platform: UInt32 in [0,1] {
+            try checkPreferenceRows(platform: platform)
             let root = directory.appendingPathComponent("platform-\(platform)")
             let persistence = EditorPersistence(root: root)
             let stateA = State(), stateB = State()

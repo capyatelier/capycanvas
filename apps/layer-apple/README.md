@@ -9,8 +9,9 @@ Zen clears the native window controls. The iPad keeps its in-app menus, sharing
 the same menu item implementation and Rust catalog/actions.
 Both platforms are required at every milestone, with separate functional,
 visual and hardware performance evidence. Shared changes must build on both.
-See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
-for the shared-code boundaries, milestone matrix and remaining work.
+See [the Apple goal](../../docs/history/apple-acceptance.md#goal) for scope and
+shared-code boundaries, and the [current release checklist](../../docs/development/apple-release-checklist.md)
+for remaining work. Historical milestone lists do not supersede later passes.
 
 Popup text uses opaque shared-theme surfaces, including the workspace pill.
 `EditorPopupSurface` pairs the shared text and panel colors for custom overlays;
@@ -27,17 +28,19 @@ Mac system menus retain AppKit appearance and accessibility behavior.
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
 watercolor baseline on each. Current validation targets 90 Hz on Mac and 120 Hz
 on iPad; the user deferred Mac 120 Hz testing until suitable hardware is available.
-CPU spikes, missing GPU observations and the remaining workload matrix leave
-performance acceptance open. Benchmark sessions use
-isolated storage; ordinary launches do not start synthetic input or recording.
+The user accepts smooth drawing with rare measured misses. The captured Pencil
+prediction stall is fixed and physically confirmed; Diagnostics GPU values work
+on both hosts. Complete sustained workload/resource and physical latency evidence
+remains open. Benchmark sessions use isolated storage; ordinary launches do not
+start synthetic input or recording.
 
-The shared render owner drains temporary native resources after each task. Frame
-admission defers work while the native drawable pool awaits presentation, with
-ticket invalidation across resize, surface replacement and platform resume.
-[Direct checks and ten-minute results](PERFORMANCE.md#owner-lifetime-and-presentation-admission--2026-09-12)
-cover both hosts. The measured Mac CPU budget passes, but both hosts still miss
-presentation deadlines and iPad retains acquisition stalls; full performance
-acceptance remains open.
+The shared render owner drains temporary native resources after each task. The
+frame driver permits one queued render operation and lets CAMetalLayer manage
+drawable availability. Presentation callbacks collect optional diagnostics;
+rendering continues when those notifications are missing. Resume requests a
+fresh frame, and surface generations protect replacement views from old replies.
+See the [startup-progress regression](PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16)
+and current checklist before repeating historical performance experiments.
 
 Apple snapshot publication serializes the shared host models directly to UTF-8,
 avoiding the intermediate JSON tree on the render owner. Incremental workspace
@@ -137,9 +140,12 @@ real shared SwiftUI headers and the corresponding live Chrome editor, without
 system-menu automation. Complete visual parity remains open; this focused
 workflow does not establish full editor acceptance.
 
-Native panel controls report intrinsic body heights and tab widths to the shared
-Rust `measure_panels` action. Rust fits floating panels and tab groups, caps their
-height and honors manual sizing. Measurements use the mounted controls before
+Native panel controls report intrinsic body heights, fixed controls, scrolling
+row heights and tab widths to the shared Rust `measure_panels` action. Dragged
+panels preserve their visible size past workspace edges, then Rust applies the
+shared floating release budget and useful scrolling minimum in one history step.
+Compact Color content stays whole. Rust also fits tab groups and honors manual
+sizing. Measurements use the mounted controls before
 scroll clipping; lightweight copies measure inactive tab labels without mounting
 extra Navigator, thumbnail or filter content. Inactive bodies retain their last
 measurement until mounted again. Drawer bodies keep their separate width and
@@ -149,8 +155,9 @@ adding workspace history or storage writes.
 
 The direct check uses actual SwiftUI geometry in an invisible AppKit host for
 both Apple presets. It checks natural floating sizes, width reflow, tab fitting,
-control visibility, workspace Undo, growing layer content and settled measurement
-publication. UIKit pixels and sustained resizing performance require their own
+control visibility, workspace Undo, growing layer content, settled measurement
+publication, frozen drag previews and fitted scrolling releases with Undo/Redo.
+UIKit pixels and sustained resizing performance require their own
 validation:
 
 ```sh
@@ -789,6 +796,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
 /tmp/capy-frame-driver-tests
 ```
 
+A mounted AppKit/Metal regression withholds presentation notifications while
+checking startup, rendered artwork and exact thumbnail Undo/Redo on both Apple
+policies. This verifies progress independently of display-timing callbacks:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/presentation-progress.swift
+```
+
 Use a focused launch test for a settled default editor capture:
 
 ```sh
@@ -985,7 +1000,12 @@ on both targets.
 The opt-in iPad `testNativeFilesProjectRoundTrip` uses a fresh UUID supplied as
 `CAPY_FILE_TEST_TOKEN` in the test runner environment. It creates a matching
 folder in On My iPad, saves generated artwork, reopens it after restarting the
-editor, and exports a PNG. Retain the token with ignored local evidence. After
+editor, and exports a PNG. Painting runs through enabled native menus after Metal
+is ready; the reopened drawing must retain three layers and matching sampled
+pixels. The current simulator run also verifies the delivered PNG separately:
+all 3,145,728 pixels retain the opaque blue artwork at 2048×1536. This establishes
+local Files delivery, not physical or cloud-provider acceptance. Evidence is in
+`artifacts/apple-files-artwork-v1/`. Retain the token with ignored local evidence. After
 reviewing the result, run `testNativeFilesProjectRoundTripCleanup` with the same
 token to remove that folder through Files. Cleanup verifies the expected two
 items before deletion. Routine tests skip both native provider checks unless

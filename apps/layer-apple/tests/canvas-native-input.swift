@@ -208,6 +208,52 @@ private final class TabletEvent: NSEvent {
             try require(blue(painted,32,32) && blue(painted,80,64) && !blue(painted,80,32), "Native lasso must follow its concave path")
             return painted
         }
+        // Match the existing UIKit figure checks with actual AppKit mouse and
+        // modifier delivery through the assembled editor's canvas hit target.
+        // Changing Shift while stationary must affect the committed figure;
+        // the following unmodified contact must not inherit the previous chord.
+        for shape in ["line", "rectangle", "ellipse"] {
+            try await newDocument()
+            try await action(["type":"set_brush_size", "value":4])
+            try await tool(["figure":["shape":shape, "paint":shape == "line" ? "outline" : "fill"]])
+            let paper = try await pixels()
+            var constrainedPixels: Data?
+            var freePixels: Data?
+            for (name, initial, final) in [
+                ("held before contact", true, true),
+                ("pressed after movement", false, true),
+                ("released after movement", true, false),
+                ("free next contact", false, false)
+            ] {
+                try await send(.leftMouseDown, CGPoint(x:24,y:24), flags: initial ? .shift : [])
+                try await send(.leftMouseDragged, CGPoint(x:96,y:68), flags: initial ? .shift : [])
+                if initial != final { try await shift(final) }
+                try await send(.leftMouseUp, CGPoint(x:96,y:68), flags: final ? .shift : [])
+                try await shift(false)
+                let painted = try await pixels()
+                if shape == "line" {
+                    try require(blue(painted,50,50) == final && blue(painted,60,46) != final,
+                        "Shift must constrain the native line to 45 degrees: \(name)")
+                } else {
+                    try require(blue(painted,60,46) && blue(painted,60,84) == final,
+                        "Shift must make the native \(shape) square or circular: \(name)")
+                }
+                try require(!blue(painted,115,115), "A figure must preserve outside artwork")
+                if final {
+                    if let constrainedPixels { try require(painted == constrainedPixels, "Stationary Shift press must match a held chord") }
+                    constrainedPixels = painted
+                } else {
+                    if let freePixels { try require(painted == freePixels, "The next contact must not retain stale Shift") }
+                    freePixels = painted
+                }
+                try await invoke("undo")
+                let undone = try await pixels(); try require(undone == paper, "Figure Undo restores every pixel")
+                try await invoke("redo")
+                let redone = try await pixels(); try require(redone == painted, "Figure Redo restores every pixel")
+                try await invoke("undo")
+                note("PASS platform \(platform): native \(shape), Shift \(name), constraint geometry and exact PNG history")
+            }
+        }
         // Verify the native navigation adapter against camera geometry and
         // exported artwork, including contact suppression and resumption.
         do {
