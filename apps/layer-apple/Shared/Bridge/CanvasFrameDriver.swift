@@ -7,22 +7,16 @@ import QuartzCore
     private weak var store: EditorStore?
     private var generation: UInt64 = 0
     private var surfaceGeneration: UInt64 = 0
-    private var tickGeneration: UInt64 = 0
     private var pending = false
     private var active = false
     private var paused = true
-    private let currentTime: () -> TimeInterval
     var setPaused: (Bool) -> Void = { _ in }
     var submittedViewport: () -> Void = {}
 
-    init(store: EditorStore, currentTime: @escaping () -> TimeInterval = { CACurrentMediaTime() }) {
-        self.store = store; self.currentTime = currentTime
-    }
+    init(store: EditorStore) { self.store = store }
     func activate() { surfaceGeneration &+= 1; resetSubmission(); active = true; wake() }
     func deactivate() {
         active = false; generation &+= 1; surfaceGeneration &+= 1
-        tickGeneration &+= 1
-        store?.native?.whenPresentationAvailable(nil)
         resetSubmission(); pause(true)
     }
     private func resetSubmission() {
@@ -43,33 +37,11 @@ import QuartzCore
     }
     func wake() { generation &+= 1; if active { pause(false) } }
     func tick(target: TimeInterval) {
-        tickGeneration &+= 1
-        store?.native?.whenPresentationAvailable(nil)
-        attempt(target: target, retry: false)
-    }
-    private func attempt(target: TimeInterval, retry: Bool) {
         guard let native = store?.native else { return }
-        let now = UInt64(currentTime() * 1_000_000_000)
+        let now = UInt64(CACurrentMediaTime() * 1_000_000_000)
         let targetTime = UInt64(max(0, target) * 1_000_000_000)
-        let denial: UInt64 = !active ? 1 : pending ? 2 : native.canAdmitPresentation ? 0 : 3
-        if retry {
-            native.observeFrameRetry(now: now, target: targetTime, admitted: denial == 0, denial: denial)
-        } else {
-            native.observeTick(now: now, target: targetTime, admitted: denial == 0, denial: denial)
-        }
-        if denial == 3 && !retry && targetTime > now {
-            let tick = tickGeneration, surface = surfaceGeneration
-            native.whenPresentationAvailable { [weak self] in
-                DispatchQueue.main.async {
-                    guard let self, self.active, !self.paused, !self.pending,
-                        self.tickGeneration == tick, self.surfaceGeneration == surface,
-                        self.currentTime() < target else { return }
-                    // At most one retry for this tick. A callback is not a new
-                    // display-link tick, and never extends its original target.
-                    self.attempt(target: target, retry: true)
-                }
-            }
-        }
+        let denial: UInt64 = !active ? 1 : pending ? 2 : 0
+        native.observeTick(now: now, target: targetTime, admitted: denial == 0, denial: denial)
         guard denial == 0 else { return }
         pending = true
         let submittedGeneration = generation

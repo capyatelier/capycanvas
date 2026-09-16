@@ -157,6 +157,143 @@ closes the reported physical stall. No failed recording or synthetic-only pass
 is counted as physical acceptance; broader sustained measurements retain their
 original scope.
 
+## Startup progress without presentation callbacks — 2026-09-16
+
+The recorded iPad startup failure reaches canvas/filter readiness but not shader
+readiness. Four acquired drawables have no presentation callback, and 15,566
+later display ticks are denied by the custom presentation counter. Missing
+notifications therefore prevent any further owner frames from advancing startup.
+The capture does not establish why the OS notifications were absent.
+
+A focused real AppKit/Metal regression suppresses only drawable presentation
+notification registration, leaving acquisition, rendering and presentation intact.
+The published implementation stalls after three callbacks are withheld. Removing
+the custom counter and callback retry lets both Apple policies reach readiness,
+render edited artwork and reproduce exact thumbnail pixels through Undo/Redo,
+with 64 and 66 callbacks withheld. The existing driver checks also pass for one
+queued frame, intervening input, idle, detach and replacement surfaces.
+
+CAMetalLayer now owns drawable availability. The serial render owner still drains
+its autorelease pool per task; the shared driver still permits only one queued
+frame. Presentation callbacks are optional recording only. Resume still requests
+a redraw. The gate, its waiter/retry plumbing and implementation-only tests are
+removed; no timeout or synthetic presentation fallback is introduced.
+
+An unchanged `4b1837a` iPad relaunch after the same in-place update completes
+600.000 seconds of 4K watercolor. Its 1,463/65,316 long active intervals (2.240%)
+have p99/max 16.667/25.000 ms, with nominal thermals, no rejected input, renderer
+errors, missing/zero measured presentation callbacks or dropped records. The
+final canvas, Navigator and painted layer thumbnail are correct. This proves the
+startup failure is intermittent, not resolved by reinstalling. It is baseline
+evidence, not hardware acceptance of the simplified driver.
+
+Both fixed Release builds pass without compiler warnings. Each physical host
+then completes 600 seconds of the same 4096², eight-paint-layer, 320 px Wet
+Watercolor workload with prediction, 240 Hz supplied input and the full workspace.
+Mac reports a 2400×1740 viewport at 90 Hz; iPad reports 2752×2064 at 120 Hz.
+Startup and entry into measurement are verified. Both measured intervals have
+zero rejected input, renderer errors, dropped records, missing presentation
+callbacks and zero-time presentations. Final canvas, Navigator and painted layer
+thumbnails are visually correct.
+
+| Fixed Release result | Mac | iPad |
+| --- | ---: | ---: |
+| Long active intervals / total | 481 / 50,155 (0.959%) | 1,310 / 65,603 (1.997%) |
+| Active presentation p50 / p95 / p99 / max, ms | 11.111 / 11.111 / 11.111 / 33.334 | 8.333 / 8.334 / 16.667 / 25.000 |
+| Owner CPU p50 / p95 / p99 / max, ms | 2.854 / 4.190 / 10.613 / 14.869 | 2.008 / 4.154 / 9.384 / 19.747 |
+| GPU queue span p50 / p95 / p99 / max, ms | 8.927 / 10.610 / 11.462 / 22.350 | 5.762 / 8.458 / 10.205 / 19.456 |
+| Frame admission to presentation p99 / max, ms | 43.926 / 66.145 | 25.980 / 34.314 |
+| Footprint growth / peak, MiB | 719.44 / 2,299.14 | 238.03 / 2,065.74 |
+| Footprint change in final 120 seconds, MiB | −13.94 | −61.12 |
+| Canvas asleep after pen-up, ms | 34.651 | 24.202 |
+
+Each postlude has two owner frames and no frames in its final five seconds.
+Footprint falls another 273.77/303.72 MiB during the Mac/iPad postlude, and all
+thermal samples are nominal. There are 31/18 skipped GPU samples, with no invalid
+samples, poll errors or pending samples at the last poll. One Mac and twelve iPad
+zero-time callbacks occur before measurement; none are missing. The measured
+results fit the accepted rare-miss criterion and do not justify another scheduler
+or memory workaround. These separate runs do not establish a speed improvement.
+
+The before/after regression, baseline trace, exact runtime-source manifests,
+Release identities and hardware results are retained under
+`artifacts/apple-startup-stall-v1/`. Both test processes are closed. The normal
+iPad review is restored on the fix with all seven recovered drawings and every
+backed-up artist file byte-identical; the original Mac review remains running
+unchanged. The optional recorder was enabled for these synthetic workloads.
+Recorder-off behavior, instrumentation overhead, physical input-to-display
+latency and other unclosed workload/interaction cases remain separate.
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/presentation-progress.swift
+```
+
+## Current 4K watercolor with layer previews — 2026-09-16
+
+The published `4b1837a` Mac Release completes 600.001 measured seconds of
+`wet-watercolor-4k`: a 4096-square document, eight paint layers, the normal
+320-pixel Wet Watercolor brush and 240 Hz synthetic input. The full default
+workspace, recovery writer, recorder and GPU queue timing remain enabled.
+The final capture shows the painted active-layer thumbnail and matching
+Navigator. This provides a sustained result after the document-epoch thumbnail
+fix, rather than extending the earlier short capture's scope.
+
+The display reports 90 Hz. Active presentation intervals have p50/p95/p99 of
+11.111 ms and a 33.334 ms maximum; 469 of 50,032 intervals (0.937%) exceed the
+target tolerance. CPU owner-service p99/max is 5.589/23.401 ms, and GPU queue-span
+p99/max is 11.407/27.286 ms. Frame-admission-to-presentation p99/max is
+43.869/55.057 ms; this is not physical pen-to-pixel latency. There are no rejected
+input batches, renderer errors, dropped records or missing presentation callbacks.
+Two measured callbacks return zero presentation timestamps at about 114 seconds,
+within one 33.334 ms visible presentation gap. A third zero timestamp precedes
+measurement. These remain explicit measurement limits. The run skips 63 GPU
+samples, with no invalid timestamps, failed polls or final pending samples.
+
+Thermal samples remain nominal. Footprint grows 793.75 MiB, reaching 2,379.60 MiB;
+624.08 MiB of growth occurs in the first 120 seconds and 56.36 MiB in the final
+120 seconds. The ten-second postlude releases 304.52 MiB. Two canvas-owner frames
+follow measurement, the display link sleeps after 40.9 ms, and no owner frame
+occurs in the final five seconds. Recorder capacity is 74.52 MiB and measured
+event payload is 39.67 MiB; neither number attributes the footprint increase.
+No build, UI test or profiler overlaps the measured Mac workload. The original
+Mac review process is preserved and brought forward afterward.
+
+The rare longer intervals alone do not fail the user's acceptance criterion.
+This synthetic run does not establish physical latency, recorder-off resources,
+instrumentation overhead, long idle/resume behavior or all platform/profile
+coverage. Source and binary hashes, raw trace, complete distributions, capture,
+zero-timestamp details and memory/idle review remain private under
+`artifacts/performance/final-4b1837a/`.
+
+The same Mac executable also completes a 45.009-second `ink-predicted` check,
+with correct painted and Paper thumbnails, no rejected input or renderer errors,
+and no missing/zero measured presentation callbacks. There are 54 longer active
+intervals out of 3,734 (1.446%); p99/max are 22.222/22.222 ms, GPU queue-span p99
+is 6.746 ms and thermal samples remain nominal. This is a short current-build
+simple-brush result, separate from the earlier ten-minute ink measurement.
+
+The first corresponding physical iPad 600-second attempt is **invalid**. It
+never reaches workload setup or delivers drawing input. Startup submits fourteen
+viewports, records ten zero-time presentation callbacks and leaves four callbacks
+missing; subsequent ticks are denied drawable capacity. No ready shader state or
+actual presentation is observed before the workload's 120-second startup timeout.
+The final capture shows its explicit workload error. A following short probe of
+the unchanged Release reaches readiness in 0.688 seconds and shows actual ink
+before any background/return intervention, so it does not reproduce or explain
+the earlier stall. Backgrounding then interrupts the synthetic producer, as
+expected; that probe is not performance acceptance. The startup failure remains
+open. Do not change rendering or scheduling from an assumed cause, or repeat a
+long iPad run without verifying that measurement actually starts.
+
+A separate uninterrupted iPad `ink-predicted` run completes 45.001 measured
+seconds on the same Release, with correct painted/Paper thumbnails and Navigator.
+At the reported 120 Hz, 55 of 5,006 active intervals (1.099%) exceed tolerance;
+p50/p95/p99/max are 8.333/8.334/12.499/25.000 ms. GPU queue-span p99/max are
+9.230/14.618 ms. There are no rejected input batches, renderer errors, dropped
+records or missing/zero measured presentation callbacks; thermal samples remain
+nominal. This confirms a working subsequent startup and short drawing session,
+not resolution of the failed startup or a sustained iPad pass.
+
 ## Current Mac ink and watercolor — 2026-09-16
 
 The isolated Release built from `d96a0a9` completes 600 measured seconds each
@@ -201,9 +338,9 @@ it mounts AppKit/Metal, not UIKit. Both Release builds pass without warnings.
 A short final Mac Release capture shows the painted/checkerboard active-layer
 thumbnail and white Paper thumbnail. Evidence is `artifacts/apple-thumbnail-epoch-v1/`.
 
-The ten-minute drawing measurements retain their pre-fix source and missing-
-thumbnail qualification. The short visual follow-up does not establish a
-post-fix sustained result or complete full-workspace performance acceptance.
+These ten-minute drawing measurements retain their pre-fix source and missing-
+thumbnail qualification. The later `4b1837a` 4K watercolor result above provides
+a sustained post-fix check; it does not relabel these two earlier profiles.
 No scheduler or memory workaround follows these observations.
 Recorder-off resources, storage, idle/resume, instrumentation overhead, physical
 input latency and remaining platform/profile coverage are still open. Evidence
@@ -843,6 +980,10 @@ remain open. Raw traces and local signing/device information remain ignored.
 
 ## Owner lifetime and presentation admission — 2026-09-12
 
+Historical implementation: the callback-dependent gate and its ticket-only tests
+are retired by the startup-progress fix above. The owner autorelease policy and
+frame-driver lifecycle checks remain.
+
 Both native targets now drain autoreleased objects after every asynchronous
 render-owner task, including the last task before idle. The prior queue inherited
 its worker's pool policy. A direct test using 64 real owner requests fails against
@@ -873,12 +1014,6 @@ builds for both physical targets pass, as do the 28 trace-analysis tests.
 
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/owner-autorelease.swift
-bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/presentation-owner.swift
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
-  apps/layer-apple/Shared/Bridge/ObservedMetalLayer.swift \
-  apps/layer-apple/Shared/Bridge/FrameTrace.swift \
-  apps/layer-apple/tests/presentation-gate.swift -o /tmp/capy-presentation-gate
-/tmp/capy-presentation-gate
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
   apps/layer-apple/Shared/Bridge/CanvasFrameDriver.swift \
   apps/layer-apple/tests/frame-driver.swift -o /tmp/capy-frame-driver
@@ -1932,7 +2067,7 @@ endpoints and paired Metal clock samples retain their separate clock domains.
 
 | Kind | Fields in order, excluding trailing zeros |
 | --- | --- |
-| 0 tick | admission time, target time, admitted flag, denial reason (0 unspecified, 1 inactive, 2 owner pending, 3 drawable capacity) |
+| 0 tick | admission time, target time, admitted flag, denial reason (0 unspecified, 1 inactive, 2 owner pending; historical 3 drawable capacity) |
 | 1 frame | ID, target, owner start, owner end, five CPU stage durations, latest nonpredicted receipt ID |
 | 2 input | enqueue ID/time, owner start/end, oldest/newest sample time, count, kind (0 real, 1 predicted, 2 correction), original last phase, tool, accepted flag |
 | 3 drawable | frame ID, acquire start/end, drawable ID, acquired flag |
@@ -1944,7 +2079,7 @@ endpoints and paired Metal clock samples retain their separate clock domains.
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
-| 13 presentation retry | attempt time, original display target, admitted flag, denial reason using kind 0 values |
+| 13 presentation retry (historical) | attempt time, original display target, admitted flag, denial reason using kind 0 values |
 | 14 GPU clock | recorder time before sampling, Metal CPU nanoseconds, Metal GPU ticks, recorder time after sampling |
 
 Optional GPU recording samples paired clocks at most ten times per second.

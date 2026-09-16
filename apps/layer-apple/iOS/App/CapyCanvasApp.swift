@@ -33,7 +33,7 @@ private struct IPadEditorScene: View {
                     PersistenceBackground.flush(store)
                 }
                 else {
-                    store.native?.invalidatePresentations()
+                    store.native?.redraw()
                     if let library = store.workspaceLibrary {
                         Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
                     }

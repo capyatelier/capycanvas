@@ -65,7 +65,7 @@ final class MacCanvasView: NSView {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     if self.window?.occlusionState.contains(.visible) == true {
-                        self.store.native?.invalidatePresentations()
+                        self.store.native?.redraw()
                     }
                     self.wake()
                 }

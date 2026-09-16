@@ -34,13 +34,13 @@ on both hosts. Complete sustained workload/resource and physical latency evidenc
 remains open. Benchmark sessions use isolated storage; ordinary launches do not
 start synthetic input or recording.
 
-The shared render owner drains temporary native resources after each task. Frame
-admission defers work while the native drawable pool awaits presentation, with
-ticket invalidation across resize, surface replacement and platform resume.
-[Direct checks and ten-minute results](PERFORMANCE.md#owner-lifetime-and-presentation-admission--2026-09-12)
-cover both hosts. Retained presentation misses are evaluated with the user's
-perceptual criterion; they are not alone a reason for further scheduling changes.
-See the current checklist before repeating historical performance experiments.
+The shared render owner drains temporary native resources after each task. The
+frame driver permits one queued render operation and lets CAMetalLayer manage
+drawable availability. Presentation callbacks collect optional diagnostics;
+rendering continues when those notifications are missing. Resume requests a
+fresh frame, and surface generations protect replacement views from old replies.
+See the [startup-progress regression](PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16)
+and current checklist before repeating historical performance experiments.
 
 Apple snapshot publication serializes the shared host models directly to UTF-8,
 avoiding the intermediate JSON tree on the render owner. Incremental workspace
@@ -794,6 +794,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
   apps/layer-apple/Shared/Bridge/CanvasFrameDriver.swift \
   apps/layer-apple/tests/frame-driver.swift -o /tmp/capy-frame-driver-tests
 /tmp/capy-frame-driver-tests
+```
+
+A mounted AppKit/Metal regression withholds presentation notifications while
+checking startup, rendered artwork and exact thumbnail Undo/Redo on both Apple
+policies. This verifies progress independently of display-timing callbacks:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/presentation-progress.swift
 ```
 
 Use a focused launch test for a settled default editor capture:

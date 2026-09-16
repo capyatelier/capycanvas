@@ -28,8 +28,9 @@ both Apple policies: Website/Source Code rejection, retry success, completed
 requests and unchanged drawing state. This supplies native OpenURLAction results,
 without opening a browser or using Metal. It does not establish physical iPad
 browser delivery. The focused check and model audit are retained under
-`artifacts/apple-release-closure-v1/`. The review apps remain on the installed
-prediction build while its XP-Pen check is pending. Both final Release builds
+`artifacts/apple-release-closure-v1/`. The Mac review retains the installed
+prediction build while its XP-Pen check is pending; the iPad review is now on
+the startup-progress fix after the hardware checks below. Both final Release builds
 pass without compiler warnings in separate build directories. The closure work
 is grouped with the Settings/prediction follow-up.
 
@@ -99,7 +100,55 @@ expiration was used, so R4's physical expiration/interruption gate remains open.
 Evidence is `artifacts/apple-background-expiration-v1/`; reproduction and the
 API contract are in [Persistence](../../apps/layer-apple/PERSISTENCE.md#artwork-recovery).
 
+## Startup progress without presentation callbacks
+
+A focused real AppKit/Metal test reproduces startup stopping after three missing
+presentation callbacks. The custom drawable counter and its callback retry are
+removed; native CAMetalLayer acquisition manages availability, while the serial
+owner and one-pending-frame driver still bound submission. Both Apple policies
+now reach readiness and pass actual thumbnail artwork/Undo/Redo checks despite
+64/66 withheld callbacks. Fast driver lifecycle checks pass. This removes 108
+net production lines plus obsolete gate tests, without adding a timer fallback.
+
+Both Release builds pass without warnings. Both physical hosts complete ten
+measured minutes of 4K, eight-layer Wet Watercolor with prediction and the full
+workspace. Mac/iPad long active intervals are 0.959%/1.997%, with p99/max
+11.111/33.334 ms and 16.667/25.000 ms respectively. There is no rejected input,
+renderer error, recorder overflow or missing/zero measured presentation callback.
+Thermals remain nominal; the canvas sleeps 34.651/24.202 ms after pen-up and
+submits no frames in the final five idle seconds. Captures show correct canvas,
+Navigator and painted layer thumbnails. These scoped results accept the fix;
+other R1–R6 requirements remain open.
+
+The unchanged `4b1837a` iPad baseline also completed its retained 600-second run,
+confirming the original startup failure was intermittent. It does not invalidate
+the missing-callback reproduction. Both baseline and candidate workload processes
+are closed. The normal iPad review is restored on the fix, with all seven recovery
+drawings and every backed-up artist file unchanged. The original Mac prediction
+review remains running and is brought forward without restarting. Main was
+fetched and current. Evidence and publication verification are retained under
+`artifacts/apple-startup-stall-v1/`; [timings and limits](../../apps/layer-apple/PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16).
+
 ## Sustained performance evidence review
+
+Current `4b1837a` Mac Release completes ten minutes of 4K, eight-layer Wet
+Watercolor with the full workspace and correct painted layer thumbnail. Long
+active intervals are 0.937%, thermal samples remain nominal and the canvas sleeps
+after pen-up. Two measured presentation callbacks have zero timestamps within
+one 33.334 ms gap; they remain explicit limitations. Short current-Release ink
+checks also complete on Mac and physical iPad, with correct thumbnails, no rejected
+input/renderer errors and no missing/zero measured presentation callbacks.
+
+The corresponding iPad ten-minute attempt is invalid: startup never reaches
+shader readiness or drawing, and presentation admission stalls before its
+120-second startup timeout. A short subsequent probe starts normally before
+any intervention; it does not reproduce or explain that failure. This leads to
+the missing-callback reproduction and verified simplification above. Subsequent
+runs verify actual startup and measurement rather than process liveness. See the
+[current results and limits](../../apps/layer-apple/PERFORMANCE.md#current-4k-watercolor-with-layer-previews--2026-09-16)
+and `artifacts/performance/final-4b1837a/`. The installed iPad Release was updated
+in place with verified artwork backups; the original Mac review process is
+preserved. These validation notes are included in the startup-progress milestone.
 
 Current `d96a0a9` Mac Release ink/watercolor each complete ten measured minutes
 without rejected input, renderer errors or missing measured presentations.

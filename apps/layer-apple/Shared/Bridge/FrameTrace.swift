@@ -7,8 +7,7 @@ import Darwin
 struct FrameTraceEvent {
     enum Kind: UInt8 {
         case tick, frame, input, drawable, presented, memory, display, gpu, gpuStatus, state, activity, workload
-        // 12 remains reserved for the recorded Metal display-link experiment.
-        case frameRetry = 13
+        // 12/13 identify retired display-link/retry paths in historical traces.
         case gpuClock = 14
     }
     let kind: Kind
