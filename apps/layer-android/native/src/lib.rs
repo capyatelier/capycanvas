@@ -17,3 +17,6 @@ mod inspection;
 mod color_edit;
 #[cfg(target_os = "android")]
 mod source_edit;
+
+#[cfg(target_os = "android")]
+mod color_preferences;

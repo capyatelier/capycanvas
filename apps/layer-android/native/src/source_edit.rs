@@ -9,7 +9,6 @@ use layer_core::{
     LayerId, Project,
     color::{ColorProfile, source::SourceImage},
 };
-use layer_render::CanvasRenderer;
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu, SnapshotPreview};
 use layer_ui::{DocumentRequest, HostRequestKind};
 use std::sync::Arc;

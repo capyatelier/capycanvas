@@ -39,6 +39,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     var exportRequest by mutableStateOf<JSONObject?>(null)
         private set
     private var exportRecipe: JSONObject? = null
+    private var exportDestination = 0
     var profilePrompt by mutableStateOf<JSONObject?>(null)
         private set
     private var profileDecision: CompletableDeferred<JSONObject?>? = null
@@ -88,9 +89,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         picker = null; complete(id, false, error.message ?: "Could not open the file picker")
     }
     fun create(request: JSONObject, options: JSONObject) = transfer(request, null, approval, options.getJSONArray("extent").getInt(0), options.getJSONArray("extent").getInt(1), options)
-    fun chooseExport(recipe: JSONObject) {
+    fun chooseExport(recipe: JSONObject, destination: Int) {
         val request = exportRequest ?: return
-        exportRecipe = recipe; exportRequest = null
+        exportRecipe = recipe; exportDestination = destination; exportRequest = null
         val document = request.getJSONObject("kind").getJSONObject("request")
         val extension = when (recipe.getString("format")) { "Jpeg" -> "jpg"; "Tiff" -> "tif"; else -> "png" }
         document.put("name", document.getString("name").substringBeforeLast('.') + "." + extension)
@@ -157,6 +158,10 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         } ?: error("The selected file cannot be written")
                     }
                     finish(id, true)
+                    if(kind=="export")try {
+                        val color=JSONObject(host.withNative{Native.query(it,obj("type" to "document_color").toString())})
+                        ColorPreferencesStore.presets(application,color,obj("type" to "remember","index" to if(exportDestination<4)exportDestination else 3,"recipe" to exportRecipe))
+                    }catch(e:Exception){host.reportActionError("Image saved; export preferences were not saved: ${e.message}")}
                     if (kind == "save") host.documentChanged {
                         if (host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optBoolean("modified") == false) host.recovery.retire()
                     }

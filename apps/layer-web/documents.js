@@ -125,7 +125,8 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
         if(r.type==="new"||r.type==="open")await retireRecovery();
       } else if(r.type==="save"||r.type==="export") {
-        const recipe=r.type==="export"?await chooseExport({app,dialog,element,button,gpuOperation,id}):null;
+        const choice=r.type==="export"?await chooseExport({app,dialog,element,button,gpuOperation,id}):null;
+        const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r,recipe);
         if(recipe){
@@ -150,6 +151,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
             catch(error){try{await stream.abort();}catch{}throw error;}
           } else success=!!await download(bytes,target.location.name,recipe?{Png:"image/png",Tiff:"image/tiff",Jpeg:"image/jpeg"}[recipe.format]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
+          if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(`Image saved; export preferences were not saved: ${error}`);}
           if(success && r.type==="save" && !app.state().document_file.modified) {
             await retireRecovery();
           }

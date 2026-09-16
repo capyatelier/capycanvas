@@ -313,3 +313,130 @@ mod tests {
         assert_eq!(library, before);
     }
 }
+
+/// Portable worker protocol. Hosts persist the resulting library atomically;
+/// listing names never expands every preset's embedded ICC bytes into UI state.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExportPresetAction {
+    List,
+    Get { index: usize },
+    Save { name: String, recipe: ExportRecipe },
+    Update { index: usize, recipe: ExportRecipe },
+    Remove { index: usize },
+    Reset { index: usize },
+    Remember { index: usize, recipe: ExportRecipe },
+}
+#[derive(Serialize)]
+pub struct ExportPresetView {
+    pub names: Vec<String>,
+    pub index: Option<usize>,
+    pub recipe: Option<ExportRecipe>,
+    pub changed: bool,
+}
+impl ExportPresets {
+    pub fn operate(
+        &mut self,
+        action: ExportPresetAction,
+        color: DocumentColor,
+        validate: impl Fn(&ExportRecipe) -> Result<(), String>,
+    ) -> Result<ExportPresetView, String> {
+        match &action {
+            ExportPresetAction::Save { recipe, .. }
+            | ExportPresetAction::Update { recipe, .. }
+            | ExportPresetAction::Remember { recipe, .. } => validate(recipe)?,
+            _ => (),
+        }
+        let mut changed = true;
+        let index = match action {
+            ExportPresetAction::List => {
+                changed = false;
+                None
+            }
+            ExportPresetAction::Get { index } => {
+                changed = false;
+                Some(index)
+            }
+            ExportPresetAction::Save { name, recipe } => Some(self.save(&name, recipe)?),
+            ExportPresetAction::Update { index, recipe } => {
+                self.update(index, recipe)?;
+                Some(index)
+            }
+            ExportPresetAction::Remove { index } => {
+                self.remove(index)?;
+                Some(0)
+            }
+            ExportPresetAction::Reset { index } => {
+                self.reset_destination(index)?;
+                Some(index)
+            }
+            ExportPresetAction::Remember { index, recipe } => {
+                self.remember(index, recipe)?;
+                None
+            }
+        };
+        let recipe = index.map(|index| self.recipe(index, color)).transpose()?;
+        if let Some(recipe) = &recipe {
+            validate(recipe)?;
+        }
+        Ok(ExportPresetView {
+            names: Self::DESTINATIONS
+                .iter()
+                .map(|s| (*s).to_string())
+                .chain(self.names().map(str::to_string))
+                .collect(),
+            index,
+            recipe,
+            changed,
+        })
+    }
+}
+
+#[test]
+fn worker_protocol_validates_before_mutation_and_lists_only_names() {
+    let mut library = ExportPresets::default();
+    let recipe = ExportRecipe::wide_color();
+    assert!(
+        library
+            .operate(
+                ExportPresetAction::Save {
+                    name: "Rejected".into(),
+                    recipe: recipe.clone()
+                },
+                Default::default(),
+                |_| Err("Unsupported ICC".into())
+            )
+            .is_err()
+    );
+    assert_eq!(library, ExportPresets::default());
+    let view = library
+        .operate(
+            ExportPresetAction::Save {
+                name: "Exact output".into(),
+                recipe: recipe.clone(),
+            },
+            Default::default(),
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(view.index, Some(4));
+    assert!(view.changed);
+    let mut restored = ExportPresets::decode(&library.encode().unwrap()).unwrap();
+    let view = restored
+        .operate(ExportPresetAction::List, Default::default(), |_| {
+            panic!("Listing must not parse ICC data")
+        })
+        .unwrap();
+    assert_eq!(view.names.len(), 5);
+    assert!(view.recipe.is_none());
+    assert!(!view.changed);
+    let view = restored
+        .operate(
+            ExportPresetAction::Get { index: 4 },
+            Default::default(),
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(view.recipe, Some(recipe));
+    assert!(!view.changed);
+}

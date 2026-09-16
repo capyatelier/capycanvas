@@ -13,7 +13,7 @@ mod eyedropper;
 mod export;
 pub use export::{ExportForm, ExportBackground, ExportFormat, ExportProfile, ExportRecipe, ExportResolution, ExportSize};
 mod export_presets;
-pub use export_presets::ExportPresets;
+pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;

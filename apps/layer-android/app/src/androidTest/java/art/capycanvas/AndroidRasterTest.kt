@@ -40,6 +40,7 @@ class AndroidRasterTest {
             android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
         }
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "raster-test-${System.nanoTime()}")
+        ColorPreferencesStore.directoryForTest=File(root,"color-preferences")
         recoveryDirectory = File(root, "recovery")
         RecoveryController.directoryForTest = recoveryDirectory
         CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
@@ -50,6 +51,7 @@ class AndroidRasterTest {
         DocumentController.nativeFileJobsForTest = false
         RecoveryController.directoryForTest = null
         CanvasHost.workspaceDirectoryForTest = null
+        ColorPreferencesStore.directoryForTest=null
     }
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
     private val files get() = activity.cacheDir
@@ -237,6 +239,38 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
+    @Test fun exportPresetsPersistAndRestoreEveryDeliveryChoice() {
+        val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
+        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
+        fun store(action:JSONObject)=runBlocking{ColorPreferencesStore.presets(activity,color,action)}
+        fun canonical(recipe:JSONObject)=native{Native.query(it,obj("type" to "export_validate","recipe" to recipe).toString())}
+        val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(1).getJSONObject(1).toString())
+            .put("depth","U16").put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(321,123)),"enlarge" to false))).put("resolution",obj("Ppi" to 287))
+        val saved=store(obj("type" to "save","name" to "Tablet test delivery","recipe" to recipe))
+        val index=saved.getInt("index");assertEquals(4,index)
+        assertEquals(canonical(recipe),canonical(store(obj("type" to "get","index" to index)).getJSONObject("recipe")))
+        assertTrue(File(ColorPreferencesStore.directoryForTest!!,"color-export-presets.json").length()>0)
+        val updated=JSONObject(recipe.toString()).put("background","White")
+        store(obj("type" to "update","index" to index,"recipe" to updated))
+        store(obj("type" to "remember","index" to 3,"recipe" to updated))
+        assertEquals(canonical(updated),canonical(store(obj("type" to "get","index" to 3)).getJSONObject("recipe")))
+        // Reopen through the real export dialog and load the persisted named recipe.
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread {host.invoke("export_document")}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Web / Share").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Web / Share").performClick()
+        compose.onNodeWithText("Tablet test delivery").performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("16-bit").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("16-bit").assertExists()
+        compose.onNodeWithText("321").assertExists();compose.onNodeWithText("123").assertExists()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+        DocumentController.nativeFileJobsForTest=true
+        store(obj("type" to "remove","index" to index));assertEquals(4,store(obj("type" to "list")).getJSONArray("names").length())
+        store(obj("type" to "reset","index" to 3));assertNotEquals(canonical(updated),canonical(store(obj("type" to "get","index" to 3)).getJSONObject("recipe")))
+        assertNull(host.failure)
+    }
+
     @Test fun retainedPlacePasteAndDocumentDetails() {
         fun fresh(space:String, depth:String) {
             val task=native { h -> val(id,f)=request(h,"new_document")

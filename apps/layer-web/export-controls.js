@@ -2,13 +2,14 @@
 export async function chooseExport({app,dialog,element,button,gpuOperation,id}) {
   let control,running,closed=false;
   const model=app.export_form();
+  let library=await app.export_presets({type:"get",index:0});
   try { const result=await dialog("Export image",(form,finish)=>{
-    let recipe=structuredClone(model.recipes[0][1]);
+    let recipe=library.recipe,currentPreset=0;
     const field=(label,node)=>{const root=element("label","document-size",label);node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
     const select=(label,choices)=>{const node=element("select");for(const[id,name]of choices){const option=element("option","",name);option.value=id;node.append(option);}return field(label,node);};
     const number=(label,value,min,max)=>{const node=element("input");Object.assign(node,{type:"number",value,min,max,step:1});return field(label,node);};
     form.append(element("p","","Export a profiled copy. The editable drawing stays unchanged."));
-    const destination=select("Destination",model.recipes.map(([name],i)=>[i,name]));
+    const destination=select("Destination",library.names.map((name,i)=>[i,name]));
     const format=select("Format",[["Png","PNG"],["Tiff","TIFF"],["Jpeg","JPEG"]]);
     const profile=select("Output profile",model.profiles.map((p,i)=>[i,p.name]));
     const depth=select("Bit depth",[["U8","8-bit"],["U16","16-bit"]]);
@@ -21,10 +22,12 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const resolution=select("Resolution metadata",[["Master","Keep original"],["Ppi","Pixels per inch"],["Omit","Omit"]]),ppi=number("Pixels per inch",300,1,65535);
     const visible=()=>{quality.closest("label").hidden=format.value!=="Jpeg";for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
     const load=()=>{
+      if(!model.profiles.some(p=>JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
       format.value=recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
-      intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value="Original";resolution.value="Master";visible();
+      intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value=recipe.size.Fit?"Fit":"Original";
+      if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;visible();
     };
-    destination.onchange=()=>{recipe=structuredClone(model.recipes[Number(destination.value)][1]);load();};
+    destination.onchange=()=>preference({type:"get",index:Number(destination.value)});
     format.onchange=()=>{if(format.value==="Jpeg"){depth.value="U8";if(background.value==="Preserve")background.value="White";}visible();};
     size.onchange=resolution.onchange=visible;load();
     const error=element("p","error-message");form.append(error);
@@ -34,13 +37,28 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     }));
     const selected=()=>app.export_validate({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
-      size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:false}},
+      size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
       resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value});
+    const presetName=field("Preset name",element("input"));presetName.maxLength=80;
+    const presetButtons=element("div","document-size");
+    const presetAction=type=>{try{preference(type==="save"?{type,name:presetName.value,recipe:selected()}:{type,index:Number(destination.value),recipe:selected()});}catch(e){error.textContent=String(e);}};
+    const savePreset=button("Save Preset",()=>presetAction("save"));
+    const updatePreset=button("Update Preset",()=>presetAction("update"));
+    const removePreset=button("Delete Preset",()=>preference({type:"remove",index:Number(destination.value)}));
+    const resetPreset=button("Reset Destination",()=>preference({type:"reset",index:Number(destination.value)}));
+    const presetAvailability=()=>{updatePreset.disabled=removePreset.disabled=Number(destination.value)<4;resetPreset.disabled=Number(destination.value)>=4;};
+    presetButtons.append(savePreset,updatePreset,removePreset,resetPreset);form.append(presetButtons);presetAvailability();
+    let preferenceBusy=false;
+    async function preference(action){
+      if(preferenceBusy||running)return;preferenceBusy=true;const inputs=[...form.querySelectorAll('input,select,button')];inputs.forEach(n=>n.disabled=true);
+      try{library=await app.export_presets(action);destination.replaceChildren();library.names.forEach((name,i)=>{const option=element("option","",name);option.value=i;destination.append(option);});currentPreset=library.index??0;destination.value=String(currentPreset);if(library.recipe){recipe=library.recipe;load();}invalidate();error.textContent="";}
+      catch(e){destination.value=String(currentPreset);error.textContent=String(e);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
+    }
     const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");
     const invalidate=()=>{comparison.replaceChildren();status.textContent="";};
     form.addEventListener("input",invalidate,true);form.addEventListener("change",invalidate,true);
     const cancel=button("Cancel",()=>{control?.cancel();finish(null);});
-    const choose=button("Choose File…",()=>{if(!form.reportValidity())return;try{finish(selected());}catch(e){error.textContent=String(e);}},"suggested-action");
+    const choose=button("Choose File…",()=>{if(!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){error.textContent=String(e);}},"suggested-action");
     const preview=button("Preview Output",()=>{
       if(running||!form.reportValidity())return;
       let recipe;try{recipe=selected();}catch(e){error.textContent=String(e);return;}
@@ -55,7 +73,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
             figure.append(canvas,element("figcaption","",index?"Output":"Artwork"));comparison.append(figure);});
           status.textContent="sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts."+(output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
         }catch(e){if(!closed&&!control.cancelled())error.textContent=String(e);}
-        finally{running=null;if(!closed)inputs.forEach(node=>node.disabled=false);}
+        finally{running=null;if(!closed){inputs.forEach(node=>node.disabled=false);presetAvailability();}}
       })();
     });
     footer.append(cancel,preview,choose);form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();

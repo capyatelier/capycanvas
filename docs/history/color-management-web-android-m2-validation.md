@@ -386,3 +386,40 @@ integration runs did not exhibit this crash.
 Remaining feature work: persistent named export presets/profile library and
 flattened conversion copies, followed by broader workflow/display checks and the
 final tablet navigation/memory benchmark and user-test handoff.
+
+## Persistent delivery presets — 2026-09-16
+
+Export offers Web / Share, Wide-color image, Further editing and Custom plus
+named user presets. Save/Update/Delete and Reset Destination use the shared
+bounded `ExportPresets` model. A successful delivery remembers its choices for
+that destination; temporary edits to a named preset remember Custom, while the
+named preset changes only through Update. Failed delivery does not remember it.
+Reopening restores the complete recipe, including size, DPI and JPEG quality.
+
+Android publishes preferences with `AtomicFile` on IO under an application
+mutex. Web uses a strict IndexedDB transaction and an origin-wide Web Lock on
+the file worker. Source documents and workspace snapshots do not own the library.
+List operations transfer names only, without expanding all embedded ICC profiles
+into UI state. Selected/saved recipes validate actual ICC channels and encoder
+support before publication. Persistence errors after a successful image save are
+reported as preference failures, without marking the image save as failed.
+
+Validation:
+
+- `tablet-native-export-presets.log`: persisted CRUD, every delivery choice,
+  remembered Custom/reset and actual export-dialog reload passed (4.363 s).
+  Instrumentation uses a separate preference directory for each test.
+- `tablet-web-export-presets.log`, `tablet-web-export-presets-retry.log`: prior
+  SDR/output-preview checks passed; after normalizing a BigInt in the DevTools
+  transport, actual dialog Save/Update/Delete, reopen with all choices restored,
+  successful delivery remembering Custom, and Reset Destination passed.
+- `shared-export-presets.log`: all three preset tests passed, including profile
+  interning/retirement, atomic rejection of invalid/oversized changes, protocol
+  validation before mutation and metadata-only listing.
+- `android-export-presets-tests-build.log`, `web-export-presets-build.log`,
+  `gtk-export-presets-check.log`, `package-export-presets.log`: ARM64/Wasm builds,
+  GTK check and all 13 Web packaging tests passed.
+
+Remaining feature work: reusable ICC profile-library management and flattened
+conversion copies. Broader correction/effect/display qualification and the final
+tablet navigation/memory benchmark still precede the user-test handoff.

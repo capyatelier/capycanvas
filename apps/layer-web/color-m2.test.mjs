@@ -222,3 +222,34 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   await invoke('rasterize_source');await click('Preview Complete Result');await click('Cancel');await idle();assert.deepEqual(backing(await save()),backing(added));
   console.log('Source repair/rasterize full-composition comparisons, exact undo/redo, worker/preview cancellation, baked-paint preservation and save/reopen passed');
 }
+
+export async function checkExportPresets({evaluate}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const invoke=async()=>{await wait('layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('select[aria-label="Destination"]')`);};
+  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+  const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
+  const name='Tablet delivery '+Date.now();
+  await invoke();await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('select[aria-label="'+label+'"]');node.value=value;node.dispatchEvent(new Event('change'));};
+    select('Format','Png');select('Output profile','1');select('Bit depth','U16');select('Pixel size','Fit');select('Resolution metadata','Ppi');
+    d.querySelector('input[aria-label="Maximum width"]').value='321';d.querySelector('input[aria-label="Maximum height"]').value='123';d.querySelector('input[aria-label="Pixels per inch"]').value='287';d.querySelector('input[aria-label="Preset name"]').value=${JSON.stringify(name)};})()`);
+  await click('Save Preset');await wait(`document.querySelector('select[aria-label="Destination"]')?.selectedOptions[0]?.textContent===${JSON.stringify(name)}`);
+  const index=await evaluate('Number(document.querySelector(\'select[aria-label="Destination"]\').value)');
+  const saved=await preset(index);
+  assert.equal(saved.recipe.profile.profile.Builtin,'DisplayP3');assert.equal(saved.recipe.depth,'U16');assert.deepEqual(saved.recipe.size,{Fit:{bounds:[321,123],enlarge:false}});assert.deepEqual(saved.recipe.resolution,{Ppi:287});
+  await click('Cancel');await wait('!layerApp.state().document_file.busy');await invoke();
+  await evaluate(`(()=>{const node=document.querySelector('select[aria-label="Destination"]');node.value=${JSON.stringify(String(index))};node.dispatchEvent(new Event('change'));})()`);
+  await wait(`document.querySelector('select[aria-label="Bit depth"]').value==='U16' && document.querySelector('input[aria-label="Maximum width"]').value==='321'`);
+  assert.equal(await evaluate('document.querySelector(\'input[aria-label="Pixels per inch"]\').value'),'287');
+  await evaluate(`const node=document.querySelector('select[aria-label="Transparency"]');node.value='White';node.dispatchEvent(new Event('change'));`);await click('Update Preset');
+  await wait(`!document.querySelector('select[aria-label="Destination"]').disabled`);
+  assert.equal((await preset(index)).recipe.background,'White');
+  await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+  const remembered=await preset(3);assert.equal(remembered.recipe.background,'White');assert.deepEqual(remembered.recipe.resolution,{Ppi:287});
+  await invoke();await evaluate(`(()=>{const node=document.querySelector('select[aria-label="Destination"]');node.value=${JSON.stringify(String(index))};node.dispatchEvent(new Event('change'));})()`);
+  await wait(`!document.querySelector('select[aria-label="Destination"]').disabled`);await click('Delete Preset');
+  await wait(`![...document.querySelector('select[aria-label="Destination"]').options].some(o=>o.textContent===${JSON.stringify(name)})`);
+  await click('Reset Destination');await wait(`!document.querySelector('select[aria-label="Destination"]').disabled`);
+  const reset=await preset(0);assert.equal(reset.recipe.format,'Png');assert.equal(reset.recipe.profile.profile.Builtin,'Srgb');assert.equal(reset.recipe.size,'Original');
+  await click('Cancel');await wait('!layerApp.state().document_file.busy');
+  console.log('Named export presets save/update/delete, restore all size/profile/depth/DPI choices across dialog reopen, remember successful delivery and reset destinations passed');
+}

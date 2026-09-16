@@ -3,6 +3,7 @@
 mod documents;
 mod color_edit;
 mod source_edit;
+mod color_preferences;
 mod output;
 mod editor;
 mod header;

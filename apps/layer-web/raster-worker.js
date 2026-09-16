@@ -8,6 +8,12 @@ async function execute({id,request}) {
     let result;
     switch(request.operation) {
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
+      case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
+        const bytes=await colorPreferences("readonly",store=>store.get("export-presets"));
+        const prepared=wasm.raster_worker_export_presets(request.metadata,bytes??new Uint8Array());
+        if(prepared.bytes)await colorPreferences("readwrite",store=>store.put(prepared.bytes,"export-presets"));
+        return prepared.view;
+      });break;
       case "properties": result = wasm.raster_worker_properties(request.metadata); break;
       case "source-profile": result = wasm.raster_worker_source_profile(request.metadata); break;
       case "source-rasterize": result = await wasm.raster_worker_source_rasterize(request.metadata,request.buffers); break;
@@ -101,4 +107,16 @@ async function recovery(mode, operation) {
     transaction.onabort=()=>reject(transaction.error || request.error || new Error("Recovery transaction aborted"));
     transaction.onerror=()=>{};
   }); } finally { database.close(); }
+}
+
+async function colorPreferences(mode,operation) {
+  const database=await new Promise((resolve,reject)=>{
+    const request=indexedDB.open("capy-color-preferences",1);
+    request.onupgradeneeded=()=>request.result.createObjectStore("values");
+    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+  });
+  try{return await new Promise((resolve,reject)=>{
+    const transaction=database.transaction("values",mode,{durability:"strict"}),request=operation(transaction.objectStore("values"));
+    transaction.oncomplete=()=>resolve(request.result);transaction.onabort=()=>reject(transaction.error||request.error||new Error("Color preferences were not saved"));transaction.onerror=()=>{};
+  });}finally{database.close();}
 }

@@ -35,6 +35,7 @@ internal object Native {
     @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
     /** File worker only; consumes the detached descriptor, retains the task. */
+    @JvmStatic external fun exportPresets(bytes: ByteArray, request: String, color: String): Array<Any?>
     @JvmStatic external fun inspectProfile(bytes: ByteArray): String
     @JvmStatic external fun projectProfilePrompt(task: Long): String
     @JvmStatic external fun projectAssumeProfile(task: Long, profile: String)
