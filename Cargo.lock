@@ -1098,6 +1098,7 @@ version = "0.1.0"
 dependencies = [
  "glib-unix",
  "gtk4",
+ "half",
  "layer-color",
  "layer-core",
  "layer-engine",

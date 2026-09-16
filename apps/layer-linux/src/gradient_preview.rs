@@ -46,15 +46,17 @@ mod imp {
                 .is_none_or(|(size, _)| *size != pixels)
             {
                 let mut rows = [
-                    Vec::with_capacity(pixels * 16),
-                    Vec::with_capacity(pixels * 16),
+                    Vec::with_capacity(pixels * 8),
+                    Vec::with_capacity(pixels * 8),
                 ];
                 for x in 0..pixels {
                     let position = x as f32 / pixels.saturating_sub(1).max(1) as f32;
                     let color = layer_core::gradient_value(&stops, position, space)
                         .expect("validated gradient");
                     for (row, rgba) in rows.iter_mut().zip(view.checker_colors(color)) {
-                        row.extend(rgba.into_iter().flat_map(f32::to_ne_bytes));
+                        row.extend(rgba.into_iter().flat_map(|v| {
+                            half::f16::from_f32(v).to_bits().to_ne_bytes()
+                        }));
                     }
                 }
                 *self.textures.borrow_mut() = Some((
@@ -62,8 +64,8 @@ mod imp {
                     rows.map(|bytes| {
                         view.texture(
                             [pixels as u32, 1],
-                            gdk::MemoryFormat::R32g32b32a32Float,
-                            pixels * 16,
+                            gdk::MemoryFormat::R16g16b16a16Float,
+                            pixels * 8,
                             bytes,
                         )
                     }),

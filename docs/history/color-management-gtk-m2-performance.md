@@ -2360,3 +2360,58 @@ first-interaction interruption and closing the remaining correctness audit.
 Other hosts, calibrated physical displays, unlike-monitor movement/spanning,
 constrained-memory 120 Hz qualification and future inactive-tab spilling remain
 outside the demonstrated platform envelope.
+
+
+## GTK first-paint allocation investigation — 2026-09-15
+
+Instrumenting GDK before-paint/after-paint and the GLib event loop identifies
+first GTK paints as the long input-thread interruptions. A local diagnostic
+preload measures dynamically linked GTK Vulkan calls; it is not linked into the
+app and its timings are not used as normal performance qualification. In one
+37.388 ms paint, 27 `vkAllocateMemory` calls longer than 0.1 ms account for
+15.654 ms; two pipeline creations total only 0.310 ms. The next 22.367 ms paint
+contains 11.269 ms in 13 allocations and no pipeline creation. Shader compilation
+is therefore not the dominant measured cause of those interruptions.
+
+Managed Float32 swatches/gradient strips promote GTK intermediate render targets:
+GSK shader diagnostics report RGBA16F (Vulkan 97) followed by RGBA32F (109).
+With display-only half-float textures, the same workload uses only 97; its
+slowest instrumented paint is 14.949 ms, including 5.059 ms in ten allocations.
+This establishes a concrete contributor to GTK startup cost. It does not prove
+the cause of the earlier unmatched 8.226 versus 12–14 ms latency reports.
+
+Three serial pairs use actual 3840×2160 scale 2, the same 61 MP ProPhoto16
+source, identical camera scheduling, and 960 software requests each. The first
+two start when the canvas renderer is ready, with no added GTK settling delay.
+The third waits 300 ms and starts near the old scheduling cutoff.
+
+| Case | Float32 / half slowest GTK paint | Float32 / half first navigation presentation | Float32 / half presented requests |
+| --- | ---: | ---: | ---: |
+| 2400×1800 window, cold | 24.763 / 13.377 ms | 35.696 / 23.342 ms | 956 / 956 |
+| 3840×2160 maximized, cold | 52.243 / 23.149 ms | 61.938 / 34.245 ms | 947 / 956 |
+| Window, nominal 2.1 ms input offset | 19.925 / 18.969 ms | 1.616 / 1.657 ms | 890 / 951 |
+
+These are not zero-drop or first-use 8.33 ms results. Half textures reduce the
+measured first-use cost but do not eliminate it. In the near-cutoff Float32
+repeat, 70 requests fail to present across several phases despite low renderer
+cost, showing the experimental narrow scheduling grace is not a robust fix.
+That grace policy is not selected for production; the following checkpoint
+records the final scheduler decision. A cold half-texture window also loses one
+later continuous-zoom request; it is retained rather than presented as perfect
+cadence. Fullscreen half-texture repeats and native-resolution Gaussian blur
+present 956/960, with all four missing requests at first use, and first response
+33.178/33.566 ms. No camera recomposition or source decoding occurs.
+
+Raw records and summaries: `gtk-display-half-compare-*`,
+`gtk-display-half-final-*`; exact environments/commands are in the matching
+`*-runs.json` files. Before executable `navigation-grace-gtk-tests` SHA-256
+`3685d79354f097b7a77efe28f900a31b4f2b7e703b08708eff17776f130e53fc`;
+after executable `gtk-display-half-qualified-tests` SHA-256
+`9358a9dbaf999669e94281a8fbb8280eee12c0bdf0e1b9313195b261a4230dce`.
+The startup probe source, wrappers and logs are local artifacts
+`gsk-pipeline-probe.rs`, `navigation-startup-vulkan-calls*` and
+`gtk-display-half-final-probe*`. Reproduce normal runs with `gtk-raster.sh`,
+`LAYER_TEST_MONITOR=3840x2160@120`, `LAYER_TEST_SCALE=2`,
+`LAYER_NAVIGATION_PHOTO=61mp`, `LAYER_NAVIGATION_COMPLETE=1`,
+`LAYER_NAVIGATION_MAXIMIZE=0` or `1`, and optional
+`LAYER_NAVIGATION_SETTLE_MS=300 LAYER_NAVIGATION_PHASE_NS=2100000`.

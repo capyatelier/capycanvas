@@ -6522,3 +6522,34 @@ The full renderer suite then passes **251 tests, zero failures, 28 optional
 hardware/performance tests ignored** (`native-60mp-output-all-gpu-tests.log`,
 393.04 s). The two 60 MP cases above are among the ignored tests and were run
 explicitly. Final GTK integration checks follow this focused checkpoint.
+
+
+## Display-only GTK texture precision and startup allocations — 2026-09-15
+
+Tiny managed swatches and gradient strips used Float32 textures. On GTK 4.22.4
+Vulkan, these promoted much larger GTK intermediate surfaces to Float32.
+The measured shader pipeline formats include Vulkan 109 (RGBA32F); replacing
+only these display derivatives with RGBA16F leaves format 97 (RGBA16F) and removes
+109. Source color definitions, gradient calculations, canvas working pixels,
+integer backing, artwork sampling and exports retain their existing precision.
+There is no new reduced-precision document/editing path.
+
+Six native checks pass on the captured executable: managed canvas/control color
+agreement with Vulkan, OpenGL and Cairo, effect colors/gradients/retained controls,
+wide-color GPU failure/recovery, and native file save/reopen. The display download
+bound is explicitly changed from 0.0005 to 0.001 linear RGB: a half code has at
+most 2^-12 encoded rounding error in [0,1], amplified by transfer decoding and
+P3-to-sRGB conversion. The former bound failed an Adobe RGB patch by 0.000639;
+that failed log is retained. The final test adds values near rounding boundaries
+and low alpha. Canvas-versus-control agreement still requires two U8 codes and
+gradients retain their existing 0.004 bound. Integer identity, persistence and
+editing bounds are unchanged. This qualifies a display derivative, not an
+arbitrary HDR or full-precision data texture.
+
+Artifacts: `gtk-display-half-qualified-functional-runs.json` records commands,
+renderers and six successful exits; `gtk-display-half-managed-vulkan.log` retains
+the initial precision-bound failure. Executable `gtk-display-half-qualified-tests`
+SHA-256: `9358a9dbaf999669e94281a8fbb8280eee12c0bdf0e1b9313195b261a4230dce`.
+The following performance checkpoint distinguishes startup allocation reduction
+from camera scheduling and does not attribute every historical latency change
+to this texture choice.

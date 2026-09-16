@@ -140,9 +140,14 @@ impl ViewColor {
     pub fn solid(self, rgba: [f32; 4]) -> gdk::Texture {
         self.texture(
             [1, 1],
-            gdk::MemoryFormat::R32g32b32a32Float,
-            16,
-            rgba.into_iter().flat_map(f32::to_ne_bytes).collect(),
+            // This is a display derivative only. A Float32 swatch can promote
+            // GTK's much larger intermediate surfaces to Float32 too. Keep
+            // source color definitions and canvas/native samples unchanged.
+            gdk::MemoryFormat::R16g16b16a16Float,
+            8,
+            rgba.into_iter()
+                .flat_map(|v| half::f16::from_f32(v).to_bits().to_ne_bytes())
+                .collect(),
         )
     }
 }

@@ -30,6 +30,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
             [0.2, 0.7, 0.3, 0.5],
             [0., 0., 0., 0.],
             [1.; 4],
+            [0.50024, 0.04044, 0.99975, 0.0001],
         ] {
             let color = RgbColor::new(space, rgba).unwrap();
             let p3 = color.encoded_in(RgbSpace::DisplayP3).unwrap();
@@ -41,7 +42,13 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
             let expected = color.linear_in(RgbSpace::Srgb).unwrap();
             for c in 0..4 {
                 assert!(
-                    (pixels[0][c] - expected[c]).abs() < 0.0005,
+                    // Display-only half-float codes have at most 2^-12 encoded
+                    // error in [0, 1]. The sRGB derivative and P3-to-sRGB
+                    // matrix amplify this to < 0.001 in linear RGB. Document
+                    // sample precision is tested independently in the renderer;
+                    // the canvas/control display comparison below remains two
+                    // U8 codes, including a patch outside the sRGB gamut.
+                    (pixels[0][c] - expected[c]).abs() < 0.001,
                     "GDK {space:?} {rgba:?}: {:?} expected {expected:?}",
                     pixels[0]
                 );
