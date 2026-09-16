@@ -282,7 +282,9 @@ export async function checkProfileLibrary({evaluate}) {
   await invoke('export_document');await wait(`!!document.querySelector('select[aria-label="Output profile"]')`);await click('Saved Profiles…');
   await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
-  await wait(`!document.querySelector('.profile-library[open]')`);
+  // close() clears `open` before the queued close event resolves the picker.
+  // Wait for that event's removal before inspecting its selected result.
+  await wait(`!document.querySelector('.profile-library')`);
   const chosen=await evaluate(`document.querySelector('select[aria-label="Output profile"]').selectedOptions[0].textContent`);assert.match(chosen,/ProPhoto/i);
   await click('Cancel');await idle();
   await evaluate(`layerApp.dispatch({type:'open_settings',page:'color'})`);
@@ -302,8 +304,8 @@ export async function checkFlattenedCopy({evaluate}) {
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   const saved=await evaluate('({file:JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v)),color:layerApp.app.document_color(),count:sdrFiles.size})');
   const prepare=async()=>{
-    await invoke('convert_color_space');await wait(`!!document.querySelector('select[aria-label="Result"]')`);
-    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Color space','Srgb']]){const s=document.querySelector('select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));}})()`);
+    await invoke('convert_color_space');await wait(`!!document.querySelector('dialog[open] select[aria-label="Result"]')`);
+    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Color space','Srgb']]){const s=document.querySelector('dialog[open] select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));}})()`);
     await click('Preview Complete Result');await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
     assert.ok(await evaluate(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Save Copy…'&&!b.disabled)`));
   };

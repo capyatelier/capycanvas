@@ -821,3 +821,93 @@ The user approved disabling Chrome's browser-wide
 `chrome://flags`, then activated with Chrome's Relaunch button. The Disabled
 selection persisted and all pre-existing user tabs remained present. Flag state
 is recorded in `chrome-throttle-disabled-after-relaunch.log`.
+
+The normal Android package also passes its complete SDR raster suite in 88.147 s
+(`android-corrections-sdr-suite.log`, nine ordinary tests plus the opt-in large
+photo test reported as skipped). The large photo test is run separately with
+`-e photoWorkflow true`, as above. To reproduce on the installed normal package:
+
+```sh
+adb shell am instrument -w -e class art.capycanvas.AndroidRasterTest \
+  art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am instrument -w -e photoWorkflow true \
+  -e class art.capycanvas.AndroidRasterTest#largeJpegGpenPreservesPhotoThroughSaveAndRecovery \
+  art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Web suspension now explicitly destroys the retired GPU device after preserving
+the CPU document. Ordinary document adoption shares the live device and does
+not destroy it. This follows the [WebGPU lifetime contract](https://gpuweb.github.io/gpuweb/#resource-lifetime):
+dropping JavaScript handles does not promise timely release of GPU allocations.
+wgpu 30.0.1's WebDevice drop is a no-op. Explicit retirement prevents recovery
+from relying on garbage collection to release the previous device's resources;
+the end-to-end test now passes (`web-61mp-gpen-workflow.log`). It imports the
+9504×6336 JPEG, draws G-Pen, verifies zero transparent pixels and changed image
+content, exact undo/redo histograms, native save/reopen blob manifests, and an
+identical histogram after GPU replacement. No host or browser console error is
+reported. Available system memory was sampled at 4823492 KiB during recovery
+and 2642636 KiB after its final full-image histogram; the composition-only run
+fell to 800892 KiB and then lost the tab. These spot readings support the resource
+lifetime diagnosis but are not peak-memory measurements or per-tab accounting.
+
+`web-corrections-navigation.json/log` measures the corrected PWA at 2880×1800,
+DPR 1.75, after the complete 61 MP workflow and GPU replacement. With the approved
+Chrome throttle disabled, all three runs submit 361 frames; RAF median/p95 is
+8.3/8.4 ms. CPU frame creation p95 is 1.9/1.8/1.9 ms and p99 is 2.0/1.9/2.1 ms.
+Intervals above 12 ms number 5/2/2 out of 360, so this is smooth 120 Hz navigation
+with occasional missed intervals, not a zero-drop guarantee. Tracked canvas
+storage is 1272 MiB including the painted photo's tiles. The synthetic latest
+request-to-CPU-submit estimates are p95 8.8/8.7/8.9 ms and p99 12.6/9.2/10.1 ms
+(`web-corrections-software-latency.json`). The prior Default-flag measurements
+were 60 Hz and p95 17.5–17.8 ms. Removing the browser throttle explains the
+cadence ceiling and approximately one refresh interval of submission latency.
+These runs also include the correctness fixes, so they do not isolate the exact
+cause of every CPU timing difference. Actual presentation latency remains
+unmeasured; the earlier unexplained compositor delay is not claimed resolved.
+
+The final PWA also passes every exported SDR workflow check in
+`apps/layer-web/color-m2.test.mjs`: tagged color/palettes, U16 profiled delivery,
+document color/history, retained imports and real custom-format clipboard paste,
+source repair/rasterization, export presets, ICC library, flattened copy and all
+six correction layers/masks. Evidence is split across
+`web-corrections-all-sdr-workflows.log` (first two checks),
+`web-corrections-remaining-sdr-workflows.log` (imports/source edits/presets),
+`web-corrections-final-sdr-workflows.log` (profile library), and
+`web-corrections-copy-filters.log` (copy and corrections).
+
+Those logs retain harness failures rather than hiding them. Setup on an existing
+tablet origin must finish recovery prompts with **Keep for Later**, show the
+Color/Layers panels, and accept Chrome's clipboard permission prompt. The
+profile test now waits for the actual close event, and the copy test selects
+Color space in the open dialog instead of the retained Preferences control.
+Neither failure required a production color change. The original workspace was
+restored after testing; no recovery copies were deleted.
+
+The final normal Android package passes the three-run 61 MP navigation harness
+(`android-corrections-navigation.log`, 18.963 s). Warm runs submit 346/342 frames
+for 361 input ticks, with CPU p95 2.08/2.26 ms and p99 5.90/4.65 ms. Input cadence
+median/p95 is 8.334 ms, with 4/2 intervals above 12 ms. The first immediate
+post-import run has a 2.15 s delay before its queued inputs are processed and only
+102 submissions; it is **not** a smooth-navigation pass. The raw timestamps
+establish an owner-queue delay, but do not identify the intervening operation.
+Its cause is not known from this capture. Warm latest-input-to-submit p95 is
+11.14/11.59 ms; this remains a software estimate, not observed presentation.
+The raw runs and summary are `android-corrections-navigation-{0,1,2}.json` and
+`android-corrections-navigation-summary.json`. Cold import/startup and dirty
+regeneration remain outside the warm navigation result.
+
+Final Android delivery uses **Capy Canvas / `art.capycanvas`**, APK SHA-256
+`fcdff15a316c68a9bdee04f69f55a4212a555218732e0ed73a3e0170b0c930fc`.
+Opening `Downloads/sony_a7r_v_29.jpg` through that app's real system picker
+succeeds and displays the 9504×6336 photograph (`android-normal-package-open61mp.png`).
+Its SHA-256 remains
+`3aac9c9b8b34c38a5e0121f16ad1ec806e92a19e15ee5e1128f36d987e888054`.
+The normal app's existing recovery entries were kept for later. The separately
+installed earlier `art.capycanvas.colorm2` is not the corrected handoff package.
+
+The final Web package uses Wasm fingerprint `43511c2096db122e6018` at
+`http://127.0.0.1:8128/` on the USB-connected tablet. The earlier public editor
+tabs are a different build. Service-worker activation was verified explicitly;
+the final reload removes test picker/clipboard instrumentation. User hands-on
+confirmation remains the final acceptance step. No Apple/Windows port or merge
+to the main branch is included in this checkpoint.

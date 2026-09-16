@@ -507,7 +507,13 @@ impl WebApp {
     }
     pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
         let change = self.session.suspend_renderer().map_err(js)?;
-        self.session.renderer_mut().0.take();
+        if let Some(gpu) = self.session.renderer_mut().0.take() {
+            // Dropping WebGPU handles leaves release to JavaScript GC. Retire
+            // the failed device explicitly before recovery allocates another
+            // complete photo cache. Document adoption shares a device and must
+            // not use this path; suspension ends all work on this device.
+            gpu.renderer.device().destroy();
+        }
         self.deferred_contacts.clear();
         self.overviews.clear();
         serialize(&change)
