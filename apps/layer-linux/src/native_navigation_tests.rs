@@ -116,6 +116,9 @@ fn native_large_photo_navigation() {
         }
         assert!(Instant::now() < deadline, "photo startup must settle");
     }
+    let settle_ms = std::env::var("LAYER_NAVIGATION_SETTLE_MS")
+        .ok().map(|v| v.parse::<u64>().unwrap()).unwrap_or(0);
+    pump(settle_ms);
     let original = w
         .gpu
         .borrow()
@@ -139,6 +142,30 @@ fn native_large_photo_navigation() {
     let viewport = state(&w).camera.viewport;
     let fit = (viewport[0] as f32 / extent[0] as f32).min(viewport[1] as f32 / extent[1] as f32);
     let context = glib::MainContext::default();
+    let gtk_frames = Rc::new(RefCell::new(Vec::new()));
+    let gtk_phases = Rc::new(RefCell::new(Vec::new()));
+    let gtk_frame_start = Rc::new(Cell::new(0_u64));
+    let frame_clock = w.window.frame_clock().unwrap();
+    let before_paint = frame_clock.connect_before_paint(glib::clone!(
+        #[strong] gtk_frame_start,
+        move |_| gtk_frame_start.set(glib::monotonic_time() as u64 * 1000)
+    ));
+    let after_paint = frame_clock.connect_after_paint(glib::clone!(
+        #[strong] gtk_frames,
+        #[strong] gtk_frame_start,
+        move |_| gtk_frames.borrow_mut().push([
+            gtk_frame_start.get(), glib::monotonic_time() as u64 * 1000,
+        ])
+    ));
+    let layout = frame_clock.connect_layout(glib::clone!(
+        #[strong] gtk_phases,
+        move |_| gtk_phases.borrow_mut().push(("layout", glib::monotonic_time() as u64 * 1000))
+    ));
+    let paint = frame_clock.connect_paint(glib::clone!(
+        #[strong] gtk_phases,
+        move |_| gtk_phases.borrow_mut().push(("paint", glib::monotonic_time() as u64 * 1000))
+    ));
+    let mut slow_iterations = Vec::new();
     // Wake the real GLib event loop without polling sleeps that add artificial
     // presentation delay. Requests use an absolute 120 Hz schedule, not a wait
     // for the previous render, so slow frames cannot throttle the workload.
@@ -165,7 +192,12 @@ fn native_large_photo_navigation() {
             for step in 0..96 {
                 let due = start + Duration::from_secs_f64(requests.len() as f64 / 120.);
                 while Instant::now() < due {
+                    let before = glib::monotonic_time() as u64 * 1000;
                     context.iteration(true);
+                    let after = glib::monotonic_time() as u64 * 1000;
+                    if after - before > 2_000_000 {
+                        slow_iterations.push([before, after]);
+                    }
                 }
                 let angle = step as f32 / 95. * std::f32::consts::TAU;
                 let scale = if fixed_scale == 0. {
@@ -200,7 +232,12 @@ fn native_large_photo_navigation() {
         }
     }
     tick.remove();
+    frame_clock.disconnect(before_paint);
+    frame_clock.disconnect(after_paint);
+    frame_clock.disconnect(layout);
+    frame_clock.disconnect(paint);
     pump(300);
+    assert!(w.frame_timer.borrow().is_none(), "idle navigation must stop requesting frames");
     assert!(!w.gpu.borrow().as_ref().unwrap().session.rendering_suspended());
     assert_eq!(
         w.gpu.borrow().as_ref().unwrap().session.engine().document(),
@@ -225,6 +262,10 @@ fn native_large_photo_navigation() {
         "monitor_scale": w.area.scale_factor(),
         "physical_filter": std::env::var("LAYER_NAVIGATION_PHYSICAL").as_deref() == Ok("1"),
         "input_phase_ns": input_phase_ns,
+        "gtk_frames_ns": *gtk_frames.borrow(),
+        "gtk_phases_ns": *gtk_phases.borrow(),
+        "settle_ms": settle_ms,
+        "slow_event_loop_iterations_ns": slow_iterations,
         "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
         "worker_thread_cpu": stats.thread_cpu, "worker_gpu": stats.gpu,
         "frame_handler_cpu": stats.frame_handler_cpu,

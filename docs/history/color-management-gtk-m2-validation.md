@@ -1,52 +1,48 @@
 # GTK SDR color milestone 2 — implementation and validation
 
-Work begins at `e46f271` on 2026-09-13. Milestone 2 is **in progress**;
-this report is not a declaration that the new modes are qualified. Scope is
-shared implementation and GTK integration. Other host integration requires the
-user's approval after GTK qualification.
+Work began at `e46f271` on 2026-09-13. **The GTK milestone-2 implementation and
+reference-system qualification are complete**, under the user's revised scope:
+smooth 120 Hz unchanged-photo navigation with latency documented; dirty-pixel,
+filter and histogram regeneration optimization deferred. See the concise
+[acceptance summary](color-management-gtk-m2-acceptance.md) and the
+[final performance results](color-management-gtk-m2-performance.md#final-gtk-navigation-qualification--2026-09-15).
+Other host integration still requires the user's approval; this is not an
+all-platform milestone declaration.
 
-Current delivery status (2026-09-15): the GTK development build implements
-integer8/integer16 SDR editing in sRGB, Display P3, Adobe RGB and ProPhoto;
-retained sources and native masters; revisable photo corrections and masks;
-exact artwork sampling and histograms; tagged color entry, palettes and managed
-viewing; Assign/Convert/precision changes; and profiled PNG/JPEG/TIFF delivery
-with preview, resizing, reusable recipes and physical resolution. Display mips,
-bounded composite/filter windows and losslessly backed paint caches are present.
-The later checkpoint sections record implementation and reproducible evidence.
+The GTK build implements integer8/integer16 SDR editing in sRGB, Display P3,
+Adobe RGB and ProPhoto; retained originals and separate editable masters;
+revisable corrections and masks; exact artwork sampling/histograms; tagged color
+entry, palettes and managed viewing; Assign/Convert/precision changes; and
+profiled PNG/JPEG/TIFF delivery with preview, resizing, recipes and resolution.
+Portable JPEG/CMM integration, display mips, bounded filter/composite work and
+losslessly backed paint caches are included. The full renderer suite passes
+251 tests; 77 core tests pass; both explicit whole-60 MP edit-publication
+regressions and the subsequent GTK color/file/drawing/recovery checks pass.
 
-**GTK is not yet qualified as complete.** Functional color/photo workflows and
-the portable JPEG/CMM integration are implemented; the sections below preserve
-numerical, native, recovery and external-decoder evidence. The 4K/61 MP GPU-worker
-failure is fixed, and completed-display retention makes unchanged camera frames
-sampling-only when the driver reports sufficient headroom. The latest renderer
-suite passes 249 tests, followed by 15 display checks and nine thumbnail checks
-for the subsequent focused fixes. See the [current performance record](color-management-gtk-m2-performance.md).
+The reported 4K/61 MP worker crash is fixed. Available driver-reported headroom
+can admit the complete display (about 1.2 GiB of actual Float32 storage for
+61 MP); the allowance itself is not allocated. Navigation then performs no
+source decoding or image recomposition, and thumbnail preparation yields.
+The final seven native runs cover a 2400×1800 window and 3840×2160 fullscreen,
+actual 200% scale, several input phases and native-resolution Gaussian blur.
+All 5,376 requests in the later pan/zoom/rotate phases present, with every timed
+CPU/GPU frame under 8.33 ms. The initial fit phase loses 2–4 requests per run;
+first response is 14.304–36.201 ms and whole-run request-to-present p99 is
+6.295–11.519 ms. These are documented first-use/input-latency limits, not a
+zero-gap or strict 8.33 ms latency pass. Dirty regeneration remains deferred.
 
-The current user scope requires 120 Hz unchanged-photo pan/zoom/rotation and
-defers dirty-pixel/filter/histogram regeneration optimization and the proposed
-resolution-aware preview pipeline. Fixed memory ceilings are superseded by using
-available memory where it helps reach 120 Hz, with less important work yielding
-to interaction. The complete 61 MP Float32 display occupies about 1.2 GiB; the
-allowance itself is never allocated. Complete display admission remains a driver
-headroom snapshot, not a global pressure manager or inactive-tab disk hierarchy.
+GTK first-paint memory allocation and phase-sensitive camera scheduling have
+measured causes and fixes. The broader earlier-versus-later input-latency
+regression is **not causally established**, because those older captures used
+unmatched viewport and input phase. Physical calibrated displays, unlike-monitor
+movement/spanning, constrained-device 120 Hz and other hosts remain unqualified.
+Memory headroom remains a snapshot rather than a global reservation or future
+inactive-tab disk hierarchy. Current capability limits are explicit in the
+acceptance summary; historical checkpoint failures below are retained evidence.
 
-Current camera CPU/GPU work fits 8.33 ms, including native-resolution Gaussian
-blur followed by display reduction. The user now requires **smooth 120 Hz
-navigation with latency documented**, superseding the historical strict 8.33 ms
-input-to-present gate. The first complete-display run presents 960/960 requests;
-later runs sustain the later navigation phases but retain first-interaction gaps.
-The controlled scheduling comparison records 29–45 ms to the first navigation
-presentation and production-deadline request-to-present p99 of 12.1–14.4 ms.
-The startup cause and a causal attribution for the reported latency regression
-remain unknown. These are reported separately from renderer time. Physical calibrated
-displays, unlike-monitor movement/spanning and other host/device qualification
-remain explicit gaps. Other platform host integration still requires approval.
-
-The user's work order was correctness first, measurements/optimization last.
-The present work is that final qualification phase. Deferred regeneration
-latency is recorded as deferred, not passed. Initial milestone-1 deficiencies
-below are the audit at implementation start; later checkpoints record their
-replacement and tests.
+The initial milestone-1 deficiencies below are the audit at implementation start;
+later checkpoints record their replacement and tests. Earlier sections describing
+work as in progress are historical, superseded by this final qualification.
 
 **Filter accuracy (user instruction, 2026-09-14):** edited filters need perceptually
 equivalent results, not exact historical pixel parity. Use practical numerical

@@ -19,7 +19,7 @@ use wayland_client::{
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
 
 /// The compositor's display phase, not the frequency of GTK scene updates.
-/// One small sample per second suffices; no locks on the input thread.
+/// Presentation feedback corrects startup/monitor phase shifts without input-thread locks.
 #[derive(Default)]
 pub struct FrameClock {
     phase_ns: AtomicU64,
@@ -42,6 +42,22 @@ impl FrameClock {
         }
         period * 3 / 4
     }
+    fn observe(&self, time: u64, period: u64) {
+        let previous = self.phase_ns.load(Ordering::Relaxed);
+        let old_period = self.period_ns.load(Ordering::Relaxed);
+        let drift = if period > 0 {
+            let delta = (time % period).abs_diff(previous % period);
+            delta.min(period - delta)
+        } else { 0 };
+        // Ignore small compositor timestamp jitter, but correct a real phase
+        // change immediately instead of submitting near a stale cutoff for 1 s.
+        if old_period != period || time.saturating_sub(previous) >= 1_000_000_000
+            || drift > period / 16
+        {
+            self.period_ns.store(period, Ordering::Relaxed);
+            self.phase_ns.store(if period > 0 { time } else { 0 }, Ordering::Release);
+        }
+    }
     pub fn period(&self) -> u64 {
         match self.period_ns.load(Ordering::Relaxed) {
             n @ 1_000_000..=1_000_000_000 => n,
@@ -63,6 +79,27 @@ impl FrameClock {
         } else {
             base + ((now - base) / period + 1) * period
         })
+    }
+    /// Start a camera burst after a small input-coalescing window, away from
+    /// the compositor cutoff. Retain this phase until the burst goes idle.
+    pub fn navigation_start(&self, input: u64, now: u64) -> u64 {
+        let period = self.period();
+        let earliest = input + period / 4;
+        // Corrected feedback may be newer than the last input. Predict from a
+        // future deadline while retaining the input's phase through whole periods.
+        let earliest = if earliest <= now {
+            earliest + ((now - earliest) / period + 1) * period
+        } else { earliest };
+        let present = self.presentation(earliest);
+        if present - earliest < period * 3 / 8 {
+            present + period / 8
+        } else {
+            earliest
+        }
+    }
+    pub fn navigation_aligned(&self, deadline: u64, interval: u64) -> bool {
+        interval == self.period()
+            && self.presentation(deadline) - deadline >= interval * 3 / 8
     }
     /// A running timer must also follow newly available/corrected presentation
     /// phase, not just refresh-rate changes. Ignore small feedback
@@ -95,6 +132,44 @@ impl FrameClock {
 #[cfg(test)]
 mod clock_tests {
     use super::*;
+    #[test]
+    fn presentation_phase_shift_realigns_navigation_but_small_jitter_does_not() {
+        let clock = FrameClock::default();
+        let period = 8_000_000;
+        let present = 100_000_000;
+        clock.observe(present, period);
+        let deadline = present - 4_000_000;
+        assert!(clock.navigation_aligned(deadline, period));
+        clock.observe(present + period + 100_000, period);
+        assert_eq!(clock.phase_ns.load(Ordering::Relaxed), present);
+        clock.observe(present + 2 * period - 2_000_000, period);
+        assert!(!clock.navigation_aligned(deadline + 2 * period, period));
+        let corrected = clock.navigation_start(present + 2 * period, present + 2 * period);
+        assert!(clock.navigation_aligned(corrected, period));
+        clock.observe(present + 3 * period, period * 2);
+        assert!(!clock.navigation_aligned(corrected, period));
+    }
+    #[test]
+    fn navigation_burst_coalesces_input_and_avoids_the_compositor_cutoff() {
+        let clock = FrameClock::default();
+        let period = 8_000_000;
+        clock.period_ns.store(period, Ordering::Relaxed);
+        clock.phase_ns.store(100_000_000, Ordering::Release);
+        for now in (100_000_000..108_000_000).step_by(10_000) {
+            let start = clock.navigation_start(now, now);
+            assert!(start >= now + period / 4);
+            assert!(start < now + period);
+            assert!(clock.presentation(start) - start >= period * 3 / 8);
+            let resumed = clock.navigation_start(now, now + period * 5);
+            assert_eq!(resumed, start + period * 5);
+            assert!(resumed > now + period * 5);
+            clock.phase_ns.store(100_000_000 + period * 5, Ordering::Release);
+            let resumed = clock.navigation_start(now, now + period * 5);
+            assert_eq!(resumed, start + period * 5);
+            assert!(clock.navigation_aligned(resumed, period));
+            clock.phase_ns.store(100_000_000, Ordering::Release);
+        }
+    }
     #[test]
     fn display_phase_survives_idle_and_period_changes() {
         let clock = FrameClock::default();
@@ -204,8 +279,6 @@ pub struct Child {
     geometry: Option<Geometry>,
     presentation: Option<wp_presentation::WpPresentation>,
     color: Option<color::ColorSurface>,
-    #[cfg(not(test))]
-    last_feedback: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
@@ -213,7 +286,7 @@ struct Events {
     color: color::State,
     clock: Arc<FrameClock>,
     monotonic: bool,
-    feedback_pending: bool,
+    feedback_pending: usize,
     #[cfg(test)]
     presented: Vec<[u64; 4]>,
 }
@@ -257,8 +330,6 @@ impl Child {
             geometry: None,
             presentation,
             color,
-            #[cfg(not(test))]
-            last_feedback: None,
         })
     }
 
@@ -294,22 +365,12 @@ impl Child {
     }
 
     pub fn feedback_pending(&self) -> bool {
-        self.state.feedback_pending
+        self.state.feedback_pending != 0
     }
 
     pub fn feedback(&mut self, id: u64) {
-        #[cfg(not(test))]
-        {
-            if self
-                .last_feedback
-                .is_some_and(|t| t.elapsed().as_secs() < 1)
-            {
-                return;
-            }
-            self.last_feedback = Some(std::time::Instant::now());
-        }
         if let Some(presentation) = &self.presentation {
-            self.state.feedback_pending = true;
+            self.state.feedback_pending += 1;
             presentation.feedback(&self.surface, &self.events.handle(), id);
         }
     }
@@ -384,27 +445,16 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, u64> for Events 
             ..
         } = event
         {
-            state.feedback_pending = false;
+            state.feedback_pending -= 1;
             let time = ((u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo)) * 1_000_000_000
                 + u64::from(tv_nsec);
-            if state.monotonic
-                && (time.saturating_sub(state.clock.phase_ns.load(Ordering::Relaxed))
-                    >= 1_000_000_000
-                    || u64::from(refresh) != state.clock.period_ns.load(Ordering::Relaxed))
-            {
-                state
-                    .clock
-                    .period_ns
-                    .store(u64::from(refresh), Ordering::Relaxed);
-                state
-                    .clock
-                    .phase_ns
-                    .store(if refresh > 0 { time } else { 0 }, Ordering::Release);
+            if state.monotonic {
+                state.clock.observe(time, u64::from(refresh));
             }
             #[cfg(test)]
             state.presented.push([*_id, time, u64::from(refresh), 1]);
         } else if matches!(event, wp_presentation_feedback::Event::Discarded) {
-            state.feedback_pending = false;
+            state.feedback_pending -= 1;
             #[cfg(test)]
             state.presented.push([*_id, 0, 0, 0]);
         }

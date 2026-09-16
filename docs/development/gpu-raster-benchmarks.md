@@ -138,6 +138,13 @@ builds and other performance workloads out of the measurement interval.
 The report excludes late-arriving startup feedback from navigation cadence,
 retains unmatched requests by phase, and separately reports first-request to
 first-navigation presentation, request-to-enqueue, and enqueue-to-present delay.
+Repeated presentations of the same input count once for input latency, while
+remaining in cadence and work totals. Inspect distinct presented requests as
+well as refresh cadence: repeating old poses can hide coalesced input. Optional
+`LAYER_NAVIGATION_SETTLE_MS` separates a ready-window run from the default cold
+first interaction; retain both, including first response and lost requests.
+The [GTK acceptance summary](../history/color-management-gtk-m2-acceptance.md)
+records the qualified envelope and outstanding platform work.
 The first-response measurement includes initial coalesced requests; the ordinary
 request-latency distribution can only contain requests matched to presentation.
 
@@ -145,7 +152,8 @@ For scheduling investigations, `LAYER_NAVIGATION_PHASE_NS` selects the first
 request's offset from the current display-clock prediction. The clock continues
 to update from feedback; this is an initial offset, not a phase lock. Release
 **test executables only** accept `LAYER_PACING_LEAD_NS` to override the lead before
-predicted presentation. Production retains its three-quarter-refresh deadline.
+predicted presentation. Production retains its three-quarter-refresh drawing deadline; unchanged-camera
+bursts use the separately qualified input/presentation phase policy.
 These controls compare scheduling without changing source pixels or rendering.
 
 | Scenario | Workload |

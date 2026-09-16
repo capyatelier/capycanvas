@@ -833,6 +833,7 @@ pub struct Workspace {
     refreshing: Cell<bool>,
     frame_timer: RefCell<Option<crate::canvas::FrameTimer>>,
     frame_deadline: Cell<u64>,
+    navigation_input: Cell<u64>,
 }
 impl Drop for Workspace {
     fn drop(&mut self) {
@@ -1015,6 +1016,7 @@ impl Workspace {
             refreshing: Cell::new(false),
             frame_timer: RefCell::new(None),
             frame_deadline: Cell::new(0),
+            navigation_input: Cell::new(0),
             input: Rc::default(),
             tooltips: Rc::default(),
         });
@@ -1744,7 +1746,11 @@ impl Workspace {
                     self.publish_workspace(update);
                 }
                 if change.canvas_wake {
-                    self.wake();
+                    let navigation = change.regions == regions::CAMERA;
+                    if navigation {
+                        self.navigation_input.set(glib::monotonic_time().max(0) as u64 * 1000);
+                    }
+                    self.wake_frame(false, navigation);
                 }
                 if change.regions & regions::HOST != 0 {
                     if !self
@@ -1776,12 +1782,12 @@ impl Workspace {
         }
     }
     pub fn wake(self: &Rc<Self>) {
-        self.wake_frame(false);
+        self.wake_frame(false, false);
     }
     pub(crate) fn wake_stroke_end(self: &Rc<Self>) {
-        self.wake_frame(true);
+        self.wake_frame(true, false);
     }
-    fn wake_frame(self: &Rc<Self>, immediate: bool) {
+    fn wake_frame(self: &Rc<Self>, immediate: bool, navigation: bool) {
         if self
             .gpu
             .borrow()
@@ -1790,25 +1796,30 @@ impl Workspace {
         {
             return;
         }
+        let now = glib::monotonic_time().max(0) as u64 * 1000;
+        let (navigation, period, deadline) = self.gpu.borrow().as_ref().map(|g| {
+            let engine = g.session.engine();
+            let clock = &engine.backend().clock;
+            let navigation = navigation && engine.backend().startup.complete
+                && !engine.has_active_stroke() && !engine.has_pending_document_edits()
+                && engine.transform_preview().is_none();
+            (navigation, clock.period(), if navigation {
+                clock.navigation_start(self.navigation_input.get(), now)
+            } else {
+                clock.deadline(now).unwrap_or(self.frame_deadline.get())
+            })
+        }).unwrap_or((false, crate::canvas::FRAME_NS, self.frame_deadline.get()));
+        // Keep one timer through the input burst. Rearming for corrected display
+        // feedback must retain the real input anchor, not invent another input.
+        if !navigation {
+            self.navigation_input.set(0);
+        }
         if let Some(timer) = self.frame_timer.borrow().as_ref() {
             if immediate {
                 self.frame_deadline.set(timer.expedite());
             }
             return;
         }
-        let now = glib::monotonic_time().max(0) as u64 * 1000;
-        let (deadline, period) = self
-            .gpu
-            .borrow()
-            .as_ref()
-            .map(|g| {
-                let clock = &g.session.engine().backend().clock;
-                (
-                    clock.deadline(now).unwrap_or(self.frame_deadline.get()),
-                    clock.period(),
-                )
-            })
-            .unwrap_or((self.frame_deadline.get(), crate::canvas::FRAME_NS));
         let (first, timer) = crate::canvas::schedule(
             deadline,
             period,
@@ -1872,7 +1883,10 @@ impl Workspace {
                         }
                         None => {}
                     }
-                    let active = this.input.has_pending()
+                    let last_navigation = this.navigation_input.get();
+                    let navigating = last_navigation != 0
+                        && now.saturating_sub(last_navigation) < period * 2;
+                    let active = navigating || this.input.has_pending()
                         || this.gpu.borrow().as_ref().is_some_and(|g| {
                             g.session.wants_continuous_frames() || g.needs_present
                         });
@@ -1893,10 +1907,15 @@ impl Workspace {
                         // feedback-jitter tolerance; otherwise each pen-up can
                         // leave subsequent movement slightly early or late.
                         if expedited || this.gpu.borrow().as_ref().is_some_and(|g| {
-                            !g.session.engine().backend().clock.aligned(next, period)
+                            let clock = &g.session.engine().backend().clock;
+                            if navigating {
+                                !clock.navigation_aligned(next, period)
+                            } else {
+                                !clock.aligned(next, period)
+                            }
                         }) {
                             this.frame_timer.borrow_mut().take();
-                            this.wake();
+                            this.wake_frame(false, navigating && !expedited);
                             return glib::ControlFlow::Break;
                         }
                         glib::ControlFlow::Continue

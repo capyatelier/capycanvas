@@ -60,6 +60,17 @@ class NavigationReportTests(unittest.TestCase):
         self.assertEqual(result["presented_requests"], 2)
         self.assertEqual(result["request_to_present"]["p99_ms"], 4)
 
+    def test_idle_repeat_does_not_count_as_another_input_response(self):
+        report = self.report()
+        report["worker_cpu"].append([12, 0, 0, 1, 126_000_000])
+        report["camera_views"].insert(0, [12, [3], 0])
+        report["canvas_presentation"].append([12, 128_000_000, 8_000_000, 1])
+        result = navigation_report.summarize(report)
+        self.assertEqual(result["presented_requests"], 2)
+        self.assertEqual(result["request_to_present"]["n"], 2)
+        self.assertEqual(result["request_to_present"]["max_ms"], 4)
+        self.assertEqual(result["presentation_cadence"]["n"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

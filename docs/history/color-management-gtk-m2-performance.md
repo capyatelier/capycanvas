@@ -2415,3 +2415,172 @@ The startup probe source, wrappers and logs are local artifacts
 `LAYER_NAVIGATION_PHOTO=61mp`, `LAYER_NAVIGATION_COMPLETE=1`,
 `LAYER_NAVIGATION_MAXIMIZE=0` or `1`, and optional
 `LAYER_NAVIGATION_SETTLE_MS=300 LAYER_NAVIGATION_PHASE_NS=2100000`.
+
+
+## Steady camera-burst pacing candidate — 2026-09-15
+
+Two mechanisms were reproduced independently of image recomposition. Restarting
+a camera timer around the early drawing deadline makes small input jitter choose
+different refresh slots. A narrow one-eighth-refresh grace helps some input phases
+but has a 71-missed-slot repeat, so it was rejected. Unconditionally expediting
+camera input removes most enqueue waiting, but a fullscreen run submits near the
+compositor cutoff: 28 mailbox feedback events are discarded, including 14 poses
+in continuous zoom. Their CPU submissions take roughly 0.12–0.34 ms and zoom GPU
+work remains about 1.1 ms or less. This is presentation timing, not source decoding
+or a slow full-resolution filter.
+
+The candidate policy keeps the existing single timer at the display's refresh
+period throughout an unchanged-camera gesture burst. At burst start it allows
+one quarter of a refresh for input coalescing and avoids the last three eighths
+before predicted presentation. It retains that phase while requests continue,
+instead of selecting a different refresh on each request. Two idle refreshes
+end the burst; the final native fixture asserts the timer stops. A refresh-rate
+change rearms the timer. Drawing, active strokes, pending document edits and
+transform previews retain the existing drawing deadline and expedited pen-up.
+No extra source texture, recomposition, busy loop or unbounded frame queue is
+introduced. This does not establish unlike-monitor qualification.
+
+Four serial 61 MP ProPhoto16 fullscreen candidate runs use actual 3840×2160 at scale
+2, 960 requests each, with nominal initial input offsets across the refresh.
+The test's absolute 120 Hz input schedule includes its observed delivery jitter;
+input is not throttled to renderer completion. No settling delay is added.
+
+| Initial offset | Presented / 960 | Missed refresh slots | First response | Request-to-present p99 | CPU / GPU maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 ms | 959 | 0 | 16.392 ms | 8.843 ms | 5.615 / 1.906 ms |
+| 2 ms | 958 | 0 | 25.748 ms | 9.692 ms | 5.312 / 1.080 ms |
+| 4 ms | 957 | 1 | 25.165 ms | 9.160 ms | 5.651 / 6.206 ms |
+| 6 ms | 957 | 0 | 34.397 ms | 9.943 ms | 5.294 / 5.801 ms |
+
+All unmatched requests are in the initial fit/pan/rotate phase. Each later phase
+presents every request: 768/768 per run, including repeated far-to-near zoom,
+panning and full rotations. Every timed CPU/GPU frame fits 8.33 ms. Camera frames
+do zero recomposition and zero source decoding. First-use GTK paints still add
+16–34 ms before the first presented navigation pose; this is a documented cold
+interaction limit, not a zero-gap/strict input-latency pass. The qualification is
+sustained smooth 120 Hz navigation on the reference setup with completed display
+storage, as selected by the user. Physical input-to-photon remains unmeasured.
+
+The initial burst-policy window checks at 2.1/3.1 ms offsets present 958/955 poses,
+with 0/4 missed refresh slots. The second loses two later zoom poses as well as
+three initial poses; it is retained as an imperfect run. The physical Gaussian
+blur case presents 958 poses with zero missed slots and zero image regeneration.
+The final window/blur rechecks below use the release candidate with refresh-rate
+rearming and the idle-timer assertion. There is no claim of a real-time guarantee
+under every scheduling condition or on constrained GPUs.
+
+Candidate binary: `navigation-burst-final-gtk-tests`, SHA-256
+`b51056b0c1b8d77867fb9c8e5e699209fd9e1dd8324ecf40324f0443779bdf21`.
+The two clock tests and existing timer rearm/readiness test pass. Native portable
+paint/sampling, repeated ProPhoto16 pen-up with concurrent backing, diagnostics
+and both SDR8/wide-color failure recovery pass. Their serial commands and exits
+are in `navigation-burst-final-runs.json`; timed navigation and functional checks
+are separate entries. They preserve drawing behavior but do not reclassify
+previously deferred dirty-regeneration latency as passed.
+
+`photo-navigation-report.py` now counts only the first presentation of each
+requested pose for input latency. A timer's repeated final pose remains in frame
+cadence and CPU/GPU work, but cannot inflate input-response counts/latency.
+Four deterministic report tests pass. Original reports remain, and final
+summaries use this correction. Raw evidence and rejected experiments are
+`navigation-grace-*`, `navigation-prompt-*`, `navigation-burst-*`; build/source
+provenance is recorded alongside the executables. Reproduce with the native
+command and environment above, `LAYER_NAVIGATION_PHASE_NS=0` (then
+2000000/4000000/6000000), and the final executable. Do not overlap GPU runs or
+compilation. The local run records include exact command arguments.
+
+**Latency attribution:** the first-paint allocation contributor and these two
+phase-sensitive scheduling failure modes have direct measurements. The broader
+historical input-to-presentation regression is still not causally established:
+the original earlier/later samples used unmatched viewport and input phase.
+The retained three-quarter-refresh drawing lead predates milestone 2. These
+findings explain observed stalls, not every difference between old p99 figures.
+
+
+The final-window recheck of that candidate exposes a remaining stale-phase issue:
+`navigation-burst-qualified-window-cutoff` presents 934/960 with 23 missed slots.
+Its first GTK paint is 20.191 ms, but later submissions repeatedly fall about
+0.85 ms before actual presentation. Twenty-three missing poses occur across the
+first fit phase, one in double zoom and two in continuous zoom. This cannot be
+attributed solely to an initial paint pause; it is not accepted as the final
+windowed result. The corresponding blur recheck presents 958/960, zero missed
+slots, with only two initial poses lost.
+
+The corrected implementation observes real Wayland presentation phase changes
+rather than holding an obsolete phase for a full second. It ignores small
+jitter (one sixteenth of a refresh), checks a navigation timer still leaves its
+rendering margin, and rearms when the display phase or refresh rate moves. GTK
+and compositor startup can shift that phase even with a constant nominal rate.
+Production now requests feedback for each submitted frame, matching the already
+measured test path; the old one-second feedback throttle is deleted. Outstanding
+feedback uses a count so multiple in-flight frames cannot falsely put the worker
+to sleep after just one response. Navigation still ends after two idle periods;
+no feedback is generated without a submitted frame. Three clock tests and the
+existing timer rearm test pass, including a substantial phase jump and ignored
+small jitter. Final qualification follows below.
+
+
+The first phase-correction candidate (`navigation-final-gtk-tests`, SHA-256
+`431b69e751da4a6818d1d622d70a9f27639cad72e619e2636a00fd9d07ea3b2d`)
+eliminates missed refresh slots in both windowed cases (959/951 presented requests)
+and passes the four fullscreen phases with 956–958 poses and 0–1 missed slots.
+However its physical-filter repeat presents only 852/960 distinct requests even
+with zero missed refresh slots: repeated poses fill the cadence. This is **not**
+accepted as smooth motion. Actual per-request presentation remains a separate
+gate from cadence. Both pen-up and recovery checks pass on that candidate.
+
+The cause in the new scheduler is an input-anchor error during phase correction:
+it starts a replacement timer relative to the frame callback instead of the
+last real input. That can put the new sampling phase directly on the jitter in
+input delivery. The corrected version retains the actual camera-input timestamp,
+advances it by whole refresh periods when necessary, then chooses the safe
+presentation margin. Rearming does not extend a burst's idle expiry. Tests cover
+resuming from an older input with newer presentation feedback as well as fresh
+input and refresh changes. Qualification uses distinct presented requests as
+well as cadence; the rejected candidate's raw data remains under
+`navigation-final-*` and is not replaced by a successful summary.
+
+## Final GTK navigation qualification — 2026-09-15
+
+The corrected input-anchor/phase policy passes all seven final native navigation
+cases on the reference configuration. Every request in every later phase is
+presented: **5,376/5,376** across half-size, native-size, double-size and continuous
+zoom/pan/rotate. All unmatched requests occur during the initial fit phase.
+Every run has zero camera recomposition/source decoding and stops its timer after
+idle. No dirty-image regeneration optimization or reduced-resolution filter input
+is used. Startup remains separately measured rather than removed from acceptance.
+
+| Case | Presented / 960 | Missed refresh slots | First response | Request-to-present p99 | CPU / GPU maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| full-blur | 958 | 0 | 25.127 ms | 8.467 ms | 1.890 / 1.070 ms |
+| window-2100000 | 958 | 1 | 14.304 ms | 6.295 ms | 5.368 / 1.950 ms |
+| window-3100000 | 956 | 0 | 36.201 ms | 11.519 ms | 1.472 / 1.735 ms |
+| full-0 | 957 | 1 | 24.185 ms | 7.580 ms | 5.622 / 6.183 ms |
+| full-2000000 | 957 | 1 | 25.029 ms | 8.939 ms | 5.594 / 6.061 ms |
+| full-4000000 | 956 | 1 | 33.832 ms | 9.239 ms | 5.545 / 6.070 ms |
+| full-6000000 | 957 | 0 | 34.116 ms | 8.954 ms | 5.328 / 1.530 ms |
+
+The window cases use actual 2400×1800 pixels at 200% scale with nominal 2.1/3.1 ms
+input offsets and a 300 ms initial settling interval. Fullscreen cases use
+3840×2160 at 200% scale, no added settling, and 0/2/4/6 ms initial offsets.
+The blur case evaluates Gaussian sigma 4 at the full 61 MP source resolution
+before the timed camera-only sequence. All cases use 960 absolute 120 Hz inputs.
+
+This is sustained smooth 120 Hz qualification, with **14.304–36.201 ms first-use
+response** and **6.295–11.519 ms whole-run input-to-present p99** documented. It is
+not zero first-use delay, a strict ≤8.33 ms input-latency pass, calibrated physical
+display qualification or a real-time guarantee under arbitrary machine load.
+The first-use GTK allocation interruption is smaller after the display-only
+texture change but not eliminated. The user explicitly selected smooth navigation
+with latency reported; the startup distinction and rejected runs stay visible.
+
+Executable `navigation-input-anchor-qualified-gtk-tests`, SHA-256:
+`76393f9a4de7065ad0c0868c505238a1d01fd555e62a86df6756d5acbde1dd64`.
+Exact serial commands, environments and exit codes:
+`navigation-input-anchor-qualified-runs.json`; raw captures and summaries have
+the same prefix. Three clock tests, one timer test and four report tests pass.
+The final repeated-pen-up/backing and wide-color GPU recovery runs also pass.
+Earlier current-pixel-source paint/sampling, diagnostics, native saving, managed
+Vulkan/GL/Cairo controls and gradient checks remain recorded above.
+The brief [acceptance summary](color-management-gtk-m2-acceptance.md) separates the
+qualified GTK envelope from deferred regeneration and outstanding platforms.

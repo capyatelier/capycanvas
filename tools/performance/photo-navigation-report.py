@@ -41,7 +41,10 @@ def summarize(report):
     enqueue_delay = []
     queued_to_present = []
     first_response = None
-    for frame, matrix, _revision in report["camera_views"]:
+    # A burst timer can present the final pose again while going idle. Input
+    # latency ends at its first presentation; repeated display is still cadence.
+    views = sorted(report["camera_views"], key=lambda v: presented.get(v[0], [0, 0])[1])
+    for frame, matrix, _revision in views:
         if frame not in cpu or frame not in presented or not presented[frame][3]:
             continue
         # Repeated poses can have identical matrices. Select the last matching
@@ -50,7 +53,7 @@ def summarize(report):
             (r for r in reversed(by_matrix[tuple(matrix)]) if r["requested_ns"] <= cpu[frame][4]),
             None,
         )
-        if request is None:
+        if request is None or request["requested_ns"] in matched:
             continue
         elapsed = (presented[frame][1] - request["requested_ns"]) / 1e6
         assert elapsed >= 0, "presentation/request clocks must share a monotonic origin"
