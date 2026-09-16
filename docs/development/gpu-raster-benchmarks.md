@@ -90,6 +90,19 @@ Archive reopen compares retained source/profile, editable effects, and exact
 native paint and mask digests. Serialize hardware runs and retain exact
 executables, source hashes, environment and raw output for each arm.
 
+`--photo-navigation` isolates unchanged-image pan/zoom/rotation on the adjusted
+24/45/60 MP photographs. Each size runs two 96-frame revolutions at fit, 50%,
+100% and 200% zoom, then two revolutions with continuously varying zoom. The
+1600×1000 managed Float16 presentation target matches the reference viewport
+size. CSV rows include camera scale/angle, frame CPU time, total CPU time through
+presentation submission, completed queue time, recomposited pixels, source misses
+and display storage. It waits for the presenter's submission too; waiting only
+for the engine would omit presentation work. This remains an offscreen workload,
+so native GTK frame delivery must be measured separately. Every frame preserves
+artwork revision, and the run verifies unchanged native paint/mask roots. The
+first navigation frame and cache misses stay in the results. `multiple` uses the
+existing `--photo` worker fixture instead.
+
 | Scenario | Workload |
 | --- | --- |
 | G‑Pen inking | Two long pressure-varying analytic strokes |

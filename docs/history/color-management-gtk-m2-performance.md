@@ -21,13 +21,14 @@ correctness, precision, bounded memory, saving, diagnostics, GPU recovery and
 responsive/cancellable long operations. Other host integration still requires
 approval after GTK validation.
 
-Navigation should reuse completed composition. Current `live_display::Cache`
-selects a view-dependent detail level, but a missing detail slot requests native
-document tiles and runs `Scene::compose_pixels` again before reducing the result.
-That dependency explains slow navigation without any content edit. Address that
-reuse path without changing shader semantics or introducing reduced-resolution
-effect evaluation. Broad final resource/correctness checks remain necessary;
-repeated optimization of deferred regeneration workloads is not the next step.
+Navigation reuses completed composition through bounded retained Float32 display
+mips and native detail. The checkpoint below removes repeated zoomed-out scene
+evaluation and seeds native detail during existing composition. Native detail
+misses can still request full-resolution scene tiles; the 60 MP cold-zoom tail
+and native GTK presentation remain unqualified. Filters always execute at their
+original resolution before display reduction. Broad final resource/correctness
+checks remain necessary; repeated optimization of deferred regeneration workloads
+is not the next step.
 
 The budgets below are the original declaration and historical comparison basis.
 Their regeneration latency thresholds remain future targets; the current
@@ -1733,3 +1734,138 @@ full-workflow run. `source-sample-cache-matched-paint.json` records the first
 - Cached samples: `e3eb14a42cfe3b3f761348ebf5315d2e9d16472952ebfec1a49905edf6337e0e`.
 - GPU tests: `ec06f6d65b7da77dff55f9b97d6f2e6269cba9de636b35624c19d7a92b0f6e92`.
 - GTK tests: `1505a97bae71b713753d4294cbd307d5a49bea9bf85ce07315471dca4722107e`.
+
+## Unchanged-photo navigation checkpoint — retained completed pixels
+
+This checkpoint starts from `b39ae1e1` and precedes the concurrent JPEG/CMM Rust
+migration. It is partial navigation evidence, not milestone acceptance. The new
+`raster_workloads --photo-navigation` fixture keeps native U16 ProPhoto source,
+32 paint layers, a committed stroke and five masked/revisable adjustments. It
+then changes only the camera. Each image contributes five phases, two repetitions
+and 96 frames per repetition: 960 frames at 1600×1000. The phases cover fit,
+50%, 100%, 200%, and continuous fit-to-200% zoom, with full rotation and panning
+around a circle of radius 40% of each document axis. The first measured frame
+includes changing the initial 1024×768 view to 1600×1000. Native paint/mask roots
+and artwork preview revision remain unchanged.
+
+Frame CPU, CPU through actual managed presentation submission, and completion of
+**all** queue work are recorded separately. The presentation target is
+RGBA16Float extended-linear sRGB; all retained display and composition pixels
+remain Float32. Runs are unpaced/offscreen and do not establish native input or
+Wayland presentation latency.
+
+The old singular-value calculation was numerically unstable at exact 25%/50%
+zoom. Float32 rotation rounding repeatedly crossed a mip boundary. A stable
+singular-value formula and tolerance below one millionth of a surface pixel per
+texel remove that oscillation; real zoom crossings still choose finer detail.
+The rotation-only control removes the 24 MP fit-phase stalls but does not fix
+real level transitions. Retaining already-produced complete display mip levels
+addresses those transitions. Native detail is allocated and seeded while the
+photo is composed, within its component allowance. Offscreen/zoomed-out edits
+invalidate old native detail; pending cache keys publish only after submission.
+There is no reduced-resolution filter evaluation or change to authoritative
+samples, queries, history or export.
+
+The display component ceiling is 608 MiB: the existing 272 MiB detail allowance
+plus at most 336 MiB of completed display mips. Whole-device/process budgets are
+unchanged. The small-budget fallback still uses a bounded view window. A full
+native image is retained only if it fits the component ceiling (24 MP here).
+Larger photographs retain bounded toroidal native detail and complete reduced
+display levels. No unbounded whole-document composite was introduced.
+
+### Matched baseline/current observations
+
+Values below combine the two 96-frame repetitions per phase; maxima and deadline
+misses remain visible rather than hiding the two slow frames in a 960-frame
+aggregate. The current executable uses manual 64–128 MiB device allocation
+blocks. Each arm runs at the same staged executable pathname. Builds and GPU
+checks finished before these measurement runs.
+
+| Photo / phase | Baseline completed p99 / max ms | Current completed p99 / max ms | Misses over 8.333 ms, baseline → current (of 192) |
+| --- | --- | --- | --- |
+| 24 MP fit / pan / rotate | 70.231 / 70.911 | 0.750 / 1.993 | 111 → 0 |
+| 24 MP half / pan / rotate | 29.126 / 29.146 | 0.183 / 1.956 | 61 → 0 |
+| 24 MP native / pan / rotate | 2.708 / 2.724 | 0.095 / 0.103 | 0 → 0 |
+| 24 MP double / pan / rotate | 1.564 / 1.651 | 0.122 / 1.937 | 0 → 0 |
+| 24 MP varying zoom / pan / rotate | 23.770 / 23.851 | 0.378 / 1.959 | 8 → 0 |
+| 45 MP fit / pan / rotate | 97.909 / 117.051 | 0.651 / 2.445 | 6 → 0 |
+| 45 MP half / pan / rotate | 43.078 / 43.499 | 0.136 / 2.075 | 89 → 0 |
+| 45 MP native / pan / rotate | 3.337 / 3.714 | 3.242 / 3.419 | 0 → 0 |
+| 45 MP double / pan / rotate | 1.921 / 2.686 | 1.772 / 2.089 | 0 → 0 |
+| 45 MP varying zoom / pan / rotate | 78.807 / 79.877 | 8.031 / 8.209 | 18 → 0 |
+| 60 MP fit / pan / rotate | 135.216 / 148.954 | 0.371 / 0.654 | 2 → 0 |
+| 60 MP half / pan / rotate | 40.153 / 41.798 | 0.264 / 2.042 | 86 → 0 |
+| 60 MP native / pan / rotate | 2.990 / 3.088 | 3.662 / 3.827 | 0 → 0 |
+| 60 MP double / pan / rotate | 1.815 / 2.528 | 1.788 / 3.136 | 0 → 0 |
+| 60 MP varying zoom / pan / rotate | 93.970 / 94.487 | 9.385 / 9.555 | 21 → 2 |
+
+All 960 current 24 MP frames reuse completed pixels with zero scene recomposition.
+The two 60 MP misses occur at step 95, scale 0.5225657, following zoomed-out
+navigation: 48 uncached native tiles (3,145,728 pixels) are recomposed. CPU through
+submission is 8.138/8.300 ms; full completion is 9.385/9.555 ms. These misses
+remain open. The 60 MP native-phase p99 increase of 0.672 ms also exceeds the
+relative regression trigger. Retained-mip copying and changed detail residency
+add work on a native cache miss; the precise contribution still needs isolation.
+Being under the absolute gate does not waive that investigation.
+
+| Photo | GPU live / reserved MiB, after navigation | Process RSS high-water MiB |
+| --- | --- | --- |
+| 24 MP | 647.25 / 832 | 654.82 |
+| 45 MP | 655.35 / 880 | 922.03 |
+| 60 MP | 732.35 / 936 | 1096.23 |
+
+These are single-document measurements; concurrent documents/jobs and full
+transforms still need aggregate memory qualification. Driver-private allocations
+are separate. The selected device and power conditions are recorded in each
+`*-environment.json` and GPU log, using the declared reference workstation.
+
+The initial default `MemoryHints::Performance` variant reserved 1152 MiB at
+60 MP, exceeding the 1 GiB steady gate. `MemoryHints::MemoryUsage` reduced this
+to 772 MiB, but repeated 45 MP navigation exposed 16–29 ms tails around source
+uploads. The final manual block range retains the memory bound and removes those
+tails in this run. This comparison supports the policy choice; it does not prove
+the precise driver allocation mechanism. The hints are documented by
+[wgpu](https://docs.rs/wgpu/30.0.1/wgpu/enum.MemoryHints.html); installed wgpu-hal
+30.0.1 maps this range to 64–128 MiB device and 32–64 MiB host blocks on Vulkan.
+Other backends may ignore the hints and are not qualified here.
+
+### Correctness and reproduction
+
+The seeded-cache GPU executable passes all 10 live-display, four display-mip,
+and four managed-view tests. New checks cover 1,440 rotations per mip level,
+reflections/nonuniform scale and real boundary crossings; retained pixels match
+an independently rendered constrained-window path within 5e-6 Float32 channels.
+A zoomed-out edit followed by native zoom matches a fresh dense reference.
+Five separate native GTK processes pass managed canvas/artwork agreement,
+bounded-canvas startup/painting, Assign/Convert/depth/history/copy, resized export
+and cancellation, and wide-color GPU failure/recovery. Those native checks use
+the same cache implementation with the preceding MemoryUsage allocation policy;
+the final manual-policy GTK build remains to be tested.
+
+Artifacts are in `artifacts/color-m2/final-performance/`. Exact baseline SHA-256:
+`02bbea9257e205dffde0a7952367988f5118a4eb7e18d5699b5a72428c758590`;
+current `navigation-balanced`:
+`ae8df77dd71001e91e8cf3e7192dff05b8ee091efbf5728d939c856deb1d3386`.
+`navigation-*-builds.json`, captured source trees/patches, raw per-frame CSV,
+`photo-expanded-*-runs.json`, environment records and `/usr/bin/time` output
+preserve provenance. `navigation-checkpoint-summary.json` contains per-phase
+counts, p95/p99/max and missed deadlines. The 45 MP baseline uses the identical
+baseline executable under the `navigation-baseline-45` alias. GPU correctness
+SHA-256 is `c0a96f1b237d9a5244cf11bd1998ee5b68de46641e599f4223f962eb222fa3bf`;
+GTK correctness is `fc16cfd3bbab73a4e6d5a404ff0887ee0d027a9c675dc36f0204f562e4028454`.
+The first `navigation-retained-final` measurements accidentally overlapped a GPU
+check and are excluded by `navigation-retained-final-run-exclusion.json`; the
+`navigation-retained-isolated` runs replace them. Correctness durations from
+runs overlapping compilation are not latency evidence.
+
+Reproduce the workload with a release `raster_workloads` binary:
+
+```sh
+raster-workloads 60mp --photo-navigation --space prophoto --depth 16 --output-dir /tmp/photo-navigation
+```
+
+`run-photo-navigation.py navigation-balanced 24mp 45mp 60mp` retains the exact
+captured binary, telemetry and timeout invocation used here. Final GTK
+presentation, remaining 60 MP cold detail, aggregate resource qualification and
+post-migration color regression checks remain open. No other platform host is
+approved by this checkpoint.

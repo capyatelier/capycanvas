@@ -399,6 +399,7 @@ fn main() -> Result<()> {
     let mut selected = "all";
     let mut photo = false;
     let mut capture_only = false;
+    let mut navigation_only = false;
     let mut output = PathBuf::from("artifacts/color-m2/final-performance/dense");
     let mut color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
     let mut arguments = args.iter();
@@ -406,6 +407,7 @@ fn main() -> Result<()> {
         match argument.as_str() {
             "--photo" => photo = true,
             "--photo-capture" => { photo = true; capture_only = true; },
+            "--photo-navigation" => navigation_only = true,
             "--output-dir" => output = PathBuf::from(arguments.next().ok_or("--output-dir needs a path")?),
             "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
             "--space" => color.space = match arguments.next().map(String::as_str) {
@@ -420,11 +422,14 @@ fn main() -> Result<()> {
                 Some("16") => IntegerDepth::U16,
                 _ => return Err("--depth needs 8 or 16".into()),
             },
-            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
+            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
         }
     }
     println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");
     std::fs::create_dir_all(&output)?;
+    if navigation_only {
+        return photo::navigation::run(selected, color, &output);
+    }
     if photo {
         return photo::run(selected, color, &output, capture_only);
     }

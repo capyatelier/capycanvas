@@ -911,6 +911,9 @@ impl WgpuRasterizer {
                     | working_features
                     | if format == wgpu::TextureFormat::Rgba32Float { native_tiles::native_in_place_features(&adapter) } else { wgpu::Features::empty() },
                 required_limits: limits,
+                memory_hints: if format == wgpu::TextureFormat::Rgba32Float {
+                    wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (64 * 1024 * 1024)..(128 * 1024 * 1024) }
+                } else { wgpu::MemoryHints::Performance },
                 ..Default::default()
             })
             .await

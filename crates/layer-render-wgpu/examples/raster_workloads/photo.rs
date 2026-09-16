@@ -5,6 +5,9 @@ use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, Ti
 use layer_render_wgpu::snapshot::{CaptureControl, CaptureLimits};
 use std::sync::{Arc, Barrier};
 
+#[path = "navigation.rs"]
+pub(super) mod navigation;
+
 struct Frame {
     kind: &'static str,
     start: Instant,

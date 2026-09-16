@@ -2,6 +2,80 @@ use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
 use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
+#[test]
+fn camera_rotation_preserves_power_of_two_detail_levels() {
+    let plan = display_mips::Plan::new([8192, 7324]).unwrap();
+    for level in 0..plan.level {
+        let scale = 1. / (1u32 << level) as f32;
+        for step in 0..1440 {
+            let angle = step as f32 * std::f32::consts::TAU / 1440.;
+            let (sin, cos) = angle.sin_cos();
+            for reflect in [1., -1.] {
+                let window = Window::new(view([
+                    reflect * scale * cos, reflect * scale * sin,
+                    -scale * sin, scale * cos, 160., 120.,
+                ]), plan).unwrap().unwrap();
+                assert_eq!(window.level, level, "level={level} angle={angle} reflect={reflect}");
+            }
+        }
+        if level > 0 {
+            // A real zoom crossing is not held at the coarser level. Include
+            // nonuniform transforms: the largest stretch controls resolution.
+            let larger = scale * 1.00001;
+            let window = Window::new(view([larger, 0., 0., scale, 0., 0.]), plan)
+                .unwrap().unwrap();
+            assert_eq!(window.level, level - 1);
+        }
+    }
+}
+
+#[test]
+fn retained_mips_match_windowed_pixels_and_zoomed_out_edits_invalidate_native_detail() {
+    let mut doc = document([1537, 769]);
+    let mut retained = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut windowed = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for r in [&mut retained, &mut windowed] {
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    }
+    windowed.native_edit.as_mut().unwrap().display_cache_bytes = DETAIL_BYTES;
+    let mut a = ViewportPresenter::for_surface(&retained, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut b = ViewportPresenter::for_surface(&windowed, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let native = view([1., 0., 0., 1., -700., -300.]);
+    for r in [&mut retained, &mut windowed] { submit(r, &doc, native, true); }
+    assert!(!retained.live_display.as_ref().unwrap().retained.is_empty());
+    assert!(windowed.live_display.as_ref().unwrap().retained.is_empty());
+    let work = retained.metrics.composited_pixels;
+    for matrix in [
+        [0.5, 0., 0., 0.5, 0., 0.],
+        [0.5, 0., 0., 0.5, -550., -150.],
+        [0., 0.5, -0.5, 0., 350., -200.],
+        [0.25, 0., 0., 0.25, 0., 0.],
+    ] {
+        let v = view(matrix);
+        for r in [&mut retained, &mut windowed] { submit(r, &doc, v, false); }
+        close(&present(&retained, &mut a, v), &present(&windowed, &mut b, v));
+        assert_eq!(retained.metrics.composited_pixels, work,
+            "retained display levels must not re-evaluate the document for navigation");
+    }
+    // The old native window is not visible during this edit. Returning to it
+    // must reject stale detail, including when the new view uses retained mips.
+    doc.layers[0].opacity = 0.35;
+    let zoomed_out = view([0.25, 0., 0., 0.25, 0., 0.]);
+    for r in [&mut retained, &mut windowed] {
+        submit(r, &doc, zoomed_out, true);
+        submit(r, &doc, native, false);
+    }
+    let mut dense = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut c = ViewportPresenter::for_surface(&dense, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    submit(&mut dense, &doc, native, true);
+    let expected = present(&dense, &mut c, native);
+    close(&expected, &present(&retained, &mut a, native));
+    close(&expected, &present(&windowed, &mut b, native));
+}
+
 fn document(extent: [u32; 2]) -> layer_core::Document {
     let mut doc = layer_core::Document::new("bounded live display", extent[0], extent[1]);
     doc.color = DocumentColor {
@@ -192,12 +266,15 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
 fn large_live_composite_uses_bounded_pixels_and_zoom_out_matches_full_area_reference() {
     let doc = document([4097, 1025]);
     let mut cached = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    cached.native_edit.as_mut().unwrap().display_cache_bytes = DETAIL_BYTES;
     let v = view([0.25, 0., 0., 0.25, -256., 0.]);
     submit(&mut cached, &doc, v, true);
     assert!(
         cached.composite_texture.is_none(),
         "the default threshold must choose bounded storage"
     );
+    // The constrained cache keeps a complete coarse image and visible detail;
+    // it does not allocate the optional retained levels or seed native detail.
     assert!(cached.metrics.composite_storage_bytes < 16 * 1024 * 1024);
     let mut dense = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     dense.native_edit.as_mut().unwrap().display_dense_bytes = u64::MAX;

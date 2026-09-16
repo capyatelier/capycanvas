@@ -1002,6 +1002,9 @@ impl Worker {
             label: Some("Wayland canvas GPU"),
             required_features: features,
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            memory_hints: wgpu::MemoryHints::Manual {
+                suballocated_device_memory_block_size: (64 * 1024 * 1024)..(128 * 1024 * 1024),
+            },
             ..Default::default()
         }))
         .map_err(error)?;
