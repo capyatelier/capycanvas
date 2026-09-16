@@ -645,9 +645,13 @@ pages with 21 rows, and 43 property scenarios per Apple policy. Nine color/photo
 commands and the dynamic SDR controls now have explicit workflow references.
 The CPU generator's obsolete RGBA-array assumptions are replaced with shared
 `RgbColor` and `GradientStop` values. Both policies pass 162 property edit/history/
-reset routes and all ten corruption probes. This is model coverage; renderer-
-dependent scale/rotate enumeration remains unresolved in the no-GPU audit.
-Evidence: `artifacts/apple-sdr-inventory-v1/`.
+reset routes and all ten corruption probes. The subsequent offscreen hardware
+run resolves scale/rotate with actual content and passes the full auditor: 93
+tool choices (the previous 90 plus Point/3×3/5×5 sampling), 28 setting IDs, 14 panel
+control types, six preference kinds and nine workspace service commands per
+policy. This qualifies model routing, not physical/native-widget acceptance.
+The original no-GPU failure and hardware follow-up are retained under
+`artifacts/apple-sdr-inventory-v1/`.
 
 Thirty-six UIKit component captures cover New Drawing, numeric color, palettes,
 missing-photo-profile choice, the empty ICC library, Assign Profile, Convert Color
@@ -666,6 +670,25 @@ appearance are outside these captures. The disposable simulator apps are removed
 the physical review apps and drawings remain untouched. Evidence:
 `artifacts/apple-sdr-form-fit-v1/`. Continue the pending physical SDR check and
 the remaining release gates; this checkpoint does not close full visual parity.
+
+## Recovery publication under process interruption
+
+Eight local process-kill cases now verify the real recovery file helpers with
+shared native project tasks on both Apple policies, without Metal or UI. The
+fixture stops each owned child and rechecks its disk state before killing it:
+archive output, pending manifest, published replacement and published discard.
+Fresh processes see exactly a complete old/new archive or the discard, and retry
+preserves the new generation against stale removal. The initial run exposed
+abandoned temporary files surviving a successful retry. Cleanup now reclaims only
+recognized UUID-named private files after durable publication/discard; final
+checks cover both cleanup paths and unrelated-file preservation.
+Both Release builds pass without compiler warnings.
+
+Run `python3 apps/layer-apple/scripts/test-recovery-interruption.py`; ignored
+evidence is `artifacts/apple-recovery-interruption-v1/`. This closes local file
+publication under process termination. Physical iPadOS expiration, provider
+delivery, power loss and full editor lifecycle remain separate. The physical
+review apps and their drawings are untouched.
 
 ## Native provider acceptance
 

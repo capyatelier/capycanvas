@@ -51,19 +51,27 @@ struct RecoveryFiles: Sendable {
         let destination = archive(record)!
         try task.write(to: destination)
         try AtomicJSONFile.write(JSONEncoder().encode(Index(record: record)), to: folder.appendingPathComponent("current.json"))
-        // Only obsolete private generations are removed, after publication.
-        for url in try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            where url.pathExtension == "capy" && url.lastPathComponent != destination.lastPathComponent
-                && UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil {
-            try? fm.removeItem(at: url)
-        }
+        try prune(folder, keeping: destination.lastPathComponent)
         return record
     }
     /// A late UI completion must not delete a newer generation from another
-    /// owner. Remove the manifest first, then its now-unreferenced archive.
+    /// owner. Publish the discard first, then reclaim its private files.
     func remove(_ record: RecoveryRecord) throws {
         guard let folder = folder(record.scene), try current(record.scene) == record else { return }
         try AtomicJSONFile.write(JSONEncoder().encode(Index(record: nil)), to: folder.appendingPathComponent("current.json"))
-        if let archive = archive(record) { try? FileManager.default.removeItem(at: archive) }
+        try? prune(folder, keeping: nil)
+    }
+    private func prune(_ folder: URL, keeping archive: String?) throws {
+        // One serial file worker owns each runtime folder. After publication,
+        // reclaim obsolete generations and temporary writes left by a kill.
+        for url in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+            let stem = url.deletingPathExtension().lastPathComponent
+            let generation = url.pathExtension == "capy" && UUID(uuidString: stem) != nil
+            let temporary = ["capy-tmp", "tmp"].contains(url.pathExtension)
+                && stem.hasPrefix(".") && UUID(uuidString: String(stem.dropFirst())) != nil
+            if url.lastPathComponent != archive && (generation || temporary) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
     }
 }

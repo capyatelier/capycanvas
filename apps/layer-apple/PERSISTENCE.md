@@ -193,6 +193,11 @@ tombstone precedes archive deletion. Corrupt records remain untouched and are
 reported without hiding other valid records. No provider URL, bookmark, account
 or hardware identifier is stored in the recovery record.
 
+Successful publication and discard also reclaim UUID-named private temporary
+files left by a terminated writer. Cleanup is confined to that runtime's recovery
+folder after the manifest is durable; unrelated names and the current generation
+are preserved. It does not scan document destinations or other runtime folders.
+
 **File → Recovered Drawings…** is shared by the iPad menu and Mac OS File menu.
 Available copies are also offered after launch. Archives belonging to other live
 owners are excluded. Open dismisses the picker before entering the existing
@@ -229,8 +234,10 @@ python3 apps/layer-apple/tests/background-expiration.py
 ```
 
 A kill or allowance expiration before durable
-publication can still leave only the previous completed copy. Full physical
-expiration/interruption and sustained storage overhead remain acceptance work.
+publication can still leave only the previous completed copy. The local process-
+interruption check now verifies this publication contract and cleanup below.
+Physical lifecycle/expiration delivery and sustained storage overhead remain
+acceptance work.
 
 GPU loss and uncaptured validation errors suspend the shared session and retire
 the failed renderer on a worker. CPU document state, embedded sources, committed
@@ -317,6 +324,7 @@ On an Apple Silicon development Mac, run from the repository root:
 bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/recovery.swift
+python3 apps/layer-apple/scripts/test-recovery-interruption.py
 cargo test -p layer-apple project_ --lib
 cargo test -p layer-apple renderer_failure_retains -- --test-threads=1
 cargo test -p layer-apple ui_actions_change_only_the_addressed_apple_session
@@ -403,6 +411,19 @@ app, opens the offered drawing after document readiness, and verifies the restor
 layer count and a new recovery copy. It uses an isolated persistence namespace
 and actual in-app controls. This checks completed-copy restart; it does not model
 a physical background-task expiration or a kill during publication.
+
+`test-recovery-interruption.py` supplies the missing local process-kill check.
+It compiles the production file helpers and uses real shared recovery tasks for
+both Apple policies, with disposable layer edits and no Metal surface or UI.
+Each writer is stopped and its actual disk state rechecked before killing only
+that child: archive temporary output, a different pending manifest, a published
+replacement, and a published discard. Fresh processes must read exactly a
+complete old/new archive or the discard; retry, abandoned-file cleanup, preserved
+unrelated files and stale-removal protection also pass. The initial run reproduced
+temporary files surviving retry; the final run passes after private cleanup was
+extended. Evidence is `artifacts/apple-recovery-interruption-v1/`. This qualifies
+local publication under process termination, not iPadOS expiration, power loss,
+provider delivery, or the full editor lifecycle.
 
 The standalone settings tests use temporary directories. They verify complete old/new file
 generations under concurrent reads, private permissions, size limits, failed-write

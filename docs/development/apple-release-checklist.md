@@ -90,7 +90,7 @@ Do not replace a missing result with a catalog entry or build success.
 | --- | --- | --- |
 | R2 | **Complete native feature behavior.** The table below assigns all command groups and dynamic controls to specific remaining cases. Most implementation and many workflows already pass. The reported iPad native-prediction error after document adoption is reproduced and fixed in shared policy; the user confirms the fixed iPad now uses the correct native prediction. | Reconcile each case against its existing test result, then group genuinely missing native interactions. Fix reproduced failures with focused local regressions. |
 | R3 | **Physical input and drag contract.** Basic drawing/navigation passes. Supplied AppKit/UIKit callbacks and shared history/pixel checks cover many constraints and cancellations. | Verify supported tilt/rotation/hover/proximity, interrupted contacts and recovery, physical trackpad/button navigation, Pencil eyedropper, and representative tool handles. Finish the device-specific tile/row/grip cases in the [drag inventory](../ui/drag-inventory.md#apple-macos-and-ipados). Physical iPad shortcut checks require a hardware keyboard, which is currently absent. Retained injected-key failures are unresolved evidence, not a proven application cause. |
-| R4 | **Documents, recovery and native windows.** Local save/reopen/PNG, native cold/warm URL delivery, painted process recovery on Mac/simulator and physical background/return have scoped passes. iPad expiration now ends its lease synchronously; a focused production-helper check proves callback ordering and exactly-once completion, with a clean iPad Release build. | The user defers iCloud acceptance. Finish applicable native destination restoration, error/cancel/interruption and image-import delivery; interrupted recovery and actual OS background-task expiration; remaining physical iPad scene restoration/lifecycle (independent drawings/history/input now pass); Mac sleep/wake and window/display/surface transitions. Verify artwork, settings/workspace, continued input and independent history. Preserve the open limits in [Persistence](../../apps/layer-apple/PERSISTENCE.md). |
+| R4 | **Documents, recovery and native windows.** Local save/reopen/PNG, native cold/warm URL delivery, painted process recovery on Mac/simulator and physical background/return have scoped passes. Eight local process-kill cases now prove complete old/new recovery publication, discard, cleanup and retry through the production file helpers on both Apple policies. iPad expiration ends its lease synchronously; a focused production-helper check proves callback ordering and exactly-once completion. | The user defers iCloud acceptance. Finish applicable native destination restoration, error/cancel/interruption and image-import delivery; actual physical lifecycle interruption and OS background-task expiration; remaining physical iPad scene restoration/lifecycle (independent drawings/history/input now pass); Mac sleep/wake and window/display/surface transitions. Verify artwork, settings/workspace, continued input and independent history. Preserve the open limits in [Persistence](../../apps/layer-apple/PERSISTENCE.md). |
 | R5 | **Perceptual visual parity.** Main editor/component comparisons and reported fixes exist. Benchmark document replacement exposed stranded layer-preview readbacks; central invalidation now passes both-policy AppKit/Metal regression and a final Mac Release capture. | Map retained normal-size light/dark, preset and narrow/windowed captures to the final feature inventory; inspect missing visible states on both native hosts against Web. Correct straightforward visible mismatches. Do not rerun every pixel comparison for an unrelated engine fix. |
 | R6 | **Sustained hardware performance and measurement.** The missing-callback startup stall is reproduced and fixed by removing the custom presentation counter/retry. Both physical fixed Releases complete ten minutes of 4K watercolor with correct thumbnails, nominal thermals and prompt canvas idle. Long active intervals are 0.959% Mac / 1.997% iPad, with no missing/zero measured callbacks, rejected input or renderer errors. Current and retained ink results remain separately scoped. Rare measured misses alone do not fail acceptance. | Preserve the startup regression and these completed runs. Finish only outstanding source-qualified platform/profile, recorder-off resource/storage and idle/resume checks, instrumentation overhead and physical input-to-display measurement. The retained footprint curves do not justify a memory workaround. Use [Performance](../../apps/layer-apple/PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16); its CPU/GPU/presentation proxies are not physical latency. Do not restart profiler experiments without a concrete unresolved requirement or visible regression. |
 | R7 | **Integration and delivery.** Creation/tagged-paint `9e3d2567`, retained photo `d614f7b4` and document color `0290c196` milestones are published. Source repair/rasterization and ICC file import now reuse the same worker/comparison UI and shared source/history rules. Scoped Metal/shared/Swift checks pass. Physical UIKit workflows and SDR requalification remain open. Full iPad XCTest is blocked by its extra runner's free-profile app limit; preserve artist apps/drawings. Histogram/sampling uses shared workers and corrected Metal row copies; local checks pass. Evidence: `artifacts/apple-source-edit-v1/` and `artifacts/apple-histogram-v1/`. | Complete physical managed-display/SDR, provider and background acceptance; profiled export and ICC/preset storage now pass local worker/owner checks. Retained photo corrections/masks pass scoped local checks recorded above. The final goal still requires R2–R6 and the new feature scope. |
@@ -196,11 +196,15 @@ routes pass per policy, and the existing verifier rejects all ten corrupted-
 evidence probes per policy. No application runtime path changes. Evidence is
 `artifacts/apple-sdr-inventory-v1/`.
 
-These are CPU model results, not native-widget or pixel acceptance. Scale/rotate
-tool enumeration needs actual renderer content, so the full no-GPU audit remains
-incomplete at that case. Retain the separately scoped pre-SDR 90-tool GPU evidence
-under `artifacts/apple-release-closure-v1/`; do not claim a fresh complete tool
-enumeration from this CPU run.
+The hardware follow-up now supplies actual rendered content for scale/rotate and
+passes the complete catalog auditor on both policies: **93 resolved tool choices**,
+28 setting IDs, 14 panel control types, six preference kinds and nine workspace
+service commands. All 72 commands and 162 property edit/history/reset routes also
+pass. The three added choices are Point/3×3/5×5 color sampling; the previous 90
+tool entries remain present. These are shared-model routing results with hardware
+content for transforms, not native-widget, visual or performance acceptance.
+Evidence is `artifacts/apple-sdr-inventory-v1/`; the original no-GPU failure is
+retained alongside the passing hardware run.
 
 | Catalog group | Existing evidence to retain | Remaining behavior, excluding shared R3–R6 checks |
 | --- | --- | --- |
@@ -232,8 +236,9 @@ applicable Shift/Option behavior for figures, rulers and transforms, and their
 remaining native/physical delivery checks, in scope. Source references and hashes
 are retained in `artifacts/apple-native-modifiers-v1/selection-scope.json`.
 
-The drawing-tool reconciliation accounts for all 90 tool entries: 18 root tools,
-13 drawing groups, 34 brush presets and 25 other subtools. The current brush
+The drawing-tool reconciliation accounts for the retained 90 tool entries: 18 root
+tools, 13 drawing groups, 34 brush presets and 25 other subtools. The current
+93-entry hardware enumeration adds the three color-sample areas above. The brush
 catalog exactly matches the retained GPU inventory, and every brush label maps
 to one of the executed native painting or Blend/Liquify workflows. Recorded
 XCTest case results confirm both workflows pass on Mac and iPad Simulator; the
